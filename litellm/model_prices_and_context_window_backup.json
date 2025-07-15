@@ -9899,8 +9899,8 @@
         "max_tokens": 4096,
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 2e-06,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000015,
         "litellm_provider": "cohere",
         "mode": "completion"
     },
@@ -16145,5 +16145,51 @@
         "supports_tool_choice": true,
         "mode": "chat",
         "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "c4ai-aya-expanse-8b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "c4ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "c4ai-aya-expanse-32b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "c4ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "c4ai-aya-vision-8b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "c4ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "c4ai-aya-vision-32b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0000005,
+        "output_cost_per_token": 0.0000015,
+        "litellm_provider": "c4ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_vision": true
     }
 }
