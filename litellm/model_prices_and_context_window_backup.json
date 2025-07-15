@@ -9899,10 +9899,11 @@
         "max_tokens": 4096,
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.0000006,
         "litellm_provider": "cohere",
-        "mode": "completion"
+        "mode": "completion",
+        "source": "https://cohere.com/pricing (based on Command R pricing)"
     },
     "command": {
         "max_tokens": 4096,
@@ -16155,7 +16156,8 @@
         "litellm_provider": "c4ai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "source": "https://cohere.com/pricing (FAQ #11: Aya Expanse models pricing)"
     },
     "c4ai-aya-expanse-32b": {
         "max_tokens": 32768,
@@ -16166,7 +16168,8 @@
         "litellm_provider": "c4ai",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_system_messages": true
+        "supports_system_messages": true,
+        "source": "https://cohere.com/pricing (FAQ #11: Aya Expanse models pricing)"
     },
     "c4ai-aya-vision-8b": {
         "max_tokens": 32768,
@@ -16178,7 +16181,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_system_messages": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "source": "https://cohere.com/pricing (FAQ #11: Aya Expanse models pricing - applied to Vision models)"
     },
     "c4ai-aya-vision-32b": {
         "max_tokens": 32768,
@@ -16190,6 +16194,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_system_messages": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "source": "https://cohere.com/pricing (FAQ #11: Aya Expanse models pricing - applied to Vision models)"
     }
 }
