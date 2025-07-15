@@ -25,8 +25,18 @@ export const formatNumberWithCommas = (value: number | null | undefined, decimal
   });
 };
 
-export const handleCopy = (text: string | null | undefined, messageText: string = 'Copied to clipboard') => {
-  if (!text) return;
-  navigator.clipboard.writeText(text);
-  message.success(messageText);
+export const copyToClipboard = async (
+  text: string | null | undefined,
+  messageText: string = "Copied to clipboard"
+): Promise<boolean> => {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success(messageText);
+    return true;
+  } catch (err) {
+    message.error("Failed to copy to clipboard");
+    console.error("Failed to copy: ", err);
+    return false;
+  }
 };
