@@ -10,7 +10,5 @@ sys.path.insert(
 
 from litellm.proxy.proxy_cli import run_server
 
-run_server(
-    use_prisma_migrate=True,
-    skip_server_startup=True,
-)
+# Call the Click command with standalone_mode=False
+run_server(["--use_prisma_migrate", "--skip_server_startup"], standalone_mode=False)
