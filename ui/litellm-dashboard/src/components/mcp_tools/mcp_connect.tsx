@@ -196,7 +196,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         <Button
           type="text"
           size="small"
-          icon={copiedStates[copyKey] ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+          icon={copiedStates[copyKey] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
           onClick={() => copyToClipboard(code, copyKey)}
           className={`absolute top-2 right-2 z-10 transition-all duration-200 ${
             copiedStates[copyKey] 
