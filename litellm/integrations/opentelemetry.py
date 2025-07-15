@@ -16,7 +16,12 @@ from litellm.types.utils import (
 )
 
 # opentelemetry
-from opentelemetry._events import Event, get_event_logger, get_event_logger_provider, set_event_logger_provider
+from opentelemetry._events import (
+    Event,
+    get_event_logger,
+    get_event_logger_provider,
+    set_event_logger_provider,
+)
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.metrics import get_meter
@@ -62,11 +67,37 @@ RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
 _GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS = [
-    0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
+    0.01,
+    0.02,
+    0.04,
+    0.08,
+    0.16,
+    0.32,
+    0.64,
+    1.28,
+    2.56,
+    5.12,
+    10.24,
+    20.48,
+    40.96,
+    81.92,
 ]
 
 _GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS = [
-    1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864,
+    1,
+    4,
+    16,
+    64,
+    256,
+    1024,
+    4096,
+    16384,
+    65536,
+    262144,
+    1048576,
+    4194304,
+    16777216,
+    67108864,
 ]
 
 
@@ -130,8 +161,14 @@ class OpenTelemetryConfig:
         headers = os.getenv(
             "OTEL_EXPORTER_OTLP_HEADERS", os.getenv("OTEL_HEADERS")
         )  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
-        enable_metrics: bool = (os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "false").lower() == "true")
-        enable_events: bool = (os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", "false").lower() == "true")
+        enable_metrics: bool = (
+            os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "false").lower()
+            == "true"
+        )
+        enable_events: bool = (
+            os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", "false").lower()
+            == "true"
+        )
 
         if exporter == "in_memory":
             return cls(exporter=InMemorySpanExporter())
@@ -188,7 +225,6 @@ class OpenTelemetry(CustomLogger):
         self._init_metrics(meter_provider)
         self._init_logs_and_events(logger_provider, event_logger_provider)
         self._init_otel_logger_on_litellm_proxy()
-        
 
     def _init_otel_logger_on_litellm_proxy(self):
         """
@@ -233,21 +269,31 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry import metrics
-        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-        from opentelemetry.metrics._internal.instrument import Histogram as InternalHistogram
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+            OTLPMetricExporter,
+        )
+        from opentelemetry.metrics._internal.instrument import (
+            Histogram as InternalHistogram,
+        )
         from opentelemetry.sdk.metrics import Histogram, MeterProvider
-        from opentelemetry.sdk.metrics.export import AggregationTemporality, PeriodicExportingMetricReader
+        from opentelemetry.sdk.metrics.export import (
+            AggregationTemporality,
+            PeriodicExportingMetricReader,
+        )
 
         _metric_exporter = OTLPMetricExporter(
             endpoint=self.config.endpoint,
             headers=OpenTelemetry._get_headers_dictionary(self.config.headers),
             preferred_temporality={Histogram: AggregationTemporality.DELTA},
         )
-        _metric_reader = PeriodicExportingMetricReader(_metric_exporter, export_interval_millis=10000)
+        _metric_reader = PeriodicExportingMetricReader(
+            _metric_exporter, export_interval_millis=10000
+        )
 
         if meter_provider is None:
-            meter_provider = MeterProvider(metric_readers=[_metric_reader],
-                                           resource=_get_litellm_resource())
+            meter_provider = MeterProvider(
+                metric_readers=[_metric_reader], resource=_get_litellm_resource()
+            )
             meter = get_meter(__name__, schema_url=None)
         else:
             meter = meter_provider.get_meter(__name__)
@@ -497,9 +543,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -572,6 +618,7 @@ class OpenTelemetry(CustomLogger):
 
     def _start_primary_span(self, kwargs, response_obj, start_time, end_time, context):
         from opentelemetry.trace import Status, StatusCode
+
         otel_tracer: Tracer = self.get_tracer_to_use_for_request(kwargs)
         span = otel_tracer.start_span(
             name=self._get_span_name(kwargs),
@@ -583,7 +630,9 @@ class OpenTelemetry(CustomLogger):
         span.end(end_time=self._to_ns(end_time))
         return span
 
-    def _maybe_log_raw_request(self, kwargs, response_obj, start_time, end_time, parent_span):
+    def _maybe_log_raw_request(
+        self, kwargs, response_obj, start_time, end_time, parent_span
+    ):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
@@ -616,23 +665,42 @@ class OpenTelemetry(CustomLogger):
         std_log = kwargs.get("standard_logging_object")
         md = getattr(std_log, "metadata", None) or (std_log or {}).get("metadata", {})
         for key in [
-            "user_api_key_hash", "user_api_key_alias", "user_api_key_team_id",
-            "user_api_key_org_id", "user_api_key_user_id", "user_api_key_team_alias",
-            "user_api_key_user_email", "spend_logs_metadata", "requester_ip_address",
-            "requester_metadata", "user_api_key_end_user_id",
-            "prompt_management_metadata", "applied_guardrails",
-            "mcp_tool_call_metadata", "vector_store_request_metadata"
+            "user_api_key_hash",
+            "user_api_key_alias",
+            "user_api_key_team_id",
+            "user_api_key_org_id",
+            "user_api_key_user_id",
+            "user_api_key_team_alias",
+            "user_api_key_user_email",
+            "spend_logs_metadata",
+            "requester_ip_address",
+            "requester_metadata",
+            "user_api_key_end_user_id",
+            "prompt_management_metadata",
+            "applied_guardrails",
+            "mcp_tool_call_metadata",
+            "vector_store_request_metadata",
         ]:
             if md.get(key) is not None:
                 common_attrs[f"metadata.{key}"] = str(md[key])
 
         if self._operation_duration_histogram:
-            self._operation_duration_histogram.record(duration_s, attributes=common_attrs)
-            if response_obj and (usage := response_obj.get("usage")) and self._token_usage_histogram:
+            self._operation_duration_histogram.record(
+                duration_s, attributes=common_attrs
+            )
+            if (
+                response_obj
+                and (usage := response_obj.get("usage"))
+                and self._token_usage_histogram
+            ):
                 in_attrs = {**common_attrs, "gen_ai.token.type": "input"}
                 out_attrs = {**common_attrs, "gen_ai.token.type": "completion"}
-                self._token_usage_histogram.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
-                self._token_usage_histogram.record(usage.get("completion_tokens", 0), attributes=out_attrs)
+                self._token_usage_histogram.record(
+                    usage.get("prompt_tokens", 0), attributes=in_attrs
+                )
+                self._token_usage_histogram.record(
+                    usage.get("completion_tokens", 0), attributes=out_attrs
+                )
 
         cost = kwargs.get("response_cost")
         if self._cost_histogram and cost:
@@ -641,9 +709,11 @@ class OpenTelemetry(CustomLogger):
     def _emit_semantic_events(self, kwargs, response_obj, span):
         if not self._event_logger:
             return
-            
+
         parent_ctx = span.get_span_context()
-        provider = (kwargs.get("litellm_params") or {}).get("custom_llm_provider", "Unknown")
+        provider = (kwargs.get("litellm_params") or {}).get(
+            "custom_llm_provider", "Unknown"
+        )
 
         # per-message events
         for msg in kwargs.get("messages", []):
@@ -691,7 +761,6 @@ class OpenTelemetry(CustomLogger):
                 trace_flags=parent_ctx.trace_flags,
             )
             self._event_logger.emit(evt)
-
 
     def _create_guardrail_span(
         self, kwargs: Optional[dict], context: Optional[Context]
