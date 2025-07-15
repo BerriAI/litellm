@@ -3,13 +3,14 @@ MCP Server Utilities
 """
 from typing import Tuple
 
+import os
 import importlib
 
 # Constants
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
 LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
-MCP_TOOL_PREFIX_SEPARATOR = "-"
+MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 
 def is_mcp_available() -> bool:
@@ -77,17 +78,17 @@ def is_tool_name_prefixed(tool_name: str) -> bool:
 
 def validate_mcp_server_name(server_name: str, raise_http_exception: bool = False) -> None:
     """
-    Validate that MCP server name does not contain '-' (hyphen).
+    Validate that MCP server name does not contain 'MCP_TOOL_PREFIX_SEPARATOR'.
     
     Args:
         server_name: The server name to validate
         raise_http_exception: If True, raises HTTPException instead of generic Exception
         
     Raises:
-        Exception or HTTPException: If server name contains '-'
+        Exception or HTTPException: If server name contains 'MCP_TOOL_PREFIX_SEPARATOR'
     """
-    if server_name and '-' in server_name:
-        error_message = f"Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead. Found: {server_name}"
+    if server_name and MCP_TOOL_PREFIX_SEPARATOR in server_name:
+        error_message = f"Server name cannot contain '{MCP_TOOL_PREFIX_SEPARATOR}'. Use an alternative character instead Found: {server_name}"
         if raise_http_exception:
             from fastapi import HTTPException
             from starlette import status
