@@ -291,10 +291,10 @@ export default function ModelInfoView({
             <Button
                 type="text"
                 size="small"
-                icon={copiedStates["session-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                onClick={() => copyToClipboard(modelData.model_info.id, "session-id")}
+                icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
                 className={`left-2 z-10 transition-all duration-200 ${
-                  copiedStates["session-id"] 
+                  copiedStates["model-id"] 
                     ? 'text-green-600 bg-green-50 border-green-200' 
                     : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                 }`}
