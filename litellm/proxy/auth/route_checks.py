@@ -17,6 +17,35 @@ from .auth_checks_organization import _user_is_org_admin
 
 class RouteChecks:
     @staticmethod
+    def is_management_routes_disabled() -> bool:
+        """
+        Check if management route is disabled
+        """
+        from litellm.secret_managers.main import get_secret_bool
+
+        return get_secret_bool("DISABLE_ADMIN_ENDPOINTS") is True
+
+    @staticmethod
+    def should_call_route(route: str, valid_token: UserAPIKeyAuth):
+        """
+        Check if management route is disabled and raise exception
+        """
+        if (
+            RouteChecks.is_management_route(route=route)
+            and RouteChecks.is_management_routes_disabled()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Management routes are disabled for this instance.",
+            )
+
+        # Check if Virtual Key is allowed to call the route - Applies to all Roles
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route, valid_token=valid_token
+        )
+        return True
+
+    @staticmethod
     def is_virtual_key_allowed_to_call_route(
         route: str, valid_token: UserAPIKeyAuth
     ) -> bool:
@@ -226,6 +255,13 @@ class RouteChecks:
                 return True
 
         return False
+
+    @staticmethod
+    def is_management_route(route: str) -> bool:
+        """
+        Check if route is a management route
+        """
+        return route in LiteLLMRoutes.management_routes.value
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:
