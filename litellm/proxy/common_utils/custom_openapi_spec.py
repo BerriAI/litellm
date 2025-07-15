@@ -122,20 +122,20 @@ class CustomOpenAPISpec:
         return openapi_schema
     
     @staticmethod
-    def customize_openapi_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
+    def add_llm_api_request_schema_body(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Apply all custom OpenAPI schema modifications.
+        Add LLM API request schema bodies to OpenAPI specification for documentation.
         
         Args:
             openapi_schema: The base OpenAPI schema
             
         Returns:
-            Customized OpenAPI schema
+            OpenAPI schema with added request body schemas
         """
         # Add chat completion request schema
         openapi_schema = CustomOpenAPISpec.add_chat_completion_request_schema(openapi_schema)
         
-        # Future customizations can be added here
+        # Future LLM API request schemas can be added here
         # e.g., CustomOpenAPISpec.add_embedding_request_schema(openapi_schema)
         
         return openapi_schema 

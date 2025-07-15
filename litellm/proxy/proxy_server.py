@@ -735,9 +735,9 @@ def custom_openapi():
             paths_to_include[route] = openapi_schema["paths"][route]
     openapi_schema["paths"] = paths_to_include
     
-    # Apply custom OpenAPI schema modifications
+    # Add LLM API request schema bodies for documentation
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
-    openapi_schema = CustomOpenAPISpec.customize_openapi_schema(openapi_schema)
+    openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
     
     app.openapi_schema = openapi_schema
     return app.openapi_schema
