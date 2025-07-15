@@ -61,12 +61,12 @@ class LiteLLM_Proxy_MCP_Handler:
     def _transform_mcp_tools_to_openai(mcp_tools: List[Any]) -> List[Any]:
         """Transform MCP tools to OpenAI-compatible format."""
         from litellm.experimental_mcp_client.tools import (
-            transform_mcp_tool_to_openai_tool,
+            transform_mcp_tool_to_openai_responses_api_tool,
         )
         
         openai_tools = []
         for mcp_tool in mcp_tools:
-            openai_tool = transform_mcp_tool_to_openai_tool(mcp_tool)
+            openai_tool = transform_mcp_tool_to_openai_responses_api_tool(mcp_tool)
             openai_tools.append(openai_tool)
         
         return openai_tools
