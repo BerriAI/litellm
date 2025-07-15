@@ -2,18 +2,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
-import litellm
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
-    VectorStoreCreateRequest,
     VectorStoreCreateResponse,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
-    VectorStoreSearchRequest,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
