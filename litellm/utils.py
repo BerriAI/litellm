@@ -252,6 +252,7 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
+    AzureBlobCache,
     Cache,
     QdrantSemanticCache,
     RedisCache,
