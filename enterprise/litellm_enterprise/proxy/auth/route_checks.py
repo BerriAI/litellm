@@ -1,3 +1,5 @@
+import os
+
 from fastapi import HTTPException, status
 
 
@@ -7,7 +9,18 @@ class EnterpriseRouteChecks:
         """
         Check if llm api route is disabled
         """
+        from litellm.proxy._types import CommonProxyErrors
+        from litellm.proxy.proxy_server import premium_user
         from litellm.secret_managers.main import get_secret_bool
+
+        ## Check if DISABLE_LLM_API_ENDPOINTS is set
+        if "DISABLE_LLM_API_ENDPOINTS" in os.environ:
+            if not premium_user:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"🚨🚨🚨 DISABLING LLM API ENDPOINTS is an Enterprise feature\n🚨 {CommonProxyErrors.not_premium_user.value}",
+                )
+            return False
 
         return get_secret_bool("DISABLE_LLM_API_ENDPOINTS") is True
 
@@ -16,7 +29,16 @@ class EnterpriseRouteChecks:
         """
         Check if management route is disabled
         """
+        from litellm.proxy._types import CommonProxyErrors
+        from litellm.proxy.proxy_server import premium_user
         from litellm.secret_managers.main import get_secret_bool
+
+        if "DISABLE_ADMIN_ENDPOINTS" in os.environ:
+            if not premium_user:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"🚨🚨🚨 DISABLING LLM API ENDPOINTS is an Enterprise feature\n🚨 {CommonProxyErrors.not_premium_user.value}",
+                )
 
         return get_secret_bool("DISABLE_ADMIN_ENDPOINTS") is True
 

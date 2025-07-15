@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
 
+@patch("litellm.proxy.proxy_server.premium_user", True)
 class TestEnterpriseRouteChecks:
 
     @patch.object(EnterpriseRouteChecks, "is_management_routes_disabled")
