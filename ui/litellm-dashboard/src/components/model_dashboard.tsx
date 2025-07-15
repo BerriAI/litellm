@@ -289,7 +289,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   ]);
   const [pagination, setPagination] = React.useState<PaginationState>({
     pageIndex: 0,
-    pageSize: 10,
+    pageSize: 50,
   });
 
   const tableColumns = React.useMemo(
