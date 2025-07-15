@@ -1,5 +1,4 @@
 import json
-import sys
 import traceback
 from typing import Any, Optional
 
