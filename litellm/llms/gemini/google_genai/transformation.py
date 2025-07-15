@@ -11,7 +11,6 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:

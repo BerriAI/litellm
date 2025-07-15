@@ -3,7 +3,6 @@ This file contains the transformation logic for the Gemini realtime API.
 """
 
 import json
-import os
 import uuid
 from typing import Any, Dict, List, Optional, Union, cast
 
