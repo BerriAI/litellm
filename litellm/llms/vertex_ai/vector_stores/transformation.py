@@ -172,13 +172,36 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 content = [
                     VectorStoreResultContent(
                         text=context.get("text", ""),
-                        type="text"
+                        type="text",
                     )
                 ]
                 
+                # Extract file information
+                source_uri = context.get("sourceUri", "")
+                source_display_name = context.get("sourceDisplayName", "")
+                
+                # Generate file_id from source URI or use display name as fallback
+                file_id = source_uri if source_uri else source_display_name
+                filename = source_display_name if source_display_name else "Unknown Document"
+                
+                # Build attributes with available metadata
+                attributes = {}
+                if source_uri:
+                    attributes["sourceUri"] = source_uri
+                if source_display_name:
+                    attributes["sourceDisplayName"] = source_display_name
+                
+                # Add page span information if available
+                page_span = context.get("pageSpan", {})
+                if page_span:
+                    attributes["pageSpan"] = page_span
+                
                 result = VectorStoreSearchResult(
                     score=context.get("score", 0.0),
-                    content=content
+                    content=content,
+                    file_id=file_id,
+                    filename=filename,
+                    attributes=attributes,
                 )
                 search_results.append(result)
             
