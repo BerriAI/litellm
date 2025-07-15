@@ -39,7 +39,8 @@ import MemberModal from "../team/edit_membership"
 import ObjectPermissionsView from "../object_permissions_view"
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
-import { formatNumberWithCommas } from "@/utils/dataUtils"
+import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils"
+import { CheckIcon, CopyIcon } from "lucide-react"
 
 interface OrganizationInfoProps {
   organizationId: string
@@ -67,7 +68,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false)
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false)
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null)
-
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
   const canEditOrg = is_org_admin || is_proxy_admin
 
   const fetchOrgInfo = async () => {
@@ -204,6 +205,16 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>
   }
 
+  const copyToClipboard = async (text: string | null | undefined, key: string) => {
+    const success = await utilCopyToClipboard(text)
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }))
+      }, 2000)
+    }
+  }
+
   return (
     <div className="w-full h-screen p-4 bg-white">
       <div className="flex justify-between items-center mb-6">
@@ -212,7 +223,20 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
             Back to Organizations
           </TremorButton>
           <Title>{orgData.organization_alias}</Title>
-          <Text className="text-gray-500 font-mono">{orgData.organization_id}</Text>
+          <div className="flex items-center cursor-pointer">
+            <Text className="text-gray-500 font-mono">{orgData.organization_id}</Text>
+            <Button
+              type="text"
+              size="small"
+              icon={copiedStates["org-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(orgData.organization_id, "org-id")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["org-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
+            />
+          </div>
         </div>
       </div>
 
