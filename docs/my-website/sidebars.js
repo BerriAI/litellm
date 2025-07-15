@@ -116,7 +116,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling", "proxy/spend_logs_deletion"],
+          items: ["proxy/architecture", "proxy/control_plane_and_data_plane", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling", "proxy/spend_logs_deletion"],
         },
         {
           type: "link",
@@ -166,6 +166,7 @@ const sidebars = {
             "proxy/ui",
             "proxy/admin_ui_sso",
             "proxy/custom_root_ui",
+            "proxy/model_hub",
             "proxy/self_serve",
             "proxy/public_teams",
             "tutorials/scim_litellm",
@@ -408,6 +409,7 @@ const sidebars = {
         "providers/nvidia_nim",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
+        "providers/moonshot",
         "providers/lm_studio",
         "providers/cerebras",
         "providers/volcano",
@@ -447,7 +449,8 @@ const sidebars = {
         "providers/snowflake",
         "providers/featherless_ai",
         "providers/nebius",
-        "providers/dashscope"
+        "providers/dashscope",
+        "providers/bytez"
       ],
     },
     {
