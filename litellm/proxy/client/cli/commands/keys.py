@@ -156,3 +156,130 @@ def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
         except json.JSONDecodeError:
             click.echo(e.response.text, err=True)
         raise click.Abort()
+
+
+@keys.command(name="import")
+@click.option(
+    "--source-base-url", required=True, help="Base URL of the source LiteLLM proxy server to import keys from"
+)
+@click.option("--source-api-key", help="API key for authentication to the source server")
+@click.option("--dry-run", is_flag=True, help="Show what would be imported without actually importing")
+@click.pass_context
+def import_keys(ctx: click.Context, source_base_url: str, source_api_key: Optional[str], dry_run: bool):
+    """Import API keys from another LiteLLM instance"""
+    # Create clients for both source and destination
+    source_client = KeysManagementClient(source_base_url, source_api_key)
+    dest_client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
+
+    try:
+        # Get all keys from source instance with pagination
+        click.echo(f"Fetching keys from source server: {source_base_url}")
+        source_keys = []
+        page = 1
+        page_size = 100  # Use a larger page size to minimize API calls
+
+        while True:
+            source_response = source_client.list(return_full_object=True, page=page, size=page_size)
+            page_keys = source_response.get("keys", [])
+
+            if not page_keys:
+                break
+
+            source_keys.extend(page_keys)
+            click.echo(f"Fetched page {page}: {len(page_keys)} keys")
+
+            # Check if we got fewer keys than the page size, indicating last page
+            if len(page_keys) < page_size:
+                break
+
+            page += 1
+
+        if not source_keys:
+            click.echo("No keys found in source instance.")
+            return
+
+        click.echo(f"Found {len(source_keys)} keys in source instance.")
+
+        if dry_run:
+            click.echo("\n--- DRY RUN MODE ---")
+            table = Table(title="Keys that would be imported")
+            table.add_column("Key Alias", style="green")
+            table.add_column("User ID", style="magenta")
+            table.add_column("Created", style="cyan")
+
+            for key in source_keys:
+                created_at = key.get("created_at", "")
+                # Format the timestamp if it exists
+                if created_at:
+                    try:
+                        from datetime import datetime
+
+                        # Try to parse and format the timestamp for better readability
+                        if isinstance(created_at, str):
+                            # Handle common timestamp formats
+                            if "T" in created_at:
+                                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                                created_at = dt.strftime("%Y-%m-%d %H:%M")
+                    except:
+                        # If parsing fails, just use the original value
+                        pass
+
+                table.add_row(str(key.get("key_alias", "")), str(key.get("user_id", "")), str(created_at))
+            rich.print(table)
+            return
+
+        # Import each key
+        imported_count = 0
+        failed_count = 0
+
+        for key in source_keys:
+            try:
+                # Prepare key data for import
+                import_data = {}
+
+                if key.get("models"):
+                    import_data["models"] = key["models"]
+                if key.get("aliases"):
+                    import_data["aliases"] = key["aliases"]
+                if key.get("spend"):
+                    import_data["spend"] = key["spend"]
+                if key.get("key_alias"):
+                    import_data["key_alias"] = key["key_alias"]
+                if key.get("team_id"):
+                    import_data["team_id"] = key["team_id"]
+                if key.get("user_id"):
+                    import_data["user_id"] = key["user_id"]
+                if key.get("budget_id"):
+                    import_data["budget_id"] = key["budget_id"]
+                if key.get("config"):
+                    import_data["config"] = key["config"]
+
+                # Generate the key in destination instance
+                response = dest_client.generate(**import_data)
+                imported_count += 1
+
+                key_alias = key.get("key_alias", "N/A")
+                click.echo(f"✓ Imported key: {key_alias}")
+
+            except Exception as e:
+                failed_count += 1
+                key_alias = key.get("key_alias", "N/A")
+                click.echo(f"✗ Failed to import key {key_alias}: {str(e)}", err=True)
+
+        # Summary
+        click.echo(f"\nImport completed:")
+        click.echo(f"  Successfully imported: {imported_count}")
+        click.echo(f"  Failed to import: {failed_count}")
+        click.echo(f"  Total keys processed: {len(source_keys)}")
+
+    except requests.exceptions.HTTPError as e:
+        click.echo(f"Error: HTTP {e.response.status_code}", err=True)
+        try:
+            error_body = e.response.json()
+            rich.print_json(data=error_body)
+        except json.JSONDecodeError:
+            click.echo(e.response.text, err=True)
+        raise click.Abort()
+    except Exception as e:
+        click.echo(f"Error: {str(e)}", err=True)
+        raise click.Abort()
