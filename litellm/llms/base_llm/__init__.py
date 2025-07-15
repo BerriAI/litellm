@@ -1,4 +1,5 @@
 from .anthropic_messages.transformation import BaseAnthropicMessagesConfig
+from .audio_speech.transformation import BaseAudioSpeechConfig
 from .audio_transcription.transformation import BaseAudioTranscriptionConfig
 from .chat.transformation import BaseConfig
 from .embedding.transformation import BaseEmbeddingConfig
@@ -8,6 +9,7 @@ from .image_generation.transformation import BaseImageGenerationConfig
 __all__ = [
     "BaseImageGenerationConfig",
     "BaseConfig",
+    "BaseAudioSpeechConfig",
     "BaseAudioTranscriptionConfig",
     "BaseAnthropicMessagesConfig",
     "BaseEmbeddingConfig",

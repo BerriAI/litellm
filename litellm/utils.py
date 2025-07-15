@@ -6960,6 +6960,21 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def get_provider_audio_speech_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional["BaseAudioSpeechConfig"]:
+        from litellm.llms.base_llm.audio_speech.transformation import BaseAudioSpeechConfig
+        
+        if litellm.LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.text_to_speech.transformation import (
+                ElevenLabsTextToSpeechConfig,
+            )
+
+            return ElevenLabsTextToSpeechConfig()
+        return None
+
+    @staticmethod
     def get_provider_responses_api_config(
         provider: LlmProviders,
         model: Optional[str] = None,

@@ -9,7 +9,7 @@ def get_supported_openai_params(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     request_type: Literal[
-        "chat_completion", "embeddings", "transcription"
+        "chat_completion", "embeddings", "transcription", "audio_speech"
     ] = "chat_completion",
 ) -> Optional[list]:
     """
@@ -259,6 +259,15 @@ def get_supported_openai_params(  # noqa: PLR0915
             )
             return (
                 ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(
+                    model=model
+                )
+            )
+        elif request_type == "audio_speech":
+            from litellm.llms.elevenlabs.text_to_speech.transformation import (
+                ElevenLabsTextToSpeechConfig,
+            )
+            return (
+                ElevenLabsTextToSpeechConfig().get_supported_openai_params(
                     model=model
                 )
             )

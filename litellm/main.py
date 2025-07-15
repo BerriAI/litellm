@@ -5421,6 +5421,95 @@ def speech(  # noqa: PLR0915
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
         )
+    elif custom_llm_provider == "elevenlabs":
+        # ElevenLabs text-to-speech
+        from litellm.llms.elevenlabs.text_to_speech.transformation import (
+            ElevenLabsTextToSpeechConfig,
+        )
+        from litellm.llms.custom_httpx.llm_http_handler import base_llm_http_handler
+
+        elevenlabs_config = ElevenLabsTextToSpeechConfig()
+        
+        # Validate environment and get headers
+        headers = elevenlabs_config.validate_environment(
+            headers=headers or {},
+            model=model,
+            messages=[],  # Not used for TTS
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        
+        # Get complete URL
+        api_base = elevenlabs_config.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+        )
+        
+        # Transform request
+        request_data = elevenlabs_config.transform_audio_speech_request(
+            model=model,
+            input=input,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            headers=headers,
+        )
+        
+        # Log the request
+        logging_obj.pre_call(
+            input=[],
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": request_data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+        
+        # Make HTTP request using llm_http_handler
+        if aspeech:
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+            
+            async_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ELEVENLABS
+            )
+            
+            import asyncio
+            
+            async def make_async_request():
+                async_response = await async_client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data,
+                    timeout=timeout,
+                )
+                return elevenlabs_config.transform_audio_speech_response(
+                    model=model,
+                    raw_response=async_response,
+                )
+                
+            # Run the async request in the current event loop
+            loop = asyncio.get_event_loop()
+            response = loop.run_until_complete(make_async_request())
+        else:
+            from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+            
+            sync_client = _get_httpx_client()
+            sync_response = sync_client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+            
+            response = elevenlabs_config.transform_audio_speech_response(
+                model=model,
+                raw_response=sync_response,
+            )
 
     if response is None:
         raise Exception(

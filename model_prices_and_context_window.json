@@ -16018,6 +16018,48 @@
             "notes": "ElevenLabs Scribe v1 experimental - enhanced version of the main Scribe model"
         }
     },
+    "elevenlabs/eleven_multilingual_v2": {
+        "mode": "audio_speech",
+        "input_cost_per_character": 3e-05,
+        "litellm_provider": "elevenlabs",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://elevenlabs.io/pricing",
+        "metadata": {
+            "original_pricing_per_1k_chars": 0.03,
+            "calculation": "$0.03/1k characters = $0.00003 per character",
+            "notes": "ElevenLabs Multilingual v2 - high-quality TTS model with support for 29 languages"
+        }
+    },
+    "elevenlabs/eleven_flash_v2_5": {
+        "mode": "audio_speech", 
+        "input_cost_per_character": 1e-05,
+        "litellm_provider": "elevenlabs",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://elevenlabs.io/pricing",
+        "metadata": {
+            "original_pricing_per_1k_chars": 0.01,
+            "calculation": "$0.01/1k characters = $0.00001 per character",
+            "notes": "ElevenLabs Flash v2.5 - fast, affordable TTS model with ultra-low latency"
+        }
+    },
+    "elevenlabs/eleven_turbo_v2_5": {
+        "mode": "audio_speech",
+        "input_cost_per_character": 2e-05,
+        "litellm_provider": "elevenlabs",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "source": "https://elevenlabs.io/pricing",
+        "metadata": {
+            "original_pricing_per_1k_chars": 0.02,
+            "calculation": "$0.02/1k characters = $0.00002 per character", 
+            "notes": "ElevenLabs Turbo v2.5 - balanced quality and speed with low latency"
+        }
+    },
     "dashscope/qwen-max": {
         "max_tokens": 32768,
         "max_input_tokens": 30720,
