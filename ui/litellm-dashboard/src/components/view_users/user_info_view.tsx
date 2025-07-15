@@ -202,7 +202,6 @@ export default function UserInfoView({
               }`}
             />
           </div>
-          <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
@@ -347,7 +346,6 @@ export default function UserInfoView({
                         }`}
                       />
                     </div>
-                    <Text className="font-mono">{userData.user_id}</Text>
                   </div>
 
                   <div>
