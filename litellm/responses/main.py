@@ -138,10 +138,11 @@ async def aresponses_api_with_mcp(
     
     # Get available tools from MCP manager if we have MCP tools
     openai_tools = []
+    mcp_tools_fetched = []
     if mcp_tools_with_litellm_proxy:
         user_api_key_auth = kwargs.get("user_api_key_auth")
-        mcp_tools = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(user_api_key_auth)
-        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(mcp_tools)
+        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(user_api_key_auth)
+        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(mcp_tools_fetched)
     
     # Combine with other tools
     all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -193,7 +194,11 @@ async def aresponses_api_with_mcp(
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(tool_calls=tool_calls, user_api_key_auth=user_api_key_auth)
             
             if tool_results:
-                follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(response=response, tool_results=tool_results)
+                follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+                    response=response, 
+                    tool_results=tool_results, 
+                    original_input=input
+                )
                 
                 final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
                     follow_up_input=follow_up_input,
@@ -203,6 +208,13 @@ async def aresponses_api_with_mcp(
                     **call_params
                 )
                 
+                # Add custom output elements to the final response
+                if isinstance(final_response, ResponsesAPIResponse):
+                    final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
+                        response=final_response,
+                        mcp_tools_fetched=mcp_tools_fetched,
+                        tool_results=tool_results
+                    )
                 return final_response
     
     return response

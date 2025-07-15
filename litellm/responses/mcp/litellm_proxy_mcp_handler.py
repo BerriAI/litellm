@@ -214,31 +214,60 @@ class LiteLLM_Proxy_MCP_Handler:
         return tool_results
     
     @staticmethod
-    def _create_follow_up_input(response: ResponsesAPIResponse, tool_results: List[Dict[str, Any]]) -> List[Any]:
+    def _create_follow_up_input(
+        response: ResponsesAPIResponse, 
+        tool_results: List[Dict[str, Any]], 
+        original_input: Any = None
+    ) -> List[Any]:
         """Create follow-up input with tool results in proper format."""
         follow_up_input = []
         
-        # Add the original response (assistant message with tool calls)
-        # Transform response output back to input format for follow-up
+        # Add original user input if available to maintain conversation context
+        if original_input:
+            if isinstance(original_input, str):
+                follow_up_input.append({
+                    "type": "message",
+                    "role": "user",
+                    "content": original_input
+                })
+            elif isinstance(original_input, list):
+                follow_up_input.extend(original_input)
+            else:
+                follow_up_input.append(original_input)
+        
+        # Add the assistant message with function calls
+        assistant_message_content = []
+        function_calls = []
+        
         for output_item in response.output:
             if isinstance(output_item, dict):
                 if output_item.get("type") == "function_call":
-                    # Add function call to input
-                    follow_up_input.append({
+                    function_calls.append({
                         "type": "function_call",
                         "call_id": output_item.get("call_id") or output_item.get("id"),
                         "name": output_item.get("name"),
                         "arguments": output_item.get("arguments")
                     })
                 elif output_item.get("type") == "message":
-                    # Add message content
-                    follow_up_input.append({
-                    "type": "message",
-                        "role": output_item.get("role", "assistant"),
-                        "content": output_item.get("content", "")
-                    })
+                    # Extract content from message
+                    content = output_item.get("content", [])
+                    if isinstance(content, list):
+                        assistant_message_content.extend(content)
+                    else:
+                        assistant_message_content.append(content)
         
-        # Add tool results
+        # Add assistant message with content and function calls
+        if assistant_message_content or function_calls:
+            follow_up_input.append({
+                "type": "message",
+                "role": "assistant",
+                "content": assistant_message_content
+            })
+            
+            # Add function calls after assistant message
+            follow_up_input.extend(function_calls)
+        
+        # Add tool results (function call outputs)
         for tool_result in tool_results:
             follow_up_input.append({
                 "type": "function_call_output",
@@ -264,3 +293,52 @@ class LiteLLM_Proxy_MCP_Handler:
             previous_response_id=response_id,  # Link to previous response
             **call_params
         )
+
+    @staticmethod
+    def _add_mcp_output_elements_to_response(
+        response: ResponsesAPIResponse,
+        mcp_tools_fetched: List[Any],
+        tool_results: List[Dict[str, Any]]
+    ) -> ResponsesAPIResponse:
+        """Add custom output elements to the final response for MCP tool execution."""
+        # Import the required classes for creating output items
+        import json
+        import uuid
+
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        # Create output element for initial MCP tools
+        mcp_tools_output = GenericResponseOutputItem(
+            type="mcp_tools_fetched",
+            id=f"mcp_tools_{uuid.uuid4().hex[:8]}",
+            status="completed",
+            role="system",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text=json.dumps(mcp_tools_fetched, indent=2, default=str),
+                    annotations=[]
+                )
+            ]
+        )
+        
+        # Create output element for tool execution results
+        tool_results_output = GenericResponseOutputItem(
+            type="tool_execution_results",
+            id=f"tool_results_{uuid.uuid4().hex[:8]}",
+            status="completed",
+            role="system",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text=json.dumps(tool_results, indent=2, default=str),
+                    annotations=[]
+                )
+            ]
+        )
+        
+        # Add the new output elements to the response
+        response.output.append(mcp_tools_output.model_dump())  # type: ignore
+        response.output.append(tool_results_output.model_dump())  # type: ignore
+        
+        return response
