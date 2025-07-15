@@ -11,21 +11,23 @@ import litellm
 @dataclass
 class MetricValidationError:
     """Error for invalid metric name"""
+
     metric_name: str
     valid_metrics: Tuple[str, ...]
-    
+
     @property
     def message(self) -> str:
         return f"Invalid metric name: {self.metric_name}"
 
 
-@dataclass 
+@dataclass
 class LabelValidationError:
     """Error for invalid labels on a metric"""
+
     metric_name: str
     invalid_labels: List[str]
     valid_labels: List[str]
-    
+
     @property
     def message(self) -> str:
         return f"Invalid labels for metric '{self.metric_name}': {self.invalid_labels}"
@@ -34,13 +36,14 @@ class LabelValidationError:
 @dataclass
 class ValidationResults:
     """Container for all validation results"""
+
     metric_errors: List[MetricValidationError]
     label_errors: List[LabelValidationError]
-    
+
     @property
     def has_errors(self) -> bool:
         return bool(self.metric_errors or self.label_errors)
-    
+
     @property
     def all_error_messages(self) -> List[str]:
         messages = [error.message for error in self.metric_errors]
@@ -345,10 +348,25 @@ class PrometheusMetricLabels:
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
         default_labels = getattr(PrometheusMetricLabels, label_name)
-        return default_labels + [
-            metric.replace(".", "_")
-            for metric in litellm.custom_prometheus_metadata_labels
-        ]
+        custom_labels = []
+
+        # Add custom metadata labels
+        custom_labels.extend(
+            [
+                metric.replace(".", "_")
+                for metric in litellm.custom_prometheus_metadata_labels
+            ]
+        )
+
+        # Add custom tags labels
+        custom_labels.extend(
+            [
+                f"tag_{tag}".replace("-", "_").replace(".", "_")
+                for tag in litellm.custom_prometheus_tags
+            ]
+        )
+
+        return default_labels + custom_labels
 
 
 from typing import List, Optional

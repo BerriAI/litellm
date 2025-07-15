@@ -90,10 +90,10 @@ async def test_mcp_server_manager_https_server():
         
         # Verify tools were returned and properly prefixed
         assert len(tools) == 1
-        assert tools[0].name == "zapier_mcp_server/gmail_send_email"
+        assert tools[0].name == "zapier_mcp_server-gmail_send_email"
         
         result = await mcp_server_manager.call_tool(
-            name="zapier_mcp_server/gmail_send_email",
+            name="zapier_mcp_server-gmail_send_email",
             arguments={
                 "body": "Test",
                 "message": "Test",
@@ -177,16 +177,16 @@ async def test_mcp_http_transport_list_tools_mock():
         
         # Assertions
         assert len(tools) == 2
-        assert tools[0].name == "test_http_server/gmail_send_email"
-        assert tools[1].name == "test_http_server/calendar_create_event"
+        assert tools[0].name == "test_http_server-gmail_send_email"
+        assert tools[1].name == "test_http_server-calendar_create_event"
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
         mock_client.list_tools.assert_called_once()
         
         # Verify tool mapping was updated
-        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/gmail_send_email"] == "test_http_server"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server/calendar_create_event"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server-gmail_send_email"] == "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server-calendar_create_event"] == "test_http_server"
 
 
 @pytest.mark.asyncio
@@ -640,7 +640,7 @@ async def test_list_tools_rest_api_success():
 
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
-            assert response["tools"][0].name == "test_server/test_tool"
+            assert response["tools"][0].name == "test_server-test_tool"
     finally:
         # Restore original state
         global_mcp_server_manager.registry = {}
@@ -696,7 +696,7 @@ async def test_get_tools_from_mcp_servers():
             result = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header=mock_auth_header,
-                mcp_servers=["server1"]
+                mcp_servers=["server1"],
             )
             assert len(result) == 1, "Should only return tools from server1"
             assert result[0].name == "tool1", "Should return tool from server1"
@@ -708,7 +708,7 @@ async def test_get_tools_from_mcp_servers():
             result = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header=mock_auth_header,
-                mcp_servers=None
+                mcp_servers=None,
             )
             assert len(result) == 2, "Should return tools from all servers"
             assert result[0].name == "tool1" and result[1].name == "tool2", "Should return tools from all servers"

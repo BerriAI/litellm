@@ -339,6 +339,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             request_data=data,
             api_base=api_base,
+            api_key=api_key,
             stream=stream,
             fake_stream=fake_stream,
             model=model,
@@ -1324,6 +1325,7 @@ class BaseLLMHTTPHandler:
             ),  # dynamic aws_* params are passed under litellm_params
             request_data=request_body,
             api_base=request_url,
+            api_key=api_key,
             stream=stream,
             fake_stream=False,
             model=model,
@@ -2697,6 +2699,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
         )
 
@@ -2719,6 +2722,7 @@ class BaseLLMHTTPHandler:
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     def vector_store_search_handler(
@@ -2778,6 +2782,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
         )
 
@@ -2800,6 +2805,7 @@ class BaseLLMHTTPHandler:
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     async def async_vector_store_create_handler(

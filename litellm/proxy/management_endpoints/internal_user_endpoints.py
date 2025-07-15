@@ -246,6 +246,36 @@ def check_if_default_team_set() -> Optional[Union[List[str], List[NewUserRequest
     return None
 
 
+async def add_new_user_to_default_team(
+    user_id: str,
+    user_email: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    teams: Union[List[str], List[NewUserRequestTeam]],
+    prisma_client: "PrismaClient",
+):
+    tasks = []
+    for team in teams:
+        user_role: Literal["user", "admin"] = "user"
+        if isinstance(team, str):
+            team_id = team
+        elif isinstance(team, NewUserRequestTeam):
+            team_id = team.team_id
+            user_role = team.user_role
+        else:
+            raise ValueError(f"Invalid team type: {type(team)}")
+
+        tasks.append(
+            _add_user_to_team(
+                user_id=user_id,
+                team_id=team_id,
+                user_email=user_email,
+                user_api_key_dict=user_api_key_dict,
+                user_role=user_role,
+            )
+        )
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -362,30 +392,13 @@ async def new_user(
                 user_role="user",
             )
         elif teams is not None:
-            tasks = []
-            for team in teams:
-                max_budget_in_team: Optional[float] = None
-                user_role: Literal["user", "admin"] = "user"
-                if isinstance(team, str):
-                    team_id = team
-                elif isinstance(team, NewUserRequestTeam):
-                    team_id = team.team_id
-                    max_budget_in_team = team.max_budget_in_team
-                    user_role = team.user_role
-                else:
-                    raise ValueError(f"Invalid team type: {type(team)}")
-
-                tasks.append(
-                    _add_user_to_team(
-                        user_id=cast(str, response.get("user_id")),
-                        team_id=team_id,
-                        user_email=data.user_email,
-                        user_api_key_dict=user_api_key_dict,
-                        max_budget_in_team=max_budget_in_team,
-                        user_role=user_role,
-                    )
-                )
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await add_new_user_to_default_team(
+                user_id=cast(str, response.get("user_id")),
+                user_email=data.user_email,
+                user_api_key_dict=user_api_key_dict,
+                teams=teams,
+                prisma_client=prisma_client,
+            )
 
         user_id = cast(Optional[str], response.get("user_id", None))
 
@@ -1451,16 +1464,17 @@ def update_breakdown_metrics(
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
     # Update model breakdown
-    if record.model not in breakdown.models:
-        breakdown.models[record.model] = MetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=model_metadata.get(
-                record.model, {}
-            ),  # Add any model-specific metadata here
+    if record.model:
+        if record.model not in breakdown.models:
+            breakdown.models[record.model] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=model_metadata.get(
+                    record.model, {}
+                ),  # Add any model-specific metadata here
+            )
+        breakdown.models[record.model].metrics = update_metrics(
+            breakdown.models[record.model].metrics, record
         )
-    breakdown.models[record.model].metrics = update_metrics(
-        breakdown.models[record.model].metrics, record
-    )
 
     # Update provider breakdown
     provider = record.custom_llm_provider or "unknown"
