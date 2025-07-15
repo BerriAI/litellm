@@ -2,9 +2,19 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Scaling with Multiple Instances
+# Control Plane and Data Plane (Enterprise)
 
 Learn how to deploy LiteLLM across multiple instances while maintaining centralized administration and avoiding duplication of management overhead.
+
+:::info
+
+✨ This requires LiteLLM Enterprise features.
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
+
+:::
 
 ## Overview
 
@@ -38,7 +48,7 @@ The admin instance handles all management operations and provides the UI.
 # Keep admin capabilities enabled (default behavior)
 # DISABLE_ADMIN_UI=false          # Admin UI available
 # DISABLE_ADMIN_ENDPOINTS=false   # Management APIs available
-
+DISABLE_LLM_ENDPOINTS=true      # LLM APIs disabled
 DATABASE_URL=postgresql://user:pass@global-db:5432/litellm
 LITELLM_MASTER_KEY=your-master-key
 ```
@@ -76,6 +86,16 @@ DISABLE_ADMIN_UI=true
 
 ### `DISABLE_ADMIN_ENDPOINTS`
 
+:::info
+
+✨ This is an Enterprise feature.
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
+
+:::
+
 Disables all management/admin API endpoints.
 
 - **Default**: `false`  
@@ -102,6 +122,48 @@ DISABLE_ADMIN_ENDPOINTS=true
 - `/health` - Basic health check
 - `/metrics` - Prometheus metrics
 - All other LLM API endpoints
+
+
+### `DISABLE_LLM_ENDPOINTS`
+
+:::info
+
+✨ This is an Enterprise feature.
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
+
+:::
+
+Disables all LLM API endpoints.
+
+- **Default**: `false`
+- **Worker Instances**: Leave as `false` (or don't set)
+- **Admin Instance**: Set to `true`
+
+```bash
+# Admin instance
+DISABLE_LLM_ENDPOINTS=true
+```
+
+
+**Disabled Endpoints Include**:
+- `/chat/completions` - LLM requests
+- `/v1/*` - OpenAI-compatible APIs
+- `/vertex_ai/*` - Vertex AI pass-through APIs
+- `/bedrock/*` - Bedrock pass-through APIs
+- `/health` - Basic health check
+- `/metrics` - Prometheus metrics
+- All other LLM API endpoints
+
+
+**Available Endpoints** (when disabled):
+- `/key/*` - Key management
+- `/user/*` - User management  
+- `/team/*` - Team management
+- `/config/*` - Configuration updates
+- All other administrative endpoints
 
 
 ## Usage Patterns
