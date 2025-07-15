@@ -8,6 +8,9 @@ import { MCPToolsViewer } from "."
 import MCPServerEdit from "./mcp_server_edit"
 import MCPServerCostDisplay from "./mcp_server_cost_display"
 import { getMaskedAndFullUrl } from "./utils"
+import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
+import { CheckIcon, CopyIcon } from "lucide-react"
+import { Button as AntdButton } from "antd"
 
 interface MCPServerViewProps {
   mcpServer: MCPServer
@@ -32,7 +35,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 }) => {
   const [editing, setEditing] = useState(isEditing)
   const [showFullUrl, setShowFullUrl] = useState(false)
-
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false)
     onBack()
@@ -45,6 +48,16 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
     return showFull ? url : maskedUrl
   }
 
+  const copyToClipboard = async (text: string | null | undefined, key: string) => {
+    const success = await utilCopyToClipboard(text)
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }))
+      }, 2000)
+    }
+  }
+
   return (
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
@@ -53,7 +66,20 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             Back to All Servers
           </Button>
           <Title>{mcpServer.alias}</Title>
-          <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
+          <div className="flex items-center cursor-pointer">
+            <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
+            <AntdButton
+              type="text"
+              size="small"
+              icon={copiedStates["mcp-server-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(mcpServer.server_id, "mcp-server-id")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["mcp-server-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
+              />
+          </div>
         </div>
       </div>
 
