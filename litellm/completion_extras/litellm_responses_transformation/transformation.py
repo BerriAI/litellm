@@ -454,17 +454,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         """Convert chat completion tools to responses API tools format"""
         responses_tools = []
         for tool in tools:
-            if tool.get("type") == "function":
-                function = tool.get("function", {})
-                responses_tools.append(
-                    {
-                        "type": "function",
-                        "name": function.get("name", ""),
-                        "description": function.get("description", ""),
-                        "parameters": function.get("parameters", {}),
-                        "strict": function.get("strict", False),
-                    }
-                )
+            responses_tools.append(tool)
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
     def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
@@ -647,7 +637,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
-                            index=parsed_chunk.get("summary_index"), delta=Delta(reasoning_content=content_part)
+                            index=cast(int, parsed_chunk.get("summary_index")),
+                            delta=Delta(reasoning_content=content_part),
                         )
                     ]
                 )
