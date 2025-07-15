@@ -197,32 +197,26 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 }
 ```
 
-### How it works when server_url="litellm_proxy"
-
-When you set `server_url="litellm_proxy"`, LiteLLM acts as a bridge between providers that don't natively support MCP and your MCP tools. Here's how the process works:
-
-1. **Tool Discovery**: LiteLLM fetches all available tools from your configured MCP servers and converts them into OpenAI-compatible tool definitions.
-
-2. **Initial LLM Call**: The list of available tools is sent to the LLM (e.g., GPT-4, Claude, etc.) along with your input. The LLM decides which tools to call based on your request.
-
-3. **Tool Execution**: When the LLM responds with tool calls, LiteLLM automatically:
-   - Parses the tool call arguments
-   - Routes the call to the appropriate MCP server
-   - Executes the tool with the provided arguments
-   - Retrieves the results from the MCP server
-
-4. **Response Integration**: The tool results are sent back to the LLM, which then generates a final response incorporating the tool outputs.
-
-5. **Unified Response**: You receive a complete response that seamlessly integrates the LLM's reasoning with the results from your MCP tools.
-
-This approach allows you to use MCP tools with any LLM provider supported by LiteLLM, even if they don't have native MCP support. The entire process is transparent to the user - you simply make a request and get back a response that includes both LLM reasoning and tool execution results.
-
-#### Auto-execution for `require_approval: "never"`
-
-When you set `require_approval: "never"` in your MCP tool configuration, LiteLLM will automatically execute the tools and return the final response in a single API call. This provides a seamless experience where tool calls are handled transparently without requiring additional interactions.
-
 </TabItem>
 </Tabs>
+
+#### How it works when server_url="litellm_proxy"
+
+When server_url="litellm_proxy", LiteLLM bridges non-MCP providers to your MCP tools.
+
+- Tool Discovery: LiteLLM fetches MCP tools and converts them to OpenAI-compatible definitions
+- LLM Call: Tools are sent to the LLM with your input; LLM selects which tools to call
+- Tool Execution: LiteLLM automatically parses arguments, routes calls to MCP servers, executes tools, and retrieves results
+- Response Integration: Tool results are sent back to LLM for final response generation
+- Output: Complete response combining LLM reasoning with tool execution results
+
+This enables MCP tool usage with any LiteLLM-supported provider, regardless of native MCP support.
+
+#### Auto-execution for require_approval: "never"
+
+Setting require_approval: "never" triggers automatic tool execution, returning the final response in a single API call without additional user interaction.
+
+
 
 ### Specific MCP Servers
 
