@@ -352,6 +352,10 @@ def responses(
     Synchronous version of the Responses API.
     Uses the synchronous HTTP handler to make requests.
     """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+    
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -361,7 +365,9 @@ def responses(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        ## MOCK RESPONSE LOGIC
+        #########################################################
+        # MOCK RESPONSE LOGIC
+        #########################################################
         if litellm_params.mock_response and isinstance(
             litellm_params.mock_response, str
         ):
@@ -380,6 +386,13 @@ def responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+        #########################################################
+        # Native MCP Responses API
+        #########################################################
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+            return aresponses_api_with_mcp(
+                **local_vars,
+            )
 
         # get provider config
         responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (

@@ -12,6 +12,19 @@ class LiteLLM_Proxy_MCP_Handler:
 
     This handles when a user passes mcp server_url="litellm_proxy" in their tools.
     """
+
+    @staticmethod
+    def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
+        """
+        Returns True if the user passed a MCP tool with server_url="litellm_proxy"
+        """
+        if tools:
+            for tool in tools:
+                if (isinstance(tool, dict) and 
+                    tool.get("type") == "mcp" and 
+                    tool.get("server_url") == "litellm_proxy"):
+                    return True
+        return False
     
     @staticmethod
     def _parse_mcp_tools(tools: Optional[Iterable[ToolParam]]) -> Tuple[List[ToolParam], List[Any]]:
