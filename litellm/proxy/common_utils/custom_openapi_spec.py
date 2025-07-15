@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type, Union
 
 verbose_proxy_logger = logging.getLogger("litellm.proxy.proxy_server")
 
@@ -94,6 +94,53 @@ class CustomOpenAPISpec:
                 }
     
     @staticmethod
+    def add_request_schema(
+        openapi_schema: Dict[str, Any], 
+        model_class: Type, 
+        schema_name: str, 
+        paths: List[str],
+        operation_name: str
+    ) -> Dict[str, Any]:
+        """
+        Generic method to add a request schema to OpenAPI specification.
+        
+        Args:
+            openapi_schema: The OpenAPI schema dict to modify
+            model_class: The Pydantic model class to get schema from
+            schema_name: Name for the schema component
+            paths: List of paths to add the request body to
+            operation_name: Name of the operation for logging (e.g., "chat completion", "embedding")
+            
+        Returns:
+            Modified OpenAPI schema
+        """
+        try:
+            # Get the schema for the model class
+            request_schema = CustomOpenAPISpec.get_pydantic_schema(model_class)
+            
+            # Only proceed if we successfully got the schema
+            if request_schema is not None:
+                # Add schema to components
+                CustomOpenAPISpec.add_schema_to_components(openapi_schema, schema_name, request_schema)
+                
+                # Add request body to specified endpoints
+                CustomOpenAPISpec.add_request_body_to_paths(
+                    openapi_schema, 
+                    paths, 
+                    f"#/components/schemas/{schema_name}"
+                )
+                
+                verbose_proxy_logger.debug(f"Successfully added {schema_name} schema to OpenAPI spec")
+            else:
+                verbose_proxy_logger.debug(f"Could not get schema for {schema_name}")
+                
+        except Exception as e:
+            # If schema addition fails, continue without it
+            verbose_proxy_logger.debug(f"Failed to add {operation_name} request schema: {str(e)}")
+        
+        return openapi_schema
+    
+    @staticmethod
     def add_chat_completion_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
         """
         Add ProxyChatCompletionRequest schema to chat completion endpoints for documentation.
@@ -107,31 +154,17 @@ class CustomOpenAPISpec:
         """
         try:
             from litellm.proxy._types import ProxyChatCompletionRequest
-
-            # Get the schema for ProxyChatCompletionRequest
-            request_schema = CustomOpenAPISpec.get_pydantic_schema(ProxyChatCompletionRequest)
             
-            # Only proceed if we successfully got the schema
-            if request_schema is not None:
-                # Add schema to components
-                CustomOpenAPISpec.add_schema_to_components(openapi_schema, "ProxyChatCompletionRequest", request_schema)
-                
-                # Add request body to chat completion endpoints
-                CustomOpenAPISpec.add_request_body_to_paths(
-                    openapi_schema, 
-                    CustomOpenAPISpec.CHAT_COMPLETION_PATHS, 
-                    "#/components/schemas/ProxyChatCompletionRequest"
-                )
-                
-                verbose_proxy_logger.debug("Successfully added ProxyChatCompletionRequest schema to OpenAPI spec")
-            else:
-                verbose_proxy_logger.debug("Could not get schema for ProxyChatCompletionRequest")
-                
-        except Exception as e:
-            # If schema addition fails, continue without it
-            verbose_proxy_logger.debug(f"Failed to add chat completion request schema: {str(e)}")
-        
-        return openapi_schema
+            return CustomOpenAPISpec.add_request_schema(
+                openapi_schema=openapi_schema,
+                model_class=ProxyChatCompletionRequest,
+                schema_name="ProxyChatCompletionRequest",
+                paths=CustomOpenAPISpec.CHAT_COMPLETION_PATHS,
+                operation_name="chat completion"
+            )
+        except ImportError as e:
+            verbose_proxy_logger.debug(f"Failed to import ProxyChatCompletionRequest: {str(e)}")
+            return openapi_schema
     
     @staticmethod
     def add_embedding_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -147,31 +180,17 @@ class CustomOpenAPISpec:
         """
         try:
             from litellm.types.embedding import EmbeddingRequest
-
-            # Get the schema for EmbeddingRequest
-            request_schema = CustomOpenAPISpec.get_pydantic_schema(EmbeddingRequest)
             
-            # Only proceed if we successfully got the schema
-            if request_schema is not None:
-                # Add schema to components
-                CustomOpenAPISpec.add_schema_to_components(openapi_schema, "EmbeddingRequest", request_schema)
-                
-                # Add request body to embedding endpoints
-                CustomOpenAPISpec.add_request_body_to_paths(
-                    openapi_schema, 
-                    CustomOpenAPISpec.EMBEDDING_PATHS, 
-                    "#/components/schemas/EmbeddingRequest"
-                )
-                
-                verbose_proxy_logger.debug("Successfully added EmbeddingRequest schema to OpenAPI spec")
-            else:
-                verbose_proxy_logger.debug("Could not get schema for EmbeddingRequest")
-                
-        except Exception as e:
-            # If schema addition fails, continue without it
-            verbose_proxy_logger.debug(f"Failed to add embedding request schema: {str(e)}")
-        
-        return openapi_schema
+            return CustomOpenAPISpec.add_request_schema(
+                openapi_schema=openapi_schema,
+                model_class=EmbeddingRequest,
+                schema_name="EmbeddingRequest",
+                paths=CustomOpenAPISpec.EMBEDDING_PATHS,
+                operation_name="embedding"
+            )
+        except ImportError as e:
+            verbose_proxy_logger.debug(f"Failed to import EmbeddingRequest: {str(e)}")
+            return openapi_schema
     
     @staticmethod
     def add_responses_api_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -187,31 +206,17 @@ class CustomOpenAPISpec:
         """
         try:
             from litellm.types.llms.openai import ResponsesAPIRequestParams
-
-            # Get the schema for ResponsesAPIRequestParams
-            request_schema = CustomOpenAPISpec.get_pydantic_schema(ResponsesAPIRequestParams)
             
-            # Only proceed if we successfully got the schema
-            if request_schema is not None:
-                # Add schema to components
-                CustomOpenAPISpec.add_schema_to_components(openapi_schema, "ResponsesAPIRequestParams", request_schema)
-                
-                # Add request body to responses API endpoints
-                CustomOpenAPISpec.add_request_body_to_paths(
-                    openapi_schema, 
-                    CustomOpenAPISpec.RESPONSES_API_PATHS, 
-                    "#/components/schemas/ResponsesAPIRequestParams"
-                )
-                
-                verbose_proxy_logger.debug("Successfully added ResponsesAPIRequestParams schema to OpenAPI spec")
-            else:
-                verbose_proxy_logger.debug("Could not get schema for ResponsesAPIRequestParams")
-                
-        except Exception as e:
-            # If schema addition fails, continue without it
-            verbose_proxy_logger.debug(f"Failed to add responses API request schema: {str(e)}")
-        
-        return openapi_schema
+            return CustomOpenAPISpec.add_request_schema(
+                openapi_schema=openapi_schema,
+                model_class=ResponsesAPIRequestParams,
+                schema_name="ResponsesAPIRequestParams",
+                paths=CustomOpenAPISpec.RESPONSES_API_PATHS,
+                operation_name="responses API"
+            )
+        except ImportError as e:
+            verbose_proxy_logger.debug(f"Failed to import ResponsesAPIRequestParams: {str(e)}")
+            return openapi_schema
     
     @staticmethod
     def add_llm_api_request_schema_body(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
