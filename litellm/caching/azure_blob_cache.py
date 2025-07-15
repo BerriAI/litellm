@@ -18,11 +18,7 @@ from .base_cache import BaseCache
 
 
 class AzureBlobCache(BaseCache):
-    def __init__(
-        self,
-        account_url: str,
-        container: str,
-    ):
+    def __init__(self, account_url, container) -> None:
         from azure.storage.blob import BlobServiceClient
         from azure.core.exceptions import ResourceExistsError
         from azure.identity import DefaultAzureCredential
@@ -41,7 +37,7 @@ class AzureBlobCache(BaseCache):
         with suppress(ResourceExistsError):
             self.container_client.create_container()
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value = json.dumps(value)
         try:
@@ -50,7 +46,7 @@ class AzureBlobCache(BaseCache):
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value = json.dumps(value)
         try:
@@ -100,7 +96,7 @@ class AzureBlobCache(BaseCache):
         self.container_client.close()
         await self.async_container_client.close()
 
-    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+    async def async_set_cache_pipeline(self, cache_list, **kwargs) -> None:
         tasks = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
