@@ -1,4 +1,3 @@
-import logging
 from typing import Any, Dict, List, Optional, Type
 
 from litellm._logging import verbose_proxy_logger
