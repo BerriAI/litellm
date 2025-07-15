@@ -4,8 +4,8 @@ import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 
 
-def test_exception_debug_info_goes_to_stderr(capsys):
-    """Test that debug info from exception mapping goes to stderr, not stdout."""
+def test_exception_debug_info_goes_to_stderr(caplog):
+    """Test that debug info from exception mapping is logged as warnings."""
     # Save original state
     original_suppress_debug_info = litellm.suppress_debug_info
     
@@ -16,7 +16,7 @@ def test_exception_debug_info_goes_to_stderr(capsys):
         # Create a mock exception
         original_exception = Exception("Test exception")
         
-        # Call the function that should print to stderr
+        # Call the function that should log warnings
         try:
             exception_type(
                 model="test-model",
@@ -26,24 +26,21 @@ def test_exception_debug_info_goes_to_stderr(capsys):
         except:
             pass  # We expect this to raise an exception
         
-        # Capture output
-        captured = capsys.readouterr()
+        # Check that the expected messages were logged as warnings
+        log_messages = [record.message for record in caplog.records if record.levelname == "WARNING"]
         
-        # Check that nothing was written to stdout
-        assert captured.out == "", "Debug info should not be written to stdout"
-        
-        # Check that the expected messages were written to stderr
-        assert "Give Feedback / Get Help" in captured.err, "Expected message not found in stderr"
-        assert "https://github.com/BerriAI/litellm/issues/new" in captured.err
-        assert "LiteLLM.Info: If you need to debug this error" in captured.err
+        # Check that the expected messages are in the log
+        assert any("Give Feedback / Get Help" in msg for msg in log_messages), "Expected message not found in logs"
+        assert any("https://github.com/BerriAI/litellm/issues/new" in msg for msg in log_messages)
+        assert any("LiteLLM.Info: If you need to debug this error" in msg for msg in log_messages)
         
     finally:
         # Restore original state
         litellm.suppress_debug_info = original_suppress_debug_info
 
 
-def test_exception_debug_info_suppressed(capsys):
-    """Test that debug info is not printed when suppress_debug_info is True."""
+def test_exception_debug_info_suppressed(caplog):
+    """Test that debug info is not logged when suppress_debug_info is True."""
     # Save original state
     original_suppress_debug_info = litellm.suppress_debug_info
     
@@ -64,12 +61,11 @@ def test_exception_debug_info_suppressed(capsys):
         except:
             pass  # We expect this to raise an exception
         
-        # Capture output
-        captured = capsys.readouterr()
+        # Check that no warning messages were logged
+        log_messages = [record.message for record in caplog.records if record.levelname == "WARNING"]
         
-        # Check that nothing was written to either stdout or stderr
-        assert captured.out == "", "No output should be written to stdout when suppressed"
-        assert "Give Feedback / Get Help" not in captured.err, "Debug info should not be in stderr when suppressed"
+        # Check that debug info was not logged when suppressed
+        assert not any("Give Feedback / Get Help" in msg for msg in log_messages), "Debug info should not be logged when suppressed"
         
     finally:
         # Restore original state
