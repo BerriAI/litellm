@@ -2729,13 +2729,13 @@ class ProxyConfig:
 
             return current_config
 
-        # For dictionary values, update only non-empty values
+        # For dictionary values, update only non-none values
         if isinstance(current_config[param_name], dict):
             # Only keep non None values from db_param_value
-            non_empty_values = {k: v for k, v in db_param_value.items() if v}
+            non_none_values = {k: v for k, v in db_param_value.items() if v is not None}
 
-            # Update the config with non-empty values
-            current_config[param_name].update(non_empty_values)
+            # Update the config with non-none values
+            current_config[param_name].update(non_none_values)
         else:
             current_config[param_name] = db_param_value
 
@@ -7842,17 +7842,23 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 },
             )
 
-        updated_settings = config_info.json(exclude_none=True)
-        updated_settings = prisma_client.jsonify_object(updated_settings)
-        for k, v in updated_settings.items():
-            if k == "router_settings":
-                await prisma_client.db.litellm_config.upsert(
-                    where={"param_name": k},
-                    data={
-                        "create": {"param_name": k, "param_value": v},
-                        "update": {"param_value": v},
+        if config_info.router_settings is not None:
+            non_none_router_settings = {
+                k: v
+                for k, v in config_info.router_settings.model_dump().items()
+                if v is not None
+            }
+            updated_router_settings = json.dumps(non_none_router_settings)
+            await prisma_client.db.litellm_config.upsert(
+                where={"param_name": "router_settings"},
+                data={
+                    "create": {
+                        "param_name": "router_settings",
+                        "param_value": updated_router_settings,
                     },
-                )
+                    "update": {"param_value": updated_router_settings},
+                },
+            )
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
