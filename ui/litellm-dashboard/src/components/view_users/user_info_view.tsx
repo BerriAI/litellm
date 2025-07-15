@@ -9,11 +9,12 @@ import {
   invitationCreateCall,
   getProxyBaseUrl,
 } from "../networking"
-import { message } from "antd"
+import { message, Button as AntdButton } from "antd"
 import { rolesWithWriteAccess } from "../../utils/roles"
 import { UserEditView } from "../user_edit_view"
 import OnboardingModal, { InvitationLink } from "../onboarding_link"
-import { formatNumberWithCommas } from "@/utils/dataUtils"
+import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
+import { CopyIcon, CheckIcon } from "lucide-react";
 
 interface UserInfoViewProps {
   userId: string
@@ -53,15 +54,16 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const [userData, setUserData] = useState<UserInfo | null>(null)
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isEditing, setIsEditing] = useState(startInEditMode)
-  const [userModels, setUserModels] = useState<string[]>([])
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false)
-  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null)
-  const [baseUrl, setBaseUrl] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState(initialTab)
+  const [userData, setUserData] = useState<UserInfo | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isEditing, setIsEditing] = useState(startInEditMode);
+  const [userModels, setUserModels] = useState<string[]>([]);
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
   React.useEffect(() => {
     setBaseUrl(getProxyBaseUrl())
@@ -168,6 +170,16 @@ export default function UserInfoView({
     )
   }
 
+  const copyToClipboard = async (text: string, key: string) => {
+    const success = await utilCopyToClipboard(text);
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
+    }
+  };
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -176,6 +188,20 @@ export default function UserInfoView({
             Back to Users
           </Button>
           <Title>{userData.user_info?.user_email || "User"}</Title>
+          <div className="flex items-center cursor-pointer">
+            <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
+            <AntdButton
+              type="text"
+              size="small"
+              icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(userData.user_id, "user-id")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["user-id"] 
+                  ? 'text-green-600 bg-green-50 border-green-200' 
+                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+              }`}
+            />
+          </div>
           <Text className="text-gray-500 font-mono">{userData.user_id}</Text>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
@@ -307,6 +333,20 @@ export default function UserInfoView({
                 <div className="space-y-4">
                   <div>
                     <Text className="font-medium">User ID</Text>
+                    <div className="flex items-center cursor-pointer">
+                      <Text className="font-mono">{userData.user_id}</Text>
+                      <AntdButton
+                        type="text"
+                        size="small"
+                        icon={copiedStates["user-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                        onClick={() => copyToClipboard(userData.user_id, "user-id")}
+                        className={`left-2 z-10 transition-all duration-200 ${
+                          copiedStates["user-id"] 
+                            ? 'text-green-600 bg-green-50 border-green-200' 
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                        }`}
+                      />
+                    </div>
                     <Text className="font-mono">{userData.user_id}</Text>
                   </div>
 
