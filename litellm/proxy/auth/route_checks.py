@@ -26,6 +26,15 @@ class RouteChecks:
         return get_secret_bool("DISABLE_ADMIN_ENDPOINTS") is True
 
     @staticmethod
+    def is_llm_api_route_disabled() -> bool:
+        """
+        Check if llm api route is disabled
+        """
+        from litellm.secret_managers.main import get_secret_bool
+
+        return get_secret_bool("DISABLE_LLM_API_ENDPOINTS") is True
+
+    @staticmethod
     def should_call_route(route: str, valid_token: UserAPIKeyAuth):
         """
         Check if management route is disabled and raise exception
@@ -37,6 +46,14 @@ class RouteChecks:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Management routes are disabled for this instance.",
+            )
+        elif (
+            RouteChecks.is_llm_api_route(route=route)
+            and RouteChecks.is_llm_api_route_disabled()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="LLM API routes are disabled for this instance.",
             )
 
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
