@@ -89,6 +89,137 @@ def mock_responses_api_response(
         }
     )
 
+async def aresponses_api_with_mcp(
+    input: Union[str, ResponseInputParam],
+    model: str,
+    include: Optional[List[ResponseIncludable]] = None,
+    instructions: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    prompt: Optional[PromptObject] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    parallel_tool_calls: Optional[bool] = None,
+    previous_response_id: Optional[str] = None,
+    reasoning: Optional[Reasoning] = None,
+    store: Optional[bool] = None,
+    background: Optional[bool] = None,
+    stream: Optional[bool] = None,
+    temperature: Optional[float] = None,
+    text: Optional[ResponseTextConfigParam] = None,
+    tool_choice: Optional[ToolChoice] = None,
+    tools: Optional[Iterable[ToolParam]] = None,
+    top_p: Optional[float] = None,
+    truncation: Optional[Literal["auto", "disabled"]] = None,
+    user: Optional[str] = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    # The extra values given here take precedence over values defined on the client or passed to this method.
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    # LiteLLM specific params,
+    custom_llm_provider: Optional[str] = None,
+    **kwargs,
+) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+    """
+    Async version of responses API with MCP integration.
+    
+    When MCP tools with server_url="litellm_proxy" are provided, this function will:
+    1. Get available tools from the MCP server manager
+    2. Insert the tools into the messages/input
+    3. Call the standard responses API
+    4. If require_approval="never" and tool calls are returned, automatically execute them
+    """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+
+    # Parse MCP tools and separate from other tools
+    mcp_tools_with_litellm_proxy, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
+    
+    # Get available tools from MCP manager if we have MCP tools
+    openai_tools = []
+    mcp_tools_fetched = []
+    if mcp_tools_with_litellm_proxy:
+        user_api_key_auth = kwargs.get("user_api_key_auth")
+        mcp_tools_fetched = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(user_api_key_auth)
+        openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(mcp_tools_fetched)
+    
+    # Combine with other tools
+    all_tools = openai_tools + other_tools if (openai_tools or other_tools) else None
+    
+    # Prepare call parameters for reuse
+    call_params = {
+        "include": include,
+        "instructions": instructions,
+        "max_output_tokens": max_output_tokens,
+        "prompt": prompt,
+        "metadata": metadata,
+        "parallel_tool_calls": parallel_tool_calls,
+        "reasoning": reasoning,
+        "store": store,
+        "background": background,
+        "stream": stream,
+        "temperature": temperature,
+        "text": text,
+        "tool_choice": tool_choice,
+        "top_p": top_p,
+        "truncation": truncation,
+        "user": user,
+        "extra_headers": extra_headers,
+        "extra_query": extra_query,
+        "extra_body": extra_body,
+        "timeout": timeout,
+        "custom_llm_provider": custom_llm_provider,
+        **kwargs,
+    }
+    
+    # Make initial response API call
+    # TODO: if should auto-execute  is True, then this first response should not be streamed
+    response = await aresponses(
+        input=input,
+        model=model,
+        tools=all_tools,
+        previous_response_id=previous_response_id,
+        **call_params
+    )
+    
+    # Check if we need to auto-execute tool calls (only for non-streaming responses)
+    if (mcp_tools_with_litellm_proxy and 
+        isinstance(response, ResponsesAPIResponse) and
+        LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy)):  # type: ignore
+        tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
+        
+        if tool_calls:
+            user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
+            tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(tool_calls=tool_calls, user_api_key_auth=user_api_key_auth)
+            
+            if tool_results:
+                follow_up_input = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+                    response=response, 
+                    tool_results=tool_results, 
+                    original_input=input
+                )
+                
+                final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
+                    follow_up_input=follow_up_input,
+                    model=model,
+                    all_tools=all_tools,
+                    response_id=response.id,
+                    **call_params
+                )
+                
+                # Add custom output elements to the final response
+                if isinstance(final_response, ResponsesAPIResponse):
+                    final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
+                        response=final_response,
+                        mcp_tools_fetched=mcp_tools_fetched,
+                        tool_results=tool_results
+                    )
+                return final_response
+    
+    return response
+
+
 
 @client
 async def aresponses(
@@ -182,6 +313,10 @@ async def aresponses(
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
+
+        if response is None:
+            raise ValueError(f"Got an unexpected None response from the Responses API: {response}")
+
         return response
     except Exception as e:
         raise litellm.exception_type(
@@ -229,6 +364,10 @@ def responses(
     Synchronous version of the Responses API.
     Uses the synchronous HTTP handler to make requests.
     """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+    
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -238,7 +377,9 @@ def responses(
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        ## MOCK RESPONSE LOGIC
+        #########################################################
+        # MOCK RESPONSE LOGIC
+        #########################################################
         if litellm_params.mock_response and isinstance(
             litellm_params.mock_response, str
         ):
@@ -257,6 +398,13 @@ def responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+        #########################################################
+        # Native MCP Responses API
+        #########################################################
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+            return aresponses_api_with_mcp(
+                **local_vars,
+            )
 
         # get provider config
         responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
