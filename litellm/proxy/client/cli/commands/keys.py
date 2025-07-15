@@ -164,9 +164,29 @@ def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
 )
 @click.option("--source-api-key", help="API key for authentication to the source server")
 @click.option("--dry-run", is_flag=True, help="Show what would be imported without actually importing")
+@click.option(
+    "--created-since", help="Only import keys created after this date/time (format: YYYY-MM-DD_HH:MM or YYYY-MM-DD)"
+)
 @click.pass_context
-def import_keys(ctx: click.Context, source_base_url: str, source_api_key: Optional[str], dry_run: bool):
+def import_keys(
+    ctx: click.Context, source_base_url: str, source_api_key: Optional[str], dry_run: bool, created_since: Optional[str]
+):
     """Import API keys from another LiteLLM instance"""
+    # Parse created_since filter if provided
+    created_since_dt = None
+    if created_since:
+        try:
+            from datetime import datetime
+
+            # Support formats: YYYY-MM-DD_HH:MM or YYYY-MM-DD
+            if "_" in created_since:
+                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d_%H:%M")
+            else:
+                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d")
+        except ValueError:
+            click.echo(f"Error: Invalid date format '{created_since}'. Use YYYY-MM-DD_HH:MM or YYYY-MM-DD", err=True)
+            raise click.Abort()
+
     # Create clients for both source and destination
     source_client = KeysManagementClient(source_base_url, source_api_key)
     dest_client = KeysManagementClient(ctx.obj["base_url"], ctx.obj["api_key"])
@@ -193,6 +213,35 @@ def import_keys(ctx: click.Context, source_base_url: str, source_api_key: Option
                 break
 
             page += 1
+
+        # Filter keys by created_since if specified
+        if created_since_dt:
+            filtered_keys = []
+            for key in source_keys:
+                key_created_at = key.get("created_at")
+                if key_created_at:
+                    try:
+                        from datetime import datetime
+
+                        # Parse the key's created_at timestamp
+                        if isinstance(key_created_at, str):
+                            if "T" in key_created_at:
+                                key_dt = datetime.fromisoformat(key_created_at.replace("Z", "+00:00"))
+                            else:
+                                key_dt = datetime.fromisoformat(key_created_at)
+
+                            # Convert to naive datetime for comparison (assuming UTC)
+                            if key_dt.tzinfo:
+                                key_dt = key_dt.replace(tzinfo=None)
+
+                            if key_dt >= created_since_dt:
+                                filtered_keys.append(key)
+                    except:
+                        # If parsing fails, include the key (conservative approach)
+                        filtered_keys.append(key)
+
+            click.echo(f"Filtered {len(source_keys)} keys to {len(filtered_keys)} keys created since {created_since}")
+            source_keys = filtered_keys
 
         if not source_keys:
             click.echo("No keys found in source instance.")
