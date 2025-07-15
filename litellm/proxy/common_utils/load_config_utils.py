@@ -6,8 +6,6 @@ from litellm._logging import verbose_proxy_logger
 def get_file_contents_from_s3(bucket_name, object_key):
     try:
         # v0 rely on boto3 for authentication - allowing boto3 to handle IAM credentials etc
-        import tempfile
-
         import boto3
         from botocore.credentials import Credentials
 
@@ -26,21 +24,14 @@ def get_file_contents_from_s3(bucket_name, object_key):
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
         verbose_proxy_logger.debug(f"Response: {response}")
 
-        # Read the file contents
+        # Read the file contents and directly parse YAML
         file_contents = response["Body"].read().decode("utf-8")
         verbose_proxy_logger.debug("File contents retrieved from S3")
-
-        # Create a temporary file with YAML extension
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml") as temp_file:
-            temp_file.write(file_contents.encode("utf-8"))
-            temp_file_path = temp_file.name
-            verbose_proxy_logger.debug(f"File stored temporarily at: {temp_file_path}")
-
-        # Load the YAML file content
-        with open(temp_file_path, "r") as yaml_file:
-            config = yaml.safe_load(yaml_file)
-
+        
+        # Parse YAML directly from string
+        config = yaml.safe_load(file_contents)
         return config
+
     except ImportError as e:
         # this is most likely if a user is not using the litellm docker container
         verbose_proxy_logger.error(f"ImportError: {str(e)}")

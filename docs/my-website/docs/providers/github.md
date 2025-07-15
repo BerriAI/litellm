@@ -155,6 +155,7 @@ We support ALL Github models, just set `github/` as a prefix when sending comple
 | deepseek-v3     | `completion(model="github/deepseek-v3", messages)`     | 
 | Llama-3.2-11B-Vision-Instruct     | `completion(model="github/Llama-3.2-11B-Vision-Instruct", messages)`     | 
 | codestral-2501 | `completion(model="github/codestral-2501", messages)` |
+| Phi-4 | `completion(model="github/Phi-4", messages)` |
 
 ## Github - Tool / Function Calling Example
 

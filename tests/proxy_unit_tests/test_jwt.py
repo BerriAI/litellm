@@ -1220,6 +1220,70 @@ def test_can_rbac_role_call_route():
         )
 
 
+def test_user_api_key_auth_jwt_hashing():
+    """
+    Test that JWT tokens are properly hashed in UserAPIKeyAuth
+    This test ensures that when a JWT token is passed as an API key,
+    it gets hashed with the "hashed-jwt-" prefix.
+
+    Critical: This was a security fix for users
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    
+    # Test with a JWT token (3 parts separated by dots)
+    jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    
+    # Create UserAPIKeyAuth instance with JWT
+    user_auth = UserAPIKeyAuth(api_key=jwt_token)
+    
+    # Verify that the API key is hashed with "hashed-jwt-" prefix
+    # critical - the raw JWT token should not be in the api_key or token
+    assert user_auth.api_key.startswith("hashed-jwt-")
+    assert user_auth.token.startswith("hashed-jwt-")
+    assert jwt_token not in user_auth.api_key
+    assert jwt_token not in user_auth.token
+
+    
+    # Test with a regular API key (should not be hashed)
+    regular_api_key = "sk-1234567890abcdef"
+    user_auth_regular = UserAPIKeyAuth(api_key=regular_api_key)
+    
+    # Verify that regular API key is hashed normally (without "hashed-jwt-" prefix)
+    assert not user_auth_regular.api_key.startswith("hashed-jwt-")
+    assert not user_auth_regular.token.startswith("hashed-jwt-")
+    
+    # Test with a non-JWT, non-sk string (should not be hashed)
+    non_jwt_key = "some-random-key"
+    user_auth_non_jwt = UserAPIKeyAuth(api_key=non_jwt_key)
+    
+    # Verify that non-JWT key is not hashed
+    assert user_auth_non_jwt.api_key == non_jwt_key
+    assert user_auth_non_jwt.token == non_jwt_key
+
+
+def test_jwt_handler_is_jwt_static_method():
+    """
+    Test that JWTHandler.is_jwt is a static method and works correctly
+    """
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+    
+    # Test with valid JWT format
+    valid_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    assert JWTHandler.is_jwt(valid_jwt) == True
+    
+    # Test with invalid JWT format (only 2 parts)
+    invalid_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
+    assert JWTHandler.is_jwt(invalid_jwt) == False
+    
+    # Test with regular API key
+    regular_key = "sk-1234567890abcdef"
+    assert JWTHandler.is_jwt(regular_key) == False
+    
+    # Test with empty string
+    assert JWTHandler.is_jwt("") == False
+
+
 @pytest.mark.parametrize(
     "requested_model, should_work",
     [

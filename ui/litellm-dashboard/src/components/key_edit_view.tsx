@@ -9,6 +9,7 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import EditLoggingSettings from "./team/EditLoggingSettings";
 import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
+import { fetchMCPAccessGroups } from "./networking";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -54,6 +55,20 @@ export function KeyEditView({
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+
+  const fetchMcpAccessGroups = async () => {
+    if (!accessToken) return;
+    if (mcpAccessGroupsLoaded) return;
+    try {
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+      setMcpAccessGroupsLoaded(true);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -102,7 +117,10 @@ export function KeyEditView({
     metadata: formatMetadataForDisplay(keyData.metadata),
     guardrails: keyData.metadata?.guardrails || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
-    mcp_servers: keyData.object_permission?.mcp_servers || [],
+    mcp_servers_and_groups: {
+      servers: keyData.object_permission?.mcp_servers || [],
+      accessGroups: keyData.object_permission?.mcp_access_groups || []
+    },
     logging_settings: extractLoggingSettings(keyData.metadata)
   };
 
@@ -185,15 +203,14 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="MCP Servers" name="mcp_servers">
+      <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
         <MCPServerSelector
-          onChange={(values) => form.setFieldValue('mcp_servers', values)}
-          value={form.getFieldValue('mcp_servers')}
-          accessToken={accessToken || ""}
-          placeholder="Select MCP servers"
+          onChange={val => form.setFieldValue('mcp_servers_and_groups', val)}
+          value={form.getFieldValue('mcp_servers_and_groups')}
+          accessToken={accessToken || ''}
+          placeholder="Select MCP servers or access groups (optional)"
         />
       </Form.Item>
-
 
       <Form.Item label="Team ID" name="team_id">
         <Select

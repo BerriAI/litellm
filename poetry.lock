@@ -1833,27 +1833,26 @@ openai = ["openai (>=0.27.8)"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.11"
+version = "0.1.13"
 description = "Package for LiteLLM Enterprise features"
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_enterprise-0.1.11.tar.gz", hash = "sha256:37aa547116846518700a3911fec51a31703788af32c6842ce6a31da9335d67fe"},
+    {file = "litellm_enterprise-0.1.13.tar.gz", hash = "sha256:42c1c690b62251d7b50b049aac3e485ecf303bdc55bd1e2f8e2924e82bb44ac8"},
 ]
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.2.6"
+version = "0.2.10"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.2.6-py3-none-any.whl", hash = "sha256:ed5560f97f9bef69464ab3c1d54c90dc7e210c7ad3c05d1f3beb04e326764878"},
-    {file = "litellm_proxy_extras-0.2.6.tar.gz", hash = "sha256:ef10577433d1c862bcbe54d28ace65111c8474fb7618d6f25f8e66ddb8ae4a32"},
+    {file = "litellm_proxy_extras-0.2.10.tar.gz", hash = "sha256:4c4e2f733425459099c560e3b08f71d047a4df21f96d88d17b6ceb161540eaed"},
 ]
 
 [[package]]
@@ -1966,21 +1965,22 @@ files = [
 
 [[package]]
 name = "mcp"
-version = "1.9.3"
+version = "1.10.0"
 description = "Model Context Protocol SDK"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
 markers = "python_version >= \"3.10\" and extra == \"proxy\""
 files = [
-    {file = "mcp-1.9.3-py3-none-any.whl", hash = "sha256:69b0136d1ac9927402ed4cf221d4b8ff875e7132b0b06edd446448766f34f9b9"},
-    {file = "mcp-1.9.3.tar.gz", hash = "sha256:587ba38448e81885e5d1b84055cfcc0ca56d35cd0c58f50941cab01109405388"},
+    {file = "mcp-1.10.0-py3-none-any.whl", hash = "sha256:925c45482d75b1b6f11febddf9736d55edf7739c7ea39b583309f6651cbc9e5c"},
+    {file = "mcp-1.10.0.tar.gz", hash = "sha256:91fb1623c3faf14577623d14755d3213db837c5da5dae85069e1b59124cbe0e9"},
 ]
 
 [package.dependencies]
 anyio = ">=4.5"
 httpx = ">=0.27"
 httpx-sse = ">=0.4"
+jsonschema = ">=4.20.0"
 pydantic = ">=2.7.2,<3.0.0"
 pydantic-settings = ">=2.5.2"
 python-multipart = ">=0.0.9"
@@ -4992,4 +4992,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "cc402446f0ca0c50552e1857865bbe8e2ec64d64281fc7a2d8fa2be40f79456a"
+content-hash = "75c4a45aee2e0c9b75f85ff562d61c18c8a80312fdfd3371eb8ad5ec1fcd04bf"

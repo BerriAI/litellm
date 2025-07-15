@@ -288,10 +288,8 @@ def _is_api_route_allowed(
     if valid_token is None:
         raise Exception("Invalid proxy server token passed. valid_token=None.")
 
-    # Check if Virtual Key is allowed to call the route - Applies to all Roles
-    RouteChecks.is_virtual_key_allowed_to_call_route(
-        route=route, valid_token=valid_token
-    )
+    # Check if management routes are disabled and raise exception if they are
+    RouteChecks.should_call_route(route=route, valid_token=valid_token)
 
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         RouteChecks.non_proxy_admin_allowed_routes_check(
@@ -1191,6 +1189,10 @@ def _can_object_call_model(
 
     if model in litellm.model_alias_map:
         model = litellm.model_alias_map[model]
+    elif llm_router and model in llm_router.model_group_alias:
+        _model = llm_router._get_model_from_alias(model)
+        if _model:
+            model = _model
 
     ## check if model in allowed model names
     from collections import defaultdict
@@ -1199,6 +1201,7 @@ def _can_object_call_model(
 
     if llm_router:
         access_groups = llm_router.get_model_access_groups(model_name=model)
+
     if (
         len(access_groups) > 0 and llm_router is not None
     ):  # check if token contains any model access groups
@@ -1210,8 +1213,6 @@ def _can_object_call_model(
 
     # Filter out models that are access_groups
     filtered_models = [m for m in models if m not in access_groups]
-
-    verbose_proxy_logger.debug(f"model: {model}; allowed_models: {filtered_models}")
 
     if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
         return True
