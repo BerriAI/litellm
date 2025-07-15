@@ -33,8 +33,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 
-litellm.set_verbose = True
-
 GUARDRAIL_NAME = "aporia"
 
 if TYPE_CHECKING:
