@@ -2699,6 +2699,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
         )
 
@@ -2721,6 +2722,7 @@ class BaseLLMHTTPHandler:
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     def vector_store_search_handler(
@@ -2780,6 +2782,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
         )
 
@@ -2802,6 +2805,7 @@ class BaseLLMHTTPHandler:
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     async def async_vector_store_create_handler(

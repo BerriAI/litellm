@@ -30,11 +30,12 @@ class BaseVectorStoreConfig:
         query: Union[str, List[str]],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[str, Dict]:
         pass
 
     @abstractmethod
-    def transform_search_vector_store_response(self, response: httpx.Response) -> VectorStoreSearchResponse:
+    def transform_search_vector_store_response(self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj) -> VectorStoreSearchResponse:
         pass
 
     @abstractmethod
