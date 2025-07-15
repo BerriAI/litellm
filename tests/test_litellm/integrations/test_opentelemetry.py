@@ -19,7 +19,10 @@ from opentelemetry.sdk._events import EventLoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.semconv._incubating.attributes import gen_ai_attributes as GenAIAttributes, event_attributes as EventAttributes
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAIAttributes,
+    event_attributes as EventAttributes,
+)
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -84,7 +87,7 @@ class TestOpenTelemetryGuardrails(unittest.TestCase):
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
-    MODEL = 'arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0'
+    MODEL = "arn:aws:bedrock:us-west-2:1234567890123:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
     HERE = os.path.dirname(__file__)
 
     def wait_for_spans(self, exporter: InMemorySpanExporter, prefix: str):
@@ -93,7 +96,8 @@ class TestOpenTelemetry(unittest.TestCase):
         while time.time() < deadline:
             spans = exporter.get_finished_spans()
             matches = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes and any(str(k).startswith(prefix) for k in s.attributes)
             ]
             if matches:
@@ -126,8 +130,11 @@ class TestOpenTelemetry(unittest.TestCase):
         while time.time() < deadline:
             logs = exporter.get_finished_logs()
             matches = [
-                l for l in logs
-                if l.log_record.attributes and l.log_record.attributes.get(EventAttributes.EVENT_NAME) == event_name
+                l
+                for l in logs
+                if l.log_record.attributes
+                and l.log_record.attributes.get(EventAttributes.EVENT_NAME)
+                == event_name
             ]
             if matches:
                 return matches
@@ -203,7 +210,6 @@ class TestOpenTelemetry(unittest.TestCase):
         ) as mock_get_headers, patch.object(
             otel, "_get_tracer_with_dynamic_headers"
         ) as mock_get_tracer:
-
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
                 "arize-space-id": "test-space",
@@ -557,9 +563,13 @@ class TestOpenTelemetry(unittest.TestCase):
         start = datetime.utcnow()
         end = start + timedelta(seconds=1)
 
-        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
             kwargs = json.load(f)
-        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
             response_obj = json.load(f)
 
         # ─── exercise the hook ───────────────────────────────────────────────────
@@ -574,17 +584,25 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertIn("litellm_request", names)
 
         # ─── assert metrics ──────────────────────────────────────────────────────
-        duration_metric = self.wait_for_metric(metric_reader, "gen_ai.client.operation.duration")
+        duration_metric = self.wait_for_metric(
+            metric_reader, "gen_ai.client.operation.duration"
+        )
         self.assertIsNotNone(duration_metric, "duration histogram was not recorded")
 
         # check that our model attribute made it onto at least one data point
         found_dp = False
-        if duration_metric and hasattr(duration_metric, 'data') and hasattr(duration_metric.data, 'data_points'):
+        if (
+            duration_metric
+            and hasattr(duration_metric, "data")
+            and hasattr(duration_metric.data, "data_points")
+        ):
             found_dp = any(
                 dp.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == self.MODEL
                 for dp in duration_metric.data.data_points
             )
-        self.assertTrue(found_dp, "expected gen_ai.request.model attribute on a data point")
+        self.assertTrue(
+            found_dp, "expected gen_ai.request.model attribute on a data point"
+        )
 
         # ─── assert events ───────────────────────────────────────────────────────
         user_events = self.wait_for_event(log_exporter, "gen_ai.user.message")
@@ -598,8 +616,8 @@ class TestOpenTelemetry(unittest.TestCase):
 
         # Handle different body types - could be dict, string, or other
         if isinstance(user_body, dict):
-            self.assertEqual('What is the capital of France?', user_body.get("content"))
-        
+            self.assertEqual("What is the capital of France?", user_body.get("content"))
+
         if isinstance(choice_body, dict):
             self.assertEqual("stop", choice_body.get("finish_reason"))
 
@@ -632,9 +650,13 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── minimal input / output for a chat call ──────────────────────────────
         start = datetime.utcnow()
         end = start + timedelta(seconds=1)
-        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
             kwargs = json.load(f)
-        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
             response_obj = json.load(f)
 
         # ─── exercise the hook ───────────────────────────────────────────────────
@@ -651,7 +673,8 @@ class TestOpenTelemetry(unittest.TestCase):
         # )
         # model attribute should be on that span
         found = any(
-            s.attributes and s.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == self.MODEL
+            s.attributes
+            and s.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == self.MODEL
             for s in spans
         )
         self.assertTrue(found, "expected gen_ai.request.model on span attributes")
@@ -694,9 +717,13 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── minimal input / output for a chat call ──────────────────────────────
         start = datetime.utcnow()
         end = start + timedelta(seconds=1)
-        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")) as f:
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
             kwargs = json.load(f)
-        with open(os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")) as f:
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
             response_obj = json.load(f)
 
         # ─── exercise the hook ───────────────────────────────────────────────────
@@ -707,16 +734,24 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertTrue(spans, "Expected at least one span")
 
         # ─── assert metrics ──────────────────────────────────────────────────────
-        duration_metric = self.wait_for_metric(metric_reader, "gen_ai.client.operation.duration")
+        duration_metric = self.wait_for_metric(
+            metric_reader, "gen_ai.client.operation.duration"
+        )
         self.assertIsNotNone(duration_metric, "duration histogram was not recorded")
         # model attribute should be present on a data point
         found_dp = False
-        if duration_metric and hasattr(duration_metric, 'data') and hasattr(duration_metric.data, 'data_points'):
+        if (
+            duration_metric
+            and hasattr(duration_metric, "data")
+            and hasattr(duration_metric.data, "data_points")
+        ):
             found_dp = any(
                 dp.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == self.MODEL
                 for dp in duration_metric.data.data_points
             )
-        self.assertTrue(found_dp, "expected gen_ai.request.model attribute on a data point")
+        self.assertTrue(
+            found_dp, "expected gen_ai.request.model attribute on a data point"
+        )
 
         # ─── no events when only metrics enabled ─────────────────────────────────
         self.assertFalse(
