@@ -100,7 +100,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> Tuple[str, Dict]:
+    ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform search request for Vertex AI RAG API
         """
@@ -112,7 +112,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         url = f"{api_base}:retrieveContexts"
         
         # Build the request body for Vertex AI RAG API
-        request_body = {
+        request_body: Dict[str, Any] = {
             "vertex_rag_store": {
                 "rag_resources": [
                     {
@@ -219,14 +219,14 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform create request for Vertex AI RAG Corpus
         """
         url = f"{api_base}/ragCorpora"  # Base URL for creating RAG corpus
         
         # Build the request body for Vertex AI RAG Corpus creation
-        request_body = {
+        request_body: Dict[str, Any] = {
             "display_name": vector_store_create_optional_params.get("name", "litellm-vector-store"),
             "description": "Vector store created via LiteLLM"
         }
@@ -262,6 +262,10 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             elif not isinstance(create_time, int):
                 create_time = 0
             
+            # Handle labels safely
+            labels = response_json.get("labels", {})
+            metadata = labels if isinstance(labels, dict) else {}
+            
             return VectorStoreCreateResponse(
                 id=corpus_id,
                 object="vector_store",
@@ -279,7 +283,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 expires_after=None,
                 expires_at=None,
                 last_active_at=None,
-                metadata=response_json.get("labels", {})
+                metadata=metadata
             )
             
         except Exception as e:
