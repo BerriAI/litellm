@@ -15,7 +15,7 @@ import {
   TextInput,
   Select as TremorSelect
 } from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon, ClipboardCopyIcon } from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { Form, Input, InputNumber, message, Select, Tooltip, Button as AntdButton } from "antd";
