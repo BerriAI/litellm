@@ -153,8 +153,6 @@ DISABLE_LLM_ENDPOINTS=true
 - `/v1/*` - OpenAI-compatible APIs
 - `/vertex_ai/*` - Vertex AI pass-through APIs
 - `/bedrock/*` - Bedrock pass-through APIs
-- `/health` - Basic health check
-- `/metrics` - Prometheus metrics
 - All other LLM API endpoints
 
 
