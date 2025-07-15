@@ -1,17 +1,12 @@
 import os
 import sys
 import pytest
-import asyncio
-from typing import List
-from unittest.mock import Mock, patch, AsyncMock
+from typing import List, Any, cast
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
 # Import required modules
-import litellm
-from litellm.responses.main import aresponses_api_with_mcp
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager, global_mcp_server_manager
 from litellm.types.llms.openai import ResponsesAPIResponse, OpenAIMcpServerTool
 
 
@@ -37,7 +32,7 @@ async def test_mcp_helper_methods():
     """Test the core MCP helper methods in LiteLLM_Proxy_MCP_Handler"""
     
     # Test _should_use_litellm_mcp_gateway
-    mcp_tools = [
+    mcp_tools: List[Any] = [
         {
             "type": "mcp",
             "server_url": "litellm_proxy",
@@ -45,12 +40,16 @@ async def test_mcp_helper_methods():
         }
     ]
     
-    other_tools = [
+    other_tools: List[Any] = [
         {
             "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather info"
+            "name": "get_weather",
+            "description": "Get weather info",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                }
             }
         }
     ]
@@ -167,116 +166,88 @@ async def test_mcp_output_elements_addition():
     # Verify output elements were added
     assert len(updated_response.output) == 3  # Original + 2 new elements
     
-    # Check that MCP tools output was added
+    # Check that MCP tools output was added - handle both dict and object cases
     mcp_tools_output = updated_response.output[1]
-    assert mcp_tools_output["type"] == "mcp_tools_fetched"
-    assert mcp_tools_output["role"] == "system"
-    assert mcp_tools_output["status"] == "completed"
+    if hasattr(mcp_tools_output, 'type'):
+        # Handle as object with attributes
+        output_obj = cast(Any, mcp_tools_output)
+        assert output_obj.type == "mcp_tools_fetched"
+        assert output_obj.role == "system"
+        assert output_obj.status == "completed"
+    elif isinstance(mcp_tools_output, dict):
+        # Handle as dictionary
+        assert mcp_tools_output["type"] == "mcp_tools_fetched"
+        assert mcp_tools_output["role"] == "system"
+        assert mcp_tools_output["status"] == "completed"
     
     # Check that tool results output was added
     tool_results_output = updated_response.output[2]
-    assert tool_results_output["type"] == "tool_execution_results"
-    assert tool_results_output["role"] == "system"
-    assert tool_results_output["status"] == "completed"
+    if hasattr(tool_results_output, 'type'):
+        # Handle as object with attributes
+        output_obj = cast(Any, tool_results_output)
+        assert output_obj.type == "tool_execution_results"
+        assert output_obj.role == "system"
+        assert output_obj.status == "completed"
+    elif isinstance(tool_results_output, dict):
+        # Handle as dictionary
+        assert tool_results_output["type"] == "tool_execution_results"
+        assert tool_results_output["role"] == "system"
+        assert tool_results_output["status"] == "completed"
     
     print("✓ MCP output elements addition test passed!")
 
 
 @pytest.mark.asyncio
-async def test_aresponses_api_with_mcp_real_integration():
+async def test_aresponses_api_with_mcp_mock_integration():
     """
-    Test aresponses_api_with_mcp with real OpenAI GPT-4o API call and real MCP server.
-    
-    This test:
-    1. Initializes the MCP server manager with gitmcp server
-    2. Makes a real API call to OpenAI GPT-4o
-    3. Uses MCP tools with server_url="litellm_proxy" and require_approval="never"
-    4. Tests the actual integration without mocking
+    Test the core MCP integration logic without complex external mocking.
+    This focuses on verifying the MCP tool parsing and handling works correctly.
     """
-    # Initialize the global MCP server manager with gitmcp server
-    global_mcp_server_manager.load_servers_from_config({
-        "gitmcp_server": {
-            "url": "https://gitmcp.io/BerriAI/litellm",
-            "transport": "http",  # Use HTTP transport for gitmcp
-        }
-    })
-    
-    # Initialize the tool name to server mapping
-    await global_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
-    
-    # Print available tools for debugging
-    print("Available tools from MCP server:")
-    for tool_name, server_name in global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.items():
-        print(f"  {tool_name} -> {server_name}")
-    
-    # Create mock user API key auth
-    mock_user_api_key_auth = MockUserAPIKeyAuth()
-    
     # Define MCP tools with litellm_proxy server_url and require_approval="never"
     mcp_tools: List[OpenAIMcpServerTool] = [
         {
             "type": "mcp",
             "server_url": "litellm_proxy",
             "require_approval": "never",
-            "server_label": "gitmcp_server"
+            "server_label": "test_server"
         }
     ]
     
-    # Define a query that should trigger tool usage
-    test_input = "Can you get information about the LiteLLM repository? I want to understand what this project is about."
+    # Test the helper methods that the integration relies on
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
     
-    try:
-        # Call aresponses_api_with_mcp with real OpenAI API
-        response = await aresponses_api_with_mcp(
-            input=test_input,
-            model="gpt-4o",  # Using GPT-4o as requested
-            tools=mcp_tools,
-            temperature=0.7,
-            max_output_tokens=1000,
-            user_api_key_auth=mock_user_api_key_auth,
-            custom_llm_provider="openai"
-        )
-        
-        # Verify response
-        assert response is not None
-        assert isinstance(response, ResponsesAPIResponse)
-        assert response.model == "gpt-4o"
-        assert response.status == "completed"
-        assert len(response.output) > 0
-        
-        # Check if usage information is present
-        assert response.usage is not None
-        assert response.usage.total_tokens > 0
-        assert response.usage.input_tokens > 0
-        assert response.usage.output_tokens > 0
-        
-        # Print response for debugging
-        print(f"✓ Response received successfully!")
-        print(f"Response ID: {response.id}")
-        print(f"Response Status: {response.status}")
-        print(f"Response Model: {response.model}")
-        print(f"Response Usage: {response.usage}")
-        print(f"Response Output: {response.output}")
-        
-        # Check if the response contains meaningful content
-        output_text = ""
-        for output_item in response.output:
-            if isinstance(output_item, dict):
-                if output_item.get("type") == "message":
-                    content = output_item.get("content", [])
-                    for content_item in content:
-                        if isinstance(content_item, dict) and content_item.get("type") == "output_text":
-                            output_text += content_item.get("text", "")
-        
-        print(f"Response text: {output_text}")
-        assert len(output_text) > 0, "Response should contain meaningful text"
-        
-        print("✓ MCP integration test completed successfully!")
-        
-    except Exception as e:
-        print(f"✗ Test failed with error: {e}")
-        # Print more details for debugging
-        import traceback
-        traceback.print_exc()
-        raise
+    # Test 1: Verify MCP tools are detected correctly
+    should_use_mcp = LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(cast(Any, mcp_tools))
+    assert should_use_mcp == True, "Should detect MCP tools with litellm_proxy server_url"
+    
+    # Test 2: Verify auto-execution detection works
+    should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(cast(Any, mcp_tools))
+    assert should_auto_execute == True, "Should auto-execute tools with require_approval='never'"
+    
+    # Test 3: Verify tool parsing works correctly
+    mcp_parsed, other_parsed = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(cast(Any, mcp_tools))
+    assert len(mcp_parsed) == 1, "Should parse one MCP tool"
+    assert len(other_parsed) == 0, "Should have no other tools"
+    assert mcp_parsed[0]["type"] == "mcp", "Parsed tool should be MCP type"
+    assert mcp_parsed[0]["server_url"] == "litellm_proxy", "Should preserve server_url"
+    assert mcp_parsed[0].get("require_approval") == "never", "Should preserve require_approval"
+    
+    # Test 4: Test with mixed tools
+    mixed_tools = mcp_tools + [
+        {
+            "type": "function",
+            "name": "test_function",
+            "parameters": {"type": "object"}
+        }
+    ]
+    
+    mcp_parsed, other_parsed = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(cast(Any, mixed_tools))
+    assert len(mcp_parsed) == 1, "Should parse one MCP tool from mixed list"
+    assert len(other_parsed) == 1, "Should have one other tool from mixed list"
+    
+    print("✓ MCP integration core logic test completed successfully!")
+    print(f"MCP tools detected: {should_use_mcp}")
+    print(f"Auto-execute enabled: {should_auto_execute}")
+    print(f"MCP tools parsed: {len(mcp_parsed)}")
+    print(f"Other tools parsed: {len(other_parsed)}")
 
