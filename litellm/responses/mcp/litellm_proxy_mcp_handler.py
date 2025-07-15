@@ -89,7 +89,7 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def _extract_tool_calls_from_response(response: ResponsesAPIResponse) -> List[Any]:
         """Extract tool calls from the response output."""
-        tool_calls = []
+        tool_calls: List[Any] = []
         for output_item in response.output:
             # Check if this is a function call output item
             if (isinstance(output_item, dict) and 
