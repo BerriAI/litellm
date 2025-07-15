@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # Control Plane for Multi-region Architecture (Enterprise)
 
-Learn how to deploy LiteLLM across multiple instances while maintaining centralized administration and avoiding duplication of management overhead.
+Learn how to deploy LiteLLM across multiple regions while maintaining centralized administration and avoiding duplication of management overhead.
 
 :::info
 
