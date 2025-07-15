@@ -737,8 +737,7 @@ def custom_openapi():
     
     # Apply custom OpenAPI schema modifications
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
-    custom_spec = CustomOpenAPISpec()
-    openapi_schema = custom_spec.customize_openapi_schema(openapi_schema)
+    openapi_schema = CustomOpenAPISpec.customize_openapi_schema(openapi_schema)
     
     app.openapi_schema = openapi_schema
     return app.openapi_schema

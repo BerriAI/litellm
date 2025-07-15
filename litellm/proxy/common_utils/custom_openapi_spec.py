@@ -10,15 +10,15 @@ class CustomOpenAPISpec:
     for documentation purposes without runtime validation.
     """
     
-    def __init__(self):
-        self.chat_completion_paths = [
-            "/v1/chat/completions",
-            "/chat/completions", 
-            "/engines/{model}/chat/completions",
-            "/openai/deployments/{model}/chat/completions"
-        ]
+    CHAT_COMPLETION_PATHS = [
+        "/v1/chat/completions",
+        "/chat/completions", 
+        "/engines/{model}/chat/completions",
+        "/openai/deployments/{model}/chat/completions"
+    ]
     
-    def get_pydantic_schema(self, model_class) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def get_pydantic_schema(model_class) -> Optional[Dict[str, Any]]:
         """
         Get JSON schema from a Pydantic model, handling both v1 and v2 APIs.
         
@@ -39,7 +39,8 @@ class CustomOpenAPISpec:
                 # If both methods fail, return None
                 return None
     
-    def add_schema_to_components(self, openapi_schema: Dict[str, Any], schema_name: str, schema_def: Dict[str, Any]) -> None:
+    @staticmethod
+    def add_schema_to_components(openapi_schema: Dict[str, Any], schema_name: str, schema_def: Dict[str, Any]) -> None:
         """
         Add a schema definition to the OpenAPI components/schemas section.
         
@@ -57,7 +58,8 @@ class CustomOpenAPISpec:
         # Add the schema
         openapi_schema["components"]["schemas"][schema_name] = schema_def
     
-    def add_request_body_to_paths(self, openapi_schema: Dict[str, Any], paths: List[str], schema_ref: str) -> None:
+    @staticmethod
+    def add_request_body_to_paths(openapi_schema: Dict[str, Any], paths: List[str], schema_ref: str) -> None:
         """
         Add request body schema reference to specified paths.
         
@@ -79,7 +81,8 @@ class CustomOpenAPISpec:
                     }
                 }
     
-    def add_chat_completion_request_schema(self, openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def add_chat_completion_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
         """
         Add ProxyChatCompletionRequest schema to chat completion endpoints for documentation.
         This shows the request body in Swagger without runtime validation.
@@ -94,17 +97,17 @@ class CustomOpenAPISpec:
             from litellm.proxy._types import ProxyChatCompletionRequest
 
             # Get the schema for ProxyChatCompletionRequest
-            request_schema = self.get_pydantic_schema(ProxyChatCompletionRequest)
+            request_schema = CustomOpenAPISpec.get_pydantic_schema(ProxyChatCompletionRequest)
             
             # Only proceed if we successfully got the schema
             if request_schema is not None:
                 # Add schema to components
-                self.add_schema_to_components(openapi_schema, "ProxyChatCompletionRequest", request_schema)
+                CustomOpenAPISpec.add_schema_to_components(openapi_schema, "ProxyChatCompletionRequest", request_schema)
                 
                 # Add request body to chat completion endpoints
-                self.add_request_body_to_paths(
+                CustomOpenAPISpec.add_request_body_to_paths(
                     openapi_schema, 
-                    self.chat_completion_paths, 
+                    CustomOpenAPISpec.CHAT_COMPLETION_PATHS, 
                     "#/components/schemas/ProxyChatCompletionRequest"
                 )
                 
@@ -118,7 +121,8 @@ class CustomOpenAPISpec:
         
         return openapi_schema
     
-    def customize_openapi_schema(self, openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def customize_openapi_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply all custom OpenAPI schema modifications.
         
@@ -129,9 +133,9 @@ class CustomOpenAPISpec:
             Customized OpenAPI schema
         """
         # Add chat completion request schema
-        openapi_schema = self.add_chat_completion_request_schema(openapi_schema)
+        openapi_schema = CustomOpenAPISpec.add_chat_completion_request_schema(openapi_schema)
         
         # Future customizations can be added here
-        # e.g., self.add_embedding_request_schema(openapi_schema)
+        # e.g., CustomOpenAPISpec.add_embedding_request_schema(openapi_schema)
         
         return openapi_schema 
