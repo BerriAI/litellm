@@ -2130,6 +2130,20 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
     assert isinstance(config, AmazonAnthropicClaude3Config)
 
 
+def test_bedrock_application_inference_profile():
+    model = "arn:aws:bedrock:us-east-2:<AWS-ACCOUNT-ID>:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0"
+    from pydantic import BaseModel
+
+    from litellm import completion
+    from litellm.utils import supports_tool_choice
+
+    result = supports_tool_choice(model, custom_llm_provider="bedrock")
+    result_2 = supports_tool_choice(model, custom_llm_provider="bedrock_converse")
+    print(result)
+    assert result == result_2
+    assert result is True
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])

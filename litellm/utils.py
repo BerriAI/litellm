@@ -4385,7 +4385,7 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
 
 
 def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
-    if custom_llm_provider and custom_llm_provider == "bedrock":
+    if custom_llm_provider and custom_llm_provider in ["bedrock", "bedrock_converse"]:
         stripped_bedrock_model = _get_base_bedrock_model(model_name=model)
         return stripped_bedrock_model
     elif custom_llm_provider and (
@@ -6839,12 +6839,10 @@ class ProviderConfigManager:
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
-                legacy_anthropic_model_names = [
-                    "anthropic.claude-v2",
-                    "anthropic.claude-instant-v1",
-                    "anthropic.claude-v2:1",
-                ]
-                if base_model in legacy_anthropic_model_names:
+                if (
+                    base_model
+                    in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
+                ):
                     return litellm.AmazonAnthropicConfig()
                 else:
                     return litellm.AmazonAnthropicClaude3Config()
