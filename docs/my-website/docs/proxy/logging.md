@@ -1778,10 +1778,10 @@ Instead of using local Python files, you can load custom callbacks directly from
 
 **Example - Loading from S3:**
 
-Let's say you have a file `custom_ui_sso_hook.py` stored in your S3 bucket `litellm-proxy` with the following content:
+Let's say you have a file `custom_callbacks.py` stored in your S3 bucket `litellm-proxy` with the following content:
 
 ```python
-# custom_ui_sso_hook.py (stored in S3)
+# custom_callbacks.py (stored in S3)
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
 
@@ -1807,7 +1807,7 @@ model_list:
       model: gpt-3.5-turbo
 
 litellm_settings:
-  callbacks: ["s3://litellm-proxy/custom_ui_sso_hook.custom_ui_sso_sign_in_handler"]
+  callbacks: ["s3://litellm-proxy/custom_callbacks.custom_handler"]
 ```
 
 **Example - Loading from GCS:**
@@ -1819,7 +1819,7 @@ model_list:
       model: gpt-3.5-turbo
 
 litellm_settings:
-  callbacks: ["gcs://my-gcs-bucket/custom_callbacks.proxy_handler_instance"]
+  callbacks: ["gcs://my-gcs-bucket/custom_callbacks.custom_handler"]
 ```
 
 **How it works:**
