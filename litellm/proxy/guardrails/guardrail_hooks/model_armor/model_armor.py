@@ -28,7 +28,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     Choices,
     ModelResponse,
