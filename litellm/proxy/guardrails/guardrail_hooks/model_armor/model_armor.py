@@ -94,9 +94,28 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return {"model_response_data": {"text": content}}
 
     def _extract_content_from_messages(self, messages: List[AllMessageValues]) -> str:
-        """Extract text content from messages."""
+        """Extract text content from the last consecutive block of user messages."""
+        if not messages:
+            return ""
+
+        # Get the last consecutive block of user messages
+        user_messages = []
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                user_messages.append(message)
+            else:
+                # Stop when we hit a non-user message
+                break
+
+        if not user_messages:
+            return ""
+
+        # Reverse to get messages in chronological order
+        user_messages.reverse()
+
+        # Extract content from each message
         content_parts = []
-        for message in messages:
+        for message in user_messages:
             content = message.get("content")
             if content is None:
                 continue
@@ -104,6 +123,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if isinstance(content, str):
                 content_parts.append(content)
             elif isinstance(content, list):
+                # Extract text from content list items
                 for item in content:
                     if isinstance(item, dict) and "text" in item:
                         content_parts.append(item["text"])
@@ -116,17 +136,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self, response: Union[Any, ModelResponse]
     ) -> str:
         """Extract text content from model response."""
-        content_parts = []
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_content_from_model_response,
+        )
 
+        # Handle ModelResponse objects
         if isinstance(response, litellm.ModelResponse):
-            for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
-                        content_parts.append(choice.message.content)
+            return get_content_from_model_response(response)
 
-        return "\n".join(content_parts)
+        # For non-ModelResponse types (e.g., TTS, images), return empty string
+        # These response types are not text-based and shouldn't be processed
+        return ""
 
     async def make_model_armor_request(
         self,
@@ -196,7 +216,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
         json_response = response.json()
-        if hasattr(json_response, '__await__'):
+        if hasattr(json_response, "__await__"):
             return await json_response
         return json_response
 
@@ -281,13 +301,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if self.mask_request_content:
                 sanitized_content = self._get_sanitized_content(armor_response)
                 if sanitized_content and sanitized_content != content:
-                    # Update the last user message with sanitized content
-                    for i in reversed(range(len(messages))):
-                        if messages[i].get("role") == "user":
-                            if isinstance(messages[i]["content"], str):
-                                messages[i]["content"] = sanitized_content
-                            break
-                    data["messages"] = messages
+                    # Use the helper to set the last user message with sanitized content
+                    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                        set_last_user_message,
+                    )
+
+                    data["messages"] = set_last_user_message(
+                        messages, sanitized_content
+                    )
 
         except HTTPException:
             raise
@@ -384,6 +405,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
+
         # Collect all chunks
         all_chunks: List[ModelResponseStream] = []
         async for chunk in response:
@@ -454,5 +476,5 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         from litellm.types.proxy.guardrails.guardrail_hooks.model_armor import (
             ModelArmorGuardrailConfigModel,
         )
-        
+
         return ModelArmorGuardrailConfigModel
