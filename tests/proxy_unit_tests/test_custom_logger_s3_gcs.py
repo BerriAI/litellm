@@ -65,9 +65,9 @@ test_logger_instance = TestCustomLogger()
             
             # Verify the download was called with correct parameters
             mock_download.assert_called_once()
-            args = mock_download.call_args[0]
-            assert args[0] == "my-bucket"  # bucket_name
-            assert args[1] == "loggers/custom_callbacks.py"  # object_key
+            call_args = mock_download.call_args
+            assert call_args.kwargs['bucket_name'] == "my-bucket"
+            assert call_args.kwargs['object_key'] == "loggers/custom_callbacks.py"
 
     def test_gcs_url_parsing(self):
         """Test GCS URL parsing"""
@@ -82,16 +82,16 @@ test_logger_instance = TestCustomLogger()
             
             # Verify the download was called with correct parameters
             mock_download.assert_called_once()
-            args = mock_download.call_args[0]
-            assert args[0] == "my-bucket"  # bucket_name
-            assert args[1] == "custom_logger.py"  # object_key
+            call_args = mock_download.call_args
+            assert call_args[0][0] == "my-bucket"  # bucket_name (positional for _download_gcs_file_wrapper)
+            assert call_args[0][1] == "custom_logger.py"  # object_key
 
     @patch('litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3')
     def test_s3_download_success(self, mock_s3_download, sample_custom_logger_content):
         """Test successful S3 download and loading"""
         # Configure S3 download to succeed and create the file
-        def mock_download(bucket, key, local_path):
-            with open(local_path, 'w') as f:
+        def mock_download(bucket_name, object_key, local_file_path):
+            with open(local_file_path, 'w') as f:
                 f.write(sample_custom_logger_content)
             return True
         
@@ -108,15 +108,15 @@ test_logger_instance = TestCustomLogger()
         # Verify S3 download was called with correct parameters
         mock_s3_download.assert_called_once()
         call_args = mock_s3_download.call_args
-        assert call_args[0][0] == 'test-bucket'  # bucket_name
-        assert call_args[0][1] == 'test_custom_logger.py'  # object_key
+        assert call_args.kwargs['bucket_name'] == 'test-bucket'
+        assert call_args.kwargs['object_key'] == 'test_custom_logger.py'
 
     @patch('litellm.proxy.types_utils.utils._download_gcs_file_wrapper')
     def test_gcs_download_success(self, mock_gcs_download, sample_custom_logger_content):
         """Test successful GCS download and loading"""
         # Configure GCS download to succeed and create the file
-        def mock_download(bucket, key, local_path):
-            with open(local_path, 'w') as f:
+        def mock_download(bucket_name, object_key, local_file_path):
+            with open(local_file_path, 'w') as f:
                 f.write(sample_custom_logger_content)
             return True
         
@@ -142,7 +142,7 @@ test_logger_instance = TestCustomLogger()
             
             # Verify correct object key was generated
             call_args = mock_download.call_args
-            assert call_args[0][1] == "loggers/production/advanced_logger.py"
+            assert call_args.kwargs['object_key'] == "loggers/production/advanced_logger.py"
 
     def test_invalid_url_schemes(self):
         """Test error handling for invalid URL schemes"""
@@ -167,6 +167,10 @@ test_logger_instance = TestCustomLogger()
         # Missing instance name
         with pytest.raises(ImportError, match="Invalid module specification"):
             get_instance_fn("s3://bucket/module-only")
+            
+        # Including .py extension (common mistake)
+        with pytest.raises(ImportError, match="Don't include '\\.py' extension and you must specify the instance name"):
+            get_instance_fn("s3://bucket/custom_guardrail.py")
 
     @patch('litellm.proxy.common_utils.load_config_utils.download_python_file_from_s3')
     def test_download_failure_handling(self, mock_s3_download):
@@ -183,9 +187,9 @@ test_logger_instance = TestCustomLogger()
         """Test that temporary files are cleaned up"""
         created_files = []
         
-        def mock_download(bucket, key, local_path):
-            created_files.append(local_path)
-            with open(local_path, 'w') as f:
+        def mock_download(bucket_name, object_key, local_file_path):
+            created_files.append(local_file_path)
+            with open(local_file_path, 'w') as f:
                 f.write(sample_custom_logger_content)
             return True
         
