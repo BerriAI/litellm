@@ -24,6 +24,9 @@ from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+from litellm.llms.base_llm.audio_speech.transformation import (
+    BaseAudioSpeechConfig,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
@@ -63,7 +66,7 @@ from litellm.types.llms.openai import (
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import EmbeddingResponse, FileTypes, TranscriptionResponse
+from litellm.types.utils import EmbeddingResponse, FileTypes, HttpxBinaryResponseContent, TranscriptionResponse
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
     VectorStoreCreateResponse,
@@ -1232,6 +1235,217 @@ class BaseLLMHTTPHandler:
             model=model,
             response=response,
             model_response=model_response,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+        )
+
+    def audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        litellm_params: dict,
+        timeout: float,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        aspeech: bool = False,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseAudioSpeechConfig] = None,
+    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+
+        if aspeech is True:
+            return self.async_audio_speech(  # type: ignore
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                client=client,
+                headers=headers,
+                provider_config=provider_config,
+            )
+
+        # Prepare the request
+        headers, complete_url, data = self._prepare_audio_speech_request(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
+        )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            client = _get_httpx_client()
+
+        try:
+            response = client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return self._transform_audio_speech_response(
+            provider_config=provider_config,
+            model=model,
+            response=response,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+        )
+
+    async def async_audio_speech(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        litellm_params: dict,
+        timeout: float,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_llm_provider: str,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        headers: Optional[Dict[str, Any]] = None,
+        provider_config: Optional[BaseAudioSpeechConfig] = None,
+    ) -> HttpxBinaryResponseContent:
+        if provider_config is None:
+            raise ValueError(
+                f"No provider config found for model: {model} and provider: {custom_llm_provider}"
+            )
+
+        # Prepare the request
+        headers, complete_url, data = self._prepare_audio_speech_request(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            headers=headers,
+            provider_config=provider_config,
+        )
+
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        try:
+            response = await async_httpx_client.post(
+                url=complete_url,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return self._transform_audio_speech_response(
+            provider_config=provider_config,
+            model=model,
+            response=response,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+        )
+
+    def _prepare_audio_speech_request(
+        self,
+        model: str,
+        input: str,
+        voice: str,
+        optional_params: dict,
+        litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        headers: Optional[Dict[str, Any]],
+        provider_config: BaseAudioSpeechConfig,
+    ) -> Tuple[dict, str, dict]:
+        """
+        Shared logic for preparing audio speech requests.
+        Returns: (headers, complete_url, data)
+        """
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers or {},
+            model=model,
+            messages=[],
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
+
+        complete_url = provider_config.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
+
+        # Transform the request
+        data = provider_config.transform_audio_speech_request(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": complete_url,
+                "headers": headers,
+            },
+        )
+
+        return headers, complete_url, data
+
+    def _transform_audio_speech_response(
+        self,
+        provider_config: BaseAudioSpeechConfig,
+        model: str,
+        response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        optional_params: dict,
+        api_key: Optional[str],
+    ) -> HttpxBinaryResponseContent:
+        """Shared logic for transforming audio speech responses."""
+        return provider_config.transform_audio_speech_response(
+            model=model,
+            raw_response=response,
             logging_obj=logging_obj,
             optional_params=optional_params,
             api_key=api_key,
