@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Scaling with Multiple Instances
 
 Learn how to deploy LiteLLM across multiple instances while maintaining centralized administration and avoiding duplication of management overhead.
@@ -13,24 +17,7 @@ When scaling LiteLLM for production use, you may want to deploy multiple instanc
 
 ### Typical Deployment Scenario
 
-```
-┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
-│   Admin Instance    │    │   US Worker         │    │   EU Worker         │
-│  admin.company.com  │    │  us.company.com     │    │  eu.company.com     │
-│                     │    │                     │    │                     │
-│  ✅ Admin UI        │    │  ❌ Admin UI        │    │  ❌ Admin UI        │
-│  ✅ Management APIs │    │  ❌ Management APIs │    │  ❌ Management APIs │
-│  ✅ User/Key Mgmt   │    │  ✅ LLM APIs        │    │  ✅ LLM APIs        │
-│  ✅ Monitoring      │    │  ✅ Health Checks   │    │  ❌ Health Checks   │
-└─────────────────────┘    └─────────────────────┘    └─────────────────────┘
-           │                          │                          │
-           └──────────────────────────┼──────────────────────────┘
-                                      │
-                              ┌───────────────┐
-                              │  Shared DB    │
-                              │   (Global)    │
-                              └───────────────┘
-```
+<Image img={require('../../img/scaling_architecture.png')} />  
 
 ### Benefits of This Architecture
 
