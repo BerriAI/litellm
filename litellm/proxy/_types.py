@@ -852,8 +852,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_access_groups: List[str] = Field(default_factory=list)
     # Stdio-specific fields
     command: Optional[str] = None
-    args: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
     
     @model_validator(mode="before")
     @classmethod
@@ -884,8 +884,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     mcp_access_groups: List[str] = Field(default_factory=list)
     # Stdio-specific fields
     command: Optional[str] = None
-    args: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
     
     @model_validator(mode="before")
     @classmethod
@@ -923,8 +923,8 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     mcp_info: Optional[MCPInfo] = None
     # Stdio-specific fields
     command: Optional[str] = None
-    args: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
@@ -2768,6 +2768,7 @@ class SpecialHeaders(enum.Enum):
     custom_litellm_api_key = "x-litellm-api-key"
     mcp_auth = "x-mcp-auth"
     mcp_servers = "x-mcp-servers"
+    mcp_access_groups = "x-mcp-access-groups"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):

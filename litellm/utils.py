@@ -1620,7 +1620,6 @@ def _is_streaming_request(
     ):
         return True
     #########################################################
-
     return False
 
 
@@ -5352,6 +5351,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("DASHSCOPE_API_KEY")
+        elif custom_llm_provider == "moonshot":
+            if "MOONSHOT_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MOONSHOT_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -6665,6 +6669,8 @@ class ProviderConfigManager:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
+        elif litellm.LlmProviders.BYTEZ == provider:
+            return litellm.BytezChatConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
@@ -6811,6 +6817,8 @@ class ProviderConfigManager:
             return litellm.NebiusConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             return litellm.DashScopeChatConfig()
+        elif litellm.LlmProviders.MOONSHOT == provider:
+            return litellm.MoonshotChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -7079,6 +7087,12 @@ class ProviderConfigManager:
             )
 
             return AzureOpenAIVectorStoreConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.vector_stores.transformation import (
+                VertexVectorStoreConfig,
+            )
+
+            return VertexVectorStoreConfig()
         return None
 
     @staticmethod

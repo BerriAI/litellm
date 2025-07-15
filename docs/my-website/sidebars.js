@@ -166,6 +166,7 @@ const sidebars = {
             "proxy/ui",
             "proxy/admin_ui_sso",
             "proxy/custom_root_ui",
+            "proxy/model_hub",
             "proxy/self_serve",
             "proxy/public_teams",
             "tutorials/scim_litellm",
@@ -408,6 +409,7 @@ const sidebars = {
         "providers/nvidia_nim",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
+        "providers/moonshot",
         "providers/lm_studio",
         "providers/cerebras",
         "providers/volcano",
@@ -447,7 +449,8 @@ const sidebars = {
         "providers/snowflake",
         "providers/featherless_ai",
         "providers/nebius",
-        "providers/dashscope"
+        "providers/dashscope",
+        "providers/bytez"
       ],
     },
     {
@@ -618,6 +621,11 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
+    },
+    {
+      type: "doc",
+      id: "provider_registration/index",
+      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],

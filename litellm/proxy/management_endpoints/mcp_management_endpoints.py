@@ -1,3 +1,6 @@
+
+
+
 """
 1. Allow proxy admin to perform create, update, and delete operations on MCP servers in the db.
 2. Allows users to view the mcp servers they have access to.
@@ -24,7 +27,6 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
-from litellm.proxy.auth.model_checks import get_mcp_server_ids
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -92,19 +94,19 @@ if MCP_AVAILABLE:
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Get all MCP tools available for the current key
+        Get all MCP tools available for the current key, including those from access groups
         """
-
-        server_ids = await get_mcp_server_ids(
-            user_api_key_dict=user_api_key_dict,
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
         )
-
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
-        tools = []
+        # This now includes both direct and access group servers
+        server_ids = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_dict)
 
+        tools = []
         for server_id in server_ids:
             tools.extend(await global_mcp_server_manager.get_tools_for_server(server_id))
 
@@ -245,9 +247,9 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                         mcp_info=_server_config.mcp_info,
                         # Stdio-specific fields
-                        command=_server_config.command,
-                        args=_server_config.args,
-                        env=_server_config.env,
+                        command=getattr(_server_config, 'command', None),
+                        args=getattr(_server_config, 'args', None) or [],
+                        env=getattr(_server_config, 'env', None) or {},
                     )
                 )
 
@@ -269,9 +271,9 @@ if MCP_AVAILABLE:
                 mcp_info=server.mcp_info,
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
                 # Stdio-specific fields
-                command=server.command,
-                args=server.args,
-                env=server.env,
+                command=getattr(server, 'command', None),
+                args=getattr(server, 'args', None) or [],
+                env=getattr(server, 'env', None) or {},
             )
             for server in LIST_MCP_SERVERS
         ]
@@ -533,3 +535,4 @@ if MCP_AVAILABLE:
             pass
 
         return mcp_server_record_updated
+

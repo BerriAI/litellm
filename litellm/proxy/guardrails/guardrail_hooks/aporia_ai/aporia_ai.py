@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 
 from fastapi import HTTPException
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -32,8 +31,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-
-litellm.set_verbose = True
 
 GUARDRAIL_NAME = "aporia"
 
