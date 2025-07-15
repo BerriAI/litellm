@@ -734,6 +734,12 @@ def custom_openapi():
         if route in openapi_schema["paths"]:
             paths_to_include[route] = openapi_schema["paths"][route]
     openapi_schema["paths"] = paths_to_include
+    
+    # Apply custom OpenAPI schema modifications
+    from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
+    custom_spec = CustomOpenAPISpec()
+    openapi_schema = custom_spec.customize_openapi_schema(openapi_schema)
+    
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
