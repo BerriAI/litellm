@@ -65,7 +65,11 @@ async def get_config_file_contents_from_gcs(bucket_name, object_key):
         return None
 
 
-def download_python_file_from_s3(bucket_name, object_key, local_file_path):
+def download_python_file_from_s3(
+    bucket_name: str,
+    object_key: str,
+    local_file_path: str,
+) -> bool:
     """
     Download a Python file from S3 and save it to local filesystem.
     
@@ -99,6 +103,7 @@ def download_python_file_from_s3(bucket_name, object_key, local_file_path):
         
         # Read the file contents
         file_contents = response["Body"].read().decode("utf-8")
+        verbose_proxy_logger.debug(f"File contents: {file_contents}")
         
         # Ensure directory exists
         os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
@@ -114,11 +119,15 @@ def download_python_file_from_s3(bucket_name, object_key, local_file_path):
         verbose_proxy_logger.error(f"ImportError: {str(e)}")
         return False
     except Exception as e:
-        verbose_proxy_logger.error(f"Error downloading Python file: {str(e)}")
+        verbose_proxy_logger.exception(f"Error downloading Python file: {str(e)}")
         return False
 
 
-async def download_python_file_from_gcs(bucket_name, object_key, local_file_path):
+async def download_python_file_from_gcs(
+    bucket_name: str,
+    object_key: str,
+    local_file_path: str,
+) -> bool:
     """
     Download a Python file from GCS and save it to local filesystem.
     
@@ -154,7 +163,7 @@ async def download_python_file_from_gcs(bucket_name, object_key, local_file_path
         return True
 
     except Exception as e:
-        verbose_proxy_logger.error(f"Error downloading Python file from GCS: {str(e)}")
+        verbose_proxy_logger.exception(f"Error downloading Python file from GCS: {str(e)}")
         return False
 
 
