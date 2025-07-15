@@ -93,44 +93,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"model_response_data": {"text": content}}
 
-    def _extract_content_from_messages(self, messages: List[AllMessageValues]) -> str:
-        """Extract text content from the last consecutive block of user messages."""
-        if not messages:
-            return ""
 
-        # Get the last consecutive block of user messages
-        user_messages = []
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                user_messages.append(message)
-            else:
-                # Stop when we hit a non-user message
-                break
-
-        if not user_messages:
-            return ""
-
-        # Reverse to get messages in chronological order
-        user_messages.reverse()
-
-        # Extract content from each message
-        content_parts = []
-        for message in user_messages:
-            content = message.get("content")
-            if content is None:
-                continue
-
-            if isinstance(content, str):
-                content_parts.append(content)
-            elif isinstance(content, list):
-                # Extract text from content list items
-                for item in content:
-                    if isinstance(item, dict) and "text" in item:
-                        content_parts.append(item["text"])
-                    elif isinstance(item, str):
-                        content_parts.append(item)
-
-        return "\n".join(content_parts)
 
     def _extract_content_from_response(
         self, response: Union[Any, ModelResponse]
@@ -274,8 +237,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             return data
 
-        # Extract content from messages
-        content = self._extract_content_from_messages(messages)
+        # Extract content from messages using helper from common_utils
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_last_user_message,
+        )
+
+        content = get_last_user_message(messages)
         if not content:
             return data
 

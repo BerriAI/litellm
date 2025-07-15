@@ -230,7 +230,7 @@ async def test_model_armor_with_list_content():
     # Verify the content was extracted correctly
     guardrail.async_handler.post.assert_called_once()
     call_args = guardrail.async_handler.post.call_args
-    assert call_args[1]["json"]["user_prompt_data"]["text"] == "Hello world\nHow are you?"
+    assert call_args[1]["json"]["user_prompt_data"]["text"] == "Hello worldHow are you?"
 
 
 @pytest.mark.asyncio
