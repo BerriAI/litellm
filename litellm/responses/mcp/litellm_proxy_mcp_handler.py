@@ -220,7 +220,7 @@ class LiteLLM_Proxy_MCP_Handler:
         original_input: Any = None
     ) -> List[Any]:
         """Create follow-up input with tool results in proper format."""
-        follow_up_input = []
+        follow_up_input: List[Any] = []
         
         # Add original user input if available to maintain conversation context
         if original_input:
@@ -236,18 +236,24 @@ class LiteLLM_Proxy_MCP_Handler:
                 follow_up_input.append(original_input)
         
         # Add the assistant message with function calls
-        assistant_message_content = []
-        function_calls = []
+        assistant_message_content: List[Any] = []
+        function_calls: List[Dict[str, Any]] = []
         
         for output_item in response.output:
             if isinstance(output_item, dict):
                 if output_item.get("type") == "function_call":
-                    function_calls.append({
-                        "type": "function_call",
-                        "call_id": output_item.get("call_id") or output_item.get("id"),
-                        "name": output_item.get("name"),
-                        "arguments": output_item.get("arguments")
-                    })
+                    call_id = output_item.get("call_id") or output_item.get("id")
+                    name = output_item.get("name")
+                    arguments = output_item.get("arguments")
+                    
+                    # Only add if we have required fields
+                    if call_id and name:
+                        function_calls.append({
+                            "type": "function_call",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": arguments
+                        })
                 elif output_item.get("type") == "message":
                     # Extract content from message
                     content = output_item.get("content", [])
@@ -265,7 +271,8 @@ class LiteLLM_Proxy_MCP_Handler:
             })
             
             # Add function calls after assistant message
-            follow_up_input.extend(function_calls)
+            for function_call in function_calls:
+                follow_up_input.append(function_call)
         
         # Add tool results (function call outputs)
         for tool_result in tool_results:
