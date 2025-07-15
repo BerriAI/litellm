@@ -73,7 +73,7 @@ class LiteLLM_Proxy_MCP_Handler:
     
     @staticmethod
     def _should_auto_execute_tools(
-        mcp_tools_with_litellm_proxy: List[Dict[str, Any]], 
+        mcp_tools_with_litellm_proxy: Union[List[Dict[str, Any]], List[ToolParam]], 
     ) -> bool:
         """Check if we should auto-execute tool calls.
 
@@ -82,7 +82,10 @@ class LiteLLM_Proxy_MCP_Handler:
         
         """
         for tool in mcp_tools_with_litellm_proxy:
-            if tool.get("require_approval") == "never":
+            if isinstance(tool, dict):
+                if tool.get("require_approval") == "never":
+                    return True
+            elif getattr(tool, "require_approval", None) == "never":
                 return True
         return False
     

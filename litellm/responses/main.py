@@ -190,7 +190,7 @@ async def aresponses_api_with_mcp(
         tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
         
         if tool_calls:
-            user_api_key_auth = kwargs.get("user_api_key_auth")
+            user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(tool_calls=tool_calls, user_api_key_auth=user_api_key_auth)
             
             if tool_results:
