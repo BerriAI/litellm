@@ -81,9 +81,10 @@ def download_python_file_from_s3(bucket_name, object_key, local_file_path):
         import boto3
         from botocore.credentials import Credentials
 
-        from litellm.main import bedrock_converse_chat_completion
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        base_aws_llm = BaseAWSLLM()
 
-        credentials: Credentials = bedrock_converse_chat_completion.get_credentials()
+        credentials: Credentials = base_aws_llm.get_credentials()
         s3_client = boto3.client(
             "s3",
             aws_access_key_id=credentials.access_key,
