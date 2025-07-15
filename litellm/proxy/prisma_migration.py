@@ -10,15 +10,18 @@ from pathlib import Path
 sys.path.insert(
     0, os.path.abspath("./")
 )  # Adds the parent directory to the system path
+
 from litellm._logging import verbose_proxy_logger
-from litellm.secret_managers.aws_secret_manager import decrypt_env_var
+from litellm.proxy.proxy_cli import run_server
 
-if os.getenv("USE_AWS_KMS", None) is not None and os.getenv("USE_AWS_KMS") == "True":
-    ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
-    new_env_var = decrypt_env_var()
+# Call the Click command with standalone_mode=False
+run_server(["--use_prisma_migrate", "--skip_server_startup"], standalone_mode=False)
 
-    for k, v in new_env_var.items():
-        os.environ[k] = v
+# run prisma generate
+verbose_proxy_logger.info("Running 'prisma generate'...")
+result = subprocess.run(["prisma", "generate"], capture_output=True, text=True)
+verbose_proxy_logger.info(f"'prisma generate' stdout: {result.stdout}")  # Log stdout
+exit_code = result.returncode
 
 # Check if DATABASE_URL is not set
 database_url = os.getenv("DATABASE_URL")

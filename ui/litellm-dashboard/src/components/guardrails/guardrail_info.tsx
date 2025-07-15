@@ -26,6 +26,8 @@ import PiiConfiguration from "./pii_configuration"
 import GuardrailProviderFields from "./guardrail_provider_fields"
 import GuardrailOptionalParams from "./guardrail_optional_params"
 import { ArrowLeftIcon } from "@heroicons/react/outline"
+import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
+import { CheckIcon, CopyIcon } from "lucide-react"
 
 export interface GuardrailInfoProps {
   guardrailId: string
@@ -67,7 +69,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     }>
     supported_modes: string[]
   } | null>(null)
-
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
   const fetchGuardrailInfo = async () => {
     try {
       setLoading(true)
@@ -316,6 +318,16 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   // Format the provider display name and logo
   const { logo, displayName } = getGuardrailLogoAndName(guardrailData.litellm_params?.guardrail || "")
 
+  const copyToClipboard = async (text: string | null | undefined, key: string) => {
+    const success = await utilCopyToClipboard(text)
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }))
+      }, 2000)
+    }
+  }
+
   return (
     <div className="p-4">
       <div>
@@ -323,7 +335,21 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
           Back to Guardrails
         </TremorButton>
         <Title>{guardrailData.guardrail_name || "Unnamed Guardrail"}</Title>
-        <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
+        <div className="flex items-center cursor-pointer">
+          <Text className="text-gray-500 font-mono">{guardrailData.guardrail_id}</Text>
+          
+            <Button
+              type="text"
+              size="small"
+              icon={copiedStates["guardrail-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(guardrailData.guardrail_id, "guardrail-id")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["guardrail-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
+            />
+        </div>
       </div>
 
       <TabGroup>
