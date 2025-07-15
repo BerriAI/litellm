@@ -125,7 +125,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -155,7 +155,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -185,7 +185,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp",
+      "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
@@ -197,123 +197,25 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 </TabItem>
 </Tabs>
 
-## Selecting MCP Servers/Groups via URL Namespacing
+#### How it works when server_url="litellm_proxy"
 
-You can now directly access specific MCP servers and groups by specifying them in the MCP URL itself. This allows you to:
-- Limit tool access to one or more specific MCP servers or groups using the URL
-- Control which tools are available in different environments or use cases
+When server_url="litellm_proxy", LiteLLM bridges non-MCP providers to your MCP tools.
 
-**This is the preferred method for MCP server/group selection.**
+- Tool Discovery: LiteLLM fetches MCP tools and converts them to OpenAI-compatible definitions
+- LLM Call: Tools are sent to the LLM with your input; LLM selects which tools to call
+- Tool Execution: LiteLLM automatically parses arguments, routes calls to MCP servers, executes tools, and retrieves results
+- Response Integration: Tool results are sent back to LLM for final response generation
+- Output: Complete response combining LLM reasoning with tool execution results
 
-The URL pattern is:
+This enables MCP tool usage with any LiteLLM-supported provider, regardless of native MCP support.
 
-```
-<your-litellm-proxy-base-url>/mcp/<server_name>
-```
+#### Auto-execution for require_approval: "never"
 
-- You can specify one or more server/group names, separated by commas after `/mcp/`.
-- Server/group names with spaces should be replaced with underscores.
-- If you do not use this URL pattern, all available MCP servers will be accessible (unless restricted by other means).
-- You can still use the `x-mcp-servers` header as an alternative (see below).
-
-<Tabs>
-<TabItem value="openai" label="OpenAI API">
-
-```bash title="cURL Example with URL Namespacing" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
---header 'Content-Type: application/json' \
---header "Authorization: Bearer $OPENAI_API_KEY" \
---data '{
-    "model": "gpt-4o",
-    "tools": [
-        {
-            "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail",
-            "require_approval": "never",
-            "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
-            }
-        }
-    ],
-    "input": "Run available tools",
-    "tool_choice": "required"
-}'
-```
-
-In this example, the request will only have access to tools from the "Zapier_Gmail" MCP servers.
-
-</TabItem>
-
-<TabItem value="litellm" label="LiteLLM Proxy">
-
-```bash title="cURL Example with URL Namespacing" showLineNumbers
-curl --location '<your-litellm-proxy-base-url>/v1/responses' \
---header 'Content-Type: application/json' \
---header "Authorization: Bearer $LITELLM_API_KEY" \
---data '{
-    "model": "gpt-4o",
-    "tools": [
-        {
-            "type": "mcp",
-            "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,Group1",
-            "require_approval": "never",
-            "headers": {
-                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
-            }
-        }
-    ],
-    "input": "Run available tools",
-    "tool_choice": "required"
-}'
-```
-
-This configuration restricts the request to only use tools from the specified MCP servers/groups via the URL.
-
-</TabItem>
-
-<TabItem value="cursor" label="Cursor IDE">
-
-```json title="Cursor MCP Configuration with URL Namespacing" showLineNumbers
-{
-  "mcpServers": {
-    "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail",
-      "headers": {
-        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
-      }
-    }
-  }
-}
-```
-
-This configuration in Cursor IDE settings will limit tool access to only the specified MCP servers/groups via the URL.
-
-</TabItem>
-</Tabs>
-
-:::info
-**Note:** You can add multiple servers or access groups in the URL instead of just one, by making it comma-separated. This allows you to restrict access to several MCP servers/groups at once.
-:::
-
-**Example:**
-
-```json title="Multiple Servers/Access Groups in URL" showLineNumbers
-{
-  "mcpServers": {
-    "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,dev_access_group,deepwiki_mcp",
-      "headers": {
-        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
-      }
-    }
-  }
-}
-```
+Setting require_approval: "never" triggers automatic tool execution, returning the final response in a single API call without additional user interaction.
 
 
-## Segregating MCP Server Access Using Headers
+
+### Specific MCP Servers
 
 You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
 - Limit tool access to one or more specific MCP servers
@@ -338,7 +240,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -367,7 +269,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -390,7 +292,7 @@ This configuration restricts the request to only use tools from the specified MC
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp",
+      "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
         "x-mcp-servers": "Zapier_Gmail,Server2"
@@ -405,7 +307,57 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 </TabItem>
 </Tabs>
 
----
+### Grouping MCPs (Access Groups)
+
+MCP Access Groups allow you to group multiple MCP servers together for easier management.
+
+#### 1. Create an Access Group
+
+To create an access group:
+- Go to MCP Servers in the LiteLLM UI
+- Click "Add a New MCP Server" 
+- Under "MCP Access Groups", create a new group (e.g., "dev_group") by typing it
+- Add the same group name to other servers to group them together
+
+<Image 
+  img={require('../img/mcp_create_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+#### 2. Use Access Group in Cursor
+
+Include the access group name in the `x-mcp-servers` header:
+
+```json title="Cursor Configuration with Access Groups" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "litellm_proxy",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "dev_group"
+      }
+    }
+  }
+}
+```
+
+This gives you access to all servers in the "dev_group" access group.
+
+#### Advanced: Connecting Access Groups to API Keys
+
+When creating API keys, you can assign them to specific access groups for permission management:
+
+- Go to "Keys" in the LiteLLM UI and click "Create Key"
+- Select the desired MCP access groups from the dropdown
+- The key will have access to all MCP servers in those groups
+- This is reflected in the Test Key page
+
+<Image 
+  img={require('../img/mcp_key_access_group.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
 
 ## Using your MCP with client side credentials
 
@@ -430,7 +382,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -461,7 +413,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -492,7 +444,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP and include your MCP authent
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp",
+      "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
         "x-mcp-auth": "$MCP_AUTH_TOKEN"
@@ -512,7 +464,7 @@ Connect to LiteLLM MCP using HTTP transport with MCP authentication:
 
 **Server URL:**
 ```text showLineNumbers
-<your-litellm-proxy-base-url>/mcp
+litellm_proxy
 ```
 
 **Headers:**
@@ -539,7 +491,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 # Create the transport with your LiteLLM MCP server URL and auth headers
-server_url = "<your-litellm-proxy-base-url>/mcp"
+server_url = "litellm_proxy"
 transport = StreamableHttpTransport(
     server_url,
     headers={
@@ -620,7 +572,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
