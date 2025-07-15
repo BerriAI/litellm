@@ -42,18 +42,18 @@ class GetRoutes:
         sub_app = getattr(route, 'app', None)
         if sub_app and hasattr(sub_app, 'routes'):
             for sub_route in sub_app.routes:
-                sub_endpoint_route = getattr(sub_route, "endpoint", None)
-                if sub_endpoint_route is not None:
-                    full_path = mount_path.rstrip('/') + getattr(sub_route, "path", "")
+                # Get endpoint - either from endpoint attribute or app attribute
+                endpoint_func = getattr(sub_route, "endpoint", None) or getattr(sub_route, "app", None)
+                
+                if endpoint_func is not None:
+                    sub_route_path = getattr(sub_route, "path", "")
+                    full_path = mount_path.rstrip('/') + sub_route_path
+                    
                     route_info = {
                         "path": full_path,
-                        "methods": getattr(sub_route, "methods", None),
+                        "methods": getattr(sub_route, "methods", ["GET", "POST"]),
                         "name": getattr(sub_route, "name", None),
-                        "endpoint": (
-                            sub_endpoint_route.__name__
-                            if sub_endpoint_route
-                            else None
-                        ),
+                        "endpoint": endpoint_func.__name__ if callable(endpoint_func) else None,
                         "mounted_app": True,
                     }
                     routes.append(route_info)
