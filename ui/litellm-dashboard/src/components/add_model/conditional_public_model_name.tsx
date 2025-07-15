@@ -23,7 +23,7 @@ const ConditionalPublicModelName: React.FC = () => {
           mapping.litellm_model === "custom"
         ) {
           return {
-            public_name: customModelName + "/<my-deployment>",
+            public_name: customModelName,
             litellm_model: customModelName + "/",
           };
         }
@@ -66,7 +66,7 @@ const ConditionalPublicModelName: React.FC = () => {
             };
           }
           return {
-            public_name: model + "/<my-deployment>",
+            public_name: model,
             litellm_model: model + "/",
           };
         });
