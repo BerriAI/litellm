@@ -11,7 +11,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.types.utils import Delta, LlmProviders, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    Delta,
+    LlmProviders,
+    ModelResponseStream,
+    StreamingChoices,
+)
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
@@ -2108,6 +2113,35 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
     choice = transformed["choices"][0]
     assert choice["text"] == "Some answer text"
     assert choice["reasoning_content"] == "Here's my chain of thought..."
+
+
+def test_anthropic_claude_4_invoke_chat_provider_config():
+    """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaude3Config,
+    )
+    from litellm.utils import ProviderConfigManager
+
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="invoke/us.anthropic.claude-sonnet-4-20250514-v1:0",
+        provider=LlmProviders.BEDROCK,
+    )
+    print(config)
+    assert isinstance(config, AmazonAnthropicClaude3Config)
+
+
+def test_bedrock_application_inference_profile():
+    model = "arn:aws:bedrock:us-east-2:<AWS-ACCOUNT-ID>:inference-profile/us.anthropic.claude-3-5-haiku-20241022-v1:0"
+    from pydantic import BaseModel
+
+    from litellm import completion
+    from litellm.utils import supports_tool_choice
+
+    result = supports_tool_choice(model, custom_llm_provider="bedrock")
+    result_2 = supports_tool_choice(model, custom_llm_provider="bedrock_converse")
+    print(result)
+    assert result == result_2
+    assert result is True
 
 
 if __name__ == "__main__":
