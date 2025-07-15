@@ -6,13 +6,7 @@ model_list:
     litellm_params:
       model: openai/*
 
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
+
 
 litellm_settings:
   callbacks: ["s3://litellm-proxy/custom_ui_sso_hook.custom_ui_sso_sign_in_handler"]
