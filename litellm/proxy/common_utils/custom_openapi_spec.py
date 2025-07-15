@@ -1,7 +1,7 @@
 import logging
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type
 
-verbose_proxy_logger = logging.getLogger("litellm.proxy.proxy_server")
+from litellm._logging import verbose_proxy_logger
 
 
 class CustomOpenAPISpec:
