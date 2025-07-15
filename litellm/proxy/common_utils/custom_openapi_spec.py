@@ -17,6 +17,18 @@ class CustomOpenAPISpec:
         "/openai/deployments/{model}/chat/completions"
     ]
     
+    EMBEDDING_PATHS = [
+        "/v1/embeddings",
+        "/embeddings",
+        "/engines/{model}/embeddings", 
+        "/openai/deployments/{model}/embeddings"
+    ]
+    
+    RESPONSES_API_PATHS = [
+        "/v1/responses",
+        "/responses"
+    ]
+    
     @staticmethod
     def get_pydantic_schema(model_class) -> Optional[Dict[str, Any]]:
         """
@@ -122,6 +134,86 @@ class CustomOpenAPISpec:
         return openapi_schema
     
     @staticmethod
+    def add_embedding_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Add EmbeddingRequest schema to embedding endpoints for documentation.
+        This shows the request body in Swagger without runtime validation.
+        
+        Args:
+            openapi_schema: The OpenAPI schema dict to modify
+            
+        Returns:
+            Modified OpenAPI schema
+        """
+        try:
+            from litellm.types.embedding import EmbeddingRequest
+
+            # Get the schema for EmbeddingRequest
+            request_schema = CustomOpenAPISpec.get_pydantic_schema(EmbeddingRequest)
+            
+            # Only proceed if we successfully got the schema
+            if request_schema is not None:
+                # Add schema to components
+                CustomOpenAPISpec.add_schema_to_components(openapi_schema, "EmbeddingRequest", request_schema)
+                
+                # Add request body to embedding endpoints
+                CustomOpenAPISpec.add_request_body_to_paths(
+                    openapi_schema, 
+                    CustomOpenAPISpec.EMBEDDING_PATHS, 
+                    "#/components/schemas/EmbeddingRequest"
+                )
+                
+                verbose_proxy_logger.debug("Successfully added EmbeddingRequest schema to OpenAPI spec")
+            else:
+                verbose_proxy_logger.debug("Could not get schema for EmbeddingRequest")
+                
+        except Exception as e:
+            # If schema addition fails, continue without it
+            verbose_proxy_logger.debug(f"Failed to add embedding request schema: {str(e)}")
+        
+        return openapi_schema
+    
+    @staticmethod
+    def add_responses_api_request_schema(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Add ResponsesAPIRequestParams schema to responses API endpoints for documentation.
+        This shows the request body in Swagger without runtime validation.
+        
+        Args:
+            openapi_schema: The OpenAPI schema dict to modify
+            
+        Returns:
+            Modified OpenAPI schema
+        """
+        try:
+            from litellm.types.llms.openai import ResponsesAPIRequestParams
+
+            # Get the schema for ResponsesAPIRequestParams
+            request_schema = CustomOpenAPISpec.get_pydantic_schema(ResponsesAPIRequestParams)
+            
+            # Only proceed if we successfully got the schema
+            if request_schema is not None:
+                # Add schema to components
+                CustomOpenAPISpec.add_schema_to_components(openapi_schema, "ResponsesAPIRequestParams", request_schema)
+                
+                # Add request body to responses API endpoints
+                CustomOpenAPISpec.add_request_body_to_paths(
+                    openapi_schema, 
+                    CustomOpenAPISpec.RESPONSES_API_PATHS, 
+                    "#/components/schemas/ResponsesAPIRequestParams"
+                )
+                
+                verbose_proxy_logger.debug("Successfully added ResponsesAPIRequestParams schema to OpenAPI spec")
+            else:
+                verbose_proxy_logger.debug("Could not get schema for ResponsesAPIRequestParams")
+                
+        except Exception as e:
+            # If schema addition fails, continue without it
+            verbose_proxy_logger.debug(f"Failed to add responses API request schema: {str(e)}")
+        
+        return openapi_schema
+    
+    @staticmethod
     def add_llm_api_request_schema_body(openapi_schema: Dict[str, Any]) -> Dict[str, Any]:
         """
         Add LLM API request schema bodies to OpenAPI specification for documentation.
@@ -135,7 +227,10 @@ class CustomOpenAPISpec:
         # Add chat completion request schema
         openapi_schema = CustomOpenAPISpec.add_chat_completion_request_schema(openapi_schema)
         
-        # Future LLM API request schemas can be added here
-        # e.g., CustomOpenAPISpec.add_embedding_request_schema(openapi_schema)
+        # Add embedding request schema
+        openapi_schema = CustomOpenAPISpec.add_embedding_request_schema(openapi_schema)
+        
+        # Add responses API request schema
+        openapi_schema = CustomOpenAPISpec.add_responses_api_request_schema(openapi_schema)
         
         return openapi_schema 
