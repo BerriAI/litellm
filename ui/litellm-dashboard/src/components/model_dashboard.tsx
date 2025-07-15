@@ -12,6 +12,7 @@ import {
   Text,
   Grid,
   Col,
+  DateRangePicker,
 } from "@tremor/react";
 import {
   CredentialItem,
@@ -1235,7 +1236,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     <SelectItem value="all">
                                       All Models
                                     </SelectItem>
-                                    {availableModelGroups.map((group, idx) => (
+                                    <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
+                                {availableModelGroups.map((group, idx) => (
                                       <SelectItem key={idx} value={group}>
                                         {group}
                                       </SelectItem>
@@ -1322,84 +1324,82 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           </div>
                         </div>
 
-                        <ModelDataTable
-                          columns={columns(
-                            userRole,
-                            userID,
-                            premiumUser,
-                            setSelectedModelId,
-                            setSelectedTeamId,
-                            getDisplayModelName,
-                            handleEditClick,
-                            handleRefreshClick,
-                            setEditModel,
-                            expandedRows,
-                            setExpandedRows
-                          )}
-                          data={modelData.data.filter((model: any) => {
-                            // Model name filter
-                            const modelNameMatch =
-                              selectedModelGroup === "all" ||
-                              model.model_name === selectedModelGroup ||
-                              !selectedModelGroup;
-
-                            // Model access group filter
-                            const accessGroupMatch =
-                              selectedModelAccessGroupFilter === "all" ||
-                              model.model_info["access_groups"]?.includes(
-                                selectedModelAccessGroupFilter
-                              ) ||
-                              !selectedModelAccessGroupFilter;
-
-                            // Team access filter based on current team and view mode
-                            let teamAccessMatch = true;
-                            if (modelViewMode === "current_team") {
-                              if (currentTeam === "personal") {
-                                // Show only models with direct access
-                                teamAccessMatch =
-                                  model.model_info?.direct_access === true;
-                              } else {
-                                // Show only models accessible by the current team
-                                teamAccessMatch =
-                                  model.model_info?.access_via_team_ids?.includes(
-                                    currentTeam
-                                  ) === true;
-                              }
+                    <ModelDataTable
+                      columns={columns(
+                        userRole,
+                        userID,
+                        premiumUser,
+                        setSelectedModelId,
+                        setSelectedTeamId,
+                        getDisplayModelName,
+                        handleEditClick,
+                        handleRefreshClick,
+                        setEditModel,
+                        expandedRows,
+                        setExpandedRows
+                      )}
+                      data={modelData.data.filter(
+                        (model: any) => {
+                          // Model name filter
+                          const modelNameMatch = selectedModelGroup === "all" ||
+                          model.model_name === selectedModelGroup ||
+                          !selectedModelGroup || (selectedModelGroup === "wildcard" && model.model_name.includes('*'));
+                           // Model access group filter
+                           const accessGroupMatch =
+                           selectedModelAccessGroupFilter === "all" ||
+                           model.model_info["access_groups"]?.includes(
+                             selectedModelAccessGroupFilter
+                           ) ||
+                           !selectedModelAccessGroupFilter;
+                          // Team access filter based on current team and view mode
+                          let teamAccessMatch = true;
+                          if (modelViewMode === "current_team") {
+                            if (currentTeam === "personal") {
+                              // Show only models with direct access
+                              teamAccessMatch =
+                                model.model_info?.direct_access === true;
+                            } else {
+                              // Show only models accessible by the current team
+                              teamAccessMatch =
+                                model.model_info?.access_via_team_ids?.includes(
+                                  currentTeam
+                                ) === true;
                             }
-                            // For 'all' mode, show all models (teamAccessMatch remains true)
+                          }
+                          // For 'all' mode, show all models (teamAccessMatch remains true)
 
-                            return (
-                              modelNameMatch &&
-                              accessGroupMatch &&
-                              teamAccessMatch
-                            );
-                          })}
-                          isLoading={false}
-                          table={tableRef}
-                        />
-                      </div>
-                    </div>
-                  </Grid>
-                </TabPanel>
-                <TabPanel className="h-full">
-                  <AddModelTab
-                    form={form}
-                    handleOk={handleOk}
-                    selectedProvider={selectedProvider}
-                    setSelectedProvider={setSelectedProvider}
-                    providerModels={providerModels}
-                    setProviderModelsFn={setProviderModelsFn}
-                    getPlaceholder={getPlaceholder}
-                    uploadProps={uploadProps}
-                    showAdvancedSettings={showAdvancedSettings}
-                    setShowAdvancedSettings={setShowAdvancedSettings}
-                    teams={teams}
-                    credentials={credentialsList}
-                    accessToken={accessToken}
-                    userRole={userRole}
-                  />
-                </TabPanel>
-                <TabPanel>
+                          return (
+                            modelNameMatch &&
+                            accessGroupMatch &&
+                            teamAccessMatch
+                          );
+                        })}
+                      isLoading={false}
+                      table={tableRef}
+                    />
+                  </div>
+                </div>
+              </Grid>
+            </TabPanel>
+            <TabPanel className="h-full">
+              <AddModelTab
+                form={form}
+                handleOk={handleOk}
+                selectedProvider={selectedProvider}
+                setSelectedProvider={setSelectedProvider}
+                providerModels={providerModels}
+                setProviderModelsFn={setProviderModelsFn}
+                getPlaceholder={getPlaceholder}
+                uploadProps={uploadProps}
+                showAdvancedSettings={showAdvancedSettings}
+                setShowAdvancedSettings={setShowAdvancedSettings}
+                teams={teams}
+                credentials={credentialsList}
+                accessToken={accessToken}
+                userRole={userRole}
+              />
+            </TabPanel>
+            <TabPanel>
                   <CredentialsPanel
                     accessToken={accessToken}
                     uploadProps={uploadProps}
@@ -1472,26 +1472,27 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       </Select>
                     </Col>
                     <Col>
-                      <Popover
-                        trigger="click"
-                        content={FilterByContent}
-                        overlayStyle={{
-                          width: "20vw",
-                        }}
-                      >
-                        <Button
-                          icon={FilterIcon}
-                          size="md"
-                          variant="secondary"
-                          className="mt-4 ml-2"
-                          style={{
-                            border: "none",
-                          }}
-                          onClick={() => setShowAdvancedFilters(true)}
-                        ></Button>
-                      </Popover>
-                    </Col>
-                  </Grid>
+                <Popover
+                  trigger="click" content={FilterByContent}
+                  overlayStyle={{
+                    width: "20vw"
+                  }}
+                  >
+                <Button
+                icon={FilterIcon}
+                size="md"
+                variant="secondary"
+                className="mt-4 ml-2"
+                style={{
+                  border: "none",
+                }}
+                onClick={() => setShowAdvancedFilters(true)}
+                  >
+                </Button>      
+                </Popover>
+                </Col>
+
+                </Grid>
 
                   <Grid numItems={2}>
                     <Col>
