@@ -235,6 +235,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "dashscope-intl.aliyuncs.com/compatible-mode/v1":
                         custom_llm_provider = "dashscope"
                         dynamic_api_key = get_secret_str("DASHSCOPE_API_KEY")
+                    elif endpoint == "api.moonshot.ai/v1":
+                        custom_llm_provider = "moonshot"
+                        dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -671,6 +674,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.DashScopeChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "moonshot":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 
