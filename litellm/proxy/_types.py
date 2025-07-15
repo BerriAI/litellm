@@ -16,7 +16,11 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRequest,
+    OpenAIFileObject,
+)
 from litellm.types.mcp import (
     MCPAuthType,
     MCPSpecVersion,
@@ -558,44 +562,14 @@ class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
                 )
         return values
 
-
 ######### Request Class Definition ######
-class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
-    model: str
-    messages: List[Dict[str, str]]
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    n: Optional[int] = None
-    stream: Optional[bool] = None
-    stop: Optional[List[str]] = None
-    max_tokens: Optional[int] = None
-    presence_penalty: Optional[float] = None
-    frequency_penalty: Optional[float] = None
-    logit_bias: Optional[Dict[str, float]] = None
-    user: Optional[str] = None
-    response_format: Optional[Dict[str, str]] = None
-    seed: Optional[int] = None
-    tools: Optional[List[str]] = None
-    tool_choice: Optional[str] = None
-    functions: Optional[List[str]] = None  # soon to be deprecated
-    function_call: Optional[str] = None  # soon to be deprecated
-
+class ProxyChatCompletionRequest(ChatCompletionRequest):
     # Optional LiteLLM params
-    caching: Optional[bool] = None
-    api_base: Optional[str] = None
-    api_version: Optional[str] = None
-    api_key: Optional[str] = None
-    num_retries: Optional[int] = None
-    context_window_fallback_dict: Optional[Dict[str, str]] = None
-    fallbacks: Optional[List[str]] = None
-    metadata: Optional[Dict[str, str]] = {}
-    deployment_id: Optional[str] = None
-    request_timeout: Optional[int] = None
-
-    model_config = ConfigDict(
-        extra="allow"
-    )  # allow params not defined here, these fall in litellm.completion(**kwargs)
-
+    guardrails: Optional[List[str]] 
+    caching: Optional[bool] 
+    num_retries: Optional[int] 
+    context_window_fallback_dict: Optional[Dict[str, str]] 
+    fallbacks: Optional[List[str]] 
 
 class ModelInfoDelete(LiteLLMPydanticObjectBase):
     id: str
