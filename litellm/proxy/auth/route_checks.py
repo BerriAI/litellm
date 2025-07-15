@@ -23,11 +23,10 @@ class RouteChecks:
         """
         try:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
-        except ImportError:
-            EnterpriseRouteChecks = None
 
-        if EnterpriseRouteChecks is not None:
             EnterpriseRouteChecks.should_call_route(route=route)
+        except Exception:
+            pass
 
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(
