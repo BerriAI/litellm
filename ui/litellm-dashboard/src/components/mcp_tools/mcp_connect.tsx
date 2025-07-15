@@ -35,6 +35,7 @@ import {
   Zap
 } from "lucide-react";
 import { getProxyBaseUrl } from "../networking";
+import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
@@ -153,15 +154,12 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
   const [currentServer] = useState("Zapier_MCP"); // This should match the current server being viewed
 
   const copyToClipboard = async (text: string, key: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedStates(prev => ({ ...prev, [key]: true }));
-      message.success('Copied to clipboard');
+    const success = await utilCopyToClipboard(text);
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
       setTimeout(() => {
-        setCopiedStates(prev => ({ ...prev, [key]: false }));
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
       }, 2000);
-    } catch (err) {
-      message.error('Failed to copy to clipboard');
     }
   };
 
@@ -198,7 +196,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
         <Button
           type="text"
           size="small"
-          icon={copiedStates[copyKey] ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+          icon={copiedStates[copyKey] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
           onClick={() => copyToClipboard(code, copyKey)}
           className={`absolute top-2 right-2 z-10 transition-all duration-200 ${
             copiedStates[copyKey] 
