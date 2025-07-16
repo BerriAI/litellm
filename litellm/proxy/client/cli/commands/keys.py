@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, List, Dict, Any
 
 import click
 import rich
@@ -159,6 +159,141 @@ def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
         raise click.Abort()
 
 
+def _parse_created_since_filter(created_since: Optional[str]) -> Optional[datetime]:
+    """Parse and validate the created_since date filter."""
+    if not created_since:
+        return None
+
+    try:
+        # Support formats: YYYY-MM-DD_HH:MM or YYYY-MM-DD
+        if "_" in created_since:
+            return datetime.strptime(created_since, "%Y-%m-%d_%H:%M")
+        else:
+            return datetime.strptime(created_since, "%Y-%m-%d")
+    except ValueError:
+        click.echo(f"Error: Invalid date format '{created_since}'. Use YYYY-MM-DD_HH:MM or YYYY-MM-DD", err=True)
+        raise click.Abort()
+
+
+def _fetch_all_keys_with_pagination(source_client: KeysManagementClient, source_base_url: str) -> List[Dict[str, Any]]:
+    """Fetch all keys from source instance using pagination."""
+    click.echo(f"Fetching keys from source server: {source_base_url}")
+    source_keys = []
+    page = 1
+    page_size = 100  # Use a larger page size to minimize API calls
+
+    while True:
+        source_response = source_client.list(return_full_object=True, page=page, size=page_size)
+        page_keys = source_response.get("keys", [])
+
+        if not page_keys:
+            break
+
+        source_keys.extend(page_keys)
+        click.echo(f"Fetched page {page}: {len(page_keys)} keys")
+
+        # Check if we got fewer keys than the page size, indicating last page
+        if len(page_keys) < page_size:
+            break
+
+        page += 1
+
+    return source_keys
+
+
+def _filter_keys_by_created_since(
+    source_keys: List[Dict[str, Any]], created_since_dt: Optional[datetime], created_since: str
+) -> List[Dict[str, Any]]:
+    """Filter keys by created_since date if specified."""
+    if not created_since_dt:
+        return source_keys
+
+    filtered_keys = []
+    for key in source_keys:
+        key_created_at = key.get("created_at")
+        if key_created_at:
+            # Parse the key's created_at timestamp
+            if isinstance(key_created_at, str):
+                if "T" in key_created_at:
+                    key_dt = datetime.fromisoformat(key_created_at.replace("Z", "+00:00"))
+                else:
+                    key_dt = datetime.fromisoformat(key_created_at)
+
+                # Convert to naive datetime for comparison (assuming UTC)
+                if key_dt.tzinfo:
+                    key_dt = key_dt.replace(tzinfo=None)
+
+                if key_dt >= created_since_dt:
+                    filtered_keys.append(key)
+
+    click.echo(f"Filtered {len(source_keys)} keys to {len(filtered_keys)} keys created since {created_since}")
+    return filtered_keys
+
+
+def _display_dry_run_table(source_keys: List[Dict[str, Any]]) -> None:
+    """Display a table of keys that would be imported in dry-run mode."""
+    click.echo("\n--- DRY RUN MODE ---")
+    table = Table(title="Keys that would be imported")
+    table.add_column("Key Alias", style="green")
+    table.add_column("User ID", style="magenta")
+    table.add_column("Created", style="cyan")
+
+    for key in source_keys:
+        created_at = key.get("created_at", "")
+        # Format the timestamp if it exists
+        if created_at:
+            # Try to parse and format the timestamp for better readability
+            if isinstance(created_at, str):
+                # Handle common timestamp formats
+                if "T" in created_at:
+                    dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    created_at = dt.strftime("%Y-%m-%d %H:%M")
+
+        table.add_row(str(key.get("key_alias", "")), str(key.get("user_id", "")), str(created_at))
+    rich.print(table)
+
+
+def _prepare_key_import_data(key: Dict[str, Any]) -> Dict[str, Any]:
+    """Prepare key data for import by extracting relevant fields."""
+    import_data = {}
+
+    # Copy relevant fields if they exist
+    for field in ["models", "aliases", "spend", "key_alias", "team_id", "user_id", "budget_id", "config"]:
+        if key.get(field):
+            import_data[field] = key[field]
+
+    return import_data
+
+
+def _import_keys_to_destination(
+    source_keys: List[Dict[str, Any]], dest_client: KeysManagementClient
+) -> tuple[int, int]:
+    """Import each key to the destination instance and return counts."""
+    imported_count = 0
+    failed_count = 0
+
+    for key in source_keys:
+        try:
+            # Prepare key data for import
+            import_data = _prepare_key_import_data(key)
+
+            # Generate the key in destination instance
+            response = dest_client.generate(**import_data)
+            response.raise_for_status()
+            # The generate method returns JSON data directly, not a Response object
+            imported_count += 1
+
+            key_alias = key.get("key_alias", "N/A")
+            click.echo(f"✓ Imported key: {key_alias}")
+
+        except Exception as e:
+            failed_count += 1
+            key_alias = key.get("key_alias", "N/A")
+            click.echo(f"✗ Failed to import key {key_alias}: {str(e)}", err=True)
+
+    return imported_count, failed_count
+
+
 @keys.command(name="import")
 @click.option(
     "--source-base-url", required=True, help="Base URL of the source LiteLLM proxy server to import keys from"
@@ -174,17 +309,7 @@ def import_keys(
 ):
     """Import API keys from another LiteLLM instance"""
     # Parse created_since filter if provided
-    created_since_dt = None
-    if created_since:
-        try:
-            # Support formats: YYYY-MM-DD_HH:MM or YYYY-MM-DD
-            if "_" in created_since:
-                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d_%H:%M")
-            else:
-                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d")
-        except ValueError:
-            click.echo(f"Error: Invalid date format '{created_since}'. Use YYYY-MM-DD_HH:MM or YYYY-MM-DD", err=True)
-            raise click.Abort()
+    created_since_dt = _parse_created_since_filter(created_since)
 
     # Create clients for both source and destination
     source_client = KeysManagementClient(source_base_url, source_api_key)
@@ -192,49 +317,11 @@ def import_keys(
 
     try:
         # Get all keys from source instance with pagination
-        click.echo(f"Fetching keys from source server: {source_base_url}")
-        source_keys = []
-        page = 1
-        page_size = 100  # Use a larger page size to minimize API calls
-
-        while True:
-            source_response = source_client.list(return_full_object=True, page=page, size=page_size)
-            page_keys = source_response.get("keys", [])
-
-            if not page_keys:
-                break
-
-            source_keys.extend(page_keys)
-            click.echo(f"Fetched page {page}: {len(page_keys)} keys")
-
-            # Check if we got fewer keys than the page size, indicating last page
-            if len(page_keys) < page_size:
-                break
-
-            page += 1
+        source_keys = _fetch_all_keys_with_pagination(source_client, source_base_url)
 
         # Filter keys by created_since if specified
-        if created_since_dt:
-            filtered_keys = []
-            for key in source_keys:
-                key_created_at = key.get("created_at")
-                if key_created_at:
-                    # Parse the key's created_at timestamp
-                    if isinstance(key_created_at, str):
-                        if "T" in key_created_at:
-                            key_dt = datetime.fromisoformat(key_created_at.replace("Z", "+00:00"))
-                        else:
-                            key_dt = datetime.fromisoformat(key_created_at)
-
-                        # Convert to naive datetime for comparison (assuming UTC)
-                        if key_dt.tzinfo:
-                            key_dt = key_dt.replace(tzinfo=None)
-
-                        if key_dt >= created_since_dt:
-                            filtered_keys.append(key)
-
-            click.echo(f"Filtered {len(source_keys)} keys to {len(filtered_keys)} keys created since {created_since}")
-            source_keys = filtered_keys
+        if created_since:
+            source_keys = _filter_keys_by_created_since(source_keys, created_since_dt, created_since)
 
         if not source_keys:
             click.echo("No keys found in source instance.")
@@ -243,65 +330,11 @@ def import_keys(
         click.echo(f"Found {len(source_keys)} keys in source instance.")
 
         if dry_run:
-            click.echo("\n--- DRY RUN MODE ---")
-            table = Table(title="Keys that would be imported")
-            table.add_column("Key Alias", style="green")
-            table.add_column("User ID", style="magenta")
-            table.add_column("Created", style="cyan")
-
-            for key in source_keys:
-                created_at = key.get("created_at", "")
-                # Format the timestamp if it exists
-                if created_at:
-                    # Try to parse and format the timestamp for better readability
-                    if isinstance(created_at, str):
-                        # Handle common timestamp formats
-                        if "T" in created_at:
-                            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                            created_at = dt.strftime("%Y-%m-%d %H:%M")
-
-                table.add_row(str(key.get("key_alias", "")), str(key.get("user_id", "")), str(created_at))
-            rich.print(table)
+            _display_dry_run_table(source_keys)
             return
 
         # Import each key
-        imported_count = 0
-        failed_count = 0
-
-        for key in source_keys:
-            try:
-                # Prepare key data for import
-                import_data = {}
-
-                if key.get("models"):
-                    import_data["models"] = key["models"]
-                if key.get("aliases"):
-                    import_data["aliases"] = key["aliases"]
-                if key.get("spend"):
-                    import_data["spend"] = key["spend"]
-                if key.get("key_alias"):
-                    import_data["key_alias"] = key["key_alias"]
-                if key.get("team_id"):
-                    import_data["team_id"] = key["team_id"]
-                if key.get("user_id"):
-                    import_data["user_id"] = key["user_id"]
-                if key.get("budget_id"):
-                    import_data["budget_id"] = key["budget_id"]
-                if key.get("config"):
-                    import_data["config"] = key["config"]
-
-                # Generate the key in destination instance
-                response = dest_client.generate(**import_data)
-                # The generate method returns JSON data directly, not a Response object
-                imported_count += 1
-
-                key_alias = key.get("key_alias", "N/A")
-                click.echo(f"✓ Imported key: {key_alias}")
-
-            except Exception as e:
-                failed_count += 1
-                key_alias = key.get("key_alias", "N/A")
-                click.echo(f"✗ Failed to import key {key_alias}: {str(e)}", err=True)
+        imported_count, failed_count = _import_keys_to_destination(source_keys, dest_client)
 
         # Summary
         click.echo("\nImport completed:")
