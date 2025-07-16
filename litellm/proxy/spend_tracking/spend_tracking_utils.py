@@ -48,7 +48,7 @@ def _safe_json_dumps(obj: Any, **kwargs) -> str:
             seen.add(obj_id)
             try:
                 result = {k: _handle_circular_refs(v, seen.copy()) for k, v in obj.items()}
-            except:
+            except Exception:
                 result = f"<error serializing dict id={obj_id}>"
             seen.discard(obj_id)
             return result
@@ -56,7 +56,7 @@ def _safe_json_dumps(obj: Any, **kwargs) -> str:
             seen.add(obj_id)
             try:
                 result = [_handle_circular_refs(item, seen.copy()) for item in obj]
-            except:
+            except Exception:
                 result = f"<error serializing {type(obj).__name__} id={obj_id}>"
             seen.discard(obj_id)
             return result
@@ -64,7 +64,7 @@ def _safe_json_dumps(obj: Any, **kwargs) -> str:
             seen.add(obj_id)
             try:
                 result = _handle_circular_refs(obj.__dict__, seen.copy())
-            except:
+            except Exception:
                 result = f"<error serializing {type(obj).__name__} id={obj_id}>"
             seen.discard(obj_id)
             return result
@@ -72,7 +72,7 @@ def _safe_json_dumps(obj: Any, **kwargs) -> str:
             seen.add(obj_id)
             try:
                 result = _handle_circular_refs(obj.model_dump(), seen.copy())
-            except:
+            except Exception:
                 result = f"<error serializing pydantic model {type(obj).__name__} id={obj_id}>"
             seen.discard(obj_id)
             return result
@@ -80,7 +80,7 @@ def _safe_json_dumps(obj: Any, **kwargs) -> str:
             # For other types, try to convert to string
             try:
                 return str(obj)
-            except:
+            except Exception:
                 return f"<non-serializable {type(obj).__name__} id={obj_id}>"
     
     try:
