@@ -118,14 +118,15 @@ def test_xai_check_for_stop_in_supported_params():
     assert "stop" not in supported_params
 
 
-def test_xai_grok_4_stop_not_supported():
+@pytest.mark.parametrize("model", ["xai/grok-4", "xai/grok-4-0709"])
+def test_xai_grok_4_stop_not_supported(model):
     """
     Test that grok-4 models do not support the stop parameter
 
     Issue: https://github.com/BerriAI/litellm/issues/12635
     """
     supported_params = XAIChatConfig().get_supported_openai_params(
-        model="xai/grok-4"
+        model=model
     )
     assert "stop" not in supported_params
 
