@@ -1457,6 +1457,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="cohere",
                         response=getattr(original_exception, "response", None),
                     )
+                elif "internal server error" in error_str.lower():
+                    exception_mapping_worked = True
+                    raise InternalServerError(
+                        message=f"CohereException - {error_str}",
+                        model=model,
+                        llm_provider="cohere",
+                        response=getattr(original_exception, "response", None),
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if (
                         original_exception.status_code == 400
@@ -1478,7 +1486,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
-                        raise ServiceUnavailableError(
+                        raise InternalServerError(
                             message=f"CohereException - {original_exception.message}",
                             llm_provider="cohere",
                             model=model,
@@ -1504,7 +1512,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif "Unexpected server error" in error_str:
                     exception_mapping_worked = True
-                    raise ServiceUnavailableError(
+                    raise InternalServerError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
                         model=model,
