@@ -118,6 +118,20 @@ def test_xai_check_for_stop_in_supported_params():
     assert "stop" not in supported_params
 
 
+def test_xai_grok_4_stop_not_supported():
+    """
+    Test that grok-4 models do not support the stop parameter
+
+    Issue: https://github.com/BerriAI/litellm/issues/12635
+    """
+    supported_params = XAIChatConfig().get_supported_openai_params(
+        model="xai/grok-4"
+    )
+    assert "stop" not in supported_params
+
+
+
+
 @pytest.mark.parametrize("stream", [False, True])
 def test_completion_xai(stream):
     try:
@@ -132,8 +146,7 @@ def test_completion_xai(stream):
         response = completion(
             model="xai/grok-4",
             messages=messages,
-            stream=stream,
-            stop=["END"],
+            stream=stream
         )
         print(response)
 
