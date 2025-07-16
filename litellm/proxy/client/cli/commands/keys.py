@@ -279,7 +279,7 @@ def _import_keys_to_destination(
 
             # Generate the key in destination instance
             response = dest_client.generate(**import_data)
-            response.raise_for_status()
+            click.echo(f"Generated key: {response}")
             # The generate method returns JSON data directly, not a Response object
             imported_count += 1
 
