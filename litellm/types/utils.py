@@ -1306,7 +1306,7 @@ class EmbeddingResponse(OpenAIObject):
     model: Optional[str] = None
     """The model used for embedding."""
 
-    data: List
+    data: List[Embedding]
     """The actual embedding value"""
 
     object: Literal["list"]
