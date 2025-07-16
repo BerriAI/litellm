@@ -13451,6 +13451,16 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "together_ai/moonshotai/Kimi-K2-Instruct": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "source": "https://www.together.ai/models/kimi-k2-instruct"
+    },
     "ollama/codegemma": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
