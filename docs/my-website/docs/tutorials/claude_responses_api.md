@@ -15,7 +15,6 @@ This tutorial is based on [Anthropic's official LiteLLM configuration documentat
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) installed
-- Python 3.8+ 
 - API keys for your chosen providers
 
 ## Installation
