@@ -205,7 +205,7 @@ def get_complete_model_list(
         llm_router=llm_router,
     )
 
-    complete_model_list = list(unique_models) + all_wildcard_models
+    complete_model_list = sorted(list(unique_models) + all_wildcard_models, key=str.casefold)
 
     return complete_model_list
 
