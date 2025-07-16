@@ -552,7 +552,7 @@ def test_openai_deepresearch_model_bridge():
     litellm._turn_on_debug()
     response = litellm.completion(
         model="o3-deep-research-2025-06-26",
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
         tools=[
             {"type": "web_search_preview"},
             {"type": "code_interpreter", "container": {"type": "auto"}},

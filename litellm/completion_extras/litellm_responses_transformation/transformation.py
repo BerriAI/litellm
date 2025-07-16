@@ -277,13 +277,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     Choices(message=msg, finish_reason="tool_calls", index=index)
                 )
                 index += 1
-            elif isinstance(item, GenericResponseOutputItem):
-                raise ValueError("GenericResponseOutputItem not supported")
-            elif isinstance(item, OutputFunctionToolCall):
-                # function/tool calls pass through as-is
-                raise ValueError("Function calling not supported yet.")
             else:
-                raise ValueError(f"Unknown item type: {item}")
+                pass  # don't fail request if item in list is not supported
 
         if len(choices) == 0:
             if (
@@ -292,6 +287,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ):
                 raise ValueError(
                     f"{model} unable to complete request: {raw_response.incomplete_details.reason}"
+                )
+            else:
+                raise ValueError(
+                    f"Unknown items in responses API response: {raw_response.output}"
                 )
 
         setattr(model_response, "choices", choices)
