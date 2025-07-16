@@ -111,6 +111,7 @@ def image_generation(  # noqa: PLR0915
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
     timeout=600,  # default to 10 minutes
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -168,6 +169,7 @@ def image_generation(  # noqa: PLR0915
             "quality",
             "size",
             "style",
+            "input_fidelity",
         ]
         litellm_params = all_litellm_params
         default_params = openai_params + litellm_params

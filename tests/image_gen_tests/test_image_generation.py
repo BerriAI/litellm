@@ -242,3 +242,32 @@ async def test_aimage_generation_bedrock_with_optional_params():
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
 
+
+@pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.asyncio
+async def test_gpt_image_1_with_input_fidelity():
+    """Test gpt-image-1 with input_fidelity parameter"""
+    try:
+        litellm.set_verbose = True
+        response = await litellm.aimage_generation(
+            prompt="A cute baby sea otter",
+            model="gpt-image-1",
+            input_fidelity="high",
+            quality="medium",
+            size="1024x1024",
+        )
+        print(f"response: {response}")
+        assert len(response.data) > 0
+        assert response.data[0].url is not None or response.data[0].b64_json is not None
+    except litellm.ContentPolicyViolationError:
+        pass  # OpenAI randomly raises these errors - skip when they occur
+    except litellm.RateLimitError as e:
+        pass
+    except Exception as e:
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        elif "Connection error" in str(e):
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
+
