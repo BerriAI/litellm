@@ -11,7 +11,7 @@ This tutorial shows you how to integrate GitHub Copilot with LiteLLM Proxy, allo
 
 :::info 
 
-This integration allows you to use any LiteLLM supported model through GitHub Copilot's interface.
+This tutorial is based on [Sergio Pino's excellent guide](https://dev.to/spino327/calling-github-copilot-models-from-openhands-using-litellm-proxy-1hl4) for calling GitHub Copilot models through LiteLLM Proxy. This integration allows you to use any LiteLLM supported model through GitHub Copilot's interface.
 
 :::
 
@@ -184,4 +184,8 @@ If you encounter issues:
 
 1. **GitHub Copilot not using proxy**: Verify the proxy URL is correctly configured in VS Code settings and that LiteLLM proxy is running
 2. **Authentication errors**: Ensure your master key is valid and API keys for providers are correctly set
-3. **Connection errors**: Check that your LiteLLM Proxy is accessible at `http://localhost:4000` 
+3. **Connection errors**: Check that your LiteLLM Proxy is accessible at `http://localhost:4000`
+
+## Credits
+
+This tutorial is based on the work by [Sergio Pino](https://dev.to/spino327) from his original article: [Calling GitHub Copilot models from OpenHands using LiteLLM Proxy](https://dev.to/spino327/calling-github-copilot-models-from-openhands-using-litellm-proxy-1hl4). Thank you for the foundational work! 
