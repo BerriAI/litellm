@@ -174,3 +174,41 @@ class TestDataDogLLMObsLogger:
             assert time_to_first_token == 2.0  # 1002.0 - 1000.0 = 2.0 seconds
 
 
+    def test_datadog_span_kind_mapping(self, mock_env_vars):
+        """Test that call_type values are correctly mapped to DataDog span kinds"""
+        from litellm.types.utils import CallTypes
+        
+        with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \
+            patch('asyncio.create_task'):
+            logger = DataDogLLMObsLogger()
+        
+        # Test embedding operations
+        assert logger._get_datadog_span_kind(CallTypes.embedding.value) == "embedding"
+        assert logger._get_datadog_span_kind(CallTypes.aembedding.value) == "embedding"
+        
+        # Test LLM completion operations
+        assert logger._get_datadog_span_kind(CallTypes.completion.value) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.acompletion.value) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.text_completion.value) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.generate_content.value) == "llm"
+        assert logger._get_datadog_span_kind(CallTypes.anthropic_messages.value) == "llm"
+        
+        # Test tool operations
+        assert logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value) == "tool"
+        
+        # Test retrieval operations
+        assert logger._get_datadog_span_kind(CallTypes.get_assistants.value) == "retrieval"
+        assert logger._get_datadog_span_kind(CallTypes.file_retrieve.value) == "retrieval"
+        assert logger._get_datadog_span_kind(CallTypes.retrieve_batch.value) == "retrieval"
+        
+        # Test task operations
+        assert logger._get_datadog_span_kind(CallTypes.create_batch.value) == "task"
+        assert logger._get_datadog_span_kind(CallTypes.image_generation.value) == "task"
+        assert logger._get_datadog_span_kind(CallTypes.moderation.value) == "task"
+        assert logger._get_datadog_span_kind(CallTypes.transcription.value) == "task"
+        
+        # Test default fallback
+        assert logger._get_datadog_span_kind("unknown_call_type") == "llm"
+        assert logger._get_datadog_span_kind(None) == "llm"
+
+
