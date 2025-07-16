@@ -24,6 +24,81 @@ from litellm.types.utils import (
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
+def _safe_json_dumps(obj: Any, **kwargs) -> str:
+    """
+    Safely serialize an object to JSON, handling circular references.
+    
+    This function detects circular references and replaces them with a placeholder
+    to prevent the ValueError: Circular reference detected error.
+    """
+    def _handle_circular_refs(obj, seen=None):
+        if seen is None:
+            seen = set()
+        
+        # Get the object id to detect if we've seen this object before
+        obj_id = id(obj)
+        
+        if obj_id in seen:
+            # Circular reference detected, return a placeholder
+            return f"<circular reference to {type(obj).__name__} id={obj_id}>"
+        
+        if isinstance(obj, (str, int, float, bool, type(None))):
+            return obj
+        elif isinstance(obj, dict):
+            seen.add(obj_id)
+            try:
+                result = {k: _handle_circular_refs(v, seen.copy()) for k, v in obj.items()}
+            except:
+                result = f"<error serializing dict id={obj_id}>"
+            seen.discard(obj_id)
+            return result
+        elif isinstance(obj, (list, tuple)):
+            seen.add(obj_id)
+            try:
+                result = [_handle_circular_refs(item, seen.copy()) for item in obj]
+            except:
+                result = f"<error serializing {type(obj).__name__} id={obj_id}>"
+            seen.discard(obj_id)
+            return result
+        elif hasattr(obj, '__dict__'):
+            seen.add(obj_id)
+            try:
+                result = _handle_circular_refs(obj.__dict__, seen.copy())
+            except:
+                result = f"<error serializing {type(obj).__name__} id={obj_id}>"
+            seen.discard(obj_id)
+            return result
+        elif hasattr(obj, 'model_dump'):  # Pydantic models
+            seen.add(obj_id)
+            try:
+                result = _handle_circular_refs(obj.model_dump(), seen.copy())
+            except:
+                result = f"<error serializing pydantic model {type(obj).__name__} id={obj_id}>"
+            seen.discard(obj_id)
+            return result
+        else:
+            # For other types, try to convert to string
+            try:
+                return str(obj)
+            except:
+                return f"<non-serializable {type(obj).__name__} id={obj_id}>"
+    
+    try:
+        # First try regular json.dumps
+        return json.dumps(obj, **kwargs)
+    except ValueError as e:
+        if "circular reference" in str(e).lower():
+            # Handle circular references
+            verbose_proxy_logger.warning(
+                f"Circular reference detected in JSON serialization, using safe serialization: {e}"
+            )
+            safe_obj = _handle_circular_refs(obj)
+            return json.dumps(safe_obj, **kwargs)
+        else:
+            # Re-raise other ValueError exceptions
+            raise
+
+
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     if _master_key is None:
         return False
@@ -305,7 +380,7 @@ def get_logging_payload(  # noqa: PLR0915
             model=kwargs.get("model", "") or "",
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
-            metadata=json.dumps(clean_metadata),
+            metadata=_safe_json_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
