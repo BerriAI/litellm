@@ -244,6 +244,7 @@ async def test_prometheus_metric_tracking():
     cleanup_redis()
     try:
         from litellm_enterprise.integrations.prometheus import PrometheusLogger
+        from unittest.mock import MagicMock
     except Exception:
         PrometheusLogger = None
     if PrometheusLogger is None:
