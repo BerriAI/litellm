@@ -335,17 +335,6 @@ if MCP_AVAILABLE:
             mcp_servers: Optional list of server names and access groups to filter by
         """
         tools = []
-        for tool in global_mcp_tool_registry.list_tools():
-            tools.append(
-                MCPTool(
-                    name=tool.name,
-                    description=tool.description,
-                    inputSchema=tool.input_schema,
-                )
-            )
-        verbose_logger.debug(
-            "GLOBAL MCP TOOLS: %s", global_mcp_tool_registry.list_tools()
-        )
 
         # Get tools from MCP servers
         tools_from_mcp_servers = await _get_tools_from_mcp_servers(
