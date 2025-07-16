@@ -274,24 +274,23 @@ class MCPRequestHandler:
         return list(set(all_servers))
 
     @staticmethod
-    async def _get_mcp_servers_from_access_groups(
-        access_groups: List[str]
-    ) -> List[str]:
+    def _get_config_server_ids_for_access_groups(config_mcp_servers, access_groups: List[str]) -> set:
         """
-        Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers
+        Helper to get server_ids from config-loaded servers that match any of the given access groups.
         """
-        from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
-
         server_ids = set()
-
-        # Check config-loaded servers
-        for server_id, server in global_mcp_server_manager.config_mcp_servers.items():
+        for server_id, server in config_mcp_servers.items():
             if server.access_groups:
                 if any(group in server.access_groups for group in access_groups):
                     server_ids.add(server_id)
+        return server_ids
 
-        # Check DB servers if DB is available
+    @staticmethod
+    async def _get_db_server_ids_for_access_groups(prisma_client, access_groups: List[str]) -> set:
+        """
+        Helper to get server_ids from DB servers that match any of the given access groups.
+        """
+        server_ids = set()
         if access_groups and prisma_client is not None:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
@@ -305,6 +304,28 @@ class MCPRequestHandler:
                     server_ids.add(server.server_id)
             except Exception as e:
                 verbose_logger.debug(f"Error getting MCP servers from access groups: {e}")
+        return server_ids
+
+    @staticmethod
+    async def _get_mcp_servers_from_access_groups(
+        access_groups: List[str]
+    ) -> List[str]:
+        """
+        Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers
+        """
+        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        # Use the new helper for config-loaded servers
+        server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
+            global_mcp_server_manager.config_mcp_servers, access_groups
+        )
+
+        # Use the new helper for DB servers
+        db_server_ids = await MCPRequestHandler._get_db_server_ids_for_access_groups(
+            prisma_client, access_groups
+        )
+        server_ids.update(db_server_ids)
 
         return list(server_ids)
 
