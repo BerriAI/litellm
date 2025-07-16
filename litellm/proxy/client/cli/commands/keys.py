@@ -176,11 +176,15 @@ def import_keys(
     # Parse created_since filter if provided
     created_since_dt = None
     if created_since:
-        # Support formats: YYYY-MM-DD_HH:MM or YYYY-MM-DD
-        if "_" in created_since:
-            created_since_dt = datetime.strptime(created_since, "%Y-%m-%d_%H:%M")
-        else:
-            created_since_dt = datetime.strptime(created_since, "%Y-%m-%d")
+        try:
+            # Support formats: YYYY-MM-DD_HH:MM or YYYY-MM-DD
+            if "_" in created_since:
+                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d_%H:%M")
+            else:
+                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d")
+        except ValueError:
+            click.echo(f"Error: Invalid date format '{created_since}'. Use YYYY-MM-DD_HH:MM or YYYY-MM-DD", err=True)
+            raise click.Abort()
 
     # Create clients for both source and destination
     source_client = KeysManagementClient(source_base_url, source_api_key)
@@ -288,7 +292,7 @@ def import_keys(
 
                 # Generate the key in destination instance
                 response = dest_client.generate(**import_data)
-                response.raise_for_status()
+                # The generate method returns JSON data directly, not a Response object
                 imported_count += 1
 
                 key_alias = key.get("key_alias", "N/A")
