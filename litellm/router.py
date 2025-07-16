@@ -6235,10 +6235,17 @@ class Router:
         )
 
         if len(healthy_deployments) == 0:
-            raise litellm.BadRequestError(
-                message="You passed in model={}. There is no 'model_name' with this string ".format(
+            if self.get_model_list(model_name=model) is None:
+                message = f"You passed in model={model}. There is no 'model_name' with this string".format(
                     model
-                ),
+                )
+            else:
+                message = f"You passed in model={model}. There are no healthy deployments for this model".format(
+                    model
+                )
+
+            raise litellm.BadRequestError(
+                message=message,
                 model=model,
                 llm_provider="",
             )

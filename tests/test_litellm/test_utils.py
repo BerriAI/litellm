@@ -2144,6 +2144,29 @@ def test_bedrock_application_inference_profile():
     assert result is True
 
 
+def test_image_response_utils():
+    """Test that the image response utils are correct."""
+    from litellm.utils import ImageResponse
+
+    result = {
+        "created": None,
+        "data": [
+            {
+                "b64_json": "/9j/.../2Q==",
+                "revised_prompt": None,
+                "url": None,
+                "timings": {"inference": 0.9612685777246952},
+                "index": 0,
+            }
+        ],
+        "id": "91559891cxxx-PDX",
+        "model": "black-forest-labs/FLUX.1-schnell-Free",
+        "object": "list",
+        "hidden_params": {"additional_headers": {}},
+    }
+    image_response = ImageResponse(**result)
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
