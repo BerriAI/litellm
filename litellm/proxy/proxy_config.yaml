@@ -6,6 +6,7 @@ model_list:
     litellm_params:
       model: openai/*
 
+
 litellm_settings:
   callbacks: ["datadog_llm_observability"]
   cache: true
