@@ -360,6 +360,7 @@ router_settings:
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
 | CONFIG_FILE_PATH | File path for configuration file
 | CONFIDENT_API_KEY | API key for DeepEval integration
+| CUSTOM_PROMPT_PROMPT_ID_CHECK | Set to false if you don't want your custom prompt to skip checking for a prompt_id, see issue [#11366](https://github.com/BerriAI/litellm/issues/11366)
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
 | DATABASE_HOST | Hostname for the database server

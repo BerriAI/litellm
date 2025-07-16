@@ -42,6 +42,7 @@ from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
+    CUSTOM_PROMPT_PROMPT_ID_CHECK,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     SENTRY_DENYLIST,
@@ -523,7 +524,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             return True
 
-        return False
+        return CUSTOM_PROMPT_PROMPT_ID_CHECK
 
     def _should_run_prompt_management_hooks_without_prompt_id(
         self,
