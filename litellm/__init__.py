@@ -27,8 +27,6 @@ from litellm._logging import (
     log_level,
 )
 import re
-import requests
-import sys
 from litellm.constants import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
@@ -707,26 +705,7 @@ petals_models = [
 
 # Since Ollama models are local, it is inexpensive to refresh the list at startup.
 # Also, this list can change very quickly.
-
-ollama_dir = os.environ.get("OLLAMA_MODELS", None)
-if ollama_dir is None:
-    home = Path(os.environ.get("HOME", None))
-    if home and (home / ".ollama").exists():
-        ollama_dir = home / ".ollama"
-
-if ollama_dir is None:
-    # No ollama install found.  Skip the HTTP request.
-    ollama_models = []
-else:
-    # Hit the local Ollama endpoint for a list of model names.
-    url = "http://localhost:11434/api/tags"
-    try:
-        response = requests.get(url)
-        json_dict = response.json()
-        ollama_models = [m["name"] for m in json_dict["models"]]
-    except Exception:
-        print(f"Error checking for ollama models at: {url}", file=sys.stderr)
-        ollama_models = []
+ollama_models = []
 
 maritalk_models = ["maritalk"]
 

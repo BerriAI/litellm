@@ -3,6 +3,7 @@ import copy
 import inspect
 import io
 import os
+import pathlib
 import random
 import secrets
 import subprocess
@@ -12,6 +13,7 @@ import traceback
 import uuid
 import warnings
 from datetime import datetime, timedelta
+import requests
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -3127,6 +3129,39 @@ async def initialize(  # noqa: PLR0915
     if experimental:
         pass
     user_telemetry = telemetry
+    refresh_local_model_lists()
+
+
+def refresh_local_model_lists():
+    # Update the package-level ollama_models list.
+    # This could also be extended for huggingface models.
+    from litellm import ollama_models
+
+    # Use the same list reference in the module to avoid import order problems.
+    ollama_models.clear()
+
+    ollama_dir = os.environ.get("OLLAMA_MODELS", None)
+    if ollama_dir is None:
+        home = os.environ.get("HOME", None)
+        home = pathlib.Path(home) if home else None
+        if home and (home / ".ollama").exists():
+            ollama_dir = home / ".ollama"
+
+    if ollama_dir is not None:
+        # Note: we could just scan ~/.ollama/models/manifests/registry.ollama.ai/library/,
+        # but this ensures that we actually have a running service.
+        url = "http://localhost:11434/api/tags"
+        try:
+            verbose_proxy_logger.debug(f"Checking Ollama for local models at: {url}")
+            response = requests.get(url, timeout=3)
+            json_dict = response.json()
+            for model_info in json_dict["models"]:
+                ollama_models.append(model_info["name"])
+            verbose_proxy_logger.debug(f"Found local Ollama models: {ollama_models}")
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Error checking for ollama models at: {url}.  Ignoring Ollama: {e}")
+    else:
+        verbose_proxy_logger.debug(f"No Ollama models found locally.")
 
 
 # for streaming
