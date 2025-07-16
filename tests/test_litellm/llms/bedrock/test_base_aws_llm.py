@@ -15,7 +15,7 @@ from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
 from botocore.credentials import Credentials
-
+from botocore.awsrequest import AWSRequest, AWSPreparedRequest
 import litellm
 from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
@@ -98,3 +98,293 @@ def test_auth_functions_tracer_wrapping():
             assert (
                 has_tracer_wrap
             ), f"Auth function on line {line_number} is not wrapped with @tracer.wrap: {line.strip()}"
+
+
+def test_get_aws_region_name_boto3_fallback():
+    """
+    Test the boto3 session fallback logic in _get_aws_region_name method.
+
+    This tests the specific code block that tries to get the region from boto3.Session()
+    when aws_region_name is None and not found in environment variables.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    # Test case 1: boto3.Session() returns a configured region
+    with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
+        mock_get_secret.return_value = None  # No region in env vars
+
+        with patch("boto3.Session") as mock_boto3_session:
+            mock_session = MagicMock()
+            mock_session.region_name = "us-east-1"
+            mock_boto3_session.return_value = mock_session
+
+            optional_params = {}
+            result = base_aws_llm._get_aws_region_name(optional_params)
+
+            assert result == "us-east-1"
+            mock_boto3_session.assert_called_once()
+
+    # Test case 2: boto3.Session() returns None for region (should default to us-west-2)
+    with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
+        mock_get_secret.return_value = None  # No region in env vars
+
+        with patch("boto3.Session") as mock_boto3_session:
+            mock_session = MagicMock()
+            mock_session.region_name = None
+            mock_boto3_session.return_value = mock_session
+
+            optional_params = {}
+            result = base_aws_llm._get_aws_region_name(optional_params)
+
+            assert result == "us-west-2"
+            mock_boto3_session.assert_called_once()
+
+    # Test case 3: boto3 import/session creation raises exception (should default to us-west-2)
+    with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
+        mock_get_secret.return_value = None  # No region in env vars
+
+        with patch("boto3.Session") as mock_boto3_session:
+            mock_boto3_session.side_effect = Exception("boto3 not available")
+
+            optional_params = {}
+            result = base_aws_llm._get_aws_region_name(optional_params)
+
+            assert result == "us-west-2"
+            mock_boto3_session.assert_called_once()
+
+    # Test case 4: aws_region_name is provided in optional_params (should not use boto3)
+    with patch("boto3.Session") as mock_boto3_session:
+        optional_params = {"aws_region_name": "eu-west-1"}
+        result = base_aws_llm._get_aws_region_name(optional_params)
+
+        assert result == "eu-west-1"
+        mock_boto3_session.assert_not_called()
+
+    # Test case 5: aws_region_name found in environment variables (should not use boto3)
+    with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
+
+        def side_effect(key, default=None):
+            if key == "AWS_REGION_NAME":
+                return "ap-southeast-1"
+            return default
+
+        mock_get_secret.side_effect = side_effect
+
+        with patch("boto3.Session") as mock_boto3_session:
+            optional_params = {}
+            result = base_aws_llm._get_aws_region_name(optional_params)
+
+            assert result == "ap-southeast-1"
+            mock_boto3_session.assert_not_called()
+            
+def test_sign_request_with_env_var_bearer_token():
+    # Create instance of actual class
+    llm = BaseAWSLLM()
+
+    # Test data
+    service_name = "bedrock"
+    headers = {"Custom-Header": "test"}
+    optional_params = {}
+    request_data = {"prompt": "test"}
+    api_base = "https://api.example.com"
+
+    # Mock environment variable
+    with patch.dict(os.environ, {'AWS_BEARER_TOKEN_BEDROCK': 'test_token'}):
+        # Execute
+        result_headers, result_body = llm._sign_request(
+            service_name=service_name,
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base
+        )
+
+        # Assert
+        assert result_headers["Authorization"] == "Bearer test_token"
+        assert result_headers["Content-Type"] == "application/json"
+        assert result_headers["Custom-Header"] == "test"
+        assert result_body == json.dumps(request_data).encode()
+
+
+def test_sign_request_with_sigv4():
+    llm = BaseAWSLLM()
+
+    # Mock AWS credentials and SigV4 auth
+    mock_credentials = Credentials("test_key", "test_secret", "test_token")
+    mock_sigv4 = MagicMock()
+    mock_request = MagicMock()
+    mock_request.headers = {
+        "Authorization": "AWS4-HMAC-SHA256 Credential=test",
+        "Content-Type": "application/json"
+    }
+    mock_request.body = b'{"prompt": "test"}'
+
+    # Test data
+    service_name = "bedrock"
+    headers = {"Custom-Header": "test"}
+    optional_params = {
+        "aws_access_key_id": "test_key",
+        "aws_secret_access_key": "test_secret",
+        "aws_region_name": "us-west-2"
+    }
+    request_data = {"prompt": "test"}
+    api_base = "https://api.example.com"
+
+    # Mock the necessary components
+    with patch('botocore.auth.SigV4Auth', return_value=mock_sigv4), \
+            patch('botocore.awsrequest.AWSRequest', return_value=mock_request), \
+            patch.object(llm, 'get_credentials', return_value=mock_credentials), \
+            patch.object(llm, '_get_aws_region_name', return_value="us-west-2"):
+
+        result_headers, result_body = llm._sign_request(
+            service_name=service_name,
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base
+        )
+
+        # Assert
+        assert "Authorization" in result_headers
+        assert result_headers["Authorization"] != "Bearer test_token"
+        assert result_headers["Content-Type"] == "application/json"
+        assert result_body == mock_request.body
+
+
+def test_sign_request_with_api_key_bearer_token():
+    """
+    Test that _sign_request uses the api_key parameter as a bearer token when provided
+    """
+    llm = BaseAWSLLM()
+
+    # Test data
+    service_name = "bedrock"
+    headers = {"Custom-Header": "test"}
+    optional_params = {}
+    request_data = {"prompt": "test"}
+    api_base = "https://api.example.com"
+    api_key = "test_api_key"
+
+    # Execute with api_key parameter
+    result_headers, result_body = llm._sign_request(
+        service_name=service_name,
+        headers=headers,
+        optional_params=optional_params,
+        request_data=request_data,
+        api_base=api_base,
+        api_key=api_key
+    )
+
+    # Assert
+    assert result_headers["Authorization"] == f"Bearer {api_key}"
+    assert result_headers["Content-Type"] == "application/json"
+    assert result_headers["Custom-Header"] == "test"
+    assert result_body == json.dumps(request_data).encode()
+
+
+def test_get_request_headers_with_env_var_bearer_token():
+    # Setup
+    llm = BaseAWSLLM()
+    credentials = Credentials("test_key", "test_secret", "test_token")
+    headers = {"Content-Type": "application/json"}
+    headers_dict = headers.copy()
+
+    # Create mock request
+    mock_prepared_request = MagicMock(spec=AWSPreparedRequest)
+    mock_request = MagicMock(spec=AWSRequest)
+    mock_request.headers = headers_dict
+    mock_request.prepare.return_value = mock_prepared_request
+
+    def mock_aws_request_init(method, url, data, headers):
+        mock_request.headers.update(headers)
+        return mock_request
+
+    # Test with bearer token
+    with patch.dict(os.environ, {'AWS_BEARER_TOKEN_BEDROCK': 'test_token'}), \
+            patch('botocore.awsrequest.AWSRequest', side_effect=mock_aws_request_init):
+
+        result = llm.get_request_headers(
+            credentials=credentials,
+            aws_region_name="us-west-2",
+            extra_headers=None,
+            endpoint_url="https://api.example.com",
+            data='{"prompt": "test"}',
+            headers=headers_dict
+        )
+
+        # Assert
+        assert mock_request.headers["Authorization"] == "Bearer test_token"
+        assert result == mock_prepared_request
+
+
+def test_get_request_headers_with_sigv4():
+    # Setup
+    llm = BaseAWSLLM()
+    credentials = Credentials("test_key", "test_secret", "test_token")
+    headers = {"Content-Type": "application/json"}
+
+    # Create mock request and SigV4 instance
+    mock_request = MagicMock(spec=AWSRequest)
+    mock_request.headers = headers.copy()
+    mock_request.prepare.return_value = MagicMock(spec=AWSPreparedRequest)
+
+    mock_sigv4 = MagicMock()
+
+    # Test without bearer token (should use SigV4)
+    with patch.dict(os.environ, {}, clear=True), \
+            patch('botocore.auth.SigV4Auth', return_value=mock_sigv4) as mock_sigv4_class, \
+            patch('botocore.awsrequest.AWSRequest', return_value=mock_request):
+
+        result = llm.get_request_headers(
+            credentials=credentials,
+            aws_region_name="us-west-2",
+            extra_headers=None,
+            endpoint_url="https://api.example.com",
+            data='{"prompt": "test"}',
+            headers=headers
+        )
+
+        # Verify SigV4 authentication and result
+        mock_sigv4_class.assert_called_once_with(credentials, "bedrock", "us-west-2")
+        mock_sigv4.add_auth.assert_called_once_with(mock_request)
+        assert result == mock_request.prepare.return_value
+
+
+def test_get_request_headers_with_api_key_bearer_token():
+    """
+    Test that get_request_headers uses the api_key parameter as a bearer token when provided
+    """
+    # Setup
+    llm = BaseAWSLLM()
+    credentials = Credentials("test_key", "test_secret", "test_token")
+    headers = {"Content-Type": "application/json"}
+    headers_dict = headers.copy()
+    api_key = "test_api_key"
+
+    # Create mock request
+    mock_prepared_request = MagicMock(spec=AWSPreparedRequest)
+    mock_request = MagicMock(spec=AWSRequest)
+    mock_request.headers = headers_dict
+    mock_request.prepare.return_value = mock_prepared_request
+
+    def mock_aws_request_init(method, url, data, headers):
+        mock_request.headers.update(headers)
+        return mock_request
+
+    # Test with api_key parameter
+    with patch.dict(os.environ, {}, clear=True), \
+            patch('botocore.awsrequest.AWSRequest', side_effect=mock_aws_request_init):
+
+        result = llm.get_request_headers(
+            credentials=credentials,
+            aws_region_name="us-west-2",
+            extra_headers=None,
+            endpoint_url="https://api.example.com",
+            data='{"prompt": "test"}',
+            headers=headers_dict,
+            api_key=api_key
+        )
+
+        # Assert
+        assert mock_request.headers["Authorization"] == f"Bearer {api_key}"
+        assert result == mock_prepared_request

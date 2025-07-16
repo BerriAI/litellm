@@ -17,9 +17,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
         Example output:
         "BACKEND_WS_URL = "wss://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"";
         """
+        from httpx import URL
+
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
-        return f"{api_base}/v1/realtime?model={model}"
+        url = URL(api_base).join("/v1/realtime")
+        return str(url.copy_add_param("model", model))
 
     async def async_realtime(
         self,

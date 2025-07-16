@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy._types import ProxyException
 
 
 @pytest.mark.asyncio
@@ -48,8 +49,8 @@ async def test_read_request_body_invalid_json():
             return b'{"key": value}'  # Missing quotes around `value`
 
     request = MockRequest()
-    result = await _read_request_body(request)
-    assert result == {}  # Should return an empty dict on failure
+    with pytest.raises(ProxyException):
+        await _read_request_body(request)
 
 
 @pytest.mark.asyncio
@@ -62,8 +63,8 @@ async def test_read_request_body_large_payload():
             return large_payload.encode()
 
     request = MockRequest()
-    result = await _read_request_body(request)
-    assert result == {}  # Large payloads could trigger errors, so validate behavior
+    with pytest.raises(ProxyException):
+        await _read_request_body(request)
 
 
 @pytest.mark.asyncio

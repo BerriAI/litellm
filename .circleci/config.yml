@@ -79,7 +79,7 @@ jobs:
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
-            pip install mypy
+            pip install "mypy==1.15.0"
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
@@ -88,7 +88,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -211,7 +211,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -318,7 +318,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -481,7 +481,7 @@ jobs:
           paths:
             - litellm_router_coverage.xml
             - litellm_router_coverage
-  litellm_proxy_security_tests:
+  litellm_security_tests:
     docker:
       - image: cimg/python:3.11
         auth:
@@ -505,6 +505,23 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
       - run:
+          name: Install Trivy
+          command: |
+            sudo apt-get update
+            sudo apt-get install wget apt-transport-https gnupg lsb-release
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+            echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update
+            sudo apt-get install trivy
+      - run:
+          name: Run Trivy scan on LiteLLM Docs
+          command: |
+            trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
+      - run:
+          name: Run Trivy scan on LiteLLM UI
+          command: |
+            trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
+      - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
             set +e
@@ -522,16 +539,16 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_proxy_security_tests_coverage.xml
-            mv .coverage litellm_proxy_security_tests_coverage
+            mv coverage.xml litellm_security_tests_coverage.xml
+            mv .coverage litellm_security_tests_coverage
       # Store test results
       - store_test_results:
           path: test-results
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_proxy_security_tests_coverage.xml
-            - litellm_proxy_security_tests_coverage
+            - litellm_security_tests_coverage.xml
+            - litellm_security_tests_coverage
   litellm_proxy_unit_testing: # Runs all tests with the "proxy", "key", "jwt" filenames
     docker:
       - image: cimg/python:3.11
@@ -574,7 +591,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -604,6 +621,7 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-postgresql==7.0.1"
             pip install "fakeredis==2.28.1"
+            pip install "pytest-xdist==3.6.1"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
@@ -622,7 +640,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest tests/proxy_unit_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest tests/proxy_unit_tests --cov=litellm --cov-report=xml -vv -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -683,43 +701,6 @@ jobs:
           paths:
             - litellm_assistants_api_coverage.xml
             - litellm_assistants_api_coverage
-  load_testing:
-    docker:
-      - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - run:
-          name: Install Dependencies
-          command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.22.0"
-      - run:
-          name: Show current pydantic version
-          command: |
-            python -m pip show pydantic
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            pwd
-            ls
-            python -m pytest -vv tests/load_tests -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
   llm_translation_testing:
     docker:
       - image: cimg/python:3.11
@@ -741,13 +722,14 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/llm_translation --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -785,7 +767,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
-            pip install "mcp==1.5.0"
+            pip install "mcp==1.10.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -920,7 +902,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.10.2"
-            pip install "mcp==1.5.0"
+            pip install "mcp==1.10.1"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -931,14 +913,14 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 4
+            python -m pytest -vv tests/test_litellm --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-litellm.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Run enterprise tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
+            python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1158,6 +1140,7 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "mlflow==2.17.2"
             pip install "anthropic==0.52.0"
+            pip install "blockbuster==1.5.24"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -1237,6 +1220,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "tomli==2.2.1"
+            pip install "mcp==1.10.1"
       - run:
           name: Run tests
           command: |
@@ -1337,6 +1321,9 @@ jobs:
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
+      - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
+      - run: python ./tests/code_coverage_tests/test_proxy_types_import.py
       - run: python ./tests/code_coverage_tests/callback_manager_test.py
       - run: python ./tests/code_coverage_tests/recursive_detector.py
       - run: python ./tests/code_coverage_tests/test_router_strategy_async.py
@@ -1494,6 +1481,7 @@ jobs:
             echo "Building and scanning Dockerfile.database..."
             docker build -t litellm-database:latest -f ./docker/Dockerfile.database .
             grype litellm-database:latest --fail-on high
+
 
             # Build and scan main Dockerfile
             echo "Building and scanning main Dockerfile..."
@@ -2171,14 +2159,12 @@ jobs:
       - run:
           name: Build Docker image
           command: |
-            cd docker/build_from_pip
-            docker build -t my-app:latest -f Dockerfile.build_from_pip .
+            docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
           # the OTEL test - should get this as a trace
           command: |
-            cd docker/build_from_pip
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
@@ -2202,7 +2188,7 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e GCS_FLUSH_INTERVAL="1" \
               --name my-app \
-              -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+              -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
               --port 4000 \
@@ -2416,7 +2402,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_proxy_security_tests_coverage guardrails_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage mcp_coverage logging_coverage litellm_router_coverage local_testing_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2810,7 +2796,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - litellm_proxy_security_tests:
+      - litellm_security_tests:
           filters:
             branches:
               only:
@@ -2969,7 +2955,7 @@ workflows:
             - litellm_router_testing
             - caching_unit_tests
             - litellm_proxy_unit_testing
-            - litellm_proxy_security_tests
+            - litellm_security_tests
             - langfuse_logging_unit_tests
             - local_testing
             - litellm_assistants_api_testing
@@ -2998,12 +2984,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - load_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - test_bad_database_url:
           filters:
             branches:
@@ -3020,7 +3000,6 @@ workflows:
             - local_testing
             - build_and_test
             - e2e_openai_endpoints
-            - load_testing
             - test_bad_database_url
             - llm_translation_testing
             - mcp_testing
@@ -3039,7 +3018,7 @@ workflows:
             - db_migration_disable_update_check
             - e2e_ui_testing
             - litellm_proxy_unit_testing
-            - litellm_proxy_security_tests
+            - litellm_security_tests
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests

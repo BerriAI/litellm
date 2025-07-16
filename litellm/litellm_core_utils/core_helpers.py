@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 
 import httpx
 
@@ -68,6 +68,15 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
     return
+
+
+def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) -> None:
+    """Remove items from a list in-place by index"""
+    if items is None:
+        return
+    for index in sorted(set(indices), reverse=True):
+        if 0 <= index < len(items):
+            items.pop(index)
 
 
 def add_missing_spend_metadata_to_litellm_metadata(

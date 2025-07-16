@@ -11,6 +11,7 @@ class LiteLLMCacheType(str, Enum):
     S3 = "s3"
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
+    AZURE_BLOB = "azure-blob"
 
 
 CachingSupportedCallTypes = Literal[
@@ -34,6 +35,16 @@ class RedisPipelineIncrementOperation(TypedDict):
 
     key: str
     increment_value: float
+    ttl: Optional[int]
+
+
+class RedisPipelineSetOperation(TypedDict):
+    """
+    TypeDict for 1 Redis Pipeline Set Operation
+    """
+
+    key: str
+    value: Any
     ttl: Optional[int]
 
 

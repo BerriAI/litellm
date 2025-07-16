@@ -94,3 +94,29 @@ async def test_redis_cache_async_batch_get_cache(monkeypatch, redis_no_ping):
         assert result["key1"] == {"key1": "value1"}
         assert result["key2"] is None
         assert result["key3"] == {"key3": "value3"}
+
+
+@pytest.mark.asyncio
+async def test_handle_lpop_count_for_older_redis_versions(monkeypatch):
+    """Test the helper method that handles LPOP with count for Redis versions < 7.0"""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    # Create RedisCache instance
+    redis_cache = RedisCache()
+
+    # Create a mock pipeline
+    mock_pipeline = AsyncMock()
+    # Set up execute to return different values each time
+    mock_pipeline.execute.side_effect = [
+        [b"value1"],  # First execute returns first value
+        [b"value2"],  # Second execute returns second value
+    ]
+
+    # Test the helper method
+    result = await redis_cache.handle_lpop_count_for_older_redis_versions(
+        pipe=mock_pipeline, key="test_key", count=2
+    )
+
+    # Verify results
+    assert result == [b"value1", b"value2"]
+    assert mock_pipeline.lpop.call_count == 2
+    assert mock_pipeline.execute.call_count == 2

@@ -39,14 +39,14 @@ That's it, your local dev environment is ready!
 
 ## 2. Adding Testing to your PR
 
-- Add your test to the [`tests/litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/litellm)
+- Add your test to the [`tests/test_litellm/` directory](https://github.com/BerriAI/litellm/tree/main/tests/litellm)
 
 - This directory 1:1 maps the the `litellm/` directory, and can only contain mocked tests.
 - Do not add real llm api calls to this directory.
 
-### 2.1 File Naming Convention for `tests/litellm/`
+### 2.1 File Naming Convention for `tests/test_litellm/`
 
-The `tests/litellm/` directory follows the same directory structure as `litellm/`.
+The `tests/test_litellm/` directory follows the same directory structure as `litellm/`.
 
 - `litellm/proxy/test_caching_routes.py` maps to `litellm/proxy/caching_routes.py`
 - `test_{filename}.py` maps to `litellm/{filename}.py`

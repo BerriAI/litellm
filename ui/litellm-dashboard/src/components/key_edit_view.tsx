@@ -1,10 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, Select } from "antd";
-import { Button, TextInput } from "@tremor/react";
+import { Form, Input, Select, Button as AntdButton } from "antd";
+import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
 import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import EditLoggingSettings from "./team/EditLoggingSettings";
+import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
+import { fetchMCPAccessGroups } from "./networking";
+
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
@@ -13,6 +19,7 @@ interface KeyEditViewProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  premiumUser?: boolean;
 }
 
 // Add this helper function
@@ -41,11 +48,27 @@ export function KeyEditView({
     teams,
     accessToken,
     userID,
-    userRole }: KeyEditViewProps) {
+    userRole,
+    premiumUser = false
+}: KeyEditViewProps) {
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+
+  const fetchMcpAccessGroups = async () => {
+    if (!accessToken) return;
+    if (mcpAccessGroupsLoaded) return;
+    try {
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+      setMcpAccessGroupsLoaded(true);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -91,8 +114,14 @@ export function KeyEditView({
   const initialValues = {
     ...keyData,
     budget_duration: getBudgetDuration(keyData.budget_duration),
-    metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
-    guardrails: keyData.metadata?.guardrails || []
+    metadata: formatMetadataForDisplay(keyData.metadata),
+    guardrails: keyData.metadata?.guardrails || [],
+    vector_stores: keyData.object_permission?.vector_stores || [],
+    mcp_servers_and_groups: {
+      servers: keyData.object_permission?.mcp_servers || [],
+      accessGroups: keyData.object_permission?.mcp_access_groups || []
+    },
+    logging_settings: extractLoggingSettings(keyData.metadata)
   };
 
   return (
@@ -165,8 +194,22 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="Metadata" name="metadata">
-        <Input.TextArea rows={10} />
+      <Form.Item label="Vector Stores" name="vector_stores">
+        <VectorStoreSelector
+          onChange={(values) => form.setFieldValue('vector_stores', values)}
+          value={form.getFieldValue('vector_stores')}
+          accessToken={accessToken || ""}
+          placeholder="Select vector stores"
+        />
+      </Form.Item>
+
+      <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
+        <MCPServerSelector
+          onChange={val => form.setFieldValue('mcp_servers_and_groups', val)}
+          value={form.getFieldValue('mcp_servers_and_groups')}
+          accessToken={accessToken || ''}
+          placeholder="Select MCP servers or access groups (optional)"
+        />
       </Form.Item>
 
       <Form.Item label="Team ID" name="team_id">
@@ -182,19 +225,33 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
+      <Form.Item label="Logging Settings" name="logging_settings">
+        <EditLoggingSettings
+          value={form.getFieldValue('logging_settings')}
+          onChange={(values) => form.setFieldValue('logging_settings', values)}
+        />
+      </Form.Item>
+
+
+      <Form.Item label="Metadata" name="metadata">
+        <Input.TextArea rows={10} />
+      </Form.Item>
+
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>
         <Input />
       </Form.Item>
 
-      <div className="flex justify-end gap-2 mt-6">
-        <Button variant="light" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button>
-          Save Changes
-        </Button>
+      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+        <div className="flex justify-end items-center gap-2">
+          <AntdButton onClick={onCancel}>
+            Cancel
+          </AntdButton>
+          <TremorButton type="submit">
+            Save Changes
+          </TremorButton>
+        </div>
       </div>
     </Form>
   );

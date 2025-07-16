@@ -211,6 +211,7 @@ def test_add_headers_to_request(litellm_key_header_name):
         "Authorization": "Bearer 1234",
         "X-Custom-Header": "Custom-Value",
         "X-Stainless-Header": "Stainless-Value",
+        "anthropic-beta": "beta-value",
     }
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
@@ -219,7 +220,10 @@ def test_add_headers_to_request(litellm_key_header_name):
     forwarded_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(
         request_headers
     )
-    assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
+    assert forwarded_headers == {
+        "X-Custom-Header": "Custom-Value",
+        "anthropic-beta": "beta-value",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1037,6 +1041,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
+        print(f"team_member_add_request={team_member_add_request}")
         await team_member_add(
             data=team_member_add_request,
             user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
@@ -1274,6 +1279,7 @@ async def test_user_info_team_list(prisma_client):
 
         try:
             await user_info(
+                request=MagicMock(),
                 user_id=None,
                 user_api_key_dict=UserAPIKeyAuth(
                     api_key="sk-1234", user_id="default_user_id"
@@ -2206,7 +2212,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "health_check_interval", 1)
     monkeypatch.setattr(proxy_server, "health_check_details", None)
-    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list_1))
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_1)
+    )
     monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
     monkeypatch.setattr(proxy_server, "health_check_results", {})
 
@@ -2220,7 +2228,9 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     except asyncio.CancelledError:
         pass
 
-    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list_2))
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_2)
+    )
 
     try:
         await proxy_server._run_background_health_check()

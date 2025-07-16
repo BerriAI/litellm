@@ -943,6 +943,12 @@ def _azure_tool_call_invoke_helper(
     return function_call_params
 
 
+def _azure_image_url_helper(content: ChatCompletionImageObject):
+    if isinstance(content["image_url"], str):
+        content["image_url"] = {"url": content["image_url"]}
+    return
+
+
 def convert_to_azure_openai_messages(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
@@ -951,6 +957,11 @@ def convert_to_azure_openai_messages(
             function_call = m.get("function_call", None)
             if function_call is not None:
                 m["function_call"] = _azure_tool_call_invoke_helper(function_call)
+
+        if m["role"] == "user" and isinstance(m.get("content"), list):
+            for content in m.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "image_url":
+                    _azure_image_url_helper(content)  # type: ignore
     return messages
 
 
@@ -989,7 +1000,14 @@ def _gemini_tool_call_invoke_helper(
 ) -> Optional[VertexFunctionCall]:
     name = function_call_params.get("name", "") or ""
     arguments = function_call_params.get("arguments", "")
-    arguments_dict = json.loads(arguments)
+    if (
+        isinstance(arguments, str) and len(arguments) == 0
+    ):  # pass empty dict, if arguments is empty string - prevents call from failing
+        arguments_dict = {
+            "type": "object",
+        }
+    else:
+        arguments_dict = json.loads(arguments)
     function_call = VertexFunctionCall(
         name=name,
         args=arguments_dict,
@@ -1046,10 +1064,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for tool in tool_calls:
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         _parts_list.append(
@@ -1385,6 +1403,107 @@ def _anthropic_content_element_factory(
     return _anthropic_content_element
 
 
+def select_anthropic_content_block_type_for_file(
+    format: str,
+) -> Literal["document", "image", "container_upload"]:
+    if format == "application/pdf" or format == "text/plain":
+        return "document"
+    elif format in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
+        return "image"
+    else:
+        return "container_upload"
+
+
+def anthropic_infer_file_id_content_type(
+    file_id: str,
+) -> Literal["document_url", "container_upload"]:
+    """
+    Use when 'format' not provided.
+
+    - URL's - assume are document_url
+    - Else - assume is container_upload
+    """
+    if file_id.startswith("http") or file_id.startswith("https"):
+        return "document_url"
+    else:
+        return "container_upload"
+
+
+def anthropic_process_openai_file_message(
+    message: ChatCompletionFileObject,
+) -> Union[
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesContainerUploadParam,
+]:
+    file_message = cast(ChatCompletionFileObject, message)
+    file_data = file_message["file"].get("file_data")
+    file_id = file_message["file"].get("file_id")
+    format = file_message["file"].get("format")
+    if file_data:
+        image_chunk = convert_to_anthropic_image_obj(
+            openai_image_url=file_data,
+            format=format,
+        )
+        anthropic_document_param = AnthropicMessagesDocumentParam(
+            type="document",
+            source=AnthropicContentParamSource(
+                type="base64",
+                media_type=image_chunk["media_type"],
+                data=image_chunk["data"],
+            ),
+        )
+        return anthropic_document_param
+    elif file_id:
+        content_block_type = (
+            select_anthropic_content_block_type_for_file(format)
+            if format
+            else anthropic_infer_file_id_content_type(file_id)
+        )
+        return_block_param: Optional[
+            Union[
+                AnthropicMessagesDocumentParam,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesContainerUploadParam,
+            ]
+        ] = None
+        if content_block_type == "document":
+            return_block_param = AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceFileId(
+                    type="file",
+                    file_id=file_id,
+                ),
+            )
+        elif content_block_type == "document_url":
+            return_block_param = AnthropicMessagesDocumentParam(
+                type="document",
+                source=AnthropicContentParamSourceUrl(
+                    type="url",
+                    url=file_id,
+                ),
+            )
+        elif content_block_type == "image":
+            return_block_param = AnthropicMessagesImageParam(
+                type="image",
+                source=AnthropicContentParamSourceFileId(
+                    type="file",
+                    file_id=file_id,
+                ),
+            )
+        elif content_block_type == "container_upload":
+            return_block_param = AnthropicMessagesContainerUploadParam(
+                type="container_upload", file_id=file_id
+            )
+
+        if return_block_param is None:
+            raise Exception(f"Unable to parse anthropic file message: {message}")
+        return return_block_param
+    raise Exception(
+        f"Either file_data or file_id must be present in the file message: {message}"
+    )
+
+
 def anthropic_messages_pt(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
@@ -1465,9 +1584,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -1489,24 +1608,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         elif m.get("type", "") == "document":
                             user_content.append(cast(AnthropicMessagesDocumentParam, m))
                         elif m.get("type", "") == "file":
-                            file_message = cast(ChatCompletionFileObject, m)
-                            file_data = file_message["file"].get("file_data")
-                            if file_data:
-                                image_chunk = convert_to_anthropic_image_obj(
-                                    openai_image_url=file_data,
-                                    format=file_message["file"].get("format"),
+                            user_content.append(
+                                anthropic_process_openai_file_message(
+                                    cast(ChatCompletionFileObject, m)
                                 )
-                                anthropic_document_param = (
-                                    AnthropicMessagesDocumentParam(
-                                        type="document",
-                                        source=AnthropicContentParamSource(
-                                            type="base64",
-                                            media_type=image_chunk["media_type"],
-                                            data=image_chunk["data"],
-                                        ),
-                                    )
-                                )
-                                user_content.append(anthropic_document_param)
+                            )
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -1518,9 +1624,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2338,8 +2444,10 @@ class BedrockImageProcessor:
 
         # Extract MIME type using regular expression
         mime_type_match = re.match(r"data:(.*?);base64", image_metadata)
+
         if mime_type_match:
             mime_type = mime_type_match.group(1)
+            mime_type = mime_type.split(";")[0]
             image_format = mime_type.split("/")[1]
         else:
             mime_type = "image/jpeg"
@@ -2363,6 +2471,7 @@ class BedrockImageProcessor:
 
         document_types = ["application", "text"]
         is_document = any(mime_type.startswith(doc_type) for doc_type in document_types)
+
         supported_image_and_video_formats: List[str] = (
             supported_video_formats + supported_image_formats
         )
@@ -2522,7 +2631,7 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
-                arguments_dict = json.loads(arguments)
+                arguments_dict = json.loads(arguments) if arguments else {}
                 bedrock_tool = BedrockToolUseBlock(
                     input=arguments_dict, name=name, toolUseId=id
                 )

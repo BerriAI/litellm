@@ -75,6 +75,12 @@ export interface KeyResponse {
     user_tpm_limit: number;
     user_rpm_limit: number;
     user_email: string;
+    object_permission?: {
+        object_permission_id: string;
+        mcp_servers: string[];
+        mcp_access_groups?: string[];
+        vector_stores: string[];
+    };
 }
 
 interface KeyListResponse {

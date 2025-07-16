@@ -237,11 +237,7 @@ def test_build_vertex_schema():
                     },
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
-                    "run_id": {
-                        "anyOf": [
-                            {"format": "uuid", "type": "string", "nullable": True}
-                        ]
-                    },
+                    "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
                 },
                 "type": "object",
             },
@@ -562,3 +558,122 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
 
     assert endpoint == expected_endpoint
     assert url == expected_url
+
+
+@pytest.mark.parametrize(
+    "supported_regions, expected_result",
+    [
+        (None, False),  # get_supported_regions returns None
+        ([], False),  # empty list, no global region
+        (["us-central1"], False),  # only regional, no global
+        (["global"], True),  # only global region
+        (["global", "us-central1"], True),  # global and other regions
+        (
+            ["us-central1", "global", "europe-west1"],
+            True,
+        ),  # global among multiple regions
+    ],
+)
+def test_is_global_only_vertex_model(supported_regions, expected_result):
+    """Test is_global_only_vertex_model with various supported regions scenarios"""
+    from litellm.llms.vertex_ai.common_utils import is_global_only_vertex_model
+
+    with patch("litellm.utils.get_supported_regions") as mock_get_supported_regions:
+        mock_get_supported_regions.return_value = supported_regions
+
+        result = is_global_only_vertex_model("test-model")
+
+        assert result == expected_result
+        mock_get_supported_regions.assert_called_once_with(
+            model="test-model", custom_llm_provider="vertex_ai"
+        )
+
+
+@pytest.mark.parametrize(
+    "model_is_global_only, vertex_region, expected_region",
+    [
+        (True, None, "global"),  # Global-only model with no region specified
+        (True, "us-central1", "global"),  # Global-only model overrides specified region
+        (True, "europe-west1", "global"),  # Global-only model overrides any region
+        (False, None, "us-central1"),  # Non-global model defaults to us-central1
+        (
+            False,
+            "europe-west1",
+            "europe-west1",
+        ),  # Non-global model uses specified region
+        (False, "us-east1", "us-east1"),  # Non-global model uses specified region
+    ],
+)
+def test_get_vertex_region_global_only_model(
+    model_is_global_only, vertex_region, expected_region
+):
+    """Test get_vertex_region ensures global-only models default to 'global' region"""
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    vertex_base = VertexBase()
+
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model"
+    ) as mock_is_global_only:
+        mock_is_global_only.return_value = model_is_global_only
+
+        result = vertex_base.get_vertex_region(
+            vertex_region=vertex_region, model="test-model"
+        )
+
+        assert result == expected_region
+        mock_is_global_only.assert_called_once_with("test-model")
+
+
+def test_vertex_filter_format_uri():
+    import json
+
+    from litellm.llms.vertex_ai.common_utils import filter_schema_fields
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "format": "uri",
+                "description": "The URL to fetch content from",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "The prompt to run on the fetched content",
+            },
+        },
+        "required": ["url", "prompt"],
+        "$schema": "http://json-schema.org/draft-07/schema#",
+    }
+    valid_schema_fields = {
+        "minLength",
+        "nullable",
+        "maxItems",
+        "required",
+        "default",
+        "items",
+        "propertyOrdering",
+        "maximum",
+        "properties",
+        "anyOf",
+        "description",
+        "minProperties",
+        "minimum",
+        "minItems",
+        "maxProperties",
+        "title",
+        "pattern",
+        "example",
+        "format",
+        "enum",
+        "maxLength",
+        "type",
+    }
+
+    new_parameters = filter_schema_fields(
+        schema_dict=parameters,
+        valid_fields=valid_schema_fields,
+    )
+
+    assert "uri" not in json.dumps(new_parameters)

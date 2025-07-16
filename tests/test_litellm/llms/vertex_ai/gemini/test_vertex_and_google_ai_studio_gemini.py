@@ -1,13 +1,14 @@
 import asyncio
+import json
 from copy import deepcopy
 from typing import List, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
 
 import litellm
-from litellm import ModelResponse
+from litellm import ModelResponse, completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -309,7 +310,10 @@ def test_vertex_ai_candidate_token_count_inclusive(
     Test that the candidate token count is inclusive of the thinking token count
     """
     v = VertexGeminiConfig()
-    assert v.is_candidate_token_count_inclusive(usage_metadata) is inclusive
+    assert (
+        VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata)
+        is inclusive
+    )
 
     usage = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     assert usage.prompt_tokens == expected_usage.prompt_tokens
@@ -322,6 +326,8 @@ def test_streaming_chunk_includes_reasoning_tokens():
         ModelResponseIterator,
     )
 
+    litellm_logging = MagicMock()
+
     # Simulate a streaming chunk as would be received from Gemini
     chunk = {
         "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
@@ -332,23 +338,64 @@ def test_streaming_chunk_includes_reasoning_tokens():
             "thoughtsTokenCount": 3,
         },
     }
-    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True)
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
     streaming_chunk = iterator.chunk_parser(chunk)
-    assert streaming_chunk["usage"] is not None
-    assert streaming_chunk["usage"]["prompt_tokens"] == 5
-    assert streaming_chunk["usage"]["completion_tokens"] == 7
-    assert streaming_chunk["usage"]["total_tokens"] == 12
+    assert streaming_chunk.usage is not None
+    assert streaming_chunk.usage.prompt_tokens == 5
+    assert streaming_chunk.usage.completion_tokens == 7
+    assert streaming_chunk.usage.total_tokens == 12
+    assert streaming_chunk.usage.completion_tokens_details.reasoning_tokens == 3
+
+
+def test_streaming_chunk_includes_reasoning_content():
+    """
+    Ensure that when Gemini returns a chunk with `thought=True`, the parser maps it to `reasoning_content`.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    litellm_logging = MagicMock()
+
+    # Simulate a streaming chunk from Gemini which contains reasoning (thought) content
+    chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "text": "I'm thinking through the problem...",
+                            "thought": True,
+                        }
+                    ]
+                }
+            }
+        ],
+        "usageMetadata": {},
+    }
+
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=litellm_logging
+    )
+    streaming_chunk = iterator.chunk_parser(chunk)
+
+    # The text content should be empty and reasoning_content should be populated
+    assert streaming_chunk.choices[0].delta.content is None
     assert (
-        streaming_chunk["usage"]["completion_tokens_details"]["reasoning_tokens"] == 3
+        streaming_chunk.choices[0].delta.reasoning_content
+        == "I'm thinking through the problem..."
     )
 
 
 def test_check_finish_reason():
-    config = VertexGeminiConfig()
-    finish_reason_mappings = config.get_finish_reason_mapping()
+    finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
     for k, v in finish_reason_mappings.items():
         assert (
-            config._check_finish_reason(chat_completion_message=None, finish_reason=k)
+            VertexGeminiConfig._check_finish_reason(
+                chat_completion_message=None, finish_reason=k
+            )
             == v
         )
 
@@ -392,6 +439,7 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
         "includeThoughts": True,
         "thinkingBudget": 100,
     }
+
 
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
@@ -446,4 +494,333 @@ def test_vertex_ai_map_tool_with_anyof():
     ] == {
         "anyOf": [{"type": "string", "nullable": True, "title": "Base Branch"}]
     }, f"Expected only anyOf field and its contents to be kept, but got {tools[0]['function_declarations'][0]['parameters']['properties']['base_branch']}"
+
+
+def test_vertex_ai_streaming_usage_calculation():
+    """
+    Ensure streaming usage calculation uses same function as non-streaming usage calculation
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 67,
+    }
+
+    # Test streaming chunk parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a streaming chunk
+        chunk = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Create iterator and parse chunk
+        iterator = ModelResponseIterator(
+            streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+        )
+        iterator.chunk_parser(chunk)
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+
+    # Test non-streaming response parsing
+    with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
+        # Create a completion response
+        completion_response = {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": usage_metadata,
+        }
+
+        # Parse completion response
+        v.transform_response(
+            model="gemini-pro",
+            raw_response=MagicMock(json=lambda: completion_response),
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Verify _calculate_usage was called with correct parameters
+        mock_calculate_usage.assert_called_once_with(
+            completion_response=completion_response,
+        )
+
+
+def test_vertex_ai_streaming_usage_web_search_calculation():
+    """
+    Ensure streaming usage calculation uses same function as non-streaming usage calculation
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "candidatesTokenCount": 10,
+        "totalTokenCount": 67,
+    }
+
+    # Create a streaming chunk
+    chunk = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello"}]},
+                "groundingMetadata": [
+                    {"webSearchQueries": ["What is the capital of France?"]}
+                ],
+            }
+        ],
+        "usageMetadata": usage_metadata,
+    }
+
+    # Create iterator and parse chunk
+    iterator = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=MagicMock()
+    )
+    completed_response = iterator.chunk_parser(chunk)
+
+    usage: Usage = completed_response.usage
+    assert usage.prompt_tokens_details.web_search_requests is not None
+    assert usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_vertex_ai_transform_parts():
+    """
+    Test the _transform_parts method for converting Vertex AI function calls
+    to OpenAI-compatible tool calls and function calls.
+    
+    Tests both:
+    1. Multiple tool calls within a single message
+    2. Multiple tool calls across different messages (cumulative indexing)
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    # Test case 1: Function call mode (is_function_call=True)
+    parts_with_function = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_weather",
+                "args": {"location": "Boston", "unit": "celsius"},
+            }
+        ),
+        HttpxPartType(text="Some text content"),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_with_function, cumulative_tool_call_idx=0, is_function_call=True
+    )
+
+    # Should return function, no tools, and incremented index
+    assert function is not None
+    assert function["name"] == "get_current_weather"
+    assert function["arguments"] == '{"location": "Boston", "unit": "celsius"}'
+    assert tools is None
+    assert updated_idx == 1  # Should be incremented from 0 to 1
+
+    # Test case 2: Tool call mode (is_function_call=False) - Single message with multiple tool calls
+    parts_with_multiple_functions = [
+        HttpxPartType(
+            functionCall={"name": "get_current_weather", "args": {"location": "Boston"}}
+        ),
+        HttpxPartType(
+            functionCall={
+                "name": "get_forecast",
+                "args": {"location": "New York", "days": 3},
+            }
+        ),
+        HttpxPartType(text="Some text content"),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_with_multiple_functions, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    # Should return multiple tools with correct indices
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["function"]["name"] == "get_current_weather"
+    assert tools[0]["index"] == 0  # First tool call should have index 0
+    assert tools[1]["function"]["name"] == "get_forecast"
+    assert tools[1]["index"] == 1  # Second tool call should have index 1
+    assert tools[1]["function"]["arguments"] == '{"location": "New York", "days": 3}'
+    assert updated_idx == 2  # Should be incremented from 0 to 2 (two function calls)
+
+    # Test case 3: Simulating multiple messages - cumulative indexing across messages
+    # First message with 2 tool calls (starting from index 0)
+    first_message_parts = [
+        HttpxPartType(
+            functionCall={"name": "get_weather", "args": {"location": "Boston"}}
+        ),
+        HttpxPartType(
+            functionCall={"name": "get_time", "args": {"timezone": "EST"}}
+        ),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=first_message_parts, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["index"] == 0
+    assert tools[1]["index"] == 1
+    assert updated_idx == 2
+
+    # Second message with 1 tool call (continuing from previous index)
+    second_message_parts = [
+        HttpxPartType(
+            functionCall={"name": "send_email", "args": {"to": "user@example.com"}}
+        ),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=second_message_parts, cumulative_tool_call_idx=updated_idx, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 1
+    assert tools[0]["index"] == 2  # Should continue from previous cumulative index
+    assert tools[0]["function"]["name"] == "send_email"
+    assert updated_idx == 3  # Should be incremented to 3
+
+    # Third message with 2 more tool calls (continuing from previous index)
+    third_message_parts = [
+        HttpxPartType(
+            functionCall={"name": "create_calendar_event", "args": {"title": "Meeting"}}
+        ),
+        HttpxPartType(
+            functionCall={"name": "set_reminder", "args": {"time": "10:00"}}
+        ),
+    ]
+
+    function, tools, final_idx = VertexGeminiConfig._transform_parts(
+        parts=third_message_parts, cumulative_tool_call_idx=updated_idx, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["index"] == 3  # Should continue from previous cumulative index
+    assert tools[1]["index"] == 4  # Should be incremented
+    assert tools[0]["function"]["name"] == "create_calendar_event"
+    assert tools[1]["function"]["name"] == "set_reminder"
+    assert final_idx == 5  # Should be incremented to 5
+
+    # Test case 4: No function calls
+    parts_without_functions = [
+        HttpxPartType(text="Just some text content"),
+        HttpxPartType(text="More text"),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_without_functions, cumulative_tool_call_idx=5, is_function_call=False
+    )
+
+    # Should return nothing and preserve the cumulative index
+    assert function is None
+    assert tools is None
+    assert updated_idx == 5  # Index should remain unchanged when no function calls
+
+    # Test case 5: Empty parts list
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=[], cumulative_tool_call_idx=10, is_function_call=False
+    )
+
+    # Should return nothing and preserve the cumulative index
+    assert function is None
+    assert tools is None
+    assert updated_idx == 10  # Index should remain unchanged
+
+    # Test case 6: Function call with empty args
+    parts_with_empty_args = [
+        HttpxPartType(functionCall={"name": "simple_function", "args": {}})
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_with_empty_args, cumulative_tool_call_idx=0, is_function_call=True
+    )
+
+    # Should handle empty args correctly
+    assert function is not None
+    assert function["name"] == "simple_function"
+    assert function["arguments"] == "{}"
+    assert tools is None
+    assert updated_idx == 1
+
+    # Test case 7: Mixed content with function calls - ensuring tool call IDs are unique
+    mixed_parts = [
+        HttpxPartType(text="Before function call"),
+        HttpxPartType(
+            functionCall={"name": "function_a", "args": {"param": "value_a"}}
+        ),
+        HttpxPartType(text="Between function calls"),
+        HttpxPartType(
+            functionCall={"name": "function_b", "args": {"param": "value_b"}}
+        ),
+        HttpxPartType(text="After function calls"),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=mixed_parts, cumulative_tool_call_idx=100, is_function_call=False
+    )
+
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+    assert tools[0]["index"] == 100
+    assert tools[1]["index"] == 101
+    # Verify that tool call IDs are unique
+    assert tools[0]["id"] != tools[1]["id"]
+    assert tools[0]["id"].startswith("call_")
+    assert tools[1]["id"].startswith("call_")
+    assert updated_idx == 102
+
+
+def test_vertex_ai_usage_metadata_missing_token_count():
+    """Test that missing tokenCount in responseTokensDetails defaults to 0"""
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    v = VertexGeminiConfig()
+    usage_metadata = {
+        "promptTokenCount": 57,
+        "responseTokenCount": 74,
+        "totalTokenCount": 131,
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}],
+        "responseTokensDetails": [
+            {"modality": "TEXT"},  # Missing tokenCount
+            {"modality": "AUDIO"},  # Missing tokenCount
+        ],
+    }
+    usage_metadata = UsageMetadata(**usage_metadata)
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
+    
+    # Should not crash and should default missing tokenCount to 0
+    assert result.prompt_tokens == 57
+    assert result.completion_tokens == 74
+    assert result.total_tokens == 131
+    assert result.completion_tokens_details.text_tokens == 0  # Default value for missing tokenCount
+    assert result.completion_tokens_details.audio_tokens == 0  # Default value for missing tokenCount
+
 

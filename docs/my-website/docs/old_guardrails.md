@@ -212,7 +212,7 @@ If you need to switch `pii_masking` off for an API Key set `"permissions": {"pii
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
-    -D '{
+    -d '{
         "permissions": {"pii_masking": true}
     }'
 ```

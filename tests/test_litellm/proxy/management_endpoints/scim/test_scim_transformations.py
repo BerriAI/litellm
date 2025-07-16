@@ -18,7 +18,12 @@ from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
-from litellm.types.proxy.management_endpoints.scim_v2 import SCIMGroup, SCIMUser
+from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIMGroup,
+    SCIMPatchOp,
+    SCIMPatchOperation,
+    SCIMUser,
+)
 
 
 # Mock data
@@ -223,3 +228,58 @@ class TestScimTransformations:
         member_without_email = Member(user_id="user-456", user_email=None, role="user")
         result = ScimTransformations._get_scim_member_value(member_without_email)
         assert result == ScimTransformations.DEFAULT_SCIM_MEMBER_VALUE
+
+
+class TestSCIMPatchOperations:
+    """Test SCIM PATCH operation validation and case-insensitive handling"""
+
+    def test_scim_patch_operation_lowercase(self):
+        """Test that lowercase operations are accepted"""
+        op = SCIMPatchOperation(op="add", path="members", value=[{"value": "user123"}])
+        assert op.op == "add"
+
+        op = SCIMPatchOperation(op="remove", path='members[value eq "user123"]')
+        assert op.op == "remove"
+
+        op = SCIMPatchOperation(op="replace", path="displayName", value="New Name")
+        assert op.op == "replace"
+
+    def test_scim_patch_operation_uppercase(self):
+        """Test that uppercase operations are normalized to lowercase"""
+        op = SCIMPatchOperation(op="ADD", path="members", value=[{"value": "user123"}])
+        assert op.op == "add"
+
+        op = SCIMPatchOperation(op="REMOVE", path='members[value eq "user123"]')
+        assert op.op == "remove"
+
+        op = SCIMPatchOperation(op="REPLACE", path="displayName", value="New Name")
+        assert op.op == "replace"
+
+    def test_scim_patch_operation_mixed_case(self):
+        """Test that mixed case operations are normalized to lowercase"""
+        op = SCIMPatchOperation(op="Add", path="members", value=[{"value": "user123"}])
+        assert op.op == "add"
+
+        op = SCIMPatchOperation(op="Remove", path='members[value eq "user123"]')
+        assert op.op == "remove"
+
+        op = SCIMPatchOperation(op="Replace", path="displayName", value="New Name")
+        assert op.op == "replace"
+
+    def test_scim_patch_operation_with_optional_fields(self):
+        """Test SCIMPatchOperation with and without optional fields"""
+        # Operation with all fields
+        op_full = SCIMPatchOperation(
+            op="Add",
+            path="members",
+            value=[{"value": "user123", "display": "User 123"}],
+        )
+        assert op_full.op == "add"
+        assert op_full.path == "members"
+        assert op_full.value == [{"value": "user123", "display": "User 123"}]
+
+        # Operation with minimal fields (only op is required)
+        op_minimal = SCIMPatchOperation(op="Remove")
+        assert op_minimal.op == "remove"
+        assert op_minimal.path is None
+        assert op_minimal.value is None

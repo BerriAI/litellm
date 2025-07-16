@@ -18,10 +18,15 @@ import {
 import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
-import { Form, Input, InputNumber, message, Select } from "antd";
+import { Form, Input, InputNumber, message, Select, Tooltip, Button as AntdButton } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
 import { rolesWithWriteAccess } from '../utils/roles';
+import ObjectPermissionsView from "./object_permissions_view";
+import LoggingSettingsView from "./logging_settings_view";
+import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
+import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
+import { CopyIcon, CheckIcon } from "lucide-react";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -33,13 +38,15 @@ interface KeyInfoViewProps {
   userID: string | null;
   userRole: string | null;
   teams: any[] | null;
+  premiumUser: boolean;
 }
 
-export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, onKeyDataUpdate, onDelete }: KeyInfoViewProps) {
+export default function KeyInfoView({ keyId, onClose, keyData, accessToken, userID, userRole, teams, onKeyDataUpdate, onDelete, premiumUser }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
   if (!keyData) {
     return (
@@ -64,6 +71,27 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       const currentKey = formValues.token;
       formValues.key = currentKey;
 
+      // Handle object_permission updates
+      if (formValues.vector_stores !== undefined) {
+        formValues.object_permission = {
+          ...keyData.object_permission,
+          vector_stores: formValues.vector_stores || []
+        };
+        // Remove vector_stores from the top level as it should be in object_permission
+        delete formValues.vector_stores;
+      }
+
+      if (formValues.mcp_servers_and_groups !== undefined) {
+        const { servers, accessGroups } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [] };
+        formValues.object_permission = {
+          ...keyData.object_permission,
+          mcp_servers: servers || [],
+          mcp_access_groups: accessGroups || []
+        };
+        // Remove mcp_servers_and_groups from the top level as it should be in object_permission
+        delete formValues.mcp_servers_and_groups;
+      }
+
       // Convert metadata back to an object if it exists and is a string
       if (formValues.metadata && typeof formValues.metadata === "string") {
         try {
@@ -71,6 +99,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           formValues.metadata = {
             ...parsedMetadata,
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
+            ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {})
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
@@ -81,8 +110,11 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         formValues.metadata = {
           ...(formValues.metadata || {}),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
+          ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {})
         };
       }
+
+      delete formValues.logging_settings;
 
       // Convert budget_duration to API format
       if (formValues.budget_duration) {
@@ -122,8 +154,18 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
     }
   };
 
+  const copyToClipboard = async (text: string, key: string) => {
+    const success = await utilCopyToClipboard(text);
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
+    }
+  };
+
   return (
-    <div className="p-4">
+    <div className="w-full h-screen p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button 
@@ -135,18 +177,37 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
             Back to Keys
           </Button>
           <Title>{keyData.key_alias || "API Key"}</Title>
-          <Text className="text-gray-500 font-mono">{keyData.token}</Text>
+          <div className="flex items-center cursor-pointer"
+           >
+            <Text className="text-gray-500 font-mono">{keyData.token}</Text>
+            <AntdButton
+              type="text"
+              size="small"
+              icon={copiedStates["key-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(keyData.token, "key-id")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["key-id"] 
+                  ? 'text-green-600 bg-green-50 border-green-200' 
+                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+              }`}
+            />
+          </div>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex gap-2">
-            <Button
-              icon={RefreshIcon}
-              variant="secondary"
-              onClick={() => setIsRegenerateModalOpen(true)}
-              className="flex items-center"
-            >
-              Regenerate Key
-            </Button>
+            <Tooltip title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}>
+              <span className="inline-block">
+                <Button
+                  icon={RefreshIcon}
+                  variant="secondary"
+                  onClick={() => setIsRegenerateModalOpen(true)}
+                  className="flex items-center"
+                  disabled={!premiumUser}
+                >
+                  Regenerate Key
+                </Button>
+              </span>
+            </Tooltip>
             <Button
               icon={TrashIcon}
               variant="secondary"
@@ -165,6 +226,7 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
         accessToken={accessToken}
+        premiumUser={premiumUser}
       />
 
       {/* Delete Confirmation Modal */}
@@ -222,8 +284,8 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>${Number(keyData.spend).toFixed(4)}</Title>
-                  <Text>of {keyData.max_budget !== null ? `$${keyData.max_budget}` : "Unlimited"}</Text>
+                  <Title>${formatNumberWithCommas(keyData.spend, 4)}</Title>
+                  <Text>of {keyData.max_budget !== null ? `$${formatNumberWithCommas(keyData.max_budget)}` : "Unlimited"}</Text>
                 </div>
               </Card>
 
@@ -249,12 +311,25 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                   )}
                 </div>
               </Card>
+
+              <Card>
+                <ObjectPermissionsView
+                  objectPermission={keyData.object_permission}
+                  variant="inline"
+                  accessToken={accessToken}
+                />
+              </Card>
+
+              <LoggingSettingsView
+                loggingConfigs={extractLoggingSettings(keyData.metadata)}
+                variant="card"
+              />
             </Grid>
           </TabPanel>
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card>
+            <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
@@ -313,12 +388,16 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
                   <div>
                     <Text className="font-medium">Spend</Text>
-                    <Text>${Number(keyData.spend).toFixed(4)} USD</Text>
+                    <Text>${formatNumberWithCommas(keyData.spend, 4)} USD</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Budget</Text>
-                    <Text>{keyData.max_budget !== null ? `$${keyData.max_budget} USD` : "Unlimited"}</Text>
+                    <Text>
+                      {keyData.max_budget !== null
+                        ? `$${formatNumberWithCommas(keyData.max_budget, 2)}`
+                        : "Unlimited"}
+                    </Text>
                   </div>
 
                   <div>
@@ -351,9 +430,22 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                   <div>
                     <Text className="font-medium">Metadata</Text>
                     <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto mt-1">
-                      {JSON.stringify(keyData.metadata, null, 2)}
+                      {formatMetadataForDisplay(keyData.metadata)}
                     </pre>
                   </div>
+
+                  <ObjectPermissionsView
+                    objectPermission={keyData.object_permission}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                    accessToken={accessToken}
+                  />
+
+                  <LoggingSettingsView
+                    loggingConfigs={extractLoggingSettings(keyData.metadata)}
+                    variant="inline"
+                    className="pt-4 border-t border-gray-200"
+                  />
                 </div>
               )}
             </Card>

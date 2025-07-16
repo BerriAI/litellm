@@ -1,11 +1,12 @@
 """
-Supports using JWT's for authenticating into the proxy. 
+Supports using JWT's for authenticating into the proxy.
 
-Currently only supports admin. 
+Currently only supports admin.
 
-JWT token must have 'litellm_proxy_admin' in scope. 
+JWT token must have 'litellm_proxy_admin' in scope.
 """
 
+import fnmatch
 import json
 import os
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
@@ -31,6 +32,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
+    ProxyErrorTypes,
+    ProxyException,
     ScopeMapping,
     Span,
     TeamMemberAddRequest,
@@ -80,8 +83,9 @@ class JWTHandler:
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
-
-    def is_jwt(self, token: str):
+    
+    @staticmethod
+    def is_jwt(token: str):
         parts = token.split(".")
         return len(parts) == 3
 
@@ -162,7 +166,9 @@ class JWTHandler:
             self.litellm_jwtauth.team_ids_jwt_field is not None
             and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
         ):
+
             return token[self.litellm_jwtauth.team_ids_jwt_field]
+
         return []
 
     def get_end_user_id(
@@ -253,6 +259,21 @@ class JWTHandler:
         except KeyError:
             user_roles = default_value
         return user_roles
+
+    def map_jwt_role_to_litellm_role(self, token: dict) -> Optional[LitellmUserRoles]:
+        """Map roles from JWT to LiteLLM user roles"""
+        if not self.litellm_jwtauth.jwt_litellm_role_map:
+            return None
+
+        jwt_roles = self.get_jwt_role(token=token, default_value=[])
+        if not jwt_roles:
+            return None
+
+        for mapping in self.litellm_jwtauth.jwt_litellm_role_map:
+            for role in jwt_roles:
+                if fnmatch.fnmatch(role, mapping.jwt_role):
+                    return mapping.litellm_role
+        return None
 
     def get_jwt_role(
         self, token: dict, default_value: Optional[List[str]]
@@ -888,13 +909,74 @@ class JWTAuthManager:
             ),
             team_id=team_object.team_id,
         )
-        # add user to team
-        await team_member_add(
-            data=data,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN
-            ),  # [TODO]: expose an internal service role, for better tracking
-        )
+        # add user to team - make this non-blocking to avoid authentication failures
+        try:
+            await team_member_add(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),  # [TODO]: expose an internal service role, for better tracking
+            )
+            verbose_proxy_logger.debug(
+                f"Successfully added user {user_object.user_id} to team {team_object.team_id}"
+            )
+        except ProxyException as e:
+            if e.type == ProxyErrorTypes.team_member_already_in_team:
+                verbose_proxy_logger.debug(
+                    f"User {user_object.user_id} is already a member of team {team_object.team_id}"
+                )
+                return None
+            else:
+                raise e
+        return None
+
+    @staticmethod
+    async def sync_user_role_and_teams(
+        jwt_handler: JWTHandler,
+        jwt_valid_token: dict,
+        user_object: Optional[LiteLLM_UserTable],
+        prisma_client: Optional[PrismaClient],
+    ) -> None:
+        """
+        Sync user role and team memberships with JWT claims
+
+        The goal of this method is to ensure:
+        1. The user role on LiteLLM DB is in sync with the IDP provider role
+        2. The user is a member of the teams specified in the JWT token
+
+        This method is only called if sync_user_role_and_teams is set to True in the JWT config.
+        """
+        if not jwt_handler.litellm_jwtauth.sync_user_role_and_teams:
+            return None
+
+        if user_object is None or prisma_client is None:
+            return None
+
+        # Update user role
+        new_role = jwt_handler.map_jwt_role_to_litellm_role(jwt_valid_token)
+        if new_role and user_object.user_role != new_role.value:
+            await prisma_client.db.litellm_usertable.update(
+                where={"user_id": user_object.user_id},
+                data={"user_role": new_role.value},
+            )
+            user_object.user_role = new_role.value
+
+        # Sync team memberships
+        jwt_team_ids = set(jwt_handler.get_team_ids_from_jwt(jwt_valid_token))
+        existing_teams = set(user_object.teams or [])
+        teams_to_add = jwt_team_ids - existing_teams
+        teams_to_remove = existing_teams - jwt_team_ids
+        if teams_to_add or teams_to_remove:
+            from litellm.proxy.management_endpoints.scim.scim_v2 import (
+                patch_team_membership,
+            )
+
+            await patch_team_membership(
+                user_id=user_object.user_id,
+                teams_ids_to_add_user_to=list(teams_to_add),
+                teams_ids_to_remove_user_from=list(teams_to_remove),
+            )
+            user_object.teams = list(jwt_team_ids)
         return None
 
     @staticmethod
@@ -1018,6 +1100,13 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        await JWTAuthManager.sync_user_role_and_teams(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_valid_token,
+            user_object=user_object,
+            prisma_client=prisma_client,
+        )
+
         ## MAP USER TO TEAMS
         await JWTAuthManager.map_user_to_teams(
             user_object=user_object,
@@ -1032,8 +1121,14 @@ class JWTAuthManager:
             is_proxy_admin=False,
         )
 
+        # check if user is proxy admin
+        if user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN:
+            is_proxy_admin = True
+        else:
+            is_proxy_admin = False
+
         return JWTAuthBuilderResult(
-            is_proxy_admin=False,
+            is_proxy_admin=is_proxy_admin,
             team_id=team_id,
             team_object=team_object,
             user_id=user_id,

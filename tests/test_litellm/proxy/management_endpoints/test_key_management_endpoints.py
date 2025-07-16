@@ -251,3 +251,244 @@ async def test_key_generation_with_object_permission(monkeypatch):
     ]
     assert len(key_insert_calls) == 1
     assert key_insert_calls[0]["data"].get("object_permission_id") == "objperm123"
+
+
+@pytest.mark.asyncio
+async def test_key_update_object_permissions_existing_permission(monkeypatch):
+    """
+    Test updating object permissions when a key already has an existing object_permission_id.
+
+    This test verifies that when updating vector stores for a key that already has an
+    object_permission_id, the existing LiteLLM_ObjectPermissionTable record is updated
+    with the new permissions and the object_permission_id remains the same.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import pytest
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        LiteLLM_VerificationToken,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _handle_update_object_permission,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Mock existing key with object_permission_id
+    existing_key_row = LiteLLM_VerificationToken(
+        token="test_token_hash",
+        object_permission_id="existing_perm_id_123",
+        user_id="user123",
+        team_id=None,
+    )
+
+    # Mock existing object permission record
+    existing_object_permission = MagicMock()
+    existing_object_permission.model_dump.return_value = {
+        "object_permission_id": "existing_perm_id_123",
+        "vector_stores": ["old_store_1", "old_store_2"],
+    }
+
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=existing_object_permission
+    )
+
+    # Mock upsert operation
+    updated_permission = MagicMock()
+    updated_permission.object_permission_id = "existing_perm_id_123"
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
+        return_value=updated_permission
+    )
+
+    # Test data with new object permission
+    data_json = {
+        "object_permission": LiteLLM_ObjectPermissionBase(
+            vector_stores=["new_store_1", "new_store_2", "new_store_3"]
+        ).model_dump(exclude_unset=True, exclude_none=True),
+        "user_id": "user123",
+    }
+
+    # Call the function
+    result = await _handle_update_object_permission(
+        data_json=data_json,
+        existing_key_row=existing_key_row,
+    )
+
+    # Verify the object_permission was removed from data_json and object_permission_id was set
+    assert "object_permission" not in result
+    assert result["object_permission_id"] == "existing_perm_id_123"
+
+    # Verify database operations were called correctly
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_called_once_with(
+        where={"object_permission_id": "existing_perm_id_123"}
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_key_update_object_permissions_no_existing_permission(monkeypatch):
+    """
+    Test creating object permissions when a key has no existing object_permission_id.
+
+    This test verifies that when updating object permissions for a key that has
+    object_permission_id set to None, a new entry is created in the
+    LiteLLM_ObjectPermissionTable and the key is updated with the new object_permission_id.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import pytest
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        LiteLLM_VerificationToken,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _handle_update_object_permission,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    existing_key_row_no_perm = LiteLLM_VerificationToken(
+        token="test_token_hash_2",
+        object_permission_id=None,
+        user_id="user456",
+        team_id=None,
+    )
+
+    # Mock find_unique to return None (no existing permission)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    # Mock upsert to create new record
+    new_permission = MagicMock()
+    new_permission.object_permission_id = "new_perm_id_456"
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
+        return_value=new_permission
+    )
+
+    data_json = {
+        "object_permission": LiteLLM_ObjectPermissionBase(
+            vector_stores=["brand_new_store"]
+        ).model_dump(exclude_unset=True, exclude_none=True),
+        "user_id": "user456",
+    }
+
+    result = await _handle_update_object_permission(
+        data_json=data_json,
+        existing_key_row=existing_key_row_no_perm,
+    )
+
+    # Verify new object_permission_id was set
+    assert "object_permission" not in result
+    assert result["object_permission_id"] == "new_perm_id_456"
+    # Verify upsert was called to create new record
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_key_update_object_permissions_missing_permission_record(monkeypatch):
+    """
+    Test creating object permissions when existing object_permission_id record is not found.
+
+    This test verifies that when updating object permissions for a key that has an
+    object_permission_id but the corresponding record cannot be found in the database,
+    a new entry is created in the LiteLLM_ObjectPermissionTable with the new permissions.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import pytest
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        LiteLLM_VerificationToken,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _handle_update_object_permission,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    existing_key_row_missing_perm = LiteLLM_VerificationToken(
+        token="test_token_hash_3",
+        object_permission_id="missing_perm_id_789",
+        user_id="user789",
+        team_id=None,
+    )
+
+    # Mock find_unique to return None (permission record not found)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    # Mock upsert to create new record
+    new_permission = MagicMock()
+    new_permission.object_permission_id = "recreated_perm_id_789"
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
+        return_value=new_permission
+    )
+
+    data_json = {
+        "object_permission": LiteLLM_ObjectPermissionBase(
+            vector_stores=["recreated_store"]
+        ).model_dump(exclude_unset=True, exclude_none=True),
+        "user_id": "user789",
+    }
+
+    result = await _handle_update_object_permission(
+        data_json=data_json,
+        existing_key_row=existing_key_row_missing_perm,
+    )
+
+    # Verify new object_permission_id was set
+    assert "object_permission" not in result
+    assert result["object_permission_id"] == "recreated_perm_id_789"
+
+    # Verify find_unique was called with the missing permission ID
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_called_once_with(
+        where={"object_permission_id": "missing_perm_id_789"}
+    )
+
+    # Verify upsert was called to create new record
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+def test_get_new_token_with_valid_key():
+    """Test get_new_token function when provided with a valid key that starts with 'sk-'"""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    # Test with valid new_key
+    data = RegenerateKeyRequest(new_key="sk-test123456789")
+    result = get_new_token(data)
+
+    assert result == "sk-test123456789"
+
+
+def test_get_new_token_with_invalid_key():
+    """Test get_new_token function when provided with an invalid key that doesn't start with 'sk-'"""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    # Test with invalid new_key (doesn't start with 'sk-')
+    data = RegenerateKeyRequest(new_key="invalid-key-123")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_new_token(data)
+
+    assert exc_info.value.status_code == 400
+    assert "New key must start with 'sk-'" in str(exc_info.value.detail)

@@ -142,3 +142,24 @@ async def test_cleanup_old_spend_logs_no_retention_period():
 
     mock_prisma_client.db.litellm_spendlogs.find_many.assert_not_called()
     mock_prisma_client.db.litellm_spendlogs.delete.assert_not_called()
+
+
+def test_cleanup_batch_size_env_var(monkeypatch):
+    """Ensure batch size is configurable via environment variable"""
+    import importlib
+
+    import litellm.constants as constants_module
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    # Set env var and reload modules to pick up new value
+    monkeypatch.setenv("SPEND_LOG_CLEANUP_BATCH_SIZE", "25")
+    importlib.reload(constants_module)
+    importlib.reload(cleanup_module)
+
+    cleaner = cleanup_module.SpendLogCleanup(general_settings={})
+    assert cleaner.batch_size == 25
+
+    # Remove env var and reload to restore default for other tests
+    monkeypatch.delenv("SPEND_LOG_CLEANUP_BATCH_SIZE", raising=False)
+    importlib.reload(constants_module)
+    importlib.reload(cleanup_module)

@@ -8,12 +8,19 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
-from .common_utils import _get_gemini_url, _get_vertex_url, all_gemini_url_modes
+from .common_utils import (
+    _get_gemini_url,
+    _get_vertex_url,
+    all_gemini_url_modes,
+    is_global_only_vertex_model,
+)
 
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials as GoogleCredentialsObject
@@ -34,7 +41,9 @@ class VertexBase:
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
-    def get_vertex_region(self, vertex_region: Optional[str]) -> str:
+    def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
+        if is_global_only_vertex_model(model):
+            return "global"
         return vertex_region or "us-central1"
 
     def load_auth(
@@ -72,7 +81,17 @@ class VertexBase:
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
-                creds = self._credentials_from_identity_pool(json_obj)
+                # If environment_id key contains "aws" value it corresponds to an AWS config file
+                credential_source = json_obj.get("credential_source", {})
+                environment_id = (
+                    credential_source.get("environment_id", "")
+                    if isinstance(credential_source, dict)
+                    else ""
+                )
+                if isinstance(environment_id, str) and "aws" in environment_id:
+                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                else:
+                    creds = self._credentials_from_identity_pool(json_obj)
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
                 creds = self._credentials_from_authorized_user(
@@ -116,6 +135,11 @@ class VertexBase:
 
         return identity_pool.Credentials.from_info(json_obj)
 
+    def _credentials_from_identity_pool_with_aws(self, json_obj):
+        from google.auth import aws
+
+        return aws.Credentials.from_info(json_obj)
+
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
 
@@ -149,6 +173,74 @@ class VertexBase:
             return f"https://{vertex_location}-aiplatform.googleapis.com"
         else:
             return f"https://{self.get_default_vertex_location()}-aiplatform.googleapis.com"
+
+    @staticmethod
+    def create_vertex_url(
+        vertex_location: str,
+        vertex_project: str,
+        partner: VertexPartnerProvider,
+        stream: Optional[bool],
+        model: str,
+        api_base: Optional[str] = None,
+    ) -> str:
+        """Return the base url for the vertex partner models"""
+
+        api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
+        if partner == VertexPartnerProvider.llama:
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+        elif partner == VertexPartnerProvider.mistralai:
+            if stream:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
+            else:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
+        elif partner == VertexPartnerProvider.ai21:
+            if stream:
+                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
+            else:
+                return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
+        elif partner == VertexPartnerProvider.claude:
+            if stream:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
+            else:
+                return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+
+    def get_complete_vertex_url(
+        self,
+        custom_api_base: Optional[str],
+        vertex_location: Optional[str],
+        vertex_project: Optional[str],
+        project_id: str,
+        partner: VertexPartnerProvider,
+        stream: Optional[bool],
+        model: str,
+    ) -> str:
+        api_base = self.get_api_base(
+            api_base=custom_api_base, vertex_location=vertex_location
+        )
+        default_api_base = VertexBase.create_vertex_url(
+            vertex_location=vertex_location or "us-central1",
+            vertex_project=vertex_project or project_id,
+            partner=partner,
+            stream=stream,
+            model=model,
+            api_base=api_base,
+        )
+
+        if len(default_api_base.split(":")) > 1:
+            endpoint = default_api_base.split(":")[-1]
+        else:
+            endpoint = ""
+
+        _, api_base = self._check_custom_proxy(
+            api_base=custom_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint=endpoint,
+            stream=stream,
+            auth_header=None,
+            url=default_api_base,
+        )
+        return api_base
 
     def refresh_auth(self, credentials: Any) -> None:
         from google.auth.transport.requests import (
@@ -255,7 +347,10 @@ class VertexBase:
             )
             auth_header = None  # this field is not used for gemin
         else:
-            vertex_location = self.get_vertex_region(vertex_region=vertex_location)
+            vertex_location = self.get_vertex_region(
+                vertex_region=vertex_location,
+                model=model,
+            )
 
             ### SET RUNTIME ENDPOINT ###
             version: Literal["v1beta1", "v1"] = (
@@ -399,3 +494,30 @@ class VertexBase:
             headers.update(extra_headers)
 
         return headers
+
+    @staticmethod
+    def get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_project", None)
+            or litellm_params.pop("vertex_ai_project", None)
+            or litellm.vertex_project
+            or get_secret_str("VERTEXAI_PROJECT")
+        )
+
+    @staticmethod
+    def get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_credentials", None)
+            or litellm_params.pop("vertex_ai_credentials", None)
+            or get_secret_str("VERTEXAI_CREDENTIALS")
+        )
+
+    @staticmethod
+    def get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_location", None)
+            or litellm_params.pop("vertex_ai_location", None)
+            or litellm.vertex_location
+            or get_secret_str("VERTEXAI_LOCATION")
+            or get_secret_str("VERTEX_LOCATION")
+        )

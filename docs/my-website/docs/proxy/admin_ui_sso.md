@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Get free 7-day trial key](https://www.litellm.ai/#trial)
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -50,6 +50,7 @@ GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2k
 GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
 GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
 GENERIC_CLIENT_STATE = "random-string" # [OPTIONAL] REQUIRED BY OKTA, if not set random state value is generated
+GENERIC_SSO_HEADERS = "Content-Type=application/json, X-Custom-Header=custom-value" # [OPTIONAL] Comma-separated list of additional headers to add to the request - e.g. Content-Type=application/json, etc.
 ```
 
 You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
@@ -186,6 +187,10 @@ Set a Proxy Admin when SSO is enabled. Once SSO is enabled, the `user_id` for us
 export PROXY_ADMIN_ID="116544810872468347480"
 ```
 
+This will update the user role in the `LiteLLM_UserTable` to `proxy_admin`. 
+
+If you plan to change this ID, please update the user role via API `/user/update` or UI (Internal Users page). 
+
 #### Step 3: See all proxy keys
 
 <Image img={require('../../img/litellm_ui_admin.png')} />
@@ -272,4 +277,51 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 
 ```
 - Deploy LiteLLM Proxy Server
+
+## Troubleshooting
+
+### "The 'redirect_uri' parameter must be a Login redirect URI in the client app settings" Error
+
+This error commonly occurs with Okta and other SSO providers when the redirect URI configuration is incorrect.
+
+#### Issue
+```
+Your request resulted in an error. The 'redirect_uri' parameter must be a Login redirect URI in the client app settings
+```
+
+#### Solution
+
+**1. Ensure you have set PROXY_BASE_URL in your .env and it includes protocol**
+
+Make sure your `PROXY_BASE_URL` includes the complete URL with protocol (`http://` or `https://`):
+
+```bash
+# ✅ Correct - includes https://
+PROXY_BASE_URL=https://litellm.platform.com
+
+# ✅ Correct - includes http://
+PROXY_BASE_URL=http://litellm.platform.com
+
+# ❌ Incorrect - missing protocol
+PROXY_BASE_URL=litellm.platform.com
+```
+
+**2. For Okta specifically, ensure GENERIC_CLIENT_STATE is set**
+
+Okta requires the `GENERIC_CLIENT_STATE` parameter:
+
+```bash
+GENERIC_CLIENT_STATE="random-string" # Required for Okta
+```
+
+### Common Configuration Issues
+
+#### Missing Protocol in Base URL
+```bash
+# This will cause redirect_uri errors
+PROXY_BASE_URL=mydomain.com
+
+# Fix: Add the protocol
+PROXY_BASE_URL=https://mydomain.com
+```
 

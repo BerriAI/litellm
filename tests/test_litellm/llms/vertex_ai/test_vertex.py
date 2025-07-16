@@ -1218,6 +1218,10 @@ def test_get_image_mime_type_from_url():
         _get_image_mime_type_from_url("https://example.com/IMAGE.WEBP") == "image/webp"
     )
 
+    # Test audio formats
+    assert _get_image_mime_type_from_url("https://example.com/audio.ogg") == "audio/ogg"
+    assert _get_image_mime_type_from_url("https://example.com/track.OGG") == "audio/ogg"
+
     # Test unsupported formats
     assert _get_image_mime_type_from_url("https://example.com/image.gif") is None
     assert _get_image_mime_type_from_url("https://example.com/image.bmp") is None
@@ -1432,7 +1436,7 @@ def test_vertex_parallel_tool_calls_false_multiple_tools_error():
             parallel_tool_calls=False,
         )
     assert (
-        "`parallel_tool_calls=False` is not supported when multiple tools are provided"
+        "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are"
         in str(excinfo.value)
     )
 
@@ -1445,7 +1449,7 @@ def test_vertex_parallel_tool_calls_false_multiple_tools_error():
             parallel_tool_calls=False,
         )
     assert (
-        "`parallel_tool_calls=False` is not supported when multiple tools are provided"
+        "`parallel_tool_calls=False` is not supported by Gemini when multiple tools are"
         in str(excinfo.value)
     )
 

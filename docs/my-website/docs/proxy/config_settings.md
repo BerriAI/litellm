@@ -141,6 +141,7 @@ general_settings:
 | key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
 | disable_add_transform_inline_image_block | boolean | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model. |
 | disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
+| enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
 
 ### general_settings - Reference
 
@@ -211,7 +212,7 @@ general_settings:
 | pass_through_endpoints | List[Dict[str, Any]] | Define the pass through endpoints. [Docs](./pass_through) |
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
-| forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers) to the backend LLM call |
+| forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers and `anthropic-beta` headers) to the backend LLM call |
 | maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
 | maximum_spend_logs_retention_interval | str | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
 ### router_settings - Reference
@@ -307,6 +308,7 @@ router_settings:
 | AGENTOPS_SERVICE_NAME | Service Name for AgentOps logging integration
 | AISPEND_ACCOUNT_ID | Account ID for AI Spend
 | AISPEND_API_KEY | API Key for AI Spend
+| AIOHTTP_TRUST_ENV | Flag to enable aiohttp trust environment. When this is set to True, aiohttp will respect HTTP(S)_PROXY env vars. **Default is False**
 | ALLOWED_EMAIL_DOMAINS | List of email domains allowed for access
 | ARIZE_API_KEY | API key for Arize platform integration
 | ARIZE_SPACE_KEY | Space key for Arize platform
@@ -318,6 +320,7 @@ router_settings:
 | ATHINA_API_KEY | API key for Athina service
 | ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
+| ANTHROPIC_API_KEY | API key for Anthropic service
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_PROFILE_NAME | AWS CLI profile name to be used
 | AWS_REGION_NAME | Default AWS region for service interactions
@@ -329,10 +332,15 @@ router_settings:
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CLIENT_ID | Client ID for Azure services
 | AZURE_CLIENT_SECRET | Client secret for Azure services
+| AZURE_CODE_INTERPRETER_COST_PER_SESSION | Cost per session for Azure Code Interpreter service
+| AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS | Input cost per 1K tokens for Azure Computer Use service
+| AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS | Output cost per 1K tokens for Azure Computer Use service
 | AZURE_TENANT_ID | Tenant ID for Azure Active Directory
 | AZURE_USERNAME | Username for Azure services, use in conjunction with AZURE_PASSWORD for azure ad token with basic username/password workflow
 | AZURE_PASSWORD | Password for Azure services, use in conjunction with AZURE_USERNAME for azure ad token with basic username/password workflow
 | AZURE_FEDERATED_TOKEN_FILE | File path to Azure federated token
+| AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY | Cost per GB per day for Azure File Search service
+| AZURE_SCOPE | For EntraID Auth, Scope for Azure services, defaults to "https://cognitiveservices.azure.com/.default"
 | AZURE_KEY_VAULT_URI | URI for Azure Key Vault
 | AZURE_OPERATION_POLLING_TIMEOUT | Timeout in seconds for Azure operation polling
 | AZURE_STORAGE_ACCOUNT_KEY | The Azure Storage Account Key to use for Authentication to Azure Blob Storage logging
@@ -341,6 +349,7 @@ router_settings:
 | AZURE_STORAGE_TENANT_ID | The Application Tenant ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_ID | The Application Client ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_SECRET | The Application Client Secret to use for Authentication to Azure Blob Storage logging
+| AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY | Cost per GB per day for Azure Vector Store service
 | BATCH_STATUS_POLL_INTERVAL_SECONDS | Interval in seconds for polling batch status. Default is 3600 (1 hour)
 | BATCH_STATUS_POLL_MAX_ATTEMPTS | Maximum number of attempts for polling batch status. Default is 24 (for 24 hours)
 | BEDROCK_MAX_POLICY_SIZE | Maximum size for Bedrock policy. Default is 75
@@ -371,6 +380,7 @@ router_settings:
 | DD_API_KEY | API key for Datadog integration
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
+| DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE | Resource name for Datadog tracing of streaming chunk yields. Default is "streaming.chunk.yield"
 | DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
 | DD_SERVICE | Service identifier for Datadog logs. Defaults to "litellm-server"
 | DD_VERSION | Version identifier for Datadog logs. Defaults to "unknown"
@@ -399,6 +409,7 @@ router_settings:
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
 | DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD | Default threshold for prompt injection similarity. Default is 0.7
 | DEFAULT_POLLING_INTERVAL | Default polling interval for schedulers in seconds. Default is 0.03
+| DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET | Default reasoning effort disable thinking budget. Default is 0
 | DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET | Default high reasoning effort thinking budget. Default is 4096
 | DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET | Default low reasoning effort thinking budget. Default is 1024
 | DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET | Default medium reasoning effort thinking budget. Default is 2048
@@ -406,11 +417,17 @@ router_settings:
 | DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND | Default price per second for Replicate GPU. Default is 0.001400
 | DEFAULT_REPLICATE_POLLING_DELAY_SECONDS | Default delay in seconds for Replicate polling. Default is 1
 | DEFAULT_REPLICATE_POLLING_RETRIES | Default number of retries for Replicate polling. Default is 5
+| DEFAULT_SQS_BATCH_SIZE | Default batch size for SQS logging. Default is 512
+| DEFAULT_SQS_FLUSH_INTERVAL_SECONDS | Default flush interval for SQS logging. Default is 10
+| DEFAULT_S3_BATCH_SIZE | Default batch size for S3 logging. Default is 512
+| DEFAULT_S3_FLUSH_INTERVAL_SECONDS | Default flush interval for S3 logging. Default is 10
 | DEFAULT_SLACK_ALERTING_THRESHOLD | Default threshold for Slack alerting. Default is 300
 | DEFAULT_SOFT_BUDGET | Default soft budget for LiteLLM proxy keys. Default is 50.0
 | DEFAULT_TRIM_RATIO | Default ratio of tokens to trim from prompt end. Default is 0.75
 | DIRECT_URL | Direct URL for service endpoint
 | DISABLE_ADMIN_UI | Toggle to disable the admin UI
+| DISABLE_AIOHTTP_TRANSPORT | Flag to disable aiohttp transport. When this is set to True, litellm will use httpx instead of aiohttp. **Default is False**
+| DISABLE_AIOHTTP_TRUST_ENV | Flag to disable aiohttp trust environment. When this is set to True, litellm will not trust the environment for aiohttp eg. `HTTP_PROXY` and `HTTPS_PROXY` environment variables will not be used when this is set to True. **Default is False**
 | DISABLE_SCHEMA_UPDATE | Toggle to disable schema updates
 | DOCS_DESCRIPTION | Description text for documentation pages
 | DOCS_FILTERED | Flag indicating filtered documentation
@@ -418,6 +435,9 @@ router_settings:
 | DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
 | EMAIL_LOGO_URL | URL for the logo used in emails
 | EMAIL_SUPPORT_CONTACT | Support contact email address
+| EMAIL_SIGNATURE | Custom HTML footer/signature for all emails. Can include HTML tags for formatting and links.
+| EMAIL_SUBJECT_INVITATION | Custom subject template for invitation emails. 
+| EMAIL_SUBJECT_KEY_CREATED | Custom subject template for key creation emails. 
 | EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
 | FIREWORKS_AI_4_B | Size parameter for Fireworks AI 4B model. Default is 4
 | FIREWORKS_AI_16_B | Size parameter for Fireworks AI 16B model. Default is 16
@@ -429,6 +449,7 @@ router_settings:
 | GALILEO_PASSWORD | Password for Galileo authentication
 | GALILEO_PROJECT_ID | Project ID for Galileo usage
 | GALILEO_USERNAME | Username for Galileo authentication
+| GOOGLE_SECRET_MANAGER_PROJECT_ID | Project ID for Google Secret Manager
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
 | GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
@@ -439,6 +460,7 @@ router_settings:
 | GENERIC_CLIENT_ID | Client ID for generic OAuth providers
 | GENERIC_CLIENT_SECRET | Client secret for generic OAuth providers
 | GENERIC_CLIENT_STATE | State parameter for generic client authentication
+| GENERIC_SSO_HEADERS | Comma-separated list of additional headers to add to the request - e.g. Authorization=Bearer `<token>`, Content-Type=application/json, etc.
 | GENERIC_INCLUDE_CLIENT_ID | Include client ID in requests for OAuth
 | GENERIC_SCOPE | Scope settings for generic OAuth providers
 | GENERIC_TOKEN_ENDPOINT | Token endpoint for generic OAuth providers
@@ -454,12 +476,16 @@ router_settings:
 | GALILEO_PASSWORD | Password for Galileo authentication
 | GALILEO_PROJECT_ID | Project ID for Galileo usage
 | GALILEO_USERNAME | Username for Galileo authentication
+| GITHUB_COPILOT_TOKEN_DIR | Directory to store GitHub Copilot token for `github_copilot` llm provider
+| GITHUB_COPILOT_API_KEY_FILE | File to store GitHub Copilot API key for `github_copilot` llm provider
+| GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
 | GREENSCALE_API_KEY | API key for Greenscale service
 | GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
 | GOOGLE_APPLICATION_CREDENTIALS | Path to Google Cloud credentials JSON file
 | GOOGLE_CLIENT_ID | Client ID for Google OAuth
 | GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
 | GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
+| GUARDRAILS_AI_API_BASE | Base URL for Guardrails AI API
 | HEALTH_CHECK_TIMEOUT_SECONDS | Timeout in seconds for health checks. Default is 60
 | HF_API_BASE | Base URL for Hugging Face API
 | HCP_VAULT_ADDR | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
@@ -487,6 +513,7 @@ router_settings:
 | LAGO_API_KEY | API key for accessing Lago services
 | LANGFUSE_DEBUG | Toggle debug mode for Langfuse
 | LANGFUSE_FLUSH_INTERVAL | Interval for flushing Langfuse logs
+| LANGFUSE_TRACING_ENVIRONMENT | Environment for Langfuse tracing
 | LANGFUSE_HOST | Host URL for Langfuse service
 | LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
 | LANGFUSE_RELEASE | Release version of Langfuse integration
@@ -498,6 +525,10 @@ router_settings:
 | LANGSMITH_PROJECT | Project name for Langsmith integration
 | LANGSMITH_SAMPLING_RATE | Sampling rate for Langsmith logging
 | LANGTRACE_API_KEY | API key for Langtrace service
+| LASSO_API_BASE | Base URL for Lasso API
+| LASSO_API_KEY | API key for Lasso service
+| LASSO_USER_ID | User ID for Lasso service
+| LASSO_CONVERSATION_ID | Conversation ID for Lasso service
 | LENGTH_OF_LITELLM_GENERATED_KEY | Length of keys generated by LiteLLM. Default is 16
 | LITERAL_API_KEY | API key for Literal integration
 | LITERAL_API_URL | API URL for Literal service
@@ -514,7 +545,9 @@ router_settings:
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
+| LITELLM_MASTER_KEY | Master key for proxy authentication
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
+| LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
 | LITELLM_TOKEN | Access token for LiteLLM integration
@@ -544,7 +577,8 @@ router_settings:
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
 | MICROSOFT_TENANT | Tenant ID for Microsoft Azure
 | MICROSOFT_SERVICE_PRINCIPAL_ID | Service Principal ID for Microsoft Enterprise Application. (This is an advanced feature if you want litellm to auto-assign members to Litellm Teams based on their Microsoft Entra ID Groups)
-| NO_DOCS | Flag to disable documentation generation
+| NO_DOCS | Flag to disable Swagger UI documentation
+| NO_REDOC | Flag to disable Redoc documentation
 | NO_PROXY | List of addresses to bypass proxy
 | NON_LLM_CONNECTION_TIMEOUT | Timeout in seconds for non-LLM service connections. Default is 15
 | OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval
@@ -565,10 +599,13 @@ router_settings:
 | OTEL_EXPORTER | Exporter type for OpenTelemetry
 | OTEL_EXPORTER_OTLP_PROTOCOL | Exporter type for OpenTelemetry
 | OTEL_HEADERS | Headers for OpenTelemetry requests
+| OTEL_MODEL_ID | Model ID for OpenTelemetry tracing
 | OTEL_EXPORTER_OTLP_HEADERS | Headers for OpenTelemetry requests
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
+| PANW_PRISMA_AIRS_API_KEY | API key for PANW Prisma AIRS service
+| PANW_PRISMA_AIRS_API_BASE | Base URL for PANW Prisma AIRS service
 | PHOENIX_API_KEY | API key for Arize Phoenix
 | PHOENIX_COLLECTOR_ENDPOINT | API endpoint for Arize Phoenix
 | PHOENIX_COLLECTOR_HTTP_ENDPOINT | API http endpoint for Arize Phoenix
@@ -586,7 +623,6 @@ router_settings:
 | PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
 | PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597
 | PROXY_LOGOUT_URL | URL for logging out of the proxy service
-| LITELLM_MASTER_KEY | Master key for proxy authentication
 | QDRANT_API_BASE | Base URL for Qdrant API
 | QDRANT_API_KEY | API key for Qdrant service
 | QDRANT_SCALAR_QUANTILE | Scalar quantile for Qdrant operations. Default is 0.99
@@ -617,9 +653,11 @@ router_settings:
 | SMTP_TLS | Flag to enable or disable TLS for SMTP connections
 | SMTP_USERNAME | Username for SMTP authentication (do not set if SMTP does not require auth)
 | SPEND_LOGS_URL | URL for retrieving spend logs
+| SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
 | SSL_CERTIFICATE | Path to the SSL certificate file
 | SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification
+| SSL_CERT_FILE | Path to the SSL certificate file for custom CA bundle
 | SUPABASE_KEY | API key for Supabase service
 | SUPABASE_URL | Base URL for Supabase instance
 | STORE_MODEL_IN_DB | If true, enables storing model + credential information in the DB. 
@@ -642,8 +680,8 @@ router_settings:
 | UPSTREAM_LANGFUSE_PUBLIC_KEY | Public key for upstream Langfuse authentication
 | UPSTREAM_LANGFUSE_RELEASE | Release version identifier for upstream Langfuse
 | UPSTREAM_LANGFUSE_SECRET_KEY | Secret key for upstream Langfuse authentication
-| USE_AIOHTTP_TRANSPORT | Flag to enable aiohttp transport. This is a feature flag for the new aiohttp transport. **Default is False**
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
 | WEBHOOK_URL | URL for receiving webhooks from external services
-| SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run 
+| SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run |
+| SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000 |

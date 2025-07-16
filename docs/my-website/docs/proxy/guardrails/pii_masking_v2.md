@@ -13,6 +13,7 @@ import TabItem from '@theme/TabItem';
 | Supported Entity Types | All Presidio Entity Types |
 | Supported Actions | `MASK`, `BLOCK` |
 | Supported Modes | `pre_call`, `during_call`, `post_call`, `logging_only` |
+| Language Support | Configurable via `presidio_language` parameter (supports multiple languages including English, Spanish, German, etc.) |
 
 ## Deployment options
 
@@ -48,6 +49,18 @@ Now select the entity types you want to mask. See the [supported actions here](#
   style={{width: '50%', display: 'block', margin: '0'}}
 />
 
+#### 1.3 Set Default Language (Optional)
+
+You can also configure a default language for PII analysis using the `presidio_language` field in the UI. This sets the default language that will be used for all requests unless overridden by a per-request language setting. 
+
+**Supported language codes include:**
+- `en` - English (default)
+- `es` - Spanish  
+- `de` - German
+
+
+If not specified, English (`en`) will be used as the default language.
+
 </TabItem>
 
 
@@ -67,6 +80,7 @@ guardrails:
     litellm_params:
       guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
       mode: "pre_call"
+      presidio_language: "en"  # optional: set default language for PII analysis
 ```
 
 Set the following env vars 
@@ -379,6 +393,86 @@ print(response)
 </TabItem>
 
 </Tabs>
+
+###  Set default `language` in config.yaml
+
+You can configure a default language for PII analysis in your YAML configuration using the `presidio_language` parameter. This language will be used for all requests unless overridden by a per-request language setting.
+
+```yaml title="Default Language Configuration" showLineNumbers
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "presidio-german"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_language: "de"  # Default to German for PII analysis
+      pii_entities_config:
+        CREDIT_CARD: "MASK"
+        EMAIL_ADDRESS: "MASK"
+        PERSON: "MASK"
+        
+  - guardrail_name: "presidio-spanish"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_language: "es"  # Default to Spanish for PII analysis
+      pii_entities_config:
+        CREDIT_CARD: "MASK"
+        PHONE_NUMBER: "MASK"
+```
+
+#### Supported Language Codes
+
+Presidio supports multiple languages for PII detection. Common language codes include:
+
+- `en` - English (default)
+- `es` - Spanish
+- `de` - German  
+
+For a complete list of supported languages, refer to the [Presidio documentation](https://microsoft.github.io/presidio/analyzer/languages/).
+
+#### Language Precedence
+
+The language setting follows this precedence order:
+
+1. **Per-request language** (via `guardrail_config.language`) - highest priority
+2. **YAML config language** (via `presidio_language`) - medium priority  
+3. **Default language** (`en`) - lowest priority
+
+**Example with mixed languages:**
+
+```yaml title="Mixed Language Configuration" showLineNumbers
+guardrails:
+  - guardrail_name: "presidio-multilingual"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_language: "de"  # Default to German
+      pii_entities_config:
+        CREDIT_CARD: "MASK"
+        PERSON: "MASK"
+```
+
+```shell title="Override with per-request language" showLineNumbers
+curl http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "Mi tarjeta de crédito es 4111-1111-1111-1111"}
+    ],
+    "guardrails": ["presidio-multilingual"],
+    "guardrail_config": {"language": "es"}
+  }'
+```
+
+In this example, the request will use Spanish (`es`) for PII detection even though the guardrail is configured with German (`de`) as the default language.
 
 ### Output parsing 
 

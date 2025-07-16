@@ -606,11 +606,6 @@ response = await client.chat.completions.create(
 
 ## **Function/Tool Calling**
 
-:::info 
-
-LiteLLM now uses Anthropic's 'tool' param 🎉 (v1.34.29+)
-:::
-
 ```python
 from litellm import completion
 
@@ -669,6 +664,185 @@ response = completion(
 )
 ```
 
+### Disable Tool Calling
+
+You can disable tool calling by setting the `tool_choice` to `"none"`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=messages,
+    tools=tools,
+    tool_choice="none",
+)
+
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: anthropic-claude-model
+    litellm_params:
+        model: anthropic/claude-3-opus-20240229
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+Replace `anything` with your LiteLLM Proxy Virtual Key, if [setup](../proxy/virtual_keys).
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer anything" \
+  -d '{
+    "model": "anthropic-claude-model",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp", "require_approval": "never"}],
+    "tool_choice": "none"
+  }'
+```
+</TabItem>
+</Tabs>
+
+
+
+### MCP Tool Calling 
+
+Here's how to use MCP tool calling with Anthropic:
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+LiteLLM supports MCP tool calling with Anthropic in the OpenAI Responses API format.
+
+<Tabs>
+<TabItem value="openai_format" label="OpenAI Format">
+
+
+```python
+import os 
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+tools=[
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    },
+]
+
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    tools=tools
+)
+```
+
+</TabItem>
+<TabItem value="anthropic_format" label="Anthropic Format">
+
+```python
+import os 
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+tools = [
+    {
+        "type": "url",
+        "url": "https://mcp.deepwiki.com/mcp",
+        "name": "deepwiki-mcp",
+    }
+]
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    tools=tools
+)
+
+print(response)
+```
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4-sonnet
+    litellm_params:
+        model: anthropic/claude-sonnet-4-20250514
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-4-sonnet",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp", "require_approval": "never"}]
+  }'
+```
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-4-sonnet",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [
+        {
+            "type": "url",
+            "url": "https://mcp.deepwiki.com/mcp",
+            "name": "deepwiki-mcp",
+        }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
 
 ### Parallel Function Calling 
 

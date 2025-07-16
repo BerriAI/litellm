@@ -54,7 +54,9 @@ class TestNebiusConfig:
         This test mocks the actual HTTP request to test the integration properly.
         """
 
-        litellm.use_aiohttp_transport = False  # since this uses respx, we need to set use_aiohttp_transport to False
+        litellm.disable_aiohttp_transport = (
+            True  # since this uses respx, we need to set use_aiohttp_transport to False
+        )
 
         # Set up environment variables for the test
         api_key = "fake-nebius-key"

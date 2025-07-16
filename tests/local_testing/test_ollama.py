@@ -291,4 +291,43 @@ async def test_async_ollama_ssl_verify(stream):
     assert litellm_created_session.connector._ssl is False
     assert litellm_created_session.connector._ssl == aiohttp_session.connector._ssl
 
+@pytest.mark.skip(reason="local only test")
+def test_ollama_streaming_with_chunk_builder():
+    from litellm.main import stream_chunk_builder
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    completion_kwargs = {
+        "model": "ollama_chat/qwen2.5:0.5b",  # Important: use `ollama_chat` instead of `ollama`
+        "messages": [
+            {"role": "user", "content": "What's the weather like in New York?"},
+            {
+                "role": "assistant",
+                "content": (
+                    "'<think>\nOkay, the user is asking about the weather in New York. "
+                    "Let me check the tools available. "
+                    "There's a function called get_weather that takes a location parameter. "
+                    "So I need to call that function with 'New York' as the location. "
+                    "I should make sure the arguments are correctly formatted in JSON. "
+                    "Let me structure the tool call accordingly.\n</think>\n\n"
+                ),
+            },
+        ],
+        "tools": tools,
+        "stream": True,
+    }
+    response = litellm.completion(**completion_kwargs)
+    response = stream_chunk_builder(list(response))
 
+    assert response.choices[0].message.tool_calls, "No tool call detected"
