@@ -255,8 +255,8 @@ class TestReasoningContentFinalResponse:
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
 
 
-def test_streaming_chunk_id_encoding():
-    """Test that streaming chunk IDs are encoded with provider context"""
+def test_streaming_chunk_id_raw():
+    """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""
     chunk = ModelResponseStream(
         id="chunk-123",
         created=1234567890,
@@ -281,6 +281,6 @@ def test_streaming_chunk_id_encoding():
 
     result = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
 
-    # Streaming IDs should now be encoded like non-streaming responses
-    assert result.item_id.startswith("resp_")
-    assert result.item_id != "chunk-123"  # Should be encoded, not raw
+    # Streaming chunk IDs should be raw (like OpenAI's msg_xxx format)
+    assert result.item_id == "chunk-123"  # Should be raw, not encoded
+    assert not result.item_id.startswith("resp_")  # Should NOT have resp_ prefix
