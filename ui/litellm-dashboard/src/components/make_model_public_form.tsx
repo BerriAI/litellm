@@ -150,7 +150,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
         </div>
 
         <Text className="text-sm text-gray-600">
-          Select the models you want to make publicly accessible. These models will be visible to anyone with access to the public model hub.
+          Select the models you want to be visible on the public model hub. Users will still require a valid API key to use these models.
         </Text>
 
         {/* Filters */}
