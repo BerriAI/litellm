@@ -1567,7 +1567,7 @@ def test_prometheus_label_factory_with_no_custom_tags(monkeypatch):
     """
     Test that prometheus_label_factory works when no custom tags are configured
     """
-    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags, prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     # Set empty custom tags configuration
