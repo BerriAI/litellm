@@ -230,10 +230,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         from litellm.responses.utils import ResponseAPILoggingUtils
         from litellm.types.llms.openai import ResponsesAPIResponse
-        from litellm.types.responses.main import (
-            GenericResponseOutputItem,
-            OutputFunctionToolCall,
-        )
         from litellm.types.utils import Choices, Message
 
         if not isinstance(raw_response, ResponsesAPIResponse):
