@@ -719,3 +719,66 @@ async def test_get_tools_from_mcp_servers():
         pytest.fail(f"Unexpected error in tests: {str(e)}")
 
 
+@pytest.mark.asyncio
+async def test_list_tools_only_returns_allowed_servers(monkeypatch):
+    """
+    Test that list_tools only returns tools from servers allowed for the user.
+    """
+    test_manager = MCPServerManager()
+
+    # Setup two servers in the config
+    test_manager.load_servers_from_config({
+        "server_a": {
+            "url": "https://server-a.com/mcp",
+            "transport": MCPTransport.http,
+            "description": "Server A"
+        },
+        "server_b": {
+            "url": "https://server-b.com/mcp",
+            "transport": MCPTransport.http,
+            "description": "Server B"
+        }
+    })
+
+    # Patch get_allowed_mcp_servers to only allow server_a
+    async def mock_get_allowed_mcp_servers(self, user_api_key_auth=None):
+        return [list(test_manager.get_registry().keys())[0]]  # Only first server (server_a)
+    monkeypatch.setattr(MCPServerManager, "get_allowed_mcp_servers", mock_get_allowed_mcp_servers)
+
+    # Mock tools for each server
+    mock_tools_a = [
+        MCPTool(
+            name="send_email",
+            description="Send an email via Server A",
+            inputSchema={"type": "object"}
+        )
+    ]
+    mock_tools_b = [
+        MCPTool(
+            name="create_event",
+            description="Create an event via Server B",
+            inputSchema={"type": "object"}
+        )
+    ]
+
+    # Patch MCPClient to return different tools for each server
+    def mock_client_constructor(*args, **kwargs):
+        mock_client = AsyncMock()
+        # Return tools based on server URL
+        if kwargs.get("server_url") == "https://server-a.com/mcp":
+            mock_client.list_tools = AsyncMock(return_value=mock_tools_a)
+        else:
+            mock_client.list_tools = AsyncMock(return_value=mock_tools_b)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        return mock_client
+
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        # Call list_tools
+        tools = await test_manager.list_tools(user_api_key_auth=MagicMock())
+        # Should only return tools from server_a
+        assert len(tools) == 1
+        assert tools[0].name.startswith("server_a-")
+        assert "Server A" in tools[0].description
+
+
