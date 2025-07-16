@@ -1849,7 +1849,7 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                from litellm.integrations.prometheus import (
+                                from enterprise.litellm_enterprise.integrations.prometheus import (
                                     PrometheusLogger,
                                 )
 
@@ -3505,7 +3505,7 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
         if litellm.prometheus_initialize_budget_metrics is True:
-            from litellm.integrations.prometheus import PrometheusLogger
+            from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
 
             PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 

@@ -1,4 +1,4 @@
-# used for /metrics endpoint on LiteLLM Proxy
+ # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
 import sys
