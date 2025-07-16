@@ -278,3 +278,55 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 ```
 - Deploy LiteLLM Proxy Server
 
+## Troubleshooting
+
+### "The 'redirect_uri' parameter must be a Login redirect URI in the client app settings" Error
+
+This error commonly occurs with Okta and other SSO providers when the redirect URI configuration is incorrect.
+
+#### Issue
+```
+Your request resulted in an error. The 'redirect_uri' parameter must be a Login redirect URI in the client app settings
+```
+
+#### Solution
+
+**1. Ensure you have set PROXY_BASE_URL in your .env and it includes protocol**
+
+Make sure your `PROXY_BASE_URL` includes the complete URL with protocol (`http://` or `https://`):
+
+```bash
+# ✅ Correct - includes https://
+PROXY_BASE_URL=https://litellm.platform.com
+
+# ✅ Correct - includes http://
+PROXY_BASE_URL=http://litellm.platform.com
+
+# ❌ Incorrect - missing protocol
+PROXY_BASE_URL=litellm.platform.com
+```
+
+**2. For Okta specifically, ensure GENERIC_CLIENT_STATE is set**
+
+Okta requires the `GENERIC_CLIENT_STATE` parameter:
+
+```bash
+GENERIC_CLIENT_STATE="random-string" # Required for Okta
+```
+
+### Common Configuration Issues
+
+#### Missing Protocol in Base URL
+```bash
+# This will cause redirect_uri errors
+PROXY_BASE_URL=mydomain.com
+
+# Fix: Add the protocol
+PROXY_BASE_URL=https://mydomain.com
+```
+
+### Fallback Login
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
+<Image img={require('../../img/fallback_login.png')} />

@@ -128,7 +128,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -158,7 +158,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -188,7 +188,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp",
+      "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
@@ -199,6 +199,24 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 
 </TabItem>
 </Tabs>
+
+#### How it works when server_url="litellm_proxy"
+
+When server_url="litellm_proxy", LiteLLM bridges non-MCP providers to your MCP tools.
+
+- Tool Discovery: LiteLLM fetches MCP tools and converts them to OpenAI-compatible definitions
+- LLM Call: Tools are sent to the LLM with your input; LLM selects which tools to call
+- Tool Execution: LiteLLM automatically parses arguments, routes calls to MCP servers, executes tools, and retrieves results
+- Response Integration: Tool results are sent back to LLM for final response generation
+- Output: Complete response combining LLM reasoning with tool execution results
+
+This enables MCP tool usage with any LiteLLM-supported provider, regardless of native MCP support.
+
+#### Auto-execution for require_approval: "never"
+
+Setting require_approval: "never" triggers automatic tool execution, returning the final response in a single API call without additional user interaction.
+
+
 
 ### Specific MCP Servers
 
@@ -225,7 +243,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -254,7 +272,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -277,7 +295,7 @@ This configuration restricts the request to only use tools from the specified MC
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp",
+      "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
         "x-mcp-servers": "Zapier_Gmail,Server2"
@@ -317,7 +335,7 @@ Include the access group name in the `x-mcp-servers` header:
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp",
+      "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
         "x-mcp-servers": "dev_group"
@@ -367,7 +385,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -398,7 +416,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -429,7 +447,7 @@ Use tools directly from Cursor IDE with LiteLLM MCP and include your MCP authent
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp",
+      "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
         "x-mcp-auth": "$MCP_AUTH_TOKEN"
@@ -449,7 +467,7 @@ Connect to LiteLLM MCP using HTTP transport with MCP authentication:
 
 **Server URL:**
 ```text showLineNumbers
-<your-litellm-proxy-base-url>/mcp
+litellm_proxy
 ```
 
 **Headers:**
@@ -476,7 +494,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 # Create the transport with your LiteLLM MCP server URL and auth headers
-server_url = "<your-litellm-proxy-base-url>/mcp"
+server_url = "litellm_proxy"
 transport = StreamableHttpTransport(
     server_url,
     headers={
@@ -557,7 +575,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp",
+            "server_url": "litellm_proxy",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",

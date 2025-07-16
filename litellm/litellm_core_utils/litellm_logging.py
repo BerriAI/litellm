@@ -600,7 +600,9 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model, non_default_params=non_default_params
+                model=model, 
+                tools=tools,
+                non_default_params=non_default_params
             )
         )
 
@@ -625,7 +627,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return model, messages, non_default_params
 
     def get_custom_logger_for_prompt_management(
-        self, model: str, non_default_params: Dict
+        self, model: str, non_default_params: Dict, tools: Optional[List[Dict]] = None
     ) -> Optional[CustomLogger]:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
@@ -673,7 +675,8 @@ class Logging(LiteLLMLoggingBaseClass):
         #########################################################
         if litellm.vector_store_registry is not None:
             if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(
-                non_default_params=non_default_params
+                non_default_params=non_default_params,
+                tools=tools
             ):
                 vector_store_custom_logger = (
                     litellm.ProviderConfigManager.get_provider_vector_store_config(
