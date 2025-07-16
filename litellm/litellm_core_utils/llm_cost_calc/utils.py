@@ -263,9 +263,20 @@ def generic_cost_per_token(
     prompt_cost = float(text_tokens) * prompt_base_cost
 
     ### CACHE READ COST
-    prompt_cost += calculate_cost_component(
-        model_info, "cache_read_input_token_cost", cache_hit_tokens
-    )
+    # Check if we should use the above 200k rate
+    if (
+        usage.prompt_tokens > 200000
+        and model_info.get("cache_read_input_token_cost_above_200k_tokens") is not None
+    ):
+        prompt_cost += calculate_cost_component(
+            model_info,
+            "cache_read_input_token_cost_above_200k_tokens",
+            cache_hit_tokens,
+        )
+    else:
+        prompt_cost += calculate_cost_component(
+            model_info, "cache_read_input_token_cost", cache_hit_tokens
+        )
 
     ### AUDIO COST
     prompt_cost += calculate_cost_component(
