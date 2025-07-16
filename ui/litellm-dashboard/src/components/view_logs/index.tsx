@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall } from "../networking";
+import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall, allEndUsersCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
@@ -442,13 +442,27 @@ export default function SpendLogsTable({
       searchFn: async (searchText: string) => {
         if (!accessToken) return [];
         const keyAliases = await fetchAllKeyAliases(accessToken);
-        const filtered = keyAliases.filter(alias => 
+        const filtered = keyAliases.filter(alias =>
           alias.toLowerCase().includes(searchText.toLowerCase())
         );
         return filtered.map(alias => ({
           label: alias,
           value: alias
         }));
+      }
+    },
+    {
+      name: 'End User',
+      label: 'End User',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!accessToken) return [];
+        const data = await allEndUsersCall(accessToken);
+        const users = data?.end_users || [];
+        const filtered = users.filter((u: string) =>
+          u.toLowerCase().includes(searchText.toLowerCase())
+        );
+        return filtered.map((u: string) => ({ label: u, value: u }));
       }
     },
     {
