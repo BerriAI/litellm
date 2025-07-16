@@ -14,11 +14,6 @@ from prometheus_client import REGISTRY, CollectorRegistry
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.prometheus import (
-    PrometheusLogger,
-    UserAPIKeyLabelValues,
-    get_custom_labels_from_metadata,
-)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -30,7 +25,7 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timedelta, timezone
 try:
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues, get_custom_labels_from_metadata
 except Exception:
     PrometheusLogger = None
 from litellm.proxy._types import UserAPIKeyAuth
