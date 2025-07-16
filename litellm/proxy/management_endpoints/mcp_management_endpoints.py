@@ -140,7 +140,7 @@ if MCP_AVAILABLE:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
                 for server in mcp_servers:
-                    if server.mcp_access_groups:
+                    if hasattr(server, 'mcp_access_groups') and server.mcp_access_groups:
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
