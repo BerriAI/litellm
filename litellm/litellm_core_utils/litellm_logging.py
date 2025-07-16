@@ -42,7 +42,6 @@ from litellm.batches.batch_utils import _handle_completed_batch
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
-    CUSTOM_PROMPT_PROMPT_ID_CHECK,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     SENTRY_DENYLIST,
@@ -222,6 +221,7 @@ additional_details: Optional[Dict[str, str]] = {}
 local_cache: Optional[Dict[str, str]] = {}
 last_fetched_at = None
 last_fetched_at_keys = None
+CUSTOM_PROMPT_PROMPT_ID_CHECK = os.getenv("CUSTOM_PROMPT_PROMPT_ID_CHECK", "true").lower() == "true"
 
 
 ####
