@@ -61,6 +61,13 @@ class XAIChatConfig(OpenAIGPTConfig):
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
 
         return base_openai_params
+    
+    def _supports_stop_reason(self, model: str) -> bool:
+        if "grok-3-mini" in model:
+            return False
+        elif "grok-4" in model:
+            return False
+        return True
 
     def map_openai_params(
         self,
