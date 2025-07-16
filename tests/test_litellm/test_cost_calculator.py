@@ -330,12 +330,7 @@ def test_cost_calculator_with_cache_creation():
 def test_bedrock_cost_calculator_comparison_with_without_cache():
     """Test that Bedrock caching reduces costs compared to non-cached requests"""
     from litellm import completion_cost
-    from litellm.types.utils import (
-        Choices,
-        Message,
-        PromptTokensDetailsWrapper,
-        Usage,
-    )
+    from litellm.types.utils import Choices, Message, PromptTokensDetailsWrapper, Usage
 
     # Response WITHOUT caching
     response_no_cache = ModelResponse(
