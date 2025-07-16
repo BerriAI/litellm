@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
@@ -175,3 +176,76 @@ def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_
     mock_should_store.return_value = False
     result = _get_vector_store_request_for_spend_logs_payload(None)
     assert result is None
+
+
+def test_safe_dumps_handles_circular_references():
+    """Test that safe_dumps can handle circular references without raising exceptions"""
+    
+    # Create a circular reference
+    obj1 = {"name": "obj1"}
+    obj2 = {"name": "obj2", "ref": obj1}
+    obj1["ref"] = obj2  # This creates a circular reference
+    
+    # This should not raise an exception
+    result = safe_dumps(obj1)
+    
+    # Should be a valid JSON string
+    assert isinstance(result, str)
+    
+    # Should contain placeholder for circular reference
+    assert "CircularReference Detected" in result
+    
+    # Should be parseable as JSON
+    parsed = json.loads(result)
+    assert parsed["name"] == "obj1"
+    assert parsed["ref"]["name"] == "obj2"
+
+
+def test_safe_dumps_normal_objects():
+    """Test that safe_dumps works correctly with normal objects"""
+    
+    normal_obj = {
+        "string": "test",
+        "number": 42,
+        "boolean": True,
+        "null": None,
+        "list": [1, 2, 3],
+        "nested": {"key": "value"}
+    }
+    
+    result = safe_dumps(normal_obj)
+    
+    # Should be a valid JSON string that can be parsed
+    assert isinstance(result, str)
+    parsed = json.loads(result)
+    assert parsed == normal_obj
+
+
+def test_safe_dumps_complex_metadata_like_object():
+    """Test with a complex metadata-like object similar to what caused the issue"""
+    
+    # Simulate a complex metadata object
+    metadata = {
+        "user_api_key": "test-key",
+        "model": "gpt-4",
+        "usage": {"total_tokens": 100},
+        "mcp_tool_call_metadata": {
+            "name": "test_tool", 
+            "arguments": {"param": "value"}
+        }
+    }
+    
+    # Add a potential circular reference
+    usage_detail = {"parent_metadata": metadata}
+    metadata["usage"]["detail"] = usage_detail
+    
+    # This should not raise an exception
+    result = safe_dumps(metadata)
+    
+    # Should be a valid JSON string
+    assert isinstance(result, str)
+    
+    # Should be parseable as JSON
+    parsed = json.loads(result)
+    assert parsed["user_api_key"] == "test-key"
+    assert parsed["model"] == "gpt-4"
