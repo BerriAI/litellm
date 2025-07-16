@@ -132,6 +132,30 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vecto
     assert response is not None
 
 
+
+
+@pytest.mark.asyncio
+async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call_with_tools(setup_vector_store_registry):
+    """
+    Test that the Bedrock Knowledge Base Hook works when making a real llm api call
+    """
+    
+    # Init client
+    litellm._turn_on_debug()
+    litellm.callbacks = [BedrockVectorStore(aws_region_name="us-west-2")]
+    response = await litellm.acompletion(
+        model="anthropic/claude-3-5-haiku-latest",
+        messages=[{"role": "user", "content": "what is litellm?"}],
+        max_tokens=10,
+        tools=[
+            {
+                "type": "file_search",
+                "vector_store_ids": ["T37J8R4WTM"]
+            }
+        ],
+    )
+    assert response is not None
+
 @pytest.mark.asyncio
 async def test_openai_with_knowledge_base_mock_openai(setup_vector_store_registry):
     """

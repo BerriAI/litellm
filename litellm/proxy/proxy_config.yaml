@@ -5,14 +5,14 @@ model_list:
   - model_name: openai/*
     litellm_params:
       model: openai/*
-
-guardrails:
-  - guardrail_name: "bedrock-pre-guard"
+  - model_name: gemini/*
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
+      model: gemini/*
 
 litellm_settings:
   callbacks: ["datadog_llm_observability"]
+
+mcp_servers:
+  # HTTP Streamable Server
+  deepwiki_mcp:
+    url: "https://mcp.deepwiki.com/mcp"

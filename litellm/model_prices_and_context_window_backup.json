@@ -318,8 +318,8 @@
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.00001,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1e-05,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": true,
@@ -4227,15 +4227,6 @@
         "litellm_provider": "text-completion-openai",
         "mode": "completion"
     },
-    "claude-instant-1": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-06,
-        "output_cost_per_token": 5.51e-06,
-        "litellm_provider": "anthropic",
-        "mode": "chat"
-    },
     "mistral/mistral-tiny": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
@@ -5468,16 +5459,6 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
-    },
-    "claude-instant-1.2": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-07,
-        "output_cost_per_token": 5.51e-07,
-        "litellm_provider": "anthropic",
-        "mode": "chat",
         "supports_tool_choice": true
     },
     "claude-2": {
@@ -6831,7 +6812,9 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-pro-exp-02-05": {
         "max_tokens": 8192,
@@ -6872,7 +6855,9 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash-exp": {
         "max_tokens": 8192,
@@ -6918,7 +6903,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_tool_choice": true,
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.75e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash-001": {
         "max_tokens": 8192,
@@ -6954,7 +6941,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "deprecation_date": "2026-02-05",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.75e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash-thinking-exp": {
         "max_tokens": 8192,
@@ -7000,7 +6989,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 0.0,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash-thinking-exp-01-21": {
         "max_tokens": 65536,
@@ -7046,7 +7037,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 0.0,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-pro": {
         "max_tokens": 65535,
@@ -7087,7 +7080,9 @@
             "text"
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-pro-exp-03-25": {
         "max_tokens": 65535,
@@ -7129,7 +7124,9 @@
             "text"
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 0.0,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-pro": {
         "max_tokens": 65535,
@@ -7172,7 +7169,9 @@
             "text"
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-flash": {
         "max_tokens": 65535,
@@ -7217,7 +7216,9 @@
         "supports_url_context": true,
         "tpm": 8000000,
         "rpm": 100000,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-flash": {
         "max_tokens": 65535,
@@ -7260,7 +7261,9 @@
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
         "supports_url_context": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-flash-preview-tts": {
         "max_tokens": 65535,
@@ -7298,7 +7301,9 @@
             "audio"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.75e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-flash-preview-05-20": {
         "max_tokens": 65535,
@@ -7341,7 +7346,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_web_search": true,
         "supports_url_context": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-flash-preview-04-17": {
         "max_tokens": 65535,
@@ -7383,7 +7390,9 @@
         ],
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_web_search": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.75e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-flash-lite-preview-06-17": {
         "max_tokens": 65535,
@@ -7428,7 +7437,9 @@
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
         "supports_url_context": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-flash-preview-05-20": {
         "max_tokens": 65535,
@@ -7471,7 +7482,9 @@
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
         "supports_url_context": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-flash-preview-04-17": {
         "max_tokens": 65535,
@@ -7513,7 +7526,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.75e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-flash-lite-preview-06-17": {
         "max_tokens": 65535,
@@ -7556,7 +7571,9 @@
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
         "supports_url_context": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash": {
         "max_tokens": 8192,
@@ -7593,7 +7610,9 @@
         "source": "https://ai.google.dev/pricing#2_0flash",
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
-        "supports_url_context": true
+        "supports_url_context": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
@@ -7626,7 +7645,9 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 1.875e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash-lite-001": {
         "max_input_tokens": 1048576,
@@ -7660,7 +7681,9 @@
         "supports_tool_choice": true,
         "deprecation_date": "2026-02-25",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 1.875e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-pro-preview-06-05": {
         "max_tokens": 65535,
@@ -7703,7 +7726,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-pro-preview-05-06": {
         "max_tokens": 65535,
@@ -7749,7 +7774,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-pro-preview-03-25": {
         "max_tokens": 65535,
@@ -7792,7 +7819,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview",
         "supports_parallel_function_calling": true,
         "supports_web_search": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini-2.0-flash-preview-image-generation": {
         "max_tokens": 8192,
@@ -7828,7 +7857,9 @@
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini-2.5-pro-preview-tts": {
         "max_tokens": 65535,
@@ -7861,7 +7892,9 @@
         ],
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
         "supports_parallel_function_calling": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-pro-exp-02-05": {
         "max_tokens": 8192,
@@ -7900,7 +7933,9 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 0.0,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash-preview-image-generation": {
         "max_tokens": 8192,
@@ -7937,7 +7972,9 @@
         ],
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash": {
         "max_tokens": 8192,
@@ -7975,7 +8012,9 @@
         "supports_tool_choice": true,
         "source": "https://ai.google.dev/pricing#2_0flash",
         "supports_web_search": true,
-        "supports_url_context": true
+        "supports_url_context": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash-lite": {
         "max_input_tokens": 1048576,
@@ -8009,7 +8048,9 @@
             "text"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.0-flash-lite",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 1.875e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash-001": {
         "max_tokens": 8192,
@@ -8045,7 +8086,9 @@
             "image"
         ],
         "source": "https://ai.google.dev/pricing#2_0flash",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-pro-preview-tts": {
         "max_tokens": 65535,
@@ -8079,7 +8122,9 @@
             "audio"
         ],
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-pro-preview-06-05": {
         "max_tokens": 65535,
@@ -8118,7 +8163,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
         "supports_web_search": true,
         "supports_url_context": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-pro-preview-05-06": {
         "max_tokens": 65535,
@@ -8157,7 +8204,9 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
         "supports_web_search": true,
         "supports_url_context": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.5-pro-preview-03-25": {
         "max_tokens": 65535,
@@ -8195,7 +8244,9 @@
         ],
         "source": "https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro-preview",
         "supports_web_search": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 3.125e-07,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash-exp": {
         "max_tokens": 8192,
@@ -8242,7 +8293,9 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 0.0,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash-lite-preview-02-05": {
         "max_tokens": 8192,
@@ -8277,7 +8330,9 @@
             "text"
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash-lite",
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 1.875e-08,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash-thinking-exp": {
         "max_tokens": 8192,
@@ -8324,7 +8379,9 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 0.0,
+        "supports_prompt_caching": true
     },
     "gemini/gemini-2.0-flash-thinking-exp-01-21": {
         "max_tokens": 8192,
@@ -8371,7 +8428,9 @@
         ],
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#gemini-2.0-flash",
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_read_input_token_cost": 0.0,
+        "supports_prompt_caching": true
     },
     "gemini/gemma-3-27b-it": {
         "max_tokens": 8192,
@@ -10828,7 +10887,27 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "jamba-large-1.7": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "litellm_provider": "ai21",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "jamba-mini-1.6": {
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 4e-07,
+        "litellm_provider": "ai21",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "jamba-mini-1.7": {
         "max_tokens": 256000,
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
@@ -13309,6 +13388,8 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "input_cost_per_token": 2.7e-07,
+        "output_cost_per_token": 8.5e-07,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13316,6 +13397,8 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 5.9e-07,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13344,6 +13427,17 @@
         "supports_tool_choice": true
     },
     "together_ai/deepseek-ai/DeepSeek-V3": {
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 1.25e-06,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1": {
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 7e-06,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -15963,5 +16057,89 @@
         "supports_reasoning": true,
         "mode": "chat",
         "source": "https://bailian.console.alibabacloud.com/?spm=a2c63.p38356.0.0.4a615d7bjSUCb4&tab=doc#/doc/?type=model&url=https%3A%2F%2Fwww.alibabacloud.com%2Fhelp%2Fen%2Fdoc-detail%2F2840914.html"
+    },
+    "moonshot/moonshot-v1-8k": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-32k": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-128k": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-auto": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/kimi-k2-0711-preview": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.5e-06,
+        "cache_read_input_token_cost": 1.5e-07,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing/chat#generation-model-kimi-k2"
+    },
+    "moonshot/moonshot-v1-32k-0430": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-128k-0430": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "moonshot/moonshot-v1-8k-0430": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "litellm_provider": "moonshot",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "source": "https://platform.moonshot.ai/docs/pricing"
     }
 }

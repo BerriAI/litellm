@@ -5567,7 +5567,9 @@ class Router:
                         additional_headers[header] = value
         return response
 
-    def get_model_ids(self, model_name: Optional[str] = None) -> List[str]:
+    def get_model_ids(
+        self, model_name: Optional[str] = None, exclude_team_models: bool = False
+    ) -> List[str]:
         """
         if 'model_name' is none, returns all.
 
@@ -5577,6 +5579,8 @@ class Router:
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
                 id = model["model_info"]["id"]
+                if exclude_team_models and model["model_info"].get("team_id"):
+                    continue
                 if model_name is not None and model["model_name"] == model_name:
                     ids.append(id)
                 elif model_name is None:
@@ -6235,10 +6239,17 @@ class Router:
         )
 
         if len(healthy_deployments) == 0:
-            raise litellm.BadRequestError(
-                message="You passed in model={}. There is no 'model_name' with this string ".format(
+            if self.get_model_list(model_name=model) is None:
+                message = f"You passed in model={model}. There is no 'model_name' with this string".format(
                     model
-                ),
+                )
+            else:
+                message = f"You passed in model={model}. There are no healthy deployments for this model".format(
+                    model
+                )
+
+            raise litellm.BadRequestError(
+                message=message,
                 model=model,
                 llm_provider="",
             )
