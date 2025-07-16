@@ -1849,11 +1849,15 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                from enterprise.litellm_enterprise.integrations.prometheus import (
-                                    PrometheusLogger,
-                                )
+                                try:
+                                    from litellm_enterprise.integrations.prometheus import (
+                                        PrometheusLogger,
+                                    )
+                                except Exception:
+                                    PrometheusLogger = None
 
-                                PrometheusLogger._mount_metrics_endpoint(premium_user)
+                                if PrometheusLogger is not None:
+                                    PrometheusLogger._mount_metrics_endpoint(premium_user)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -3505,9 +3509,12 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
         if litellm.prometheus_initialize_budget_metrics is True:
-            from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
-
-            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+            try:
+                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+            except Exception:
+                PrometheusLogger = None
+            if PrometheusLogger is not None:
+                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:

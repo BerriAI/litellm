@@ -242,8 +242,12 @@ async def test_prometheus_metric_tracking():
     Test that the Prometheus metric for provider budget is tracked correctly
     """
     cleanup_redis()
-    from unittest.mock import MagicMock
-    from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
+    try:
+        from litellm_enterprise.integrations.prometheus import PrometheusLogger
+    except Exception:
+        PrometheusLogger = None
+    if PrometheusLogger is None:
+        pytest.skip("PrometheusLogger is not installed")
 
     # Create a mock PrometheusLogger
     mock_prometheus = MagicMock(spec=PrometheusLogger)

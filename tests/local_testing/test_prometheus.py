@@ -7,7 +7,10 @@ import pytest_asyncio
 from prometheus_client import REGISTRY
 
 import litellm
-from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
+try:
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
+except Exception:
+    PrometheusLogger = None
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
 
 

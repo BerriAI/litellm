@@ -29,7 +29,10 @@ from litellm.types.utils import (
 import pytest
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timedelta, timezone
-from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
+try:
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
+except Exception:
+    PrometheusLogger = None
 from litellm.proxy._types import UserAPIKeyAuth
 
 verbose_logger.setLevel(logging.DEBUG)
