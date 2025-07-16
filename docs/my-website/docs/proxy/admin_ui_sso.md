@@ -325,3 +325,8 @@ PROXY_BASE_URL=mydomain.com
 PROXY_BASE_URL=https://mydomain.com
 ```
 
+### Fallback Login
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
+<Image img={require('../../img/fallback_login.png')} />

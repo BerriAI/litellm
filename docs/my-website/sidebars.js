@@ -73,6 +73,7 @@ const sidebars = {
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
         "tutorials/litellm_gemini_cli",
+        "tutorials/github_copilot_integration",
         "tutorials/claude_code_gateway_integration",
         "tutorials/claude_responses_api",
       ]
