@@ -184,6 +184,8 @@ def _fetch_all_keys_with_pagination(source_client: KeysManagementClient, source_
 
     while True:
         source_response = source_client.list(return_full_object=True, page=page, size=page_size)
+        # source_client.list() returns Dict[str, Any] when return_request is False (default)
+        assert isinstance(source_response, dict), "Expected dict response from list API"
         page_keys = source_response.get("keys", [])
 
         if not page_keys:
