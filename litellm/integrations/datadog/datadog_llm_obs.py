@@ -11,7 +11,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
 
@@ -27,7 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.datadog_llm_obs import *
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import CallTypes, StandardLoggingPayload
 
 
 class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
@@ -149,7 +149,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
 
         meta = Meta(
-            kind="llm",
+            kind=self._get_datadog_span_kind(standard_logging_payload.get("call_type")),
             input=input_meta,
             output=output_meta,
             metadata=self._get_dd_llm_obs_payload_metadata(standard_logging_payload),
@@ -207,6 +207,105 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         if isinstance(response_obj, litellm.ModelResponse):
             return [response_obj["choices"][0]["message"].json()]
         return []
+
+    def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
+        """
+        Map liteLLM call_type to appropriate DataDog LLM Observability span kind.
+        
+        Available DataDog span kinds: "llm", "tool", "task", "embedding", "retrieval"
+        """
+        if call_type is None:
+            return "llm"
+        
+        # Embedding operations
+        if call_type in [CallTypes.embedding.value, CallTypes.aembedding.value]:
+            return "embedding"
+        
+        # LLM completion operations  
+        if call_type in [
+            CallTypes.completion.value, 
+            CallTypes.acompletion.value,
+            CallTypes.text_completion.value, 
+            CallTypes.atext_completion.value,
+            CallTypes.generate_content.value, 
+            CallTypes.agenerate_content.value,
+            CallTypes.generate_content_stream.value, 
+            CallTypes.agenerate_content_stream.value,
+            CallTypes.anthropic_messages.value
+        ]:
+            return "llm"
+        
+        # Tool operations
+        if call_type in [CallTypes.call_mcp_tool.value]:
+            return "tool"
+            
+        # Retrieval operations
+        if call_type in [
+            CallTypes.get_assistants.value, 
+            CallTypes.aget_assistants.value,
+            CallTypes.get_thread.value, 
+            CallTypes.aget_thread.value,
+            CallTypes.get_messages.value, 
+            CallTypes.aget_messages.value,
+            CallTypes.afile_retrieve.value, 
+            CallTypes.file_retrieve.value,
+            CallTypes.afile_list.value, 
+            CallTypes.file_list.value,
+            CallTypes.afile_content.value, 
+            CallTypes.file_content.value,
+            CallTypes.retrieve_batch.value, 
+            CallTypes.aretrieve_batch.value,
+            CallTypes.retrieve_fine_tuning_job.value, 
+            CallTypes.aretrieve_fine_tuning_job.value,
+            CallTypes.responses.value, 
+            CallTypes.aresponses.value,
+            CallTypes.alist_input_items.value
+        ]:
+            return "retrieval"
+            
+        # Task operations (batch, fine-tuning, file operations, etc.)
+        if call_type in [
+            CallTypes.create_batch.value, 
+            CallTypes.acreate_batch.value,
+            CallTypes.create_fine_tuning_job.value, 
+            CallTypes.acreate_fine_tuning_job.value,
+            CallTypes.cancel_fine_tuning_job.value, 
+            CallTypes.acancel_fine_tuning_job.value,
+            CallTypes.list_fine_tuning_jobs.value, 
+            CallTypes.alist_fine_tuning_jobs.value,
+            CallTypes.create_assistants.value, 
+            CallTypes.acreate_assistants.value,
+            CallTypes.delete_assistant.value, 
+            CallTypes.adelete_assistant.value,
+            CallTypes.create_thread.value, 
+            CallTypes.acreate_thread.value,
+            CallTypes.add_message.value, 
+            CallTypes.a_add_message.value,
+            CallTypes.run_thread.value, 
+            CallTypes.arun_thread.value,
+            CallTypes.run_thread_stream.value, 
+            CallTypes.arun_thread_stream.value,
+            CallTypes.file_delete.value, 
+            CallTypes.afile_delete.value,
+            CallTypes.create_file.value, 
+            CallTypes.acreate_file.value,
+            CallTypes.image_generation.value, 
+            CallTypes.aimage_generation.value,
+            CallTypes.image_edit.value, 
+            CallTypes.aimage_edit.value,
+            CallTypes.moderation.value, 
+            CallTypes.amoderation.value,
+            CallTypes.transcription.value, 
+            CallTypes.atranscription.value,
+            CallTypes.speech.value, 
+            CallTypes.aspeech.value,
+            CallTypes.rerank.value, 
+            CallTypes.arerank.value
+        ]:
+            return "task"
+            
+        # Default fallback for unknown or passthrough operations
+        return "llm"
 
     def _ensure_string_content(
         self, messages: Optional[Union[str, List[Any], Dict[Any, Any]]]
