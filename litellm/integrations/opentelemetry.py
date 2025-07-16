@@ -29,7 +29,6 @@ from opentelemetry.sdk._events import EventLoggerProvider as OTEventLoggerProvid
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 from opentelemetry.trace import SpanKind
@@ -193,9 +192,6 @@ class OpenTelemetry(CustomLogger):
         meter_provider: Optional[MeterProvider] = None,
         **kwargs,
     ):
-        from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.trace import SpanKind
 
         if config is None:
             config = OpenTelemetryConfig.from_env()
@@ -248,7 +244,6 @@ class OpenTelemetry(CustomLogger):
 
     def _init_tracing(self, tracer_provider):
         from opentelemetry import trace
-        from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
 
         # use provided tracer or create a new one
@@ -271,9 +266,6 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import metrics
         from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
             OTLPMetricExporter,
-        )
-        from opentelemetry.metrics._internal.instrument import (
-            Histogram as InternalHistogram,
         )
         from opentelemetry.sdk.metrics import Histogram, MeterProvider
         from opentelemetry.sdk.metrics.export import (
@@ -586,8 +578,6 @@ class OpenTelemetry(CustomLogger):
     #########################################################
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
-        from opentelemetry import trace
-        from opentelemetry.trace import Status, StatusCode
 
         verbose_logger.debug(
             "OpenTelemetry Logger: Logging kwargs: %s, OTEL config settings=%s",
