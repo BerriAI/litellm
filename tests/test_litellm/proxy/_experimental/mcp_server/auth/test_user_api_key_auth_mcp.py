@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-from fastapi import Request
+from fastapi import Request, FastAPI
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -617,3 +617,50 @@ class TestMCPAccessGroupsE2E:
             # Verify the header parsing worked correctly
             assert auth_result.api_key == "test-api-key"
             assert mcp_servers == ["zapier-server", "dev-group"]  # Should contain both server name and access group
+
+
+@pytest.mark.asyncio
+def test_mcp_path_based_server_segregation(monkeypatch):
+    # Import the MCP server FastAPI app and context getter
+    from litellm.proxy._experimental.mcp_server.server import app, get_auth_context
+
+    captured_mcp_servers = {}
+
+    # Patch the session manager to send a dummy response and capture context
+    async def dummy_handle_request(scope, receive, send):
+        from litellm.proxy._experimental.mcp_server.server import get_auth_context
+        _, _, mcp_servers = get_auth_context()
+        captured_mcp_servers[id(scope)] = mcp_servers
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b'{"ok": true}',
+        })
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.session_manager",
+        MagicMock(handle_request=dummy_handle_request)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.initialize_session_managers",
+        AsyncMock()
+    )
+
+    # Patch user_api_key_auth to always return a dummy user
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+        AsyncMock(return_value=UserAPIKeyAuth(api_key="test", user_id="user"))
+    )
+
+    # Use TestClient to make a request to /mcp/zapier,group1/tools
+    client = TestClient(app)
+    response = client.get("/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    # The context should have mcp_servers set to ["zapier", "group1"]
+    assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]
