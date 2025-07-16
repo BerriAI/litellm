@@ -27,4 +27,5 @@ class MCPServer(BaseModel):
     command: Optional[str] = None
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
+    access_groups: Optional[List[str]] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
