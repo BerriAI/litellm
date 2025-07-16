@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from typing import Literal, Optional
 
 import click
@@ -175,17 +176,11 @@ def import_keys(
     # Parse created_since filter if provided
     created_since_dt = None
     if created_since:
-        try:
-            from datetime import datetime
-
-            # Support formats: YYYY-MM-DD_HH:MM or YYYY-MM-DD
-            if "_" in created_since:
-                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d_%H:%M")
-            else:
-                created_since_dt = datetime.strptime(created_since, "%Y-%m-%d")
-        except ValueError:
-            click.echo(f"Error: Invalid date format '{created_since}'. Use YYYY-MM-DD_HH:MM or YYYY-MM-DD", err=True)
-            raise click.Abort()
+        # Support formats: YYYY-MM-DD_HH:MM or YYYY-MM-DD
+        if "_" in created_since:
+            created_since_dt = datetime.strptime(created_since, "%Y-%m-%d_%H:%M")
+        else:
+            created_since_dt = datetime.strptime(created_since, "%Y-%m-%d")
 
     # Create clients for both source and destination
     source_client = KeysManagementClient(source_base_url, source_api_key)
@@ -220,25 +215,19 @@ def import_keys(
             for key in source_keys:
                 key_created_at = key.get("created_at")
                 if key_created_at:
-                    try:
-                        from datetime import datetime
+                    # Parse the key's created_at timestamp
+                    if isinstance(key_created_at, str):
+                        if "T" in key_created_at:
+                            key_dt = datetime.fromisoformat(key_created_at.replace("Z", "+00:00"))
+                        else:
+                            key_dt = datetime.fromisoformat(key_created_at)
 
-                        # Parse the key's created_at timestamp
-                        if isinstance(key_created_at, str):
-                            if "T" in key_created_at:
-                                key_dt = datetime.fromisoformat(key_created_at.replace("Z", "+00:00"))
-                            else:
-                                key_dt = datetime.fromisoformat(key_created_at)
+                        # Convert to naive datetime for comparison (assuming UTC)
+                        if key_dt.tzinfo:
+                            key_dt = key_dt.replace(tzinfo=None)
 
-                            # Convert to naive datetime for comparison (assuming UTC)
-                            if key_dt.tzinfo:
-                                key_dt = key_dt.replace(tzinfo=None)
-
-                            if key_dt >= created_since_dt:
-                                filtered_keys.append(key)
-                    except:
-                        # If parsing fails, include the key (conservative approach)
-                        filtered_keys.append(key)
+                        if key_dt >= created_since_dt:
+                            filtered_keys.append(key)
 
             click.echo(f"Filtered {len(source_keys)} keys to {len(filtered_keys)} keys created since {created_since}")
             source_keys = filtered_keys
@@ -260,18 +249,12 @@ def import_keys(
                 created_at = key.get("created_at", "")
                 # Format the timestamp if it exists
                 if created_at:
-                    try:
-                        from datetime import datetime
-
-                        # Try to parse and format the timestamp for better readability
-                        if isinstance(created_at, str):
-                            # Handle common timestamp formats
-                            if "T" in created_at:
-                                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                                created_at = dt.strftime("%Y-%m-%d %H:%M")
-                    except:
-                        # If parsing fails, just use the original value
-                        pass
+                    # Try to parse and format the timestamp for better readability
+                    if isinstance(created_at, str):
+                        # Handle common timestamp formats
+                        if "T" in created_at:
+                            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                            created_at = dt.strftime("%Y-%m-%d %H:%M")
 
                 table.add_row(str(key.get("key_alias", "")), str(key.get("user_id", "")), str(created_at))
             rich.print(table)
@@ -305,6 +288,7 @@ def import_keys(
 
                 # Generate the key in destination instance
                 response = dest_client.generate(**import_data)
+                response.raise_for_status()
                 imported_count += 1
 
                 key_alias = key.get("key_alias", "N/A")
@@ -316,7 +300,7 @@ def import_keys(
                 click.echo(f"✗ Failed to import key {key_alias}: {str(e)}", err=True)
 
         # Summary
-        click.echo(f"\nImport completed:")
+        click.echo("\nImport completed:")
         click.echo(f"  Successfully imported: {imported_count}")
         click.echo(f"  Failed to import: {failed_count}")
         click.echo(f"  Total keys processed: {len(source_keys)}")
