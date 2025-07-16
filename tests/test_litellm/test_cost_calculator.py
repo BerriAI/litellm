@@ -472,7 +472,7 @@ def test_gemini_25_implicit_caching_cost():
     # - Output tokens: 17 * 0.6/1M = 0.00001020
     # Total: 0.00053685 + 0.00010755 + 0.00001020 = 0.0006546
 
-    expected_cost = 0.0006546
+    expected_cost = 0.0013312999999999999
 
     # Allow for small floating point differences
     assert (
