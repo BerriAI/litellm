@@ -132,6 +132,7 @@ class MCPServerManager:
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
                 auth_type=server_config.get("auth_type", None),
                 mcp_info=mcp_info,
+                access_groups=server_config.get("access_groups", None),
             )
             self.config_mcp_servers[server_id] = new_server
         verbose_logger.debug(

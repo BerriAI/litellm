@@ -719,3 +719,39 @@ async def test_get_tools_from_mcp_servers():
         pytest.fail(f"Unexpected error in tests: {str(e)}")
 
 
+def test_mcp_server_manager_access_groups_from_config():
+    """
+    Test that access_groups are loaded from config and can be resolved.
+    """
+    test_manager = MCPServerManager()
+    test_manager.load_servers_from_config({
+        "config_server": {
+            "url": "https://config-mcp-server.com/mcp",
+            "transport": MCPTransport.http,
+            "access_groups": ["group-a", "group-b"]
+        },
+        "other_server": {
+            "url": "https://other-mcp-server.com/mcp",
+            "transport": MCPTransport.http,
+            "access_groups": ["group-b", "group-c"]
+        }
+    })
+    # Check that access_groups are loaded
+    config_server = next((s for s in test_manager.config_mcp_servers.values() if s.name == "config_server"), None)
+    assert config_server is not None
+    assert set(config_server.access_groups) == {"group-a", "group-b"}
+    # Check that the lookup logic finds the correct server ids
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    # Patch global_mcp_server_manager for this test
+    import litellm.proxy._experimental.mcp_server.mcp_server_manager as mcp_server_manager_mod
+    mcp_server_manager_mod.global_mcp_server_manager = test_manager
+    # Should find config_server for group-a, both for group-b, other_server for group-c
+    import asyncio
+    server_ids_a = asyncio.run(MCPRequestHandler._get_mcp_servers_from_access_groups(["group-a"]))
+    server_ids_b = asyncio.run(MCPRequestHandler._get_mcp_servers_from_access_groups(["group-b"]))
+    server_ids_c = asyncio.run(MCPRequestHandler._get_mcp_servers_from_access_groups(["group-c"]))
+    assert any(config_server.server_id == sid for sid in server_ids_a)
+    assert set(server_ids_b) == set([s.server_id for s in test_manager.config_mcp_servers.values() if "group-b" in s.access_groups])
+    assert any(s.name == "other_server" and s.server_id in server_ids_c for s in test_manager.config_mcp_servers.values())
+
+
