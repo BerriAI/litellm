@@ -4227,15 +4227,6 @@
         "litellm_provider": "text-completion-openai",
         "mode": "completion"
     },
-    "claude-instant-1": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-06,
-        "output_cost_per_token": 5.51e-06,
-        "litellm_provider": "anthropic",
-        "mode": "chat"
-    },
     "mistral/mistral-tiny": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
@@ -5468,16 +5459,6 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
-    },
-    "claude-instant-1.2": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-07,
-        "output_cost_per_token": 5.51e-07,
-        "litellm_provider": "anthropic",
-        "mode": "chat",
         "supports_tool_choice": true
     },
     "claude-2": {
