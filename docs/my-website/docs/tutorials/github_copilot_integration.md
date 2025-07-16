@@ -178,44 +178,10 @@ general_settings:
 
 With this configuration, GitHub Copilot will automatically route requests through LiteLLM to your configured provider(s) with load balancing and fallbacks.
 
-### Production Deployment
-
-For production, consider using Docker:
-
-```bash
-docker run \
-  -v $(pwd)/config.yaml:/app/config.yaml \
-  -e OPENAI_API_KEY=$OPENAI_API_KEY \
-  -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  -p 4000:4000 \
-  ghcr.io/berriai/litellm:main-latest \
-  --config /app/config.yaml --port 4000
-```
-
-### Direct API Usage
-
-You can also call models directly through the LiteLLM proxy:
-
-```bash
-curl -X POST "http://localhost:4000/v1/chat/completions" \
-  -H "Authorization: Bearer sk-1234567890" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [
-      {
-        "role": "user", 
-        "content": "Write a Python function to calculate fibonacci numbers"
-      }
-    ]
-  }'
-```
-
 ## Troubleshooting
 
 If you encounter issues:
 
 1. **GitHub Copilot not using proxy**: Verify the proxy URL is correctly configured in VS Code settings and that LiteLLM proxy is running
 2. **Authentication errors**: Ensure your master key is valid and API keys for providers are correctly set
-3. **Connection errors**: Check that your LiteLLM Proxy is accessible at `http://localhost:4000`
-4. **Rate limiting**: Review your rate limits in the configuration and consider implementing user authentication 
+3. **Connection errors**: Check that your LiteLLM Proxy is accessible at `http://localhost:4000` 
