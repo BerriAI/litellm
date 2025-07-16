@@ -333,7 +333,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## OpenAI Chat Completion to Responses API Bridge
 
-Call Responses API from OpenAI's `/chat/completions` endpoint. 
+Call any Responses API model from OpenAI's `/chat/completions` endpoint. 
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
