@@ -2314,6 +2314,8 @@ class LlmProviders(str, Enum):
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
 
+class VectorStoreProviders(str, Enum):
+    PG_VECTOR = "pg_vector"
 
 class LiteLLMLoggingBaseClass:
     """
