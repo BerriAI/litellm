@@ -4227,15 +4227,6 @@
         "litellm_provider": "text-completion-openai",
         "mode": "completion"
     },
-    "claude-instant-1": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-06,
-        "output_cost_per_token": 5.51e-06,
-        "litellm_provider": "anthropic",
-        "mode": "chat"
-    },
     "mistral/mistral-tiny": {
         "max_tokens": 8191,
         "max_input_tokens": 32000,
@@ -5468,16 +5459,6 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
-    },
-    "claude-instant-1.2": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-07,
-        "output_cost_per_token": 5.51e-07,
-        "litellm_provider": "anthropic",
-        "mode": "chat",
         "supports_tool_choice": true
     },
     "claude-2": {
@@ -13407,6 +13388,8 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "input_cost_per_token": 2.7e-07,
+        "output_cost_per_token": 8.5e-07,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13414,6 +13397,8 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 5.9e-07,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13442,6 +13427,17 @@
         "supports_tool_choice": true
     },
     "together_ai/deepseek-ai/DeepSeek-V3": {
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 1.25e-06,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1": {
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 7e-06,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
