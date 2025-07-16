@@ -3511,10 +3511,9 @@ class ProxyStartupEvent:
         if litellm.prometheus_initialize_budget_metrics is True:
             try:
                 from litellm_enterprise.integrations.prometheus import PrometheusLogger
+                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
-            if PrometheusLogger is not None:
-                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
