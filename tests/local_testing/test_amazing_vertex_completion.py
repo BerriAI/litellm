@@ -3773,7 +3773,7 @@ def test_vertex_schema_test():
     }
 
     response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash-preview",
+        model="vertex_ai/gemini-2.5-flash",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=[tool],
         tool_choice="required",
