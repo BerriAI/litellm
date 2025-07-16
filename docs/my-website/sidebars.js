@@ -213,7 +213,7 @@ const sidebars = {
           type: "category",
           label: "Secret Managers",
           items: [
-            "secret",
+            "set_keys",
             "oidc"
           ]
         },
