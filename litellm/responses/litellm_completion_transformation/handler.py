@@ -86,6 +86,8 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=input,
                 responses_api_request=responses_api_request,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
 
     async def async_response_api_handler(
@@ -141,4 +143,6 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
+                custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
