@@ -501,7 +501,7 @@ async def test_async_vertexai_streaming_response():
     )
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
-    test_models = ["gemini-2.5-flash-preview"]
+    test_models = ["gemini-2.5-flash"]
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model
