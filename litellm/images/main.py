@@ -197,6 +197,7 @@ def image_generation(  # noqa: PLR0915
             size=size,
             style=style,
             user=user,
+            input_fidelity=input_fidelity,
             custom_llm_provider=custom_llm_provider,
             provider_config=image_generation_config,
             **non_default_params,
