@@ -68,7 +68,7 @@ def test_reasoning_tokens_no_price_set():
 
 
 def test_reasoning_tokens_gemini():
-    model = "gemini-2.5-flash-preview-04-17"
+    model = "gemini-2.5-flash"
     custom_llm_provider = "gemini"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
