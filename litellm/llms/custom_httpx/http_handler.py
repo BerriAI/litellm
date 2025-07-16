@@ -634,7 +634,7 @@ class AsyncHTTPHandler:
         # use for HTTP_PROXY, HTTPS_PROXY, etc.
         ########################################################
         trust_env: bool = litellm.aiohttp_trust_env
-        if str_to_bool(os.getenv("AIOHTTP_TRUST_ENV", "False")) is True:
+        if str_to_bool(os.getenv("AIOHTTP_TRUST_ENV", "True")) is True:
             trust_env = True
 
         verbose_logger.debug("Creating AiohttpTransport...")
