@@ -384,15 +384,25 @@ class LiteLLMCompletionResponsesConfig:
                 }
 
             """
-            function: dict = _tool_use_definition.get("function") or {}
+            # Handle both old format (direct tool call) and new format (dict with tool_call and index)
+            if isinstance(_tool_use_definition, dict) and "tool_call" in _tool_use_definition:
+                # New format: dict with tool_call and index
+                tool_call = _tool_use_definition["tool_call"]
+                original_index = _tool_use_definition["index"]
+            else:
+                # Old format: direct tool call object (backward compatibility)
+                tool_call = _tool_use_definition
+                original_index = 0
+            
+            function: dict = tool_call.get("function") or {}
             tool_call_chunk = ChatCompletionToolCallChunk(
-                id=_tool_use_definition.get("id") or "",
-                type=_tool_use_definition.get("type") or "function",
+                id=tool_call.get("id") or "",
+                type=tool_call.get("type") or "function",
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
                     arguments=function.get("arguments") or "",
                 ),
-                index=0,
+                index=original_index,
             )
             chat_completion_response_message = ChatCompletionResponseMessage(
                 tool_calls=[tool_call_chunk],
@@ -550,10 +560,15 @@ class LiteLLMCompletionResponsesConfig:
             if isinstance(choice, Choices):
                 if choice.message.tool_calls:
                     all_chat_completion_tools.extend(choice.message.tool_calls)
-                    for tool_call in choice.message.tool_calls:
+                    for index, tool_call in enumerate(choice.message.tool_calls):
+                        # Store the tool call with its index information
+                        tool_call_with_index = {
+                            "tool_call": tool_call,
+                            "index": index,
+                        }
                         TOOL_CALLS_CACHE.set_cache(
                             key=tool_call.id,
-                            value=tool_call,
+                            value=tool_call_with_index,
                         )
 
         responses_tools: List[OutputFunctionToolCall] = []
