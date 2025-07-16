@@ -1532,7 +1532,7 @@ def test_prometheus_label_factory_with_custom_tags(monkeypatch):
     """
     Test that prometheus_label_factory correctly handles custom tags
     """
-    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags, prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     # Set custom tags configuration
