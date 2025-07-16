@@ -7842,23 +7842,17 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                 },
             )
 
-        if config_info.router_settings is not None:
-            non_none_router_settings = {
-                k: v
-                for k, v in config_info.router_settings.model_dump().items()
-                if v is not None
-            }
-            updated_router_settings = json.dumps(non_none_router_settings)
-            await prisma_client.db.litellm_config.upsert(
-                where={"param_name": "router_settings"},
-                data={
-                    "create": {
-                        "param_name": "router_settings",
-                        "param_value": updated_router_settings,
+        updated_settings = config_info.json(exclude_none=True)
+        updated_settings = prisma_client.jsonify_object(updated_settings)
+        for k, v in updated_settings.items():
+            if k == "router_settings":
+                await prisma_client.db.litellm_config.upsert(
+                    where={"param_name": k},
+                    data={
+                        "create": {"param_name": k, "param_value": v},
+                        "update": {"param_value": v},
                     },
-                    "update": {"param_value": updated_router_settings},
-                },
-            )
+                )
 
         ### OLD LOGIC [TODO] MOVE TO DB ###
 
