@@ -2150,7 +2150,7 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
         from litellm.integrations.custom_logger import CustomLogger
-        from litellm.integrations.prometheus import PrometheusLogger
+        from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
 
         prometheus_loggers: List[CustomLogger] = (
             litellm.logging_callback_manager.get_custom_loggers_for_type(

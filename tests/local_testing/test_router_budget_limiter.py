@@ -243,7 +243,7 @@ async def test_prometheus_metric_tracking():
     """
     cleanup_redis()
     from unittest.mock import MagicMock
-    from litellm.integrations.prometheus import PrometheusLogger
+    from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
 
     # Create a mock PrometheusLogger
     mock_prometheus = MagicMock(spec=PrometheusLogger)
