@@ -5362,6 +5362,18 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "groq/moonshotai-kimi-k2-instruct": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "groq/playai-tts": {
         "max_tokens": 10000,
         "max_input_tokens": 10000,
