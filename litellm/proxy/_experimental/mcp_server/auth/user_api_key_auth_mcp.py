@@ -278,29 +278,35 @@ class MCPRequestHandler:
         access_groups: List[str]
     ) -> List[str]:
         """
-        Resolve MCP access groups to server IDs by querying the MCP server table
+        Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers
         """
         from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-        if not access_groups or prisma_client is None:
-            return []
+        server_ids = set()
 
-        try:
-            # Find all MCP servers that have any of the specified access groups
-            mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
-                where={
-                    "mcp_access_groups": {
-                        "hasSome": access_groups
+        # Check config-loaded servers
+        for server_id, server in global_mcp_server_manager.config_mcp_servers.items():
+            if server.access_groups:
+                if any(group in server.access_groups for group in access_groups):
+                    server_ids.add(server_id)
+
+        # Check DB servers if DB is available
+        if access_groups and prisma_client is not None:
+            try:
+                mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+                    where={
+                        "mcp_access_groups": {
+                            "hasSome": access_groups
+                        }
                     }
-                }
-            )
-            
-            # Extract server IDs
-            server_ids = [server.server_id for server in mcp_servers]
-            return server_ids
-        except Exception as e:
-            verbose_logger.debug(f"Error getting MCP servers from access groups: {e}")
-            return []
+                )
+                for server in mcp_servers:
+                    server_ids.add(server.server_id)
+            except Exception as e:
+                verbose_logger.debug(f"Error getting MCP servers from access groups: {e}")
+
+        return list(server_ids)
 
     @staticmethod
     async def get_mcp_access_groups(
