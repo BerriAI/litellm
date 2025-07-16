@@ -55,7 +55,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         Encode chunk ID using the same format as non-streaming responses.
         """
         model_info = self.litellm_metadata.get("model_info", {}) or {}
-        model_id = model_info.get("id")
+        model_id: Optional[str] = model_info.get("id")
         return ResponsesAPIRequestUtils._build_responses_api_response_id(
             custom_llm_provider=self.custom_llm_provider,
             model_id=model_id,
