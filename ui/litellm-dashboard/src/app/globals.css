@@ -7,6 +7,32 @@
   --background-start-rgb: 255, 255, 255;
   --background-end-rgb: 255, 255, 255;
   --neutral-border: #dcddeb;
+  
+  /* Theme Colors - Default values, will be overridden by ThemeContext */
+  --brand-primary: #6366f1;
+  --brand-muted: #8688ef;
+  --brand-subtle: #8e91eb;
+  --brand-faint: #e0e7ff;
+  --brand-emphasis: #5558eb;
+  
+  /* Tremor-compatible variables (RGB format) */
+  --tremor-brand-default: 99, 102, 241;
+  --tremor-brand-muted: 134, 136, 239;
+  --tremor-brand-subtle: 142, 145, 235;
+  --tremor-brand-faint: 224, 231, 255;
+  --tremor-brand-emphasis: 85, 88, 235;
+  
+  /* Generated color palette */
+  --brand-50: #eef2ff;
+  --brand-100: #e0e7ff;
+  --brand-200: #c7d2fe;
+  --brand-300: #a5b4fc;
+  --brand-400: #818cf8;
+  --brand-500: #6366f1;
+  --brand-600: #5558eb;
+  --brand-700: #4c48e5;
+  --brand-800: #423ad9;
+  --brand-900: #3730a3;
 }
 
 /* @media (prefers-color-scheme: dark) {
@@ -31,6 +57,25 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+  
+  /* Brand color utilities for real-time theming */
+  .bg-brand-primary { background-color: var(--brand-primary); }
+  .bg-brand-muted { background-color: var(--brand-muted); }
+  .bg-brand-subtle { background-color: var(--brand-subtle); }
+  .bg-brand-faint { background-color: var(--brand-faint); }
+  .bg-brand-emphasis { background-color: var(--brand-emphasis); }
+  
+  .text-brand-primary { color: var(--brand-primary); }
+  .text-brand-muted { color: var(--brand-muted); }
+  .text-brand-subtle { color: var(--brand-subtle); }
+  .text-brand-faint { color: var(--brand-faint); }
+  .text-brand-emphasis { color: var(--brand-emphasis); }
+  
+  .border-brand-primary { border-color: var(--brand-primary); }
+  .border-brand-muted { border-color: var(--brand-muted); }
+  .border-brand-subtle { border-color: var(--brand-subtle); }
+  .border-brand-faint { border-color: var(--brand-faint); }
+  .border-brand-emphasis { border-color: var(--brand-emphasis); }
 }
 
 .table-wrapper {

@@ -16,11 +16,11 @@ module.exports = {
         // light mode
         tremor: {
           brand: {
-            faint: userColors.brand.faint,
-            muted: userColors.brand.muted,
-            subtle: userColors.brand.subtle,
-            DEFAULT: userColors.brand.DEFAULT,
-            emphasis: colors.indigo[700],
+            faint: userColors.brand.faint || 'var(--brand-faint)',
+            muted: userColors.brand.muted || 'var(--brand-muted)',
+            subtle: userColors.brand.subtle || 'var(--brand-subtle)',
+            DEFAULT: userColors.brand.DEFAULT || 'var(--brand-primary)',
+            emphasis: userColors.brand.emphasis || 'var(--brand-emphasis)',
             inverted: colors.white,
           },
           background: {

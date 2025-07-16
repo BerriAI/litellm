@@ -6,6 +6,7 @@ import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
@@ -230,8 +231,9 @@ export default function CreateKeyPage() {
   }
 
   return (
-    <Suspense fallback={<LoadingScreen />}>
-      <QueryClientProvider client={queryClient}>
+    <ThemeProvider>
+      <Suspense fallback={<LoadingScreen />}>
+        <QueryClientProvider client={queryClient}>
         {invitation_id ? (
           <UserDashboard
             userID={userID}
@@ -449,5 +451,6 @@ export default function CreateKeyPage() {
         )}
       </QueryClientProvider>
     </Suspense>
+    </ThemeProvider>
   );
 }
