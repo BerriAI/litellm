@@ -3773,7 +3773,7 @@ def test_vertex_schema_test():
     }
 
     response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash-preview-05-20",
+        model="vertex_ai/gemini-2.5-flash-preview",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=[tool],
         tool_choice="required",
@@ -3888,7 +3888,7 @@ def test_vertex_ai_gemini_2_5_pro_streaming():
     load_vertex_ai_credentials()
     # litellm._turn_on_debug()
     response = completion(
-        model="vertex_ai/gemini-2.5-pro-preview-06-05",
+        model="vertex_ai/gemini-2.5-pro",
         messages=[{"role": "user", "content": "Hi!"}],
         vertex_location="global",
         stream=True,
