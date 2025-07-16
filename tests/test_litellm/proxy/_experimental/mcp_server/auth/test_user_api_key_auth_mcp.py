@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-from fastapi import Request
+from fastapi import Request, FastAPI
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -617,3 +617,33 @@ class TestMCPAccessGroupsE2E:
             # Verify the header parsing worked correctly
             assert auth_result.api_key == "test-api-key"
             assert mcp_servers == ["zapier-server", "dev-group"]  # Should contain both server name and access group
+
+
+@pytest.mark.asyncio
+def test_mcp_path_based_server_segregation(monkeypatch):
+    # Import the MCP server FastAPI app and context getter
+    from litellm.proxy._experimental.mcp_server.server import app, get_auth_context
+
+    # Patch the session manager to avoid actual async work
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.session_manager",
+        MagicMock(handle_request=AsyncMock())
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.initialize_session_managers",
+        AsyncMock()
+    )
+
+    # Patch user_api_key_auth to always return a dummy user
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+        AsyncMock(return_value=UserAPIKeyAuth(api_key="test", user_id="user"))
+    )
+
+    # Use TestClient to make a request to /mcp/zapier,group1/tools
+    client = TestClient(app)
+    response = client.get("/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"})
+
+    # The context should have mcp_servers set to ["zapier", "group1"]
+    _, _, mcp_servers = get_auth_context()
+    assert mcp_servers == ["zapier", "group1"]
