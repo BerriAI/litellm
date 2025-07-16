@@ -624,10 +624,26 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     # Import the MCP server FastAPI app and context getter
     from litellm.proxy._experimental.mcp_server.server import app, get_auth_context
 
-    # Patch the session manager to avoid actual async work
+    captured_mcp_servers = {}
+
+    # Patch the session manager to send a dummy response and capture context
+    async def dummy_handle_request(scope, receive, send):
+        from litellm.proxy._experimental.mcp_server.server import get_auth_context
+        _, _, mcp_servers = get_auth_context()
+        captured_mcp_servers[id(scope)] = mcp_servers
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b'{"ok": true}',
+        })
+
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server.session_manager",
-        MagicMock(handle_request=AsyncMock())
+        MagicMock(handle_request=dummy_handle_request)
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server.initialize_session_managers",
@@ -643,7 +659,8 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     # Use TestClient to make a request to /mcp/zapier,group1/tools
     client = TestClient(app)
     response = client.get("/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
 
     # The context should have mcp_servers set to ["zapier", "group1"]
-    _, _, mcp_servers = get_auth_context()
-    assert mcp_servers == ["zapier", "group1"]
+    assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]
