@@ -1278,7 +1278,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
                 "type": "url",
                 "url": "https://mcp.zapier.com/api/mcp/mcp",
                 "name": "zapier-mcp",
-                "authorization_token": os.getenv('ZAPIER_CI_CD_MCP_TOKEN')
+                "authorization_token": os.getenv("ZAPIER_CI_CD_MCP_TOKEN"),
             }
         ]
     elif spec == "openai":
@@ -1302,10 +1302,9 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 
     try:
         response = litellm.completion(**params)
+        assert response is not None
     except litellm.InternalServerError as e:
-        print(e)
-
-    assert response is not None
+        pytest.skip(f"Skipping test due to internal server error: {e}")
 
 
 @pytest.mark.parametrize(
@@ -1313,6 +1312,7 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 )
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
+
     litellm._turn_on_debug()
     tools = [
         {
@@ -1322,7 +1322,7 @@ def test_anthropic_mcp_server_responses_api(model: str):
             "require_approval": "never",
             "headers": {
                 "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
-            }
+            },
         },
     ]
 
