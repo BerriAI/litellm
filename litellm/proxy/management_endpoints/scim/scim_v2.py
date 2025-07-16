@@ -245,6 +245,21 @@ async def set_scim_content_type(response: Response):
     response.headers["Content-Type"] = "application/scim+json"
 
 
+@scim_router.get(
+    "/ServiceProviderConfig",
+    response_model=SCIMServiceProviderConfig,
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_service_provider_config(request: Request):
+    """Return SCIM Service Provider Configuration."""
+    meta = {
+        "resourceType": "ServiceProviderConfig",
+        "location": str(request.url),
+    }
+    return SCIMServiceProviderConfig(meta=meta)
+
+
 # User Endpoints
 @scim_router.get(
     "/Users",
