@@ -41,7 +41,6 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         from litellm.utils import supports_url_context
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
 
         litellm._turn_on_debug()
 
@@ -70,7 +69,7 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
 
 def test_gemini_context_caching_with_ttl():
     """Test Gemini context caching with TTL support"""
-    
+
     # Test case 1: Basic TTL functionality
     messages_with_ttl = [
         {
@@ -94,20 +93,20 @@ def test_gemini_context_caching_with_ttl():
             ],
         }
     ]
-    
+
     # Test the transformation function directly
     result = transform_openai_messages_to_gemini_context_caching(
         model="gemini-1.5-pro",
         messages=messages_with_ttl,
         cache_key="test-ttl-cache-key"
     )
-    
+
     # Verify TTL is properly included in the result
     assert "ttl" in result
     assert result["ttl"] == "3600s"  # Should use the first valid TTL found
     assert result["model"] == "models/gemini-1.5-pro"
     assert result["displayName"] == "test-ttl-cache-key"
-    
+
     # Test case 2: Invalid TTL should be ignored
     messages_invalid_ttl = [
         {
@@ -121,18 +120,18 @@ def test_gemini_context_caching_with_ttl():
             ],
         }
     ]
-    
+
     result_invalid = transform_openai_messages_to_gemini_context_caching(
         model="gemini-1.5-pro",
         messages=messages_invalid_ttl,
         cache_key="test-invalid-ttl"
     )
-    
+
     # Verify invalid TTL is not included
     assert "ttl" not in result_invalid
     assert result_invalid["model"] == "models/gemini-1.5-pro"
     assert result_invalid["displayName"] == "test-invalid-ttl"
-    
+
     # Test case 3: Messages without TTL should work normally
     messages_no_ttl = [
         {
@@ -146,18 +145,18 @@ def test_gemini_context_caching_with_ttl():
             ],
         }
     ]
-    
+
     result_no_ttl = transform_openai_messages_to_gemini_context_caching(
         model="gemini-1.5-pro",
         messages=messages_no_ttl,
         cache_key="test-no-ttl"
     )
-    
+
     # Verify no TTL field is present when not specified
     assert "ttl" not in result_no_ttl
     assert result_no_ttl["model"] == "models/gemini-1.5-pro"
     assert result_no_ttl["displayName"] == "test-no-ttl"
-    
+
     # Test case 4: Mixed messages with some having TTL
     messages_mixed = [
         {
@@ -195,19 +194,19 @@ def test_gemini_context_caching_with_ttl():
             ],
         }
     ]
-    
+
     # Test separation of cached messages
     cached_messages, non_cached_messages = separate_cached_messages(messages_mixed)
     assert len(cached_messages) > 0
     assert len(non_cached_messages) > 0
-    
+
     # Test transformation with mixed messages
     result_mixed = transform_openai_messages_to_gemini_context_caching(
         model="gemini-1.5-pro",
         messages=messages_mixed,
         cache_key="test-mixed-ttl"
     )
-    
+
     # Should pick up the first valid TTL
     assert "ttl" in result_mixed
     assert result_mixed["ttl"] == "1800s"

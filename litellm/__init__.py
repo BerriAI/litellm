@@ -374,7 +374,15 @@ output_parse_pii: bool = False
 #############################################
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 
-model_cost = get_model_cost_map(url=model_cost_map_url)
+
+_model_cost: dict | None = None
+
+def model_cost() -> dict:
+    global _model_cost
+    if _model_cost is None:
+        _model_cost = get_model_cost_map(url=model_cost_map_url)
+    return _model_cost
+
 custom_prompt_dict: Dict[str, dict] = {}
 check_provider_endpoint = False
 
@@ -534,7 +542,7 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def add_known_models():
-    for key, value in model_cost.items():
+    for key, value in model_cost().items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(
             key
         ):

@@ -264,7 +264,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 or float("inf")
             )
             item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(
+            item_litellm_model_cost_map = litellm.model_cost().get(
                 item_litellm_model_name, {}
             )
 

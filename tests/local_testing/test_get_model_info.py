@@ -62,7 +62,6 @@ def test_get_model_info_shows_correct_supports_vision():
 
 def test_get_model_info_shows_assistant_prefill():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     info = litellm.get_model_info("deepseek/deepseek-chat")
     print("info", info)
     assert info.get("supports_assistant_prefill") is True
@@ -70,7 +69,6 @@ def test_get_model_info_shows_assistant_prefill():
 
 def test_get_model_info_shows_supports_prompt_caching():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     info = litellm.get_model_info("deepseek/deepseek-chat")
     print("info", info)
     assert info.get("supports_prompt_caching") is True
@@ -119,12 +117,11 @@ def test_get_model_info_ollama_chat():
 
 def test_get_model_info_bedrock_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     args = {
         "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
         "custom_llm_provider": "bedrock",
     }
-    litellm.model_cost.pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
+    litellm.model_cost().pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
@@ -166,7 +163,7 @@ def _enforce_bedrock_converse_models(
     Assert all new bedrock chat models are added as `bedrock_converse` unless explicitly whitelisted.
     """
     # Check for unwhitelisted models
-    for model, info in litellm.model_cost.items():
+    for model, info in litellm.model_cost().items():
         if (
             info["litellm_provider"] == "bedrock"
             and info["mode"] == "chat"
@@ -184,7 +181,6 @@ def test_model_info_bedrock_converse(monkeypatch):
     This ensures they are automatically routed to the converse endpoint.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         # Load whitelist models from file
         with open("whitelisted_bedrock_models.txt", "r") as file:
@@ -193,7 +189,7 @@ def test_model_info_bedrock_converse(monkeypatch):
         pytest.skip("whitelisted_bedrock_models.txt not found")
 
     _enforce_bedrock_converse_models(
-        model_cost=litellm.model_cost, whitelist_models=whitelist_models
+        model_cost=litellm.model_cost(), whitelist_models=whitelist_models
     )
 
 
@@ -203,10 +199,9 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
     Test the enforcement of the whitelist by adding a fake model and ensuring the test fails.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Add a fake unwhitelisted model
-    litellm.model_cost["fake.bedrock-chat-model"] = {
+    litellm.model_cost()["fake.bedrock-chat-model"] = {
         "litellm_provider": "bedrock",
         "mode": "chat",
     }
@@ -219,7 +214,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
         # Check for unwhitelisted models
         with pytest.raises(AssertionError):
             _enforce_bedrock_converse_models(
-                model_cost=litellm.model_cost, whitelist_models=whitelist_models
+                model_cost=litellm.model_cost(), whitelist_models=whitelist_models
             )
     except FileNotFoundError as e:
         pytest.skip("whitelisted_bedrock_models.txt not found")
@@ -297,9 +292,8 @@ def test_get_model_info_bedrock_models():
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    for k, v in litellm.model_cost.items():
+    for k, v in litellm.model_cost().items():
         if v["litellm_provider"] == "bedrock":
             k = k.replace("*/", "")
             potential_commitments = [
@@ -311,7 +305,7 @@ def test_get_model_info_bedrock_models():
                 for commitment in potential_commitments:
                     k = k.replace(f"{commitment}/", "")
             base_model = BedrockModelInfo.get_base_model(k)
-            base_model_info = litellm.model_cost[base_model]
+            base_model_info = litellm.model_cost()[base_model]
             for base_model_key, base_model_value in base_model_info.items():
                 if "invoke/" in k:
                     continue

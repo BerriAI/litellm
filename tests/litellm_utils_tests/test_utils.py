@@ -76,7 +76,7 @@ def test_basic_trimming_no_max_tokens_specified():
     # print(get_token_count(messages=trimmed_messages, model="claude-2"))
     assert (
         get_token_count(messages=trimmed_messages, model="gpt-4")
-    ) <= litellm.model_cost["gpt-4"]["max_tokens"]
+    ) <= litellm.model_cost()["gpt-4"]["max_tokens"]
 
 
 # test_basic_trimming_no_max_tokens_specified()
@@ -270,7 +270,7 @@ def test_trimming_with_model_cost_max_input_tokens(model):
     trimmed_messages = trim_messages(messages, model=model)
     assert (
         get_token_count(trimmed_messages, model=model)
-        < litellm.model_cost[model]["max_input_tokens"]
+        < litellm.model_cost()[model]["max_input_tokens"]
     )
 
 
@@ -494,7 +494,6 @@ def test_supports_web_search(model, expected_bool):
 )
 def test_supports_reasoning(model, expected_bool):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
         assert litellm.supports_reasoning(model=model) == expected_bool
     except Exception as e:
@@ -999,7 +998,6 @@ def test_supports_response_schema(model, expected_bool):
     Should be false otherwise
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm.utils import supports_response_schema
 
@@ -1167,7 +1165,6 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 )
 def test_supports_audio_input(model, expected_bool):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm.utils import supports_audio_input, supports_audio_output
 
@@ -1286,12 +1283,11 @@ def test_models_by_provider():
     Make sure all providers from model map are in the valid providers list
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     from litellm import models_by_provider
 
     providers = set()
-    for k, v in litellm.model_cost.items():
+    for k, v in litellm.model_cost().items():
         if "_" in v["litellm_provider"] and "-" in v["litellm_provider"]:
             continue
         elif k == "sample_spec":
@@ -1606,7 +1602,6 @@ def test_get_valid_models_default(monkeypatch):
 
 def test_supports_vision_gemini():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.utils import supports_vision
 
     assert supports_vision("gemini-1.5-pro") is True
@@ -2245,7 +2240,7 @@ def test_get_whitelisted_models():
     Create whitelist to prevent naming regressions for older litellm versions.
     """
     whitelisted_models = []
-    for model, info in litellm.model_cost.items():
+    for model, info in litellm.model_cost().items():
         if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
             whitelisted_models.append(model)
 

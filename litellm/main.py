@@ -1337,7 +1337,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
+        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm._model_cost map
         model_info, model = responses_api_bridge_check(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -5506,12 +5506,12 @@ async def ahealth_check(
         if model is None:
             raise Exception("model not set")
 
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
+        if model in litellm.model_cost() and mode is None:
+            mode = litellm.model_cost()[model].get("mode")
 
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
+        if model in litellm.model_cost() and mode is None:
+            mode = litellm.model_cost()[model].get("mode")
 
         model_params["cache"] = {
             "no-cache": True

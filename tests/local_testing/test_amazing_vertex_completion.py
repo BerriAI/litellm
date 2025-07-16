@@ -1449,7 +1449,6 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
 ):
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
@@ -1543,7 +1542,6 @@ async def test_anthropic_message_via_anthropic_messages():
 
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.set_verbose = True
     client = AsyncHTTPHandler()
 
@@ -1645,7 +1643,6 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
     load_vertex_ai_credentials()
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     litellm.set_verbose = True
 
@@ -3702,7 +3699,6 @@ def test_gemini_tool_calling_not_working():
 
 def test_vertex_ai_llama_tool_calling():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     load_vertex_ai_credentials()
     litellm._turn_on_debug()
     args = {

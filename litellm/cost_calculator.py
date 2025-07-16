@@ -202,7 +202,7 @@ def cost_per_token(  # noqa: PLR0915
     # given
     prompt_tokens_cost_usd_dollar: float = 0
     completion_tokens_cost_usd_dollar: float = 0
-    model_cost_ref = litellm.model_cost
+    model_cost_ref = litellm.model_cost()
     model_with_provider = model
     if custom_llm_provider is not None:
         model_with_provider = custom_llm_provider + "/" + model
@@ -223,7 +223,7 @@ def cost_per_token(  # noqa: PLR0915
     else:
         model_without_prefix = model
     """
-    Code block that formats model to lookup in litellm.model_cost
+    Code block that formats model to lookup in litellm.model_cost()
     Option1. model = "bedrock/ap-northeast-1/anthropic.claude-instant-v1". This is the most accurate since it is region based. Should always be option 1
     Option2. model = "openai/gpt-4"       - model = provider/model
     Option3. model = "anthropic.claude-3" - model = model
@@ -465,7 +465,7 @@ def _select_model_name_for_cost_calc(
     hidden_params: Optional[dict] = getattr(completion_response, "_hidden_params", None)
 
     if custom_pricing is True:
-        if router_model_id is not None and router_model_id in litellm.model_cost:
+        if router_model_id is not None and router_model_id in litellm.model_cost():
             return_model = router_model_id
         else:
             return_model = model
@@ -869,7 +869,7 @@ def completion_cost(  # noqa: PLR0915
                 # see https://replicate.com/pricing
                 elif (
                     model in litellm.replicate_models or "replicate" in model
-                ) and model not in litellm.model_cost:
+                ) and model not in litellm.model_cost():
                     # for unmapped replicate model, default to replicate's time tracking logic
                     return get_replicate_completion_pricing(completion_response, total_time)  # type: ignore
 
@@ -1175,8 +1175,8 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider,
     ]
     for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
+        if _model is not None and _model in litellm.model_cost():
+            cost_info = litellm.model_cost()[_model]
             break
     if cost_info is None:
         raise Exception(

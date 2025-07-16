@@ -491,7 +491,6 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
         from litellm.utils import supports_response_schema
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
 
         class RFormat(BaseModel):
             question: str

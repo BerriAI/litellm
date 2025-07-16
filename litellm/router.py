@@ -1578,7 +1578,7 @@ class Router:
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
@@ -5140,7 +5140,7 @@ class Router:
         litellm_model_name_model_info: Optional[ModelInfo] = None
 
         try:
-            custom_model_info = litellm.model_cost.get(model_id)
+            custom_model_info = litellm.model_cost().get(model_id)
         except Exception:
             pass
 
@@ -5468,7 +5468,7 @@ class Router:
             return None, None
 
         tpm_usage_list: Optional[List] = combined_tpm_rpm_values[: len(tpm_keys)]
-        rpm_usage_list: Optional[List] = combined_tpm_rpm_values[len(tpm_keys) :]
+        rpm_usage_list: Optional[List] = combined_tpm_rpm_values[len(tpm_keys):]
 
         ## TPM
         tpm_usage: Optional[int] = None

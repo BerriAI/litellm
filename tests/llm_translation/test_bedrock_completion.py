@@ -2064,7 +2064,6 @@ def test_bedrock_converse_route():
 def test_bedrock_mapped_converse_models():
     litellm.set_verbose = True
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.add_known_models()
     litellm.completion(
         model="bedrock/us.amazon.nova-pro-v1:0",
@@ -2197,7 +2196,6 @@ def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
 class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
             "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -2218,9 +2216,8 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         Test if region models info is correctly used for cost calculation. Using the base model info for cost calculation.
         """
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
         bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
-        litellm.model_cost.pop(bedrock_model, None)
+        litellm.model_cost().pop(bedrock_model, None)
         model = f"bedrock/{bedrock_model}"
 
         litellm.set_verbose = True
@@ -2249,7 +2246,6 @@ class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
 class TestBedrockConverseChatNormal(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
             "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2264,7 +2260,6 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
 class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
             "model": "bedrock/us.amazon.nova-lite-v1:0",
@@ -2431,7 +2426,6 @@ def test_bedrock_cross_region_inference(monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     litellm.add_known_models()
 
     litellm.set_verbose = True

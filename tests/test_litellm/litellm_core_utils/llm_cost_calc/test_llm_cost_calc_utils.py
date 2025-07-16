@@ -30,8 +30,7 @@ def test_reasoning_tokens_no_price_set():
     model = "o1-mini"
     custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    model_cost_map = litellm.model_cost[model]
+    model_cost_map = litellm.model_cost()[model]
     usage = Usage(
         completion_tokens=1578,
         prompt_tokens=17,
@@ -71,7 +70,6 @@ def test_reasoning_tokens_gemini():
     model = "gemini-2.5-flash-preview-04-17"
     custom_llm_provider = "gemini"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
         completion_tokens=1578,
@@ -88,7 +86,7 @@ def test_reasoning_tokens_gemini():
             audio_tokens=None, cached_tokens=None, text_tokens=17, image_tokens=None
         ),
     )
-    model_cost_map = litellm.model_cost[model]
+    model_cost_map = litellm.model_cost()[model]
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
@@ -116,9 +114,8 @@ def test_generic_cost_per_token_above_200k_tokens():
     model = "gemini-2.5-pro-exp-03-25"
     custom_llm_provider = "vertex_ai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    model_cost_map = litellm.model_cost[model]
+    model_cost_map = litellm.model_cost()[model]
     prompt_tokens = 220 * 1e6
     completion_tokens = 150
     usage = Usage(

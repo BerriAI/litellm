@@ -36,7 +36,6 @@ class TestPerplexityReasoning:
         """
         # Set up local model cost map
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
 
         # Get provider and optional params
         _, provider, _, _ = litellm.get_llm_provider(model=model)
@@ -138,7 +137,6 @@ class TestPerplexityReasoning:
         
         # Set up local model cost map
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
         
         reasoning_models = [
             "perplexity/sonar-reasoning",
@@ -156,7 +154,6 @@ class TestPerplexityReasoning:
         
         # Set up local model cost map
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
         
         non_reasoning_models = [
             "perplexity/sonar",

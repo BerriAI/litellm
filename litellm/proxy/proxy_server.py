@@ -8634,7 +8634,7 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
 )
 async def get_litellm_model_cost_map():
     try:
-        _model_cost_map = litellm.model_cost
+        _model_cost_map = litellm.model_cost()
         return _model_cost_map
     except Exception as e:
         raise HTTPException(

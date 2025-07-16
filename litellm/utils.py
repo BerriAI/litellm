@@ -2276,9 +2276,9 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
             model_cost_key = key
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
-        litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        litellm.model_cost().setdefault(model_cost_key, {}).update(updated_dictionary)
         verbose_logger.debug(
-            f"added/updated model={model_cost_key} in litellm.model_cost: {model_cost_key}"
+            f"added/updated model={model_cost_key} in litellm._model_cost: {model_cost_key}"
         )
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
@@ -4330,20 +4330,20 @@ def get_max_tokens(model: str) -> Optional[int]:
             return None
 
     try:
-        if model in litellm.model_cost:
-            if "max_output_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
+        if model in litellm.model_cost():
+            if "max_output_tokens" in litellm.model_cost()[model]:
+                return litellm.model_cost()[model]["max_output_tokens"]
+            elif "max_tokens" in litellm.model_cost()[model]:
+                return litellm.model_cost()[model]["max_tokens"]
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
             return max_tokens
-        if model in litellm.model_cost:  # check if extracted model is in model_list
-            if "max_output_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_output_tokens"]
-            elif "max_tokens" in litellm.model_cost[model]:
-                return litellm.model_cost[model]["max_tokens"]
+        if model in litellm.model_cost():  # check if extracted model is in model_list
+            if "max_output_tokens" in litellm.model_cost()[model]:
+                return litellm.model_cost()[model]["max_output_tokens"]
+            elif "max_tokens" in litellm.model_cost()[model]:
+                return litellm.model_cost()[model]["max_tokens"]
         else:
             raise Exception()
         return None
@@ -4405,7 +4405,7 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
 
 
 def _get_model_info_from_model_cost(key: str) -> dict:
-    return litellm.model_cost[key]
+    return litellm.model_cost()[key]
 
 
 def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) -> bool:
@@ -4555,7 +4555,7 @@ def _is_potential_model_name_in_model_cost(
     Check if the potential model name is in the model cost.
     """
     return any(
-        potential_model_name in litellm.model_cost
+        potential_model_name in litellm.model_cost()
         for potential_model_name in potential_model_names.values()
     )
 
@@ -4585,7 +4585,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         )
 
         verbose_logger.debug(
-            f"checking potential_model_names in litellm.model_cost: {potential_model_names}"
+            f"checking potential_model_names in litellm._model_cost: {potential_model_names}"
         )
 
         combined_model_name = potential_model_names["combined_model_name"]
@@ -4623,24 +4623,24 @@ def _get_model_info_helper(  # noqa: PLR0915
         else:
             """
             Check if: (in order of specificity)
-            1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
-            2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
-            3. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
-            4. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
-            5. 'split_model' in litellm.model_cost. Checks "llama3-8b-8192" in litellm.model_cost if model="groq/llama3-8b-8192"
+            1. 'custom_llm_provider/model' in litellm._model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
+            2. 'model' in litellm._model_cost. Checks "gemini-1.5-pro-002" in  litellm._model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
+            3. 'combined_stripped_model_name' in litellm._model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
+            4. 'stripped_model_name' in litellm._model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
+            5. 'split_model' in litellm._model_cost. Checks "llama3-8b-8192" in litellm._model_cost if model="groq/llama3-8b-8192"
             """
 
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
 
-            if combined_model_name in litellm.model_cost:
+            if combined_model_name in litellm.model_cost():
                 key = combined_model_name
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            if _model_info is None and model in litellm.model_cost:
+            if _model_info is None and model in litellm.model_cost():
                 key = model
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
@@ -4649,7 +4649,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     _model_info = None
             if (
                 _model_info is None
-                and combined_stripped_model_name in litellm.model_cost
+                and combined_stripped_model_name in litellm.model_cost()
             ):
                 key = combined_stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
@@ -4657,14 +4657,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            if _model_info is None and stripped_model_name in litellm.model_cost:
+            if _model_info is None and stripped_model_name in litellm.model_cost():
                 key = stripped_model_name
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            if _model_info is None and split_model in litellm.model_cost:
+            if _model_info is None and split_model in litellm.model_cost():
                 key = split_model
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
@@ -4819,7 +4819,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
 
     Returns:
         dict: A dictionary containing the following information:
-            key: Required[str] # the key in litellm.model_cost which is returned
+            key: Required[str] # the key in litellm._model_cost which is returned
             max_tokens: Required[Optional[int]]
             max_input_tokens: Required[Optional[int]]
             max_output_tokens: Required[Optional[int]]
@@ -6009,9 +6009,9 @@ def trim_messages(
     try:
         if max_tokens is None:
             # Check if model is valid
-            if model in litellm.model_cost:
-                max_tokens_for_model = litellm.model_cost[model].get(
-                    "max_input_tokens", litellm.model_cost[model]["max_tokens"]
+            if model in litellm.model_cost():
+                max_tokens_for_model = litellm.model_cost()[model].get(
+                    "max_input_tokens", litellm.model_cost()[model]["max_tokens"]
                 )
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
