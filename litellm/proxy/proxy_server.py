@@ -6594,7 +6594,7 @@ def _get_model_group_info(
             if mg.model_group in litellm.public_model_groups:
                 mg.is_public_model_group = True
 
-    return model_groups
+    return sorted(model_groups, key=lambda x: x.model_group)
 
 
 @router.get(
