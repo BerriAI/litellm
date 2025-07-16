@@ -17,9 +17,9 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_vector_store_request_for_spend_logs_payload,
-    _safe_json_dumps,
     _sanitize_request_body_for_spend_logs_payload,
 )
 
@@ -178,8 +178,8 @@ def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_
     assert result is None
 
 
-def test_safe_json_dumps_handles_circular_references():
-    """Test that _safe_json_dumps can handle circular references without raising exceptions"""
+def test_safe_dumps_handles_circular_references():
+    """Test that safe_dumps can handle circular references without raising exceptions"""
     
     # Create a circular reference
     obj1 = {"name": "obj1"}
@@ -187,13 +187,13 @@ def test_safe_json_dumps_handles_circular_references():
     obj1["ref"] = obj2  # This creates a circular reference
     
     # This should not raise an exception
-    result = _safe_json_dumps(obj1)
+    result = safe_dumps(obj1)
     
     # Should be a valid JSON string
     assert isinstance(result, str)
     
     # Should contain placeholder for circular reference
-    assert "circular reference" in result
+    assert "CircularReference Detected" in result
     
     # Should be parseable as JSON
     parsed = json.loads(result)
@@ -201,8 +201,8 @@ def test_safe_json_dumps_handles_circular_references():
     assert parsed["ref"]["name"] == "obj2"
 
 
-def test_safe_json_dumps_normal_objects():
-    """Test that _safe_json_dumps works correctly with normal objects"""
+def test_safe_dumps_normal_objects():
+    """Test that safe_dumps works correctly with normal objects"""
     
     normal_obj = {
         "string": "test",
@@ -213,14 +213,15 @@ def test_safe_json_dumps_normal_objects():
         "nested": {"key": "value"}
     }
     
-    result = _safe_json_dumps(normal_obj)
+    result = safe_dumps(normal_obj)
     
-    # Should be identical to regular json.dumps for normal objects
-    expected = json.dumps(normal_obj)
-    assert result == expected
+    # Should be a valid JSON string that can be parsed
+    assert isinstance(result, str)
+    parsed = json.loads(result)
+    assert parsed == normal_obj
 
 
-def test_safe_json_dumps_complex_metadata_like_object():
+def test_safe_dumps_complex_metadata_like_object():
     """Test with a complex metadata-like object similar to what caused the issue"""
     
     # Simulate a complex metadata object
@@ -239,7 +240,7 @@ def test_safe_json_dumps_complex_metadata_like_object():
     metadata["usage"]["detail"] = usage_detail
     
     # This should not raise an exception
-    result = _safe_json_dumps(metadata)
+    result = safe_dumps(metadata)
     
     # Should be a valid JSON string
     assert isinstance(result, str)
