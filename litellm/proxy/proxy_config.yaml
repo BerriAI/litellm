@@ -9,10 +9,12 @@ model_list:
     litellm_params:
       model: gemini/*
 
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
-
-mcp_servers:
-  # HTTP Streamable Server
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
+guardrails:
+  - guardrail_name: "bedrock-post-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "post_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+      disable_exception_on_block: true
+      default_on: true
