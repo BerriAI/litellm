@@ -50,7 +50,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             "web_search_options",
         ]
         # for some reason, grok-3-mini does not support stop tokens
-        if "grok-3-mini" not in model:
+        if self._supports_stop_reason(model):
             base_openai_params.append("stop")
         try:
             if litellm.supports_reasoning(

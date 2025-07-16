@@ -130,9 +130,10 @@ def test_completion_xai(stream):
             },
         ]
         response = completion(
-            model="xai/grok-3-mini-beta",
+            model="xai/grok-4",
             messages=messages,
             stream=stream,
+            stop=["END"],
         )
         print(response)
 
