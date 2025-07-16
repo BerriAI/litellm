@@ -13,11 +13,10 @@ when transforming between different response formats, particularly ensuring that
 import pytest
 import sys
 import os
-from unittest.mock import patch, MagicMock
-from typing import List, Dict, Any
+from typing import List
 
 # Add the project root to the Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../..'))
 
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -30,7 +29,6 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
-from litellm.types.responses.main import OutputFunctionToolCall
 
 
 class TestToolCallIndexTransformation:
