@@ -6,6 +6,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ReasoningSummaryTextDeltaEvent,
@@ -34,6 +35,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         litellm_custom_stream_wrapper: litellm.CustomStreamWrapper,
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
+        custom_llm_provider: Optional[str] = None,
+        litellm_metadata: Optional[dict] = None,
     ):
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = (
             litellm_custom_stream_wrapper
@@ -42,8 +45,22 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.responses_api_request: ResponsesAPIOptionalRequestParams = (
             responses_api_request
         )
+        self.custom_llm_provider: Optional[str] = custom_llm_provider
+        self.litellm_metadata: Optional[dict] = litellm_metadata or {}
         self.collected_chat_completion_chunks: List[ModelResponseStream] = []
         self.finished: bool = False
+
+    def _encode_chunk_id(self, chunk_id: str) -> str:
+        """
+        Encode chunk ID using the same format as non-streaming responses.
+        """
+        model_info = self.litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id")
+        return ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider=self.custom_llm_provider,
+            model_id=model_id,
+            response_id=chunk_id,
+        )
 
     async def __anext__(
         self,
@@ -126,18 +143,20 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         ):
             reasoning_content = chunk.choices[0].delta.reasoning_content
 
+            encoded_chunk_id = self._encode_chunk_id(chunk.id)
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"{chunk.id}_reasoning",
+                item_id=f"{encoded_chunk_id}_reasoning",
                 output_index=0,
                 delta=reasoning_content,
             )
         else:
             delta_content = self._get_delta_string_from_streaming_choices(chunk.choices)
             if delta_content:
+                encoded_chunk_id = self._encode_chunk_id(chunk.id)
                 return OutputTextDeltaEvent(
                     type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-                    item_id=chunk.id,
+                    item_id=encoded_chunk_id,
                     output_index=0,
                     content_index=0,
                     delta=delta_content,
