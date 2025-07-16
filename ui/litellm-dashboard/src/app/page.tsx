@@ -38,6 +38,7 @@ import { fetchTeams } from "@/components/common_components/fetch_teams";
 import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
+import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 
@@ -369,6 +370,12 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   accessToken={accessToken}
                   modelData={modelData}
+                />
+              ) : page == "ui-theme-settings" ? (
+                <UIThemeSettings
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
                 />
               ) : page == "model-hub-table" ? (
                 <ModelHubTable

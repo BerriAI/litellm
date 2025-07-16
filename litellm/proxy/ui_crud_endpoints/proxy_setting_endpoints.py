@@ -1,7 +1,8 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -17,6 +18,38 @@ router = APIRouter()
 
 class IPAddress(BaseModel):
     ip: str
+
+
+class UIThemeConfig(BaseModel):
+    """Configuration for UI theme customization"""
+    
+    # Brand colors
+    brand_color_primary: Optional[str] = Field(
+        default="#6366f1",
+        description="Primary brand color (hex format, e.g., #6366f1)"
+    )
+    brand_color_muted: Optional[str] = Field(
+        default="#8688ef", 
+        description="Muted brand color (hex format, e.g., #8688ef)"
+    )
+    brand_color_subtle: Optional[str] = Field(
+        default="#8e91eb",
+        description="Subtle brand color (hex format, e.g., #8e91eb)"
+    )
+    brand_color_faint: Optional[str] = Field(
+        default="#c7d2fe",
+        description="Faint brand color (hex format, e.g., #c7d2fe)"
+    )
+    brand_color_emphasis: Optional[str] = Field(
+        default="#5558eb",
+        description="Emphasis brand color (hex format, e.g., #5558eb)"
+    )
+    
+    # Logo configuration
+    logo_url: Optional[str] = Field(
+        default=None,
+        description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL"
+    )
 
 
 class SettingsResponse(BaseModel):
@@ -43,6 +76,12 @@ class InternalUserSettingsResponse(SettingsResponse):
 
 class DefaultTeamSettingsResponse(SettingsResponse):
     """Response model for default team settings"""
+
+    pass
+
+
+class UIThemeSettingsResponse(SettingsResponse):
+    """Response model for UI theme settings"""
 
     pass
 
@@ -493,4 +532,151 @@ async def update_sso_settings(sso_config: SSOConfig):
         "message": "SSO settings updated successfully",
         "status": "success",
         "settings": sso_data,
+    }
+
+
+@router.get(
+    "/get/ui_theme_settings",
+    tags=["UI Theme Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=UIThemeSettingsResponse,
+)
+async def get_ui_theme_settings():
+    """
+    Get UI theme configuration from the litellm_settings.
+    Returns current theme colors and logo settings for UI customization.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    # Load existing config
+    config = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="ui_theme_config",
+        settings_class=UIThemeConfig,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/ui_theme_settings",
+    tags=["UI Theme Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_ui_theme_settings(theme_config: UIThemeConfig):
+    """
+    Update UI theme configuration.
+    Updates brand colors and logo settings for the admin UI.
+    """
+    from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+    import os
+    import json
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
+
+    # Load existing config
+    config = await proxy_config.get_config()
+    
+    # Update config with UI theme settings
+    if "general_settings" not in config:
+        config["general_settings"] = {}
+    
+    if "environment_variables" not in config:
+        config["environment_variables"] = {}
+
+    # Convert theme config to dict
+    theme_data = theme_config.model_dump(exclude_none=True)
+    
+    # Store UI theme config in general_settings
+    config["general_settings"]["ui_theme_config"] = theme_data
+    
+    # Update UI_LOGO_PATH environment variable if logo_url is provided
+    if theme_data.get("logo_url"):
+        config["environment_variables"]["UI_LOGO_PATH"] = theme_data["logo_url"]
+        os.environ["UI_LOGO_PATH"] = theme_data["logo_url"]
+    
+    # Create ui_colors.json content for Tailwind CSS
+    ui_colors = {
+        "brand": {
+            "DEFAULT": theme_data.get("brand_color_primary", "#6366f1"),
+            "muted": theme_data.get("brand_color_muted", "#8688ef"),
+            "subtle": theme_data.get("brand_color_subtle", "#8e91eb"), 
+            "faint": theme_data.get("brand_color_faint", "#c7d2fe"),
+            "emphasis": theme_data.get("brand_color_emphasis", "#5558eb"),
+            "inverted": "white"
+        }
+    }
+    
+    # Store ui_colors configuration for UI rebuilding
+    config["general_settings"]["ui_colors"] = ui_colors
+
+    # Save the updated config
+    await proxy_config.save_config(new_config=config)
+
+    return {
+        "message": "UI theme settings updated successfully. UI will reflect changes on next build.",
+        "status": "success",
+        "theme_config": theme_data,
+        "ui_colors": ui_colors,
+    }
+
+
+@router.post(
+    "/upload/logo",
+    tags=["UI Theme Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def upload_logo(file: UploadFile = File(...)):
+    """
+    Upload a custom logo for the admin UI.
+    Accepts image files (PNG, JPG, JPEG, SVG) and stores them for use in the UI.
+    """
+    import os
+    import shutil
+    from pathlib import Path
+
+    # Validate file type
+    allowed_extensions = {".png", ".jpg", ".jpeg", ".svg"}
+    file_extension = Path(file.filename or "").suffix.lower()
+    
+    if file_extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}"
+        )
+    
+    # Validate file size (max 5MB)
+    file_content = await file.read()
+    if len(file_content) > 5 * 1024 * 1024:  # 5MB
+        raise HTTPException(
+            status_code=400,
+            detail="File size too large. Maximum size is 5MB."
+        )
+    
+    # Create uploads directory if it doesn't exist
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    upload_dir = os.path.join(current_dir, "..", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    # Generate unique filename
+    import uuid
+    unique_filename = f"logo_{uuid.uuid4().hex}{file_extension}"
+    file_path = os.path.join(upload_dir, unique_filename)
+    
+    # Save the file
+    with open(file_path, "wb") as buffer:
+        buffer.write(file_content)
+    
+    return {
+        "message": "Logo uploaded successfully",
+        "status": "success",
+        "file_path": file_path,
+        "filename": unique_filename,
+        "file_size": len(file_content),
     }
