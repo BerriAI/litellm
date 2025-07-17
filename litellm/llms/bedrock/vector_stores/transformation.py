@@ -82,9 +82,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 "filter"
             ] = filters
         if retrieval_config:
-            request_body["retrievalConfiguration"] = BedrockKBRetrievalConfiguration(
-                **retrieval_config
-            )
+            # Create a properly typed retrieval configuration
+            typed_retrieval_config: BedrockKBRetrievalConfiguration = {}
+            if "vectorSearchConfiguration" in retrieval_config:
+                typed_retrieval_config["vectorSearchConfiguration"] = retrieval_config["vectorSearchConfiguration"]
+            request_body["retrievalConfiguration"] = typed_retrieval_config
 
         litellm_logging_obj.model_call_details["query"] = query
         return url, request_body
