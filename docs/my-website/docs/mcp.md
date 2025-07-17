@@ -208,7 +208,7 @@ You can now directly access specific MCP servers and groups by specifying them i
 The URL pattern is:
 
 ```
-<your-litellm-proxy-base-url>/mcp/server_name
+<your-litellm-proxy-base-url>/mcp/<server_name>
 ```
 
 - You can specify one or more server/group names, separated by commas after `/mcp/`.
@@ -303,7 +303,7 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,dev group,deepwiki_mcp",
+      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,dev_access_group,deepwiki_mcp",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
