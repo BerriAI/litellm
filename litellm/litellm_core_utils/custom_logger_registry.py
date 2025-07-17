@@ -36,6 +36,7 @@ from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
     BedrockVectorStore,
 )
+from litellm.integrations.vector_store_prompt_hook import VectorStorePromptHook
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 
 
@@ -72,6 +73,7 @@ class CustomLoggerRegistry:
         "anthropic_cache_control_hook": AnthropicCacheControlHook,
         "agentops": AgentOps,
         "bedrock_vector_store": BedrockVectorStore,
+        "vector_store_prompt_hook": VectorStorePromptHook,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
         "aws_sqs": SQSLogger,
