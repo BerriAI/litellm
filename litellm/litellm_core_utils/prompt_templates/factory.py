@@ -3137,6 +3137,15 @@ class BedrockConverseMessagesProcessor:
                 tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
 
                 tool_content.append(tool_call_result)
+                # Add cache_control support for tool messages
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        message_block=messages[msg_i],
+                        block_type="content_block",
+                    )
+                )
+                if _cache_point_block is not None:
+                    tool_content.append(_cache_point_block)
                 msg_i += 1
             if tool_content:
                 # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3467,6 +3476,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
 
             tool_content.append(tool_call_result)
+            # Add cache_control support for tool messages
+            _cache_point_block = (
+                litellm.AmazonConverseConfig()._get_cache_point_block(
+                    message_block=messages[msg_i],
+                    block_type="content_block",
+                )
+            )
+            if _cache_point_block is not None:
+                tool_content.append(_cache_point_block)
             msg_i += 1
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3529,6 +3547,17 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                         elif element["type"] == "text":
                             assistants_part = BedrockContentBlock(text=element["text"])
                             assistants_parts.append(assistants_part)
+                            # Add cache_control support for assistant text elements
+                            _cache_point_block = (
+                                litellm.AmazonConverseConfig()._get_cache_point_block(
+                                    message_block=cast(
+                                        OpenAIMessageContentListBlock, element
+                                    ),
+                                    block_type="content_block",
+                                )
+                            )
+                            if _cache_point_block is not None:
+                                assistants_parts.append(_cache_point_block)
                         elif element["type"] == "image_url":
                             if isinstance(element["image_url"], dict):
                                 image_url = element["image_url"]["url"]
@@ -3541,6 +3570,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                # Add cache_control support for assistant string content
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        message_block=assistant_message_block,
+                        block_type="content_block",
+                    )
+                )
+                if _cache_point_block is not None:
+                    assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(
