@@ -1145,7 +1145,9 @@ async def clear_cache():
         return
 
     try:
-        llm_router.model_list.clear()
+        for model in llm_router.model_list:
+            if model.get("model_info", {}).get("db_model"):
+                llm_router.model_list.remove(model)
 
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
