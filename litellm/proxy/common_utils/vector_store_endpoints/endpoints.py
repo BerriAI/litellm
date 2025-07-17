@@ -2,9 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.proxy_base_llm_request_processing import (
-    ProxyBaseLLMRequestProcessing,
-)
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router = APIRouter()
 ########################################################
@@ -49,7 +47,7 @@ async def vector_store_search(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type="vector_store_search",
+            route_type="avector_store_search",
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
@@ -108,7 +106,7 @@ async def vector_store_create(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type="vector_store_create",
+            route_type="avector_store_create",
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
