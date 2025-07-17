@@ -30,22 +30,14 @@ class CohereEmbeddingConfig:
     def map_openai_params(
         self, non_default_params: dict, optional_params: dict
     ) -> dict:
-        # Valid Cohere embedding types for v1 API
-        COHERE_VALID_EMBEDDING_TYPES = {"float", "int8", "uint8", "binary", "ubinary"}
-        
         for k, v in non_default_params.items():
             if k == "encoding_format":
-                # Convert single value to list for consistent processing
-                encoding_formats = v if isinstance(v, list) else [v]
-                
-                # Filter to only include valid Cohere embedding types
-                valid_formats = [fmt for fmt in encoding_formats if fmt in COHERE_VALID_EMBEDDING_TYPES]
-                
-                # Only set embedding_types if we have valid formats
-                # If no valid formats (e.g., OpenAI-style "base64"), don't set embedding_types at all
-                if valid_formats:
-                    optional_params["embedding_types"] = valid_formats
-                # Don't set any embedding_types parameter if the format is not supported
+                # Only pass encoding formats that Cohere supports (filters out OpenAI-style "base64")
+                valid_formats = {"float", "int8", "uint8", "binary", "ubinary"}
+                formats = v if isinstance(v, list) else [v]
+                cohere_formats = [f for f in formats if f in valid_formats]
+                if cohere_formats:
+                    optional_params["embedding_types"] = cohere_formats
         return optional_params
 
     def _is_v3_model(self, model: str) -> bool:
