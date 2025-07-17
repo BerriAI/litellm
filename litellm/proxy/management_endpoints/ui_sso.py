@@ -51,7 +51,6 @@ from litellm.proxy.common_utils.admin_ui_utils import (
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
-from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
@@ -400,7 +399,7 @@ async def sso_login_redirect(request: Request, source: Optional[str] = None, key
     """
     Handles SSO login redirect - this is what the "Login with SSO" button points to
     """
-    from litellm.proxy.proxy_server import premium_user, user_custom_ui_sso_sign_in_handler
+    from litellm.proxy.proxy_server import premium_user
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
