@@ -3084,7 +3084,7 @@ class BedrockConverseMessagesProcessor:
                                 _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
-                                    message_block=element,
+                                    message_block=cast(OpenAIMessageContentListBlock, element),
                                     block_type="content_block",
                                 )
                             )
@@ -3226,7 +3226,7 @@ class BedrockConverseMessagesProcessor:
 
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
-                                    message_block=element,
+                                    message_block=cast(OpenAIMessageContentListBlock, element),
                                     block_type="content_block",
                                 )
                             )
@@ -3442,7 +3442,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _parts.append(_part)
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
-                                message_block=element,
+                                message_block=cast(OpenAIMessageContentListBlock, element),
                                 block_type="content_block",
                             )
                         )
@@ -3572,7 +3572,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
 
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
-                                message_block=element,
+                                message_block=cast(OpenAIMessageContentListBlock, element),
                                 block_type="content_block",
                             )
                         )
