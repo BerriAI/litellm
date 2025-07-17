@@ -7101,6 +7101,12 @@ class ProviderConfigManager:
             )
 
             return VertexVectorStoreConfig()
+        elif litellm.LlmProviders.PG_VECTOR == provider:
+            from litellm.llms.pg_vector.vector_stores.transformation import (
+                PGVectorStoreConfig,
+            )
+
+            return PGVectorStoreConfig()
         return None
 
     @staticmethod

@@ -2309,11 +2309,11 @@ class LlmProviders(str, Enum):
     SNOWFLAKE = "snowflake"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
+    PG_VECTOR = "pg_vector"
 
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
-
 
 class LiteLLMLoggingBaseClass:
     """
