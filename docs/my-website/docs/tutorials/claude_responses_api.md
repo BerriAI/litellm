@@ -83,7 +83,7 @@ Setup Claude Code to use your LiteLLM proxy:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://0.0.0.0:4000"
-export ANTHROPIC_API_KEY="$LITELLM_MASTER_KEY"
+export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 ```
 
 ### 5. Use Claude Code
@@ -108,7 +108,7 @@ Common issues and solutions:
 **Claude Code not connecting:**
 - Verify your proxy is running: `curl http://0.0.0.0:4000/health`
 - Check that `ANTHROPIC_BASE_URL` is set correctly
-- Ensure your `ANTHROPIC_API_KEY` matches your LiteLLM master key
+- Ensure your `ANTHROPIC_AUTH_TOKEN` matches your LiteLLM master key
 
 **Authentication errors:**
 - Verify your environment variables are set: `echo $LITELLM_MASTER_KEY`
