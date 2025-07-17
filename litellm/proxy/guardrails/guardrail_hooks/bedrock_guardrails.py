@@ -71,7 +71,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         If True, will not raise an exception when the guardrail is blocked.
         """
-        
 
         super().__init__(**kwargs)
         BaseAWSLLM.__init__(self)
@@ -323,7 +322,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
         if self.mask_request_content or self.mask_response_content:
             return False
-        
+
         if self.disable_exception_on_block is True:
             return False
 
