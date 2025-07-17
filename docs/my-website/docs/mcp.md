@@ -293,8 +293,12 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 </TabItem>
 </Tabs>
 
-- Note: you can add multiple servers in the URL instead of just one, making it comma-separated as well
-- Example:
+:::info
+**Note:** You can add multiple servers or access groups in the URL instead of just one, by making it comma-separated. This allows you to restrict access to several MCP servers/groups at once.
+:::
+
+**Example:**
+
 ```json title="Multiple Servers/Access Groups in URL" showLineNumbers
 {
   "mcpServers": {
