@@ -24,7 +24,7 @@ from prometheus_client import REGISTRY
 import litellm
 from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
 try:
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger, prometheus_label_factory
+    from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger, prometheus_label_factory
 except Exception:
     PrometheusLogger = None
     prometheus_label_factory = None
