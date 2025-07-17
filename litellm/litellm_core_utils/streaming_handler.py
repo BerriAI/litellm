@@ -81,8 +81,8 @@ class CustomStreamWrapper:
         )
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
-        self.sent_first_thinking_block_reverse = False
-        self.sent_last_thinking_block_reverse = False
+
+        self.sent_first_thinking_block_parsed = False
         self.thinking_content = ""
 
         self.system_fingerprint: Optional[str] = None
@@ -1261,15 +1261,19 @@ class CustomStreamWrapper:
                 # If the client wants to get the reasoning_content in the main content field like for OpenWebUI,
                 # they can set the litellm_params["merge_reasoning_content_in_choices"] to True.
                 if "</think>" in response_obj["text"]:
-                    self.sent_first_thinking_block_reverse = False
+                    self.sent_first_thinking_block_parsed = False
+                    # skip the content. we don't want the </think> in the main content
+                    completion_obj["content"] = None
                 elif "<think>" in response_obj["text"]:
-                    self.sent_first_thinking_block_reverse = True
-                elif self.sent_first_thinking_block_reverse:
+                    self.sent_first_thinking_block_parsed = True
+                    # skip the content. we don't want the <think> in the main content
+                    completion_obj["content"] = None
+                    model_response.choices[0].delta.content = None
+                elif self.sent_first_thinking_block_parsed:
                     completion_obj["reasoning_content"] = completion_obj["content"]
                     model_response.choices[0].delta.reasoning_content = completion_obj["reasoning_content"]
                     # we don't want to put the reasoning content in the main content
-                    completion_obj["content"] = ""
-                    self.sent_first_thinking_block_reverse = True
+                    completion_obj["content"] = None
                 else:
                     completion_obj["content"] = response_obj["text"]
 
@@ -1354,7 +1358,7 @@ class CustomStreamWrapper:
                         )
                     )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
-                    if self.sent_first_thinking_block_reverse:
+                    if self.sent_first_thinking_block_parsed:
                         original_chunk.choices[0].delta.reasoning_content = original_chunk.choices[0].delta.content
                         original_chunk.choices[0].delta.content = None
                     delta = original_chunk.choices[0].delta
