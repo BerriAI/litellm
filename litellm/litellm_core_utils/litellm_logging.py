@@ -59,9 +59,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
-from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
-    BedrockVectorStore,
-)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -3480,13 +3477,6 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             anthropic_cache_control_hook = AnthropicCacheControlHook()
             _in_memory_loggers.append(anthropic_cache_control_hook)
             return anthropic_cache_control_hook  # type: ignore
-        elif logging_integration == "bedrock_vector_store":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, BedrockVectorStore):
-                    return callback
-            bedrock_vector_store = BedrockVectorStore()
-            _in_memory_loggers.append(bedrock_vector_store)
-            return bedrock_vector_store  # type: ignore
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
@@ -3677,10 +3667,6 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
-                    return callback
-        elif logging_integration == "bedrock_vector_store":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, BedrockVectorStore):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
