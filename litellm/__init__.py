@@ -122,7 +122,6 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
-    "bedrock_vector_store",
     "generic_api",
     "resend_email",
     "smtp_email",
