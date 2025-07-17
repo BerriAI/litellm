@@ -784,6 +784,26 @@ class Router:
         )
 
         #########################################################
+        # Vector Store routes
+        #########################################################
+        from litellm.vector_stores.main import acreate, asearch, create, search
+
+        # async routes
+        self.avector_store_search = self.factory_function(
+            asearch, call_type="avector_store_search"
+        )
+        self.avector_store_create = self.factory_function(
+            acreate, call_type="avector_store_create"
+        )
+        # sync routes
+        self.vector_store_search = self.factory_function(
+            search, call_type="vector_store_search"
+        )
+        self.vector_store_create = self.factory_function(
+            create, call_type="vector_store_create"
+        )
+
+        #########################################################
         # Gemini Native routes
         #########################################################
         from litellm.google_genai import (
@@ -3290,6 +3310,10 @@ class Router:
             "generate_content",
             "agenerate_content_stream",
             "generate_content_stream",
+            "avector_store_search",
+            "avector_store_create",
+            "vector_store_search",
+            "vector_store_create",
         ] = "assistants",
     ):
         """
@@ -3300,7 +3324,7 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type in ("responses", "generate_content", "generate_content_stream"):
+        if call_type in ("responses", "generate_content", "generate_content_stream", "vector_store_search", "vector_store_create"):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
@@ -3346,6 +3370,8 @@ class Router:
                 "aimage_edit",
                 "agenerate_content",
                 "agenerate_content_stream",
+                "avector_store_search",
+                "avector_store_create",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,

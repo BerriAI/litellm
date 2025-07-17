@@ -76,6 +76,8 @@ async def route_request(
         "agenerate_content",
         "agenerate_content_stream",
         "allm_passthrough_route",
+        "avector_store_search",
+        "avector_store_create",
     ],
 ):
     """
