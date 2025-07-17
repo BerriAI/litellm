@@ -310,27 +310,43 @@ class LiteLLMCompletionResponsesConfig:
                 # Create synthetic assistant message with function calls for each tool call ID
                 tool_calls = []
                 for call_id in function_call_ids:
-                    # Try to infer function name from available tools
-                    function_name = "get_information"  # Default fallback
+                    # Try to get function info from cache first
+                    cached_tool_call = TOOL_CALLS_CACHE.get_cache(key=call_id)
                     
-                    # Look for tools in the request to get the actual function name
-                    tools = litellm_completion_request.get("tools", [])
-                    if tools and len(tools) > 0:
-                        # Use the first available tool name as a reasonable guess
-                        first_tool = tools[0]
-                        if isinstance(first_tool, dict) and "function" in first_tool:
-                            function_name = first_tool["function"].get("name", function_name)
-                        elif isinstance(first_tool, dict) and "name" in first_tool:
-                            function_name = first_tool["name"]
-                    
-                    tool_calls.append({
-                        "id": call_id,
-                        "type": "function",
-                        "function": {
-                            "name": function_name,
-                            "arguments": "{}"  # Minimal arguments
-                        }
-                    })
+                    if cached_tool_call:
+                        # Use cached tool call information
+                        verbose_logger.debug(f"Found cached tool call for {call_id}: {cached_tool_call.function.name}")
+                        tool_calls.append({
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": cached_tool_call.function.name,
+                                "arguments": cached_tool_call.function.arguments or "{}"
+                            }
+                        })
+                    else:
+                        # Cache miss - try to infer function name from available tools
+                        verbose_logger.debug(f"Cache miss for tool call {call_id}, inferring from available tools")
+                        function_name = "get_information"  # Default fallback
+                        
+                        # Look for tools in the request to get the actual function name
+                        tools = litellm_completion_request.get("tools", [])
+                        if tools and len(tools) > 0:
+                            # Use the first available tool name as a reasonable guess
+                            first_tool = tools[0]
+                            if isinstance(first_tool, dict) and "function" in first_tool:
+                                function_name = first_tool["function"].get("name", function_name)
+                            elif isinstance(first_tool, dict) and "name" in first_tool:
+                                function_name = first_tool["name"]
+                        
+                        tool_calls.append({
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": function_name,
+                                "arguments": "{}"  # Minimal arguments
+                            }
+                        })
                 
                 synthetic_assistant_message = {
                     "role": "assistant",
