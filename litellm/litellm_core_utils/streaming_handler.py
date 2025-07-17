@@ -1312,6 +1312,8 @@ class CustomStreamWrapper:
                         )
                     )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
+                    # for thinking blocks, we'll substitute the reasoning_content with the content
+                    # and make content field empty
                     if self.sent_first_thinking_block_parsed:
                         original_chunk.choices[0].delta.reasoning_content = original_chunk.choices[0].delta.content
                         original_chunk.choices[0].delta.content = None
