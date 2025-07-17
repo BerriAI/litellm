@@ -26,7 +26,7 @@ async def test_guardrails_ai_process_input():
     # Test case 1: Valid completion call with messages
     with patch.object(
         guardrails_ai_guardrail,
-        "make_guardrails_ai_api_request_pre_call_request",
+        "make_guardrails_ai_api_request",
         return_value="processed text",
     ) as mock_api_request:
 
@@ -41,7 +41,7 @@ async def test_guardrails_ai_process_input():
 
         # Verify the API was called with the user message
         mock_api_request.assert_called_once_with(
-            text_input="Hello, how are you?", request_data=data
+            llm_output="Hello, how are you?", request_data=data
         )
 
         # Verify the message was updated
@@ -52,7 +52,7 @@ async def test_guardrails_ai_process_input():
     # Test case 2: Valid acompletion call with messages
     with patch.object(
         guardrails_ai_guardrail,
-        "make_guardrails_ai_api_request_pre_call_request",
+        "make_guardrails_ai_api_request",
         return_value="async processed text",
     ) as mock_api_request:
 
@@ -61,7 +61,7 @@ async def test_guardrails_ai_process_input():
         result = await guardrails_ai_guardrail.process_input(data, "acompletion")
 
         mock_api_request.assert_called_once_with(
-            text_input="What is the weather?", request_data=data
+            llm_output="What is the weather?", request_data=data
         )
 
         assert result["messages"][0]["content"] == "async processed text"
@@ -99,7 +99,7 @@ async def test_guardrails_ai_process_input():
     # Test case 6: Complex conversation with multiple messages
     with patch.object(
         guardrails_ai_guardrail,
-        "make_guardrails_ai_api_request_pre_call_request",
+        "make_guardrails_ai_api_request",
         return_value="sanitized message",
     ) as mock_api_request:
 
@@ -116,7 +116,7 @@ async def test_guardrails_ai_process_input():
 
         # Should process the last user message
         mock_api_request.assert_called_once_with(
-            text_input="Second question", request_data=data
+            llm_output="Second question", request_data=data
         )
 
         # Only the last user message should be updated
