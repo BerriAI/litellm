@@ -12,7 +12,7 @@ Create a vector store which can be used to store and search document chunks for 
 | Cost Tracking | ✅ | Tracked per vector store operation |
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
-| Support LLM Providers | **OpenAI** | Currently supports OpenAI's vector stores API |
+| Support LLM Providers | **OpenAI, Azure OpenAI, Bedrock, Vertex RAG Engine** | Full vector stores API support across providers |
 
 ## Usage
 
