@@ -2721,13 +2721,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_body = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
         try:
             response = await async_httpx_client.post(
                 url=url,
                 headers=headers,
-                data=request_body,
+                data=request_data,
                 timeout=timeout,
             )
         except Exception as e:
@@ -2819,13 +2819,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_body = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
 
         try:
             response = sync_httpx_client.post(
                 url=url,
                 headers=headers,
-                data=request_body,
+                data=request_data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
