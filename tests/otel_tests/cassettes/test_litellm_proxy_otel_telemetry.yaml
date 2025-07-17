@@ -1,0 +1,49 @@
+interactions:
+- request:
+    body: '{"messages": [{"role": "user", "content": [{"text": "What is a capital
+      of France?"}]}], "additionalModelRequestFields": {}, "system": [], "inferenceConfig":
+      {}}'
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate
+      authorization:
+      - AWS4-HMAC-SHA256 Credential=12345678901234567890/20250619/us-west-2/bedrock/aws4_request,
+        SignedHeaders=content-type;host;x-amz-date, Signature=5fe969d3c7073d2e63413ac3fed1fe0a10f7f9bdea20b6cd3c9e529dc0b753d3
+      connection:
+      - keep-alive
+      content-length:
+      - '160'
+      content-type:
+      - application/json
+      host:
+      - bedrock-runtime.us-west-2.amazonaws.com
+      user-agent:
+      - litellm/1.71.2
+      x-amz-date:
+      - 20250619T225849Z
+    method: POST
+    uri: https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A1234567890123%3Ainference-profile%2Fus.anthropic.claude-3-7-sonnet-20250219-v1%3A0/converse
+  response:
+    body:
+      string: '{"metrics":{"latencyMs":1513},"output":{"message":{"content":[{"text":"The
+        capital of France is Paris. Paris has been the capital city of France since
+        987 CE when Hugh Capet, the first king of the Capetian dynasty, made the city
+        his seat of government. Today, Paris is not only the political capital but
+        also the cultural and economic center of France."}],"role":"assistant"}},"stopReason":"end_turn","usage":{"cacheReadInputTokenCount":0,"cacheReadInputTokens":0,"cacheWriteInputTokenCount":0,"cacheWriteInputTokens":0,"inputTokens":14,"outputTokens":67,"totalTokens":81}}'
+    headers:
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '573'
+      Content-Type:
+      - application/json
+      Date:
+      - Thu, 19 Jun 2025 22:58:51 GMT
+      x-amzn-RequestId:
+      - b1010ced-14cc-4923-ac9c-82ba21630a12
+    status:
+      code: 200
+      message: OK
+version: 1
