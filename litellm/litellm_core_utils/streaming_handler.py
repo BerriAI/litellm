@@ -81,6 +81,8 @@ class CustomStreamWrapper:
         )
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
+        self.sent_first_thinking_block_reverse = False
+        self.sent_last_thinking_block_reverse = False
         self.thinking_content = ""
 
         self.system_fingerprint: Optional[str] = None
@@ -422,6 +424,57 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_openai_chat_completion_chunk(self, chunk):
+        try:
+            print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
+            str_line = chunk
+            text = ""
+            is_finished = False
+            finish_reason = None
+            logprobs = None
+            usage = None
+
+            if str_line and str_line.choices and len(str_line.choices) > 0:
+                if (
+                    str_line.choices[0].delta is not None
+                    and str_line.choices[0].delta.content is not None
+                ):
+                    text = str_line.choices[0].delta.content
+                else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
+                    pass
+                if str_line.choices[0].finish_reason:
+                    is_finished = (
+                        True  # check if str_line._hidden_params["is_finished"] is True
+                    )
+                    if (
+                        hasattr(str_line, "_hidden_params")
+                        and str_line._hidden_params.get("is_finished") is not None
+                    ):
+                        is_finished = str_line._hidden_params.get("is_finished")
+                    finish_reason = str_line.choices[0].finish_reason
+
+                # checking for logprobs
+                if (
+                    hasattr(str_line.choices[0], "logprobs")
+                    and str_line.choices[0].logprobs is not None
+                ):
+                    logprobs = str_line.choices[0].logprobs
+                else:
+                    logprobs = None
+
+            usage = getattr(str_line, "usage", None)
+
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+                "logprobs": logprobs,
+                "original_chunk": str_line,
+                "usage": usage,
+            }
+        except Exception as e:
+            raise e
+        
+    def handle_fireworks_chunk(self, chunk):
         try:
             print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
             str_line = chunk
@@ -1202,7 +1255,24 @@ class CustomStreamWrapper:
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 if response_obj is None:
                     return
-                completion_obj["content"] = response_obj["text"]
+                
+                # Some LLM providers might send thinking blocks in the content field
+                # we want to put it into the reasoning content field.
+                # If the client wants to get the reasoning_content in the main content field like for OpenWebUI,
+                # they can set the litellm_params["merge_reasoning_content_in_choices"] to True.
+                if "</think>" in response_obj["text"]:
+                    self.sent_first_thinking_block_reverse = False
+                elif "<think>" in response_obj["text"]:
+                    self.sent_first_thinking_block_reverse = True
+                elif self.sent_first_thinking_block_reverse:
+                    completion_obj["reasoning_content"] = completion_obj["content"]
+                    model_response.choices[0].delta.reasoning_content = completion_obj["reasoning_content"]
+                    # we don't want to put the reasoning content in the main content
+                    completion_obj["content"] = ""
+                    self.sent_first_thinking_block_reverse = True
+                else:
+                    completion_obj["content"] = response_obj["text"]
+
                 self.intermittent_finish_reason = response_obj.get(
                     "finish_reason", None
                 )
@@ -1284,6 +1354,9 @@ class CustomStreamWrapper:
                         )
                     )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
+                    if self.sent_first_thinking_block_reverse:
+                        original_chunk.choices[0].delta.reasoning_content = original_chunk.choices[0].delta.content
+                        original_chunk.choices[0].delta.content = None
                     delta = original_chunk.choices[0].delta
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None
@@ -1407,6 +1480,7 @@ class CustomStreamWrapper:
                 custom_llm_provider=self.custom_llm_provider,
                 original_exception=e,
             )
+
 
     def set_logging_event_loop(self, loop):
         """
