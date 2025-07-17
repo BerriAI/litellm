@@ -70,9 +70,9 @@ RUN chmod +x docker/prod_entrypoint.sh
 
 # Make a /non-existent folder and assign chown to nobody
 RUN mkdir -p /nonexistent /.npm && \
+    chown -R nobody:nogroup /app && \
     chown -R nobody:nogroup /nonexistent /.npm && \
-    chown -R nobody:nogroup /usr/local/lib/python3.13/site-packages/prisma/ && \
-    chown -R nobody:nogroup /app
+    chown -R nobody:nogroup /usr/local/lib/python3.13/site-packages/prisma/
 
 # Run Prisma generate as user = nobody
 USER nobody
