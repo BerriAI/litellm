@@ -85,3 +85,19 @@ class BaseVectorStoreConfig:
             headers=headers,
         )
 
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: Dict,
+        request_data: Dict,
+        api_base: str,
+        api_key: Optional[str] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """Optionally sign or modify the request before sending.
+
+        Providers like AWS Bedrock require SigV4 signing. Providers that don't
+        require any signing can simply return the headers unchanged and ``None``
+        for the signed body.
+        """
+        return headers, None
+
