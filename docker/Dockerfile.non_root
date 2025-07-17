@@ -25,7 +25,7 @@ RUN rm -rf dist/* && python -m build
 # There should be only one wheel file now, assume the build only creates one
 RUN ls -1 dist/*.whl | head -1
 
-# Install the package (mainly to allow subsequent wheel build steps that import package metadata)
+# Install the package
 RUN pip install dist/*.whl
 
 # install dependencies as wheels
@@ -39,13 +39,11 @@ RUN apk upgrade --no-cache \
     && apk add --no-cache nodejs npm bash curl
 
 WORKDIR /app
-
+COPY . .
+    
 # Copy only necessary files for runtime
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
-COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
-COPY --from=builder /app/litellm /app/litellm
-COPY --from=builder /app/ui/litellm-dashboard/out /app/litellm/proxy/_experimental/out
 
 # Install the built wheel and wheeled dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
@@ -56,6 +54,9 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
 RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
+
+# Build Admin UI
+RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 ### Prisma Handling for Non-Root #################################################
 # Prisma allows you to specify the binary cache directory to use
@@ -87,5 +88,5 @@ EXPOSE 4000/tcp
 ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs
-CMD ["--port", "4000", "--detailed_debug"]
-#CMD ["--port", "4000"]
+# CMD ["--port", "4000", "--detailed_debug"]
+CMD ["--port", "4000"]
