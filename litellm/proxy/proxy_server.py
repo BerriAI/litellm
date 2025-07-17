@@ -1857,6 +1857,7 @@ class ProxyConfig:
                                     PrometheusLogger = None
 
                                 if PrometheusLogger is not None:
+                                    verbose_proxy_logger.debug("mounting metrics endpoint")
                                     PrometheusLogger._mount_metrics_endpoint(premium_user)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
