@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -105,6 +106,47 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             api_key=api_key,
         )
 
+    def _get_file_id_from_metadata(self, metadata: Dict[str, Any]) -> str:
+        """
+        Extract file_id from Bedrock KB metadata.
+        Uses source URI if available, otherwise generates a fallback ID.
+        """
+        source_uri = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
+        if source_uri:
+            return source_uri
+        
+        chunk_id = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown") if metadata else "unknown"
+        return f"bedrock-kb-{chunk_id}"
+
+    def _get_filename_from_metadata(self, metadata: Dict[str, Any]) -> str:
+        """
+        Extract filename from Bedrock KB metadata.
+        Tries to extract filename from source URI, falls back to domain name or data source ID.
+        """
+        source_uri = metadata.get("x-amz-bedrock-kb-source-uri", "") if metadata else ""
+        
+        if source_uri:
+            try:
+                parsed_uri = urlparse(source_uri)
+                filename = parsed_uri.path.split('/')[-1] if parsed_uri.path and parsed_uri.path != '/' else parsed_uri.netloc
+                if not filename or filename == '/':
+                    filename = parsed_uri.netloc
+                return filename
+            except Exception:
+                return source_uri
+        
+        data_source_id = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
+        return f"bedrock-kb-document-{data_source_id}"
+
+    def _get_attributes_from_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract all attributes from Bedrock KB metadata.
+        Returns a copy of the metadata dictionary.
+        """
+        if not metadata:
+            return {}
+        return dict(metadata)
+
     def transform_search_vector_store_response(
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
@@ -116,10 +158,20 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 text = content.get("text") if content else None
                 if text is None:
                     continue
+                
+                # Extract metadata and use helper functions
+                metadata = item.get("metadata", {}) or {}
+                file_id = self._get_file_id_from_metadata(metadata)
+                filename = self._get_filename_from_metadata(metadata)
+                attributes = self._get_attributes_from_metadata(metadata)
+                
                 results.append(
                     VectorStoreSearchResult(
                         score=item.get("score"),
                         content=[VectorStoreResultContent(text=text, type="text")],
+                        file_id=file_id,
+                        filename=filename,
+                        attributes=attributes,
                     )
                 )
             return VectorStoreSearchResponse(
