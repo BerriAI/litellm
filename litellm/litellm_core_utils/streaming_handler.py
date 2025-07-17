@@ -474,56 +474,6 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
         
-    def handle_fireworks_chunk(self, chunk):
-        try:
-            print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
-            str_line = chunk
-            text = ""
-            is_finished = False
-            finish_reason = None
-            logprobs = None
-            usage = None
-
-            if str_line and str_line.choices and len(str_line.choices) > 0:
-                if (
-                    str_line.choices[0].delta is not None
-                    and str_line.choices[0].delta.content is not None
-                ):
-                    text = str_line.choices[0].delta.content
-                else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
-                    pass
-                if str_line.choices[0].finish_reason:
-                    is_finished = (
-                        True  # check if str_line._hidden_params["is_finished"] is True
-                    )
-                    if (
-                        hasattr(str_line, "_hidden_params")
-                        and str_line._hidden_params.get("is_finished") is not None
-                    ):
-                        is_finished = str_line._hidden_params.get("is_finished")
-                    finish_reason = str_line.choices[0].finish_reason
-
-                # checking for logprobs
-                if (
-                    hasattr(str_line.choices[0], "logprobs")
-                    and str_line.choices[0].logprobs is not None
-                ):
-                    logprobs = str_line.choices[0].logprobs
-                else:
-                    logprobs = None
-
-            usage = getattr(str_line, "usage", None)
-
-            return {
-                "text": text,
-                "is_finished": is_finished,
-                "finish_reason": finish_reason,
-                "logprobs": logprobs,
-                "original_chunk": str_line,
-                "usage": usage,
-            }
-        except Exception as e:
-            raise e
 
     def handle_azure_text_completion_chunk(self, chunk):
         try:
