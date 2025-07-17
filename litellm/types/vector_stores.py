@@ -74,6 +74,7 @@ class VectorStoreSearchResult(TypedDict, total=False):
     """Result of a vector store search"""
     score: Optional[float]
     content: Optional[List[VectorStoreResultContent]]
+    metadata: Optional[Dict[str, Any]]
     file_id: Optional[str]
     filename: Optional[str]
     attributes: Optional[Dict]
