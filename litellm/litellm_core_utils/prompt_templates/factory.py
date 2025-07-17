@@ -3137,7 +3137,7 @@ class BedrockConverseMessagesProcessor:
                 tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
 
                 tool_content.append(tool_call_result)
-                # Add cache_control support for tool messages
+                
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
                         message_block=messages[msg_i],
@@ -3476,7 +3476,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
 
             tool_content.append(tool_call_result)
-            # Add cache_control support for tool messages
+            
             _cache_point_block = (
                 litellm.AmazonConverseConfig()._get_cache_point_block(
                     message_block=messages[msg_i],
