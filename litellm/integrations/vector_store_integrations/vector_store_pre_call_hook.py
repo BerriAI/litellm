@@ -25,6 +25,7 @@ else:
     LiteLLMLoggingObj = None
 
 class VectorStorePreCallHook(CustomLogger):
+    CONTENT_PREFIX_STRING = "Context:\n\n"
     """
     Custom logger that handles vector store searches before LLM calls.
     
@@ -168,7 +169,7 @@ class VectorStorePreCallHook(CustomLogger):
         if not search_response_data:
             return messages
             
-        context_content = "Context:\n\n"
+        context_content = self.CONTENT_PREFIX_STRING
         
         for result in search_response_data:
             result_content: Optional[List[VectorStoreResultContent]] = result.get("content")
