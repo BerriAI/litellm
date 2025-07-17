@@ -137,11 +137,6 @@ model_list:
       model: openai/my-fake-model
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.appxxxx/
-  - model_name: "gradient_ai/*"
-    litellm_params:
-      model: "gradient_ai/*"
-      api_key: os.environ/GRADIENT_AI_API_KEY
-      api_base: os.environ/GRADIENT_AI_AGENT_ENDPOINT
 
 
 litellm_settings:
