@@ -53,6 +53,16 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
                 # Only pass encoding formats that Cohere supports (filters out OpenAI-style "base64")
                 valid_formats = {"float", "int8", "uint8", "binary", "ubinary"}
                 formats = v if isinstance(v, list) else [v]
+                
+                # Check if base64 is in the formats
+                has_base64 = "base64" in formats
+                
+                if has_base64 and not drop_params:
+                    raise CohereError(
+                        status_code=400,
+                        message="Cohere does not support 'base64' encoding format. Set 'drop_params=True' to automatically filter out unsupported parameters."
+                    )
+                
                 cohere_formats = [f for f in formats if f in valid_formats]
                 if cohere_formats:
                     optional_params["embedding_types"] = cohere_formats
