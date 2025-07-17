@@ -13,6 +13,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
+    LiteLLM_ManagedVectorStore,
     VectorStoreResultContent,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
@@ -69,13 +70,12 @@ class VectorStorePreCallHook(CustomLogger):
             # Check if vector store is configured
             if litellm.vector_store_registry is None:
                 return model, messages, non_default_params
-                
-            vector_store_to_run = litellm.vector_store_registry.get_vector_store_to_run(
-                non_default_params=non_default_params,
-                tools=None
+
+            vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = litellm.vector_store_registry.pop_vector_stores_to_run(
+                non_default_params=non_default_params, tools=tools
             )
             
-            if not vector_store_to_run:
+            if not vector_stores_to_run:
                 return model, messages, non_default_params
             
             # Extract the query from the last user message
@@ -85,28 +85,34 @@ class VectorStorePreCallHook(CustomLogger):
                 verbose_logger.debug("No query found in messages for vector store search")
                 return model, messages, non_default_params
             
-            # Get vector store id from the vector store config
-            vector_store_id = vector_store_to_run.get("vector_store_id", "")
-            custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
+            modified_messages: List[AllMessageValues] = messages.copy()
+            for vector_store_to_run in vector_stores_to_run:
             
-            # Call litellm.vector_stores.search() with the required parameters
-            search_response = await litellm.vector_stores.asearch(
-                vector_store_id=vector_store_id,
-                query=query,
-                custom_llm_provider=custom_llm_provider,
-            )
-            
-            # Process search results and append as context
-            modified_messages = self._append_search_results_to_messages(
-                messages=messages,
-                search_response=search_response
-            )
-            
-            # Get the number of results for logging
-            num_results = 0
-            num_results = len(search_response.get("data", []) or [])
-            verbose_logger.debug(f"Vector store search completed. Added context from {num_results} results")
-            
+                # Get vector store id from the vector store config
+                vector_store_id = vector_store_to_run.get("vector_store_id", "")
+                custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
+                
+                # Call litellm.vector_stores.search() with the required parameters
+                search_response = await litellm.vector_stores.asearch(
+                    vector_store_id=vector_store_id,
+                    query=query,
+                    custom_llm_provider=custom_llm_provider,
+                )
+
+                verbose_logger.debug(f"search_response: {search_response}")
+                
+                
+                # Process search results and append as context
+                modified_messages = self._append_search_results_to_messages(
+                    messages=messages,
+                    search_response=search_response
+                )
+                
+                # Get the number of results for logging
+                num_results = 0
+                num_results = len(search_response.get("data", []) or [])
+                verbose_logger.debug(f"Vector store search completed. Added context from {num_results} results")
+                
             return model, modified_messages, non_default_params
             
         except Exception as e:
