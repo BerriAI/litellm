@@ -77,8 +77,6 @@ RUN mkdir -p /nonexistent /.npm && \
 # Run Prisma generate as user = nobody
 USER nobody
 
-WORKDIR /app/litellm/proxy
-
 RUN prisma generate
 ### End of Prisma Handling for Non-Root #########################################
 
