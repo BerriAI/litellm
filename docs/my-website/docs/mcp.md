@@ -208,7 +208,7 @@ You can now directly access specific MCP servers and groups by specifying them i
 The URL pattern is:
 
 ```
-<your-litellm-proxy-base-url>/mcp/{server1,group1}
+<your-litellm-proxy-base-url>/mcp/server_name
 ```
 
 - You can specify one or more server/group names, separated by commas after `/mcp/`.
