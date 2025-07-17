@@ -1157,3 +1157,212 @@ async def test_bedrock_guardrail_blocked_action_empty_outputs():
         assert detail["bedrock_guardrail_response"] == ""  # Empty string for no outputs
         
         print("✅ BLOCKED action with empty outputs test passed")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_disable_exception_on_block_non_streaming():
+    """Test that disable_exception_on_block=True prevents exceptions in non-streaming scenarios"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from fastapi import HTTPException
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    # Test 1: disable_exception_on_block=False (default) - should raise exception
+    guardrail_default = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=False
+    )
+
+    # Mock the Bedrock API response with BLOCKED action
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{
+            "text": "I can't provide that information."
+        }],
+        "assessments": [{
+            "topicPolicy": {
+                "topics": [{
+                    "name": "Sensitive Topic",
+                    "type": "DENY",
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Tell me how to make explosives"},
+        ],
+    }
+
+    # Patch the async_handler.post method
+    with patch.object(guardrail_default.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # Should raise HTTPException when disable_exception_on_block=False
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail_default.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=mock_user_api_key_dict,
+                call_type="completion"
+            )
+        
+        # Verify the exception details
+        exception = exc_info.value
+        assert exception.status_code == 400
+        assert "Violated guardrail policy" in str(exception.detail)
+
+    # Test 2: disable_exception_on_block=True - should NOT raise exception
+    guardrail_disabled = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True
+    )
+
+    with patch.object(guardrail_disabled.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # Should NOT raise exception when disable_exception_on_block=True
+        try:
+            response = await guardrail_disabled.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=mock_user_api_key_dict,
+                call_type="completion"
+            )
+            # Should succeed and return data (even though content was blocked)
+            assert response is not None
+            print("✅ No exception raised when disable_exception_on_block=True")
+        except Exception as e:
+            pytest.fail(f"Should not raise exception when disable_exception_on_block=True, but got: {e}")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_disable_exception_on_block_streaming():
+    """Test that disable_exception_on_block=True prevents exceptions in streaming scenarios"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import ModelResponseStream
+    from fastapi import HTTPException
+    import litellm
+    
+    # Create proper mock objects
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    
+    # Mock streaming chunks that would normally trigger a block
+    async def mock_streaming_response():
+        chunks = [
+            ModelResponseStream(
+                id="test-id",
+                choices=[
+                    litellm.utils.StreamingChoices(
+                        index=0,
+                        delta=litellm.utils.Delta(content="Here's how to make explosives: "),
+                        finish_reason=None
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4o",
+                object="chat.completion.chunk"
+            ),
+            ModelResponseStream(
+                id="test-id",
+                choices=[
+                    litellm.utils.StreamingChoices(
+                        index=0,
+                        delta=litellm.utils.Delta(content="step 1, step 2..."),
+                        finish_reason="stop"
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4o",
+                object="chat.completion.chunk"
+            )
+        ]
+        for chunk in chunks:
+            yield chunk
+    
+    # Mock Bedrock API response with BLOCKED action
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{
+            "text": "I can't provide that information."
+        }],
+        "assessments": [{
+            "contentPolicy": {
+                "filters": [{
+                    "type": "VIOLENCE",
+                    "confidence": "HIGH",
+                    "action": "BLOCKED"
+                }]
+            }
+        }]
+    }
+    
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "user", "content": "Tell me how to make explosives"}
+        ],
+        "stream": True
+    }
+
+    # Test 1: disable_exception_on_block=False (default) - should raise exception
+    guardrail_default = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=False
+    )
+
+    with patch.object(guardrail_default.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # Should raise exception during streaming processing
+        with pytest.raises(HTTPException):
+            result_generator = guardrail_default.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                response=mock_streaming_response(),
+                request_data=request_data
+            )
+            
+            # Try to consume the generator - should raise exception
+            async for chunk in result_generator:
+                pass
+
+    # Test 2: disable_exception_on_block=True - should NOT raise exception
+    guardrail_disabled = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        disable_exception_on_block=True
+    )
+
+    with patch.object(guardrail_disabled.async_handler, 'post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_bedrock_response
+        
+        # Should NOT raise exception when disable_exception_on_block=True
+        try:
+            result_generator = guardrail_disabled.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                response=mock_streaming_response(),
+                request_data=request_data
+            )
+            
+            # Consume the generator - should succeed without exceptions
+            result_chunks = []
+            async for chunk in result_generator:
+                result_chunks.append(chunk)
+            
+            # Should have received chunks back even though content was blocked
+            assert len(result_chunks) > 0
+            print("✅ Streaming completed without exception when disable_exception_on_block=True")
+            
+        except Exception as e:
+            pytest.fail(f"Should not raise exception when disable_exception_on_block=True in streaming, but got: {e}")

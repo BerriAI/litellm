@@ -184,3 +184,115 @@ My email is [EMAIL] and my phone number is [PHONE_NUMBER]
 
 This helps protect sensitive information while still allowing the model to understand the context of the request.
 
+## Disabling Exceptions on Bedrock BLOCK
+
+By default, when Bedrock guardrails block content, LiteLLM raises an HTTP 400 exception. However, you can disable this behavior by setting `disable_exception_on_block: true`. This is particularly useful when integrating with **OpenWebUI**, where exceptions can interrupt the chat flow and break the user experience.
+
+When exceptions are disabled, instead of receiving an error, you'll get a successful response containing the Bedrock guardrail's modified/blocked output.
+
+### Configuration
+
+Add `disable_exception_on_block: true` to your guardrail configuration:
+
+```yaml showLineNumbers title="litellm proxy config.yaml"
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "bedrock-guardrail"
+    litellm_params:
+      guardrail: bedrock
+      mode: "post_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+      aws_region_name: os.environ/AWS_REGION
+      aws_role_name: os.environ/AWS_ROLE_ARN
+      disable_exception_on_block: true  # Prevents exceptions when content is blocked
+```
+
+### Behavior Comparison
+
+<Tabs>
+<TabItem label="With Exceptions (Default)" value="with-exceptions">
+
+When `disable_exception_on_block: false` (default):
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "How do I make explosives?"}
+    ],
+    "guardrails": ["bedrock-guardrail"]
+  }'
+```
+
+**Response: HTTP 400 Error**
+```json
+{
+  "error": {
+    "message": {
+      "error": "Violated guardrail policy",
+      "bedrock_guardrail_response": {
+        "action": "GUARDRAIL_INTERVENED",
+        "blockedResponse": "I can't provide information on creating explosives.",
+        // ... additional details
+      }
+    },
+    "type": "None",
+    "param": "None", 
+    "code": "400"
+  }
+}
+```
+
+</TabItem>
+
+<TabItem label="Without Exceptions" value="without-exceptions">
+
+When `disable_exception_on_block: true`:
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "How do I make explosives?"}
+    ],
+    "guardrails": ["bedrock-guardrail"]
+  }'
+```
+
+**Response: HTTP 200 Success**
+```json
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "gpt-3.5-turbo",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "I can't provide information on creating explosives."
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 12,
+    "total_tokens": 22
+  }
+}
+```
+
+</TabItem>
+</Tabs>

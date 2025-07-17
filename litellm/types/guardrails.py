@@ -273,6 +273,10 @@ class BedrockGuardrailConfigModel(BaseModel):
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
     )
+    disable_exception_on_block: Optional[bool] = Field(
+        default=False,
+        description="If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
+    )
     aws_region_name: Optional[str] = Field(
         default=None, description="AWS region where your guardrail is deployed"
     )

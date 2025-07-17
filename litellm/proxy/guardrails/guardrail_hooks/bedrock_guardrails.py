@@ -55,6 +55,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         guardrailIdentifier: Optional[str] = None,
         guardrailVersion: Optional[str] = None,
+        disable_exception_on_block: Optional[bool] = False,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -65,6 +66,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # store kwargs as optional_params
         self.optional_params = kwargs
+
+        self.disable_exception_on_block: bool = disable_exception_on_block or False
+        """
+        If True, will not raise an exception when the guardrail is blocked.
+        """
+        
 
         super().__init__(**kwargs)
         BaseAWSLLM.__init__(self)
@@ -309,6 +316,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
         if self.mask_request_content or self.mask_response_content:
+            return False
+        
+        if self.disable_exception_on_block is True:
             return False
 
         # if no intervention, return False

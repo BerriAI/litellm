@@ -15,6 +15,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         guardrailIdentifier=litellm_params.guardrailIdentifier,
         guardrailVersion=litellm_params.guardrailVersion,
         default_on=litellm_params.default_on,
+        disable_exception_on_block=litellm_params.disable_exception_on_block,
         mask_request_content=litellm_params.mask_request_content,
         mask_response_content=litellm_params.mask_response_content,
         aws_region_name=litellm_params.aws_region_name,
