@@ -313,6 +313,7 @@ def run_separate_health_app():
         print(f"\033[1;32mLiteLLM Health Endpoints: Running on http://0.0.0.0:{health_port}\033[0m")
         import threading
         def run_health_app():
+            import uvicorn
             uvicorn.run(health_app, host="0.0.0.0", port=health_port, log_level="info")
         t = threading.Thread(target=run_health_app, daemon=True)
         t.start()
