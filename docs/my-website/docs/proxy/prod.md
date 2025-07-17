@@ -240,13 +240,15 @@ Using a separate health check app ensures that your liveness and readiness probe
 - If your health endpoints share the same process as your main app, high traffic or resource exhaustion can cause health checks to hang or fail.
 - When Kubernetes liveness probes hang or time out, it may incorrectly assume your pod is unhealthy and restart it—even if the main app is just busy, not dead.
 - By running health endpoints on a separate lightweight FastAPI app (with its own port), you guarantee that health checks remain fast and reliable, preventing unnecessary pod restarts during traffic spikes or heavy workloads.
+- Since the proxy and health app are running in the same pod, if health check app fails, it signifies that the pod is unhealthy and needs to restart/have action taken upon.
 
 **How to enable:**
 
-Set the following environment variable:
-- Set the environment variable `SEPARATE_HEALTH_APP=1` to enable the separate health check app
-
-- You can also specify the port for the separate health check app by setting the `SEPARATE_HEALTH_PORT` environment variable. By default, the health app will run on port 4001
+Set the following environment variable(s):
+```bash
+SEPARATE_HEALTH_APP="1" # Default "0" 
+SEPARATE_HEALTH_PORT="8001" # Default "4001", Works only if `SEPARATE_HEALTH_APP` is "1"
+```
 
 ## Extras
 ### Expected Performance in Production
