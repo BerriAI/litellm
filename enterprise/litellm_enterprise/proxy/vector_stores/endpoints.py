@@ -9,7 +9,7 @@ All /vector_store management endpoints
 """
 
 import copy
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -72,9 +72,21 @@ async def new_vector_store(
                 vector_store.get("vector_store_metadata")
             )
 
+        # Safely handle JSON serialization of litellm_params
+        litellm_params_json: Optional[str] = None
+        if vector_store.get("litellm_params") is not None:
+            litellm_params_json = safe_dumps(
+                vector_store.get("litellm_params")
+            )
+            del vector_store["litellm_params"]
+
+
         _new_vector_store = (
             await prisma_client.db.litellm_managedvectorstorestable.create(
-                data=vector_store
+                data={
+                    **vector_store,
+                    "litellm_params": litellm_params_json,
+                }
             )
         )
 
