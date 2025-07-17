@@ -268,3 +268,240 @@ def test_get_supported_openai_params_bedrock_converse():
 
         assert set(supported_params_without_prefix) == set(supported_params_with_prefix), f"Supported params mismatch for model: {model}. Without prefix: {supported_params_without_prefix}, With prefix: {supported_params_with_prefix}"
         print(f"✅ Passed for model: {model}")
+
+
+def test_cache_control_tool_call_results():
+    """Test that cache control is properly applied to tool call results"""
+    
+    config = AmazonConverseConfig()
+    
+    # Test tool call result with cache control
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant", 
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Boston"}'
+                    }
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1", 
+            "content": "It's sunny in Boston",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    result = config.transform_request(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather info",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                }
+            ]
+        },
+        litellm_params={},
+        headers={},
+    )
+    
+    # Check that the tool result has both the content and cache point
+    assert "messages" in result
+    found_tool_result = False
+    found_cache_point = False
+    
+    for message in result["messages"]:
+        if message["role"] == "user" and len(message["content"]) > 1:
+            for content_block in message["content"]:
+                if content_block.get("toolResult"):
+                    found_tool_result = True
+                elif content_block.get("cachePoint"):
+                    found_cache_point = True
+                    assert content_block["cachePoint"]["type"] == "default"
+    
+    assert found_tool_result, "Tool result not found in transformed messages"
+    assert found_cache_point, "Cache point not found after tool result"
+
+
+def test_cache_control_assistant_text_content():
+    """Test that cache control is properly applied to assistant text content"""
+    
+    config = AmazonConverseConfig()
+    
+    # Test assistant message with cache control (list content)
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant", 
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello! How can I help you today?",
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    result = config.transform_request(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    
+    # Check that the assistant message has both text and cache point
+    assert "messages" in result
+    assistant_message = result["messages"][1]
+    assert assistant_message["role"] == "assistant"
+    assert len(assistant_message["content"]) == 2
+    
+    # First block should be text
+    assert assistant_message["content"][0]["text"] == "Hello! How can I help you today?"
+    
+    # Second block should be cache point
+    assert "cachePoint" in assistant_message["content"][1]
+    assert assistant_message["content"][1]["cachePoint"]["type"] == "default"
+
+
+def test_cache_control_assistant_string_content():
+    """Test that cache control is properly applied to assistant string content"""
+    
+    config = AmazonConverseConfig()
+    
+    # Test assistant message with cache control (string content)
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant", 
+            "content": "Hello! How can I help you today?",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    result = config.transform_request(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    
+    # Check that the assistant message has both text and cache point
+    assert "messages" in result
+    assistant_message = result["messages"][1]
+    assert assistant_message["role"] == "assistant"
+    assert len(assistant_message["content"]) == 2
+    
+    # First block should be text
+    assert assistant_message["content"][0]["text"] == "Hello! How can I help you today?"
+    
+    # Second block should be cache point
+    assert "cachePoint" in assistant_message["content"][1]
+    assert assistant_message["content"][1]["cachePoint"]["type"] == "default"
+
+
+def test_cache_control_mixed_conversation():
+    """Test cache control in a realistic conversation with multiple message types"""
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    
+    config = AmazonConverseConfig()
+    
+    messages = [
+        {
+            "role": "system", 
+            "content": "You are a helpful assistant.",
+            "cache_control": {"type": "ephemeral"}
+        },
+        {"role": "user", "content": "What's the weather in Boston?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function", 
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "Boston"}'
+                    }
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "Temperature: 72°F, Conditions: Sunny",
+            "cache_control": {"type": "ephemeral"}
+        },
+        {
+            "role": "assistant",
+            "content": "The weather in Boston is sunny with a temperature of 72°F!",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    result = config.transform_request(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=messages,
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather info",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                }
+            ]
+        },
+        litellm_params={},
+        headers={},
+    )
+    
+    # Check system message cache control
+    assert "system" in result
+    assert len(result["system"]) == 2
+    assert result["system"][0]["text"] == "You are a helpful assistant."
+    assert "cachePoint" in result["system"][1]
+    assert result["system"][1]["cachePoint"]["type"] == "default"
+    
+    # Check that we have the right number of messages
+    assert len(result["messages"]) == 4  # user, assistant with tool calls, tool result, final assistant
+    
+    # Check tool result cache control
+    tool_message = result["messages"][2]  # Should contain tool results
+    found_tool_result = False
+    found_cache_point = False
+    
+    for content_block in tool_message["content"]:
+        if content_block.get("toolResult"):
+            found_tool_result = True
+        elif content_block.get("cachePoint"):
+            found_cache_point = True
+    
+    assert found_tool_result and found_cache_point, "Tool result cache control not properly applied"
+    
+    # Check final assistant message cache control
+    final_assistant = result["messages"][3]
+    assert final_assistant["role"] == "assistant"
+    assert len(final_assistant["content"]) == 2
+    assert final_assistant["content"][0]["text"] == "The weather in Boston is sunny with a temperature of 72°F!"
+    assert "cachePoint" in final_assistant["content"][1]
+    assert final_assistant["content"][1]["cachePoint"]["type"] == "default"
