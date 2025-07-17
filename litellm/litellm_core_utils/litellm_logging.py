@@ -3130,6 +3130,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 customLogger = CustomLogger()
     except Exception as e:
         raise e
+    return None
 
 
 def _init_custom_logger_compatible_class(  # noqa: PLR0915
