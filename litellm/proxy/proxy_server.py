@@ -8715,9 +8715,7 @@ app.include_router(anthropic_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)
-# Only include health_router if SEPARATE_HEALTH_APP is not set to '1'
-if os.getenv("SEPARATE_HEALTH_APP", "0") != "1":
-    app.include_router(health_router)
+app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(team_router)
