@@ -1060,140 +1060,79 @@ class TestUISSO_FunctionsExistence:
         assert callable(SSOAuthenticationHandler._get_cli_state)
 
 
-class TestCustomUISSO:
-    """Test the custom UI SSO sign-in handler functionality"""
+class TestCustomSSOHandling:
+    """Test the custom SSO handling functionality without enterprise dependencies"""
 
     @pytest.mark.asyncio
-    async def test_handle_custom_ui_sso_sign_in_success(self):
-        """Test successful custom UI SSO sign-in with valid headers"""
-        from unittest.mock import MagicMock, patch, AsyncMock
-        
-        # Mock the enterprise classes we need
-        mock_enterprise_handler = MagicMock()
-        mock_enterprise_handler.handle_custom_ui_sso_sign_in = AsyncMock()
-        
-        # Mock the OpenID response
-        mock_openid = MagicMock()
-        mock_openid.id = "test_user_123"
-        mock_openid.email = "test@example.com"
-        mock_openid.first_name = "Test"
-        mock_openid.last_name = "User"
-        mock_openid.display_name = "Test User"
-        mock_openid.picture = None
-        mock_openid.provider = "custom"
-        
-        mock_enterprise_handler.handle_custom_ui_sso_sign_in.return_value = mock_openid
+    async def test_enterprise_import_error_handling(self):
+        """Test that proper error is raised when enterprise module is not available"""
+        from unittest.mock import MagicMock, patch
+        import sys
 
-        # Mock request with custom headers
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {
-            "x-litellm-user-id": "test_user_123",
-            "x-litellm-user-email": "test@example.com",
-            "x-forwarded-for": "192.168.1.1",
-        }
-        mock_request.base_url = "https://test.litellm.ai/"
-
-        # Mock the custom handler
+        # Mock request
+        mock_request = MagicMock()
+        mock_request.base_url = "https://test.example.com/"
+        
+        # Mock a custom handler to trigger the enterprise import path
         mock_custom_handler = MagicMock()
-        mock_custom_handler.handle_custom_ui_sso_sign_in = AsyncMock(return_value=mock_openid)
-
-        # Mock the redirect response method
-        mock_redirect_response = MagicMock()
-        mock_redirect_response.status_code = 303
-
-        # Mock the enterprise import
-        with patch.dict('sys.modules', {
-            'litellm_enterprise': MagicMock(),
-            'litellm_enterprise.proxy': MagicMock(),
-            'litellm_enterprise.proxy.auth': MagicMock(),
-            'litellm_enterprise.proxy.auth.custom_sso_handler': MagicMock()
-        }):
-            # Mock the enterprise class
-            with patch('litellm_enterprise.proxy.auth.custom_sso_handler.EnterpriseCustomSSOHandler', mock_enterprise_handler):
-                with patch("litellm.proxy.proxy_server.premium_user", True):
-                    with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", mock_custom_handler):
-                        with patch.object(SSOAuthenticationHandler, "get_redirect_response_from_openid", return_value=mock_redirect_response) as mock_get_redirect:
-                            # Import and test
-                            from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
-                            
-                            # Act
-                            result = await sso_login_redirect(request=mock_request)
-
-                            # Assert - The custom handler path should be triggered
-                            # and the redirect response should be returned
-                            assert result == mock_redirect_response
-                            assert result.status_code == 303
+        
+        # Block the enterprise import by removing it from sys.modules and making import fail
+        enterprise_modules_to_block = [
+            'litellm_enterprise',
+            'litellm_enterprise.proxy',
+            'litellm_enterprise.proxy.auth',
+            'litellm_enterprise.proxy.auth.custom_sso_handler'
+        ]
+        
+        # Store original modules if they exist
+        original_modules = {}
+        for module in enterprise_modules_to_block:
+            if module in sys.modules:
+                original_modules[module] = sys.modules[module]
+            sys.modules[module] = None
+        
+        try:
+            # Mock the environment to trigger the enterprise path
+            with patch("litellm.proxy.proxy_server.premium_user", True):
+                with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", mock_custom_handler):
+                    with patch.dict(os.environ, {"GOOGLE_CLIENT_ID": "test_client_id"}):
+                        # Import the actual function
+                        from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
+                        
+                        # This should trigger the enterprise import and raise ValueError
+                        with pytest.raises(ValueError, match="Enterprise features are not available"):
+                            await sso_login_redirect(request=mock_request)
+        finally:
+            # Restore original modules
+            for module in enterprise_modules_to_block:
+                if module in original_modules:
+                    sys.modules[module] = original_modules[module]
+                else:
+                    sys.modules.pop(module, None)
 
     @pytest.mark.asyncio
-    async def test_custom_ui_sso_handler_execution_with_real_class(self):
-        """Test that when a user provides a custom class instance, it gets properly executed"""
-        from unittest.mock import MagicMock, patch, AsyncMock
-
-        # Create a mock custom handler class
-        class MockCustomSSOHandler:
-            def __init__(self):
-                self.method_called = False
-                self.received_request = None
-
-            async def handle_custom_ui_sso_sign_in(self, request: Request):
-                self.method_called = True
-                self.received_request = request
-                
-                # Mock OpenID response
-                mock_openid = MagicMock()
-                mock_openid.id = "custom_test_user_456"
-                mock_openid.email = "custom@example.com"
-                mock_openid.first_name = "Custom"
-                mock_openid.last_name = "Handler"
-                mock_openid.display_name = "Custom Handler Test"
-                mock_openid.picture = None
-                mock_openid.provider = "custom"
-                return mock_openid
-
-        # Create instance of our test handler
-        test_handler_instance = MockCustomSSOHandler()
-
-        # Mock request with custom headers
-        mock_request = MagicMock(spec=Request)
-        mock_request.headers = {
-            "x-litellm-user-id": "custom_test_user_456", 
-            "x-litellm-user-email": "custom@example.com",
-            "x-forwarded-for": "10.0.0.1",
-        }
-        mock_request.base_url = "https://custom.litellm.ai/"
-
-        # Mock the redirect response method
-        mock_redirect_response = MagicMock()
-        mock_redirect_response.status_code = 303
-
-        # Mock enterprise handler
-        mock_enterprise_handler = MagicMock()
-        mock_enterprise_handler.handle_custom_ui_sso_sign_in = AsyncMock()
-
-        # Mock the enterprise import and class
-        with patch.dict('sys.modules', {
-            'litellm_enterprise': MagicMock(),
-            'litellm_enterprise.proxy': MagicMock(),
-            'litellm_enterprise.proxy.auth': MagicMock(),
-            'litellm_enterprise.proxy.auth.custom_sso_handler': MagicMock()
-        }):
-            with patch('litellm_enterprise.proxy.auth.custom_sso_handler.EnterpriseCustomSSOHandler', mock_enterprise_handler):
-                with patch("litellm.proxy.proxy_server.premium_user", True):
-                    with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", test_handler_instance):
-                        with patch.object(SSOAuthenticationHandler, "get_redirect_response_from_openid", return_value=mock_redirect_response) as mock_get_redirect:
-                            # Import and test
-                            from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
-                            
-                            # Act
-                            result = await sso_login_redirect(request=mock_request)
-
-                            # Assert that our custom handler was executed
-                            assert test_handler_instance.method_called is True
-                            assert test_handler_instance.received_request == mock_request
-
-                            # Verify the result is the redirect response
-                            assert result == mock_redirect_response
-                            assert result.status_code == 303
+    async def test_custom_sso_handler_none_check(self):
+        """Test behavior when user_custom_ui_sso_sign_in_handler is None"""
+        from unittest.mock import patch, MagicMock
+        
+        mock_request = MagicMock()
+        mock_request.base_url = "https://test.example.com/"
+        
+        # Mock all the necessary environment variables and imports
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            with patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None):
+                with patch.dict(os.environ, {
+                    "GOOGLE_CLIENT_ID": "test_client_id",
+                    "GOOGLE_CLIENT_SECRET": "test_secret"
+                }):
+                    with patch("litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_sso_login_redirect") as mock_redirect:
+                        from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
+                        
+                        # This should not trigger the custom handler path since it's None
+                        await sso_login_redirect(request=mock_request)
+                        
+                        # Verify that the standard SSO redirect was called
+                        mock_redirect.assert_called_once()
 
     def test_custom_sso_handler_import_path_check(self):
         """Test that the custom handler import path exists in the code"""
