@@ -11,7 +11,7 @@ All /vector_store management endpoints
 import copy
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -27,7 +27,9 @@ from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
 
-
+########################################################
+# Management Endpoints
+########################################################
 @router.post(
     "/vector_store/new",
     tags=["vector store management"],
