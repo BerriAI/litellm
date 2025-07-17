@@ -7081,8 +7081,6 @@ class ProviderConfigManager:
         """
         v2 vector store config, use this for new vector store integrations
         """
-        from litellm.types.utils import VectorStoreProviders
-
         if litellm.LlmProviders.OPENAI == provider:
             from litellm.llms.openai.vector_stores.transformation import (
                 OpenAIVectorStoreConfig,
@@ -7101,7 +7099,7 @@ class ProviderConfigManager:
             )
 
             return VertexVectorStoreConfig()
-        elif VectorStoreProviders.PG_VECTOR == provider:
+        elif litellm.LlmProviders.PG_VECTOR == provider:
             from litellm.llms.pg_vector.vector_stores.transformation import (
                 PGVectorStoreConfig,
             )
