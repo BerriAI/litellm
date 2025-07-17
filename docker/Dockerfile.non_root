@@ -1,21 +1,16 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.13.1-slim
+ARG LITELLM_BUILD_IMAGE=python:3.11-alpine
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.13.1-slim
+ARG LITELLM_RUNTIME_IMAGE=python:3.11-alpine
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
 # Set the working directory to /app
 WORKDIR /app
 
-# Set the shell to bash
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-
 # Install build dependencies
-RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc g++ python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache gcc g++ python3-dev musl-dev nodejs npm bash curl
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir build
@@ -41,8 +36,8 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
-# Update dependencies and clean up - handles debian security issue
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+# Update dependencies and clean up
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -61,20 +56,26 @@ RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
 
+# Install nodejs for Admin UI and Prisma
+RUN apk add --no-cache nodejs npm bash curl
+
 # Build Admin UI
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 ### Prisma Handling for Non-Root #################################################
 # Prisma allows you to specify the binary cache directory to use
 ENV PRISMA_BINARY_CACHE_DIR=/nonexistent
+ENV NPM_CONFIG_CACHE=/app/.npm
 
-RUN pip install --no-cache-dir nodejs-bin prisma
+RUN pip install --no-cache-dir prisma
 
 # Make a /non-existent folder and assign chown to nobody
-RUN mkdir -p /nonexistent && \
+RUN mkdir -p /nonexistent &&  \ 
     chown -R nobody:nogroup /app && \
     chown -R nobody:nogroup /nonexistent && \
-    chown -R nobody:nogroup /usr/local/lib/python3.13/site-packages/prisma/
+    chown -R nobody:nogroup /usr/local/lib/python3.11/site-packages/prisma/ && \
+    mkdir -p /.npm && \
+    chown -R nobody:nogroup /.npm
 
 RUN chmod +x docker/entrypoint.sh
 RUN chmod +x docker/prod_entrypoint.sh
@@ -82,13 +83,15 @@ RUN chmod +x docker/prod_entrypoint.sh
 # Run Prisma generate as user = nobody
 USER nobody
 
+WORKDIR /app/litellm/proxy
+
 RUN prisma generate
 ### End of Prisma Handling for Non-Root #########################################
 
 EXPOSE 4000/tcp
 
 # # Set your entrypoint and command
-ENTRYPOINT ["docker/prod_entrypoint.sh"]
+ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs
 # CMD ["--port", "4000", "--detailed_debug"]
