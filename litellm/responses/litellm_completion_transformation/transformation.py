@@ -210,20 +210,152 @@ class LiteLLMCompletionResponsesConfig:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
+        session_data_found = False
+        
         if _ENTERPRISE_ResponsesSessionHandler is not None:
-            chat_completion_session = ChatCompletionSession(
-                messages=[], litellm_session_id=None
-            )
-            if previous_response_id:
-                chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-                    previous_response_id=previous_response_id
+            try:
+                chat_completion_session = ChatCompletionSession(
+                    messages=[], litellm_session_id=None
                 )
-            _messages = litellm_completion_request.get("messages") or []
-            session_messages = chat_completion_session.get("messages") or []
-            litellm_completion_request["messages"] = session_messages + _messages
-            litellm_completion_request[
-                "litellm_trace_id"
-            ] = chat_completion_session.get("litellm_session_id")
+                if previous_response_id:
+                    chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                        previous_response_id=previous_response_id
+                    )
+                session_messages = chat_completion_session.get("messages") or []
+                
+                # Check if enterprise handler actually found session data
+                if len(session_messages) > 0:
+                    _messages = litellm_completion_request.get("messages") or []
+                    litellm_completion_request["messages"] = session_messages + _messages
+                    litellm_completion_request[
+                        "litellm_trace_id"
+                    ] = chat_completion_session.get("litellm_session_id")
+                    session_data_found = True
+                    verbose_logger.debug(f"Enterprise session handler found {len(session_messages)} messages")
+                else:
+                    verbose_logger.debug("Enterprise session handler found no session data, falling back to non-enterprise")
+            except Exception as e:
+                verbose_logger.debug(f"Enterprise session handler failed: {e}, falling back to non-enterprise")
+        
+        if not session_data_found:
+            # Non-enterprise fallback: Basic session continuity for function calling
+            verbose_logger.debug("Using non-enterprise session continuity fallback")
+            litellm_completion_request = await LiteLLMCompletionResponsesConfig._handle_session_continuity_non_enterprise(
+                previous_response_id=previous_response_id,
+                litellm_completion_request=litellm_completion_request,
+            )
+        return litellm_completion_request
+
+    @staticmethod
+    async def _handle_session_continuity_non_enterprise(
+        previous_response_id: str,
+        litellm_completion_request: dict,
+    ) -> dict:
+        """
+        Basic session continuity handler for non-enterprise users.
+        
+        This provides minimal context reconstruction for function calling scenarios
+        where Gemini models require the original conversation context.
+        
+        For function calling, this ensures that when a function result is provided,
+        Gemini gets the necessary context about what function was called.
+        """
+        verbose_logger.debug(
+            f"Non-enterprise session continuity: handling previous_response_id={previous_response_id}"
+        )
+        
+        # Get current messages from the request
+        current_messages = litellm_completion_request.get("messages", [])
+        
+        # Check if current input contains function call outputs (tool role messages)
+        has_function_outputs = False
+        function_call_ids = []
+        tool_messages = []
+        
+        for message in current_messages:
+            if (
+                isinstance(message, dict) 
+                and message.get("role") == "tool"
+                and message.get("tool_call_id")
+            ):
+                has_function_outputs = True
+                function_call_ids.append(message.get("tool_call_id"))
+                tool_messages.append(message)
+        
+        # If we have function outputs but no previous context, we need to create minimal context
+        if has_function_outputs:
+            verbose_logger.debug(
+                f"Function outputs detected: {function_call_ids}. Creating minimal context for Gemini."
+            )
+            
+            # Check if we already have the necessary context (user + assistant with tool calls)
+            has_user_message = any(msg.get("role") == "user" for msg in current_messages)
+            has_assistant_with_tool_calls = any(
+                msg.get("role") == "assistant" and msg.get("tool_calls") 
+                for msg in current_messages
+            )
+            
+            if not (has_user_message and has_assistant_with_tool_calls):
+                # For Gemini models, we need at least:
+                # 1. A user message that would have triggered the function call
+                # 2. An assistant message with the function call
+                # 3. The tool message with the function result (already in current_messages)
+                
+                # Create a minimal user message that would trigger function calling
+                synthetic_user_message = {
+                    "role": "user",
+                    "content": "Please help me with the requested information."
+                }
+                
+                # Create synthetic assistant message with function calls for each tool call ID
+                tool_calls = []
+                for call_id in function_call_ids:
+                    # Try to infer function name from available tools
+                    function_name = "get_information"  # Default fallback
+                    
+                    # Look for tools in the request to get the actual function name
+                    tools = litellm_completion_request.get("tools", [])
+                    if tools and len(tools) > 0:
+                        # Use the first available tool name as a reasonable guess
+                        first_tool = tools[0]
+                        if isinstance(first_tool, dict) and "function" in first_tool:
+                            function_name = first_tool["function"].get("name", function_name)
+                        elif isinstance(first_tool, dict) and "name" in first_tool:
+                            function_name = first_tool["name"]
+                    
+                    tool_calls.append({
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": "{}"  # Minimal arguments
+                        }
+                    })
+                
+                synthetic_assistant_message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls
+                }
+                
+                # Reconstruct the conversation: user message -> assistant with tool calls -> tool results
+                non_tool_messages = [msg for msg in current_messages if msg.get("role") != "tool"]
+                reconstructed_messages = [synthetic_user_message, synthetic_assistant_message] + non_tool_messages + tool_messages
+                
+                litellm_completion_request["messages"] = reconstructed_messages
+                
+                verbose_logger.debug(
+                    f"Non-enterprise session continuity: reconstructed {len(reconstructed_messages)} messages for function calling"
+                )
+            else:
+                verbose_logger.debug(
+                    "Function outputs detected but context already present. No reconstruction needed."
+                )
+        else:
+            verbose_logger.debug(
+                "No function outputs detected. No additional context needed."
+            )
+        
         return litellm_completion_request
 
     @staticmethod
