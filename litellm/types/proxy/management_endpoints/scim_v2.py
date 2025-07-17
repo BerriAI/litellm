@@ -90,3 +90,25 @@ class SCIMPatchOperation(BaseModel):
 class SCIMPatchOp(BaseModel):
     schemas: List[str] = ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]
     Operations: List[SCIMPatchOperation]
+
+
+# SCIM Service Provider Configuration Models
+class SCIMFeature(BaseModel):
+    supported: bool
+    maxOperations: Optional[int] = None
+    maxPayloadSize: Optional[int] = None
+    maxResults: Optional[int] = None
+
+
+class SCIMServiceProviderConfig(BaseModel):
+    schemas: List[str] = [
+        "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
+    ]
+    patch: SCIMFeature = SCIMFeature(supported=True)
+    bulk: SCIMFeature = SCIMFeature(supported=False)
+    filter: SCIMFeature = SCIMFeature(supported=False)
+    changePassword: SCIMFeature = SCIMFeature(supported=False)
+    sort: SCIMFeature = SCIMFeature(supported=False)
+    etag: SCIMFeature = SCIMFeature(supported=False)
+    authenticationSchemes: Optional[List[Dict[str, Any]]] = None
+    meta: Optional[Dict[str, Any]] = None

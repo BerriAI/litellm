@@ -16,6 +16,7 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
     ) -> List[OpenAIImageGenerationOptionalParams]:
         return [
             "background",
+            "input_fidelity",
             "moderation",
             "n",
             "output_compression",
