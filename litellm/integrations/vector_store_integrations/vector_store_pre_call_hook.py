@@ -5,7 +5,7 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import verbose_logger

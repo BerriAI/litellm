@@ -671,9 +671,6 @@ class Logging(LiteLLMLoggingBaseClass):
         # Vector Store / Knowledge Base hooks
         #########################################################
         if litellm.vector_store_registry is not None:
-                from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
-                    VectorStorePreCallHook,
-                )
                 
                 vector_store_custom_logger = _init_custom_logger_compatible_class(
                     logging_integration="vector_store_pre_call_hook",
