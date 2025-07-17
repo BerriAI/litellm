@@ -28,16 +28,16 @@ jobs:
 
 
 
-    - name: Run Black formatting
-      run: |
-        cd litellm
-        poetry run black .
-        cd ..
-
     - name: Run Ruff linting
       run: |
         cd litellm
         poetry run ruff check .
+        cd ..
+
+    - name: Run Black formatting
+      run: |
+        cd litellm
+        poetry run black .
         cd ..
 
     - name: Run MyPy type checking
