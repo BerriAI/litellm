@@ -280,6 +280,14 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "/vector_stores",
+          items: [
+            "vector_stores/create",
+            "vector_stores/search",
+          ]
+        },
+        {
+          type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
           items: [
             "pass_through/intro",
