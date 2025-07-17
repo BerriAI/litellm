@@ -152,34 +152,31 @@ class TestPGVectorStoreConfig:
         config = PGVectorStoreConfig()
         
         # Test API key from environment variable
-        with patch.dict('os.environ', {'PG_VECTOR_API_KEY': 'env_api_key_123'}):
+        with patch('litellm.llms.pg_vector.vector_stores.transformation.get_secret_str') as mock_get_secret:
+            mock_get_secret.return_value = 'env_api_key_123'
             litellm_params = GenericLiteLLMParams()  # No API key in params
             
-            # The secret_managers.get_secret_str should pick up the env var
-            with patch('litellm.secret_managers.main.get_secret_str') as mock_get_secret:
-                mock_get_secret.return_value = 'env_api_key_123'
-                
-                headers = config.validate_environment({}, litellm_params)
-                
-                assert headers["Authorization"] == "Bearer env_api_key_123"
-                mock_get_secret.assert_called_with("PG_VECTOR_API_KEY")
+            headers = config.validate_environment({}, litellm_params)
+            
+            assert headers["Authorization"] == "Bearer env_api_key_123"
+            mock_get_secret.assert_called_with("PG_VECTOR_API_KEY")
         
         # Test API base from environment variable
-        with patch.dict('os.environ', {'PG_VECTOR_API_BASE': 'https://env-pg-vector.example.com'}):
+        with patch('litellm.llms.pg_vector.vector_stores.transformation.get_secret_str') as mock_get_secret:
+            mock_get_secret.return_value = 'https://env-pg-vector.example.com'
             
-            with patch('litellm.secret_managers.main.get_secret_str') as mock_get_secret:
-                mock_get_secret.return_value = 'https://env-pg-vector.example.com'
-                
-                url = config.get_complete_url(None, {})
-                
-                assert url == "https://env-pg-vector.example.com/vector_stores"
-                mock_get_secret.assert_called_with("PG_VECTOR_API_BASE")
+            url = config.get_complete_url(None, {})
+            
+            assert url == "https://env-pg-vector.example.com/vector_stores"
+            mock_get_secret.assert_called_with("PG_VECTOR_API_BASE")
         
         # Test that params take precedence over environment variables
-        with patch.dict('os.environ', {'PG_VECTOR_API_KEY': 'env_key'}):
+        with patch('litellm.llms.pg_vector.vector_stores.transformation.get_secret_str') as mock_get_secret:
             litellm_params = GenericLiteLLMParams(api_key="param_key")
             
             headers = config.validate_environment({}, litellm_params)
             
             # Param key should take precedence
-            assert headers["Authorization"] == "Bearer param_key" 
+            assert headers["Authorization"] == "Bearer param_key"
+            # get_secret_str should not be called when api_key is provided in params
+            mock_get_secret.assert_not_called() 
