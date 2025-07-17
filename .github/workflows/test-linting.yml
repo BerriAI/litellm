@@ -26,8 +26,6 @@ jobs:
         poetry install --with dev
         pip install openai==1.81.0
 
-
-
     - name: Run Ruff linting
       run: |
         cd litellm
@@ -37,7 +35,7 @@ jobs:
     - name: Run Black formatting
       run: |
         cd litellm
-        poetry run black .
+        poetry run black . --check
         cd ..
 
     - name: Run MyPy type checking
