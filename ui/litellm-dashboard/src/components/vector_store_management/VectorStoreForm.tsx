@@ -87,7 +87,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
 
   return (
     <Modal
-      title="Create New Vector Store"
+      title="Add New Vector Store"
       visible={isVisible}
       width={1000}
       footer={null}
