@@ -478,16 +478,38 @@ if MCP_AVAILABLE:
         except Exception as e:
             return [TextContent(text=f"Error: {str(e)}", type="text")]
 
+    async def extract_mcp_auth_context(scope, path):
+        """
+        Extracts mcp_servers from the path and processes the MCP request for auth context.
+        Returns: (user_api_key_auth, mcp_auth_header, mcp_servers)
+        """
+        import re
+        mcp_servers_from_path = None
+        mcp_path_match = re.match(r"^/mcp/([^/]+)(/.*)?$", path)
+        if mcp_path_match:
+            mcp_servers_str = mcp_path_match.group(1)
+            if mcp_servers_str:
+                mcp_servers_from_path = [s.strip() for s in mcp_servers_str.split(",") if s.strip()]
+
+        if mcp_servers_from_path is not None:
+            user_api_key_auth, mcp_auth_header, _ = (
+                await MCPRequestHandler.process_mcp_request(scope)
+            )
+            mcp_servers = mcp_servers_from_path
+        else:
+            user_api_key_auth, mcp_auth_header, mcp_servers = (
+                await MCPRequestHandler.process_mcp_request(scope)
+            )
+        return user_api_key_auth, mcp_auth_header, mcp_servers
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
-            # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header, mcp_servers = (
-                await MCPRequestHandler.process_mcp_request(scope)
-            )
-            verbose_logger.debug(f"MCP request headers - mcp_servers: {mcp_servers}")
+            path = scope.get("path", "")
+            user_api_key_auth, mcp_auth_header, mcp_servers = await extract_mcp_auth_context(scope, path)
+            verbose_logger.debug(f"MCP request mcp_servers (header/path): {mcp_servers}")
             # Set the auth context variable for easy access in MCP functions
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
@@ -509,22 +531,17 @@ if MCP_AVAILABLE:
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
         try:
-            # Validate headers and log request info
-            user_api_key_auth, mcp_auth_header, mcp_servers = (
-                await MCPRequestHandler.process_mcp_request(scope)
-            )
-            verbose_logger.debug(f"MCP request headers - mcp_servers: {mcp_servers}")
-            # Set the auth context variable for easy access in MCP functions
+            path = scope.get("path", "")
+            user_api_key_auth, mcp_auth_header, mcp_servers = await extract_mcp_auth_context(scope, path)
+            verbose_logger.debug(f"MCP request mcp_servers (header/path): {mcp_servers}")
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
             )
 
-            # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
                 await initialize_session_managers()
-                # Give it a moment to start up
                 await asyncio.sleep(0.1)
 
             await sse_session_manager.handle_request(scope, receive, send)

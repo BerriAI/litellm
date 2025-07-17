@@ -5,14 +5,8 @@ model_list:
   - model_name: openai/*
     litellm_params:
       model: openai/*
-  - model_name: gemini/*
-    litellm_params:
-      model: gemini/*
+
 
 litellm_settings:
   callbacks: ["datadog_llm_observability"]
-
-mcp_servers:
-  # HTTP Streamable Server
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
+  cache: true
