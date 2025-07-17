@@ -508,3 +508,31 @@ def test_cohere_embed_v4_with_optional_params():
         
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_cohere_embed_base64_encoding_format():
+    """Test that Cohere embeddings handle base64 encoding_format gracefully.
+    
+    This test ensures that when LangChain or other clients send encoding_format="base64"
+    (which is valid for OpenAI but not for Cohere), LiteLLM handles it gracefully
+    without throwing an error.
+    """
+    try:
+        # This should not throw an error even though base64 is not a valid Cohere format
+        response = embedding(
+            model="cohere/embed-multilingual-v3.0",
+            input=["Test base64 encoding format handling"],
+            encoding_format="base64"  # OpenAI-style format that Cohere doesn't support
+        )
+        
+        # Validate response - should return regular float embeddings
+        assert response.model is not None
+        assert len(response.data) == 1
+        assert response.data[0]['object'] == 'embedding'
+        assert len(response.data[0]['embedding']) > 0
+        # Ensure embeddings are floats (default format when base64 is not supported)
+        assert all(isinstance(x, float) for x in response.data[0]['embedding'])
+        assert isinstance(response.usage, litellm.Usage)
+        
+    except Exception as e:
+        pytest.fail(f"Should handle base64 encoding_format gracefully, but got error: {e}")
