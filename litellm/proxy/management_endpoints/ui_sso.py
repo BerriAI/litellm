@@ -84,10 +84,7 @@ async def serve_login_page(
     Serves a unified login page with options for both normal
     username/password login and SSO.
     """
-    from litellm.proxy.proxy_server import (
-        premium_user,
-        user_custom_ui_sso_sign_in_handler,
-    )
+    from litellm.proxy.proxy_server import premium_user
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
@@ -409,7 +406,10 @@ async def sso_login_redirect(
     """
     Handles SSO login redirect - this is what the "Login with SSO" button points to
     """
-    from litellm.proxy.proxy_server import premium_user
+    from litellm.proxy.proxy_server import (
+        premium_user,
+        user_custom_ui_sso_sign_in_handler,
+    )
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
