@@ -409,6 +409,7 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionSystemMessage,
             ChatCompletionAssistantMessage,
             ChatCompletionToolMessage,
+            ChatCompletionThinkingBlock,
         ],
         block_type: Literal["system"],
     ) -> Optional[SystemContentBlock]:
@@ -423,6 +424,7 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionSystemMessage,
             ChatCompletionAssistantMessage,
             ChatCompletionToolMessage,
+            ChatCompletionThinkingBlock,
         ],
         block_type: Literal["content_block"],
     ) -> Optional[ContentBlock]:
@@ -436,6 +438,7 @@ class AmazonConverseConfig(BaseConfig):
             ChatCompletionSystemMessage,
             ChatCompletionAssistantMessage,
             ChatCompletionToolMessage,
+            ChatCompletionThinkingBlock,
         ],
         block_type: Literal["system", "content_block"],
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
