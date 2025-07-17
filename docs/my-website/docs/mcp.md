@@ -211,7 +211,7 @@ The URL pattern is:
 <your-litellm-proxy-base-url>/mcp/{server1,group1}
 ```
 
-- You can specify one or more server/group names, separated by commas, inside curly braces `{}` after `/mcp/`.
+- You can specify one or more server/group names, separated by commas after `/mcp/`.
 - Server/group names with spaces should be replaced with underscores.
 - If you do not use this URL pattern, all available MCP servers will be accessible (unless restricted by other means).
 - You can still use the `x-mcp-servers` header as an alternative (see below).
@@ -229,7 +229,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/{Zapier_Gmail,Group1}",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -241,7 +241,7 @@ curl --location 'https://api.openai.com/v1/responses' \
 }'
 ```
 
-In this example, the request will only have access to tools from the "Zapier_Gmail" and "Group1" MCP servers.
+In this example, the request will only have access to tools from the "Zapier_Gmail" MCP servers.
 
 </TabItem>
 
@@ -257,7 +257,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "<your-litellm-proxy-base-url>/mcp/{Zapier_Gmail,Group1}",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,Group1",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
@@ -279,7 +279,7 @@ This configuration restricts the request to only use tools from the specified MC
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "<your-litellm-proxy-base-url>/mcp/{Zapier_Gmail,Group1}",
+      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
       }
@@ -292,6 +292,21 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 
 </TabItem>
 </Tabs>
+
+- Note: you can add multiple servers in the URL instead of just one, making it comma-separated as well
+- Example:
+```json title="Multiple Servers/Access Groups in URL" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,dev group,deepwiki_mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
 
 
 ## Segregating MCP Server Access Using Headers
