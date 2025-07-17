@@ -5,9 +5,7 @@ model_list:
   - model_name: openai/*
     litellm_params:
       model: openai/*
-  - model_name: gemini/*
-    litellm_params:
-      model: gemini/*
+
 
 guardrails:
   - guardrail_name: "bedrock-post-guard"
@@ -18,3 +16,8 @@ guardrails:
       guardrailVersion: "DRAFT"
       disable_exception_on_block: true
       default_on: true
+
+litellm_settings:
+  callbacks: ["datadog_llm_observability"]
+  cache: true
+
