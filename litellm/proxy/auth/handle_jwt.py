@@ -83,7 +83,7 @@ class JWTHandler:
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
-    
+
     @staticmethod
     def is_jwt(token: str):
         parts = token.split(".")
@@ -166,7 +166,6 @@ class JWTHandler:
             self.litellm_jwtauth.team_ids_jwt_field is not None
             and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
         ):
-
             return token[self.litellm_jwtauth.team_ids_jwt_field]
 
         return []

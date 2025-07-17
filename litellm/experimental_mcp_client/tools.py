@@ -28,7 +28,9 @@ def transform_mcp_tool_to_openai_tool(mcp_tool: MCPTool) -> ChatCompletionToolPa
     )
 
 
-def transform_mcp_tool_to_openai_responses_api_tool(mcp_tool: MCPTool) -> FunctionToolParam:
+def transform_mcp_tool_to_openai_responses_api_tool(
+    mcp_tool: MCPTool,
+) -> FunctionToolParam:
     """Convert an MCP tool to an OpenAI Responses API tool."""
     return FunctionToolParam(
         name=mcp_tool.name,
@@ -37,6 +39,7 @@ def transform_mcp_tool_to_openai_responses_api_tool(mcp_tool: MCPTool) -> Functi
         type="function",
         description=mcp_tool.description or "",
     )
+
 
 async def load_mcp_tools(
     session: ClientSession, format: Literal["mcp", "openai"] = "mcp"

@@ -48,7 +48,6 @@ class CustomGuardrail(CustomLogger):
         self.mask_response_content: bool = mask_response_content
 
         if supported_event_hooks:
-
             ## validate event_hook is in supported_event_hooks
             self._validate_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
@@ -69,7 +68,6 @@ class CustomGuardrail(CustomLogger):
         ],
         supported_event_hooks: List[GuardrailEventHooks],
     ) -> None:
-
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: Union[List[GuardrailEventHooks], List[str]],
             supported_event_hooks: List[GuardrailEventHooks],
@@ -121,11 +119,9 @@ class CustomGuardrail(CustomLogger):
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
                 if self.guardrail_name in _guardrail:
-
                     return True
             elif isinstance(_guardrail, str):
                 if self.guardrail_name == _guardrail:
-
                     return True
 
         return False

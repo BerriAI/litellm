@@ -102,15 +102,15 @@ class FireworksAIConfig(OpenAIGPTConfig):
             "prompt_truncate_length",
             "context_length_exceeded_behavior",
         ]
-        
+
         # Only add tools for models that support function calling
         if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tools")
-        
+
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
-        
+
         return supported_params
 
     def map_openai_params(

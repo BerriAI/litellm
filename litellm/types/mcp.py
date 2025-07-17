@@ -15,6 +15,7 @@ else:
     MCPImageContent = Any
     MCPTextContent = Any
 
+
 class MCPTransport(str, enum.Enum):
     sse = "sse"
     http = "http"
@@ -24,6 +25,7 @@ class MCPTransport(str, enum.Enum):
 class MCPSpecVersion(str, enum.Enum):
     nov_2024 = "2024-11-05"
     mar_2025 = "2025-03-26"
+
 
 class MCPAuth(str, enum.Enum):
     none = "none"
@@ -38,7 +40,6 @@ MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
 MCPAuthType = Optional[
     Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
 ]
-
 
 
 class MCPServerCostInfo(TypedDict, total=False):
@@ -74,5 +75,8 @@ class MCPPostCallResponseObject(BaseModel):
     """
     Pydantic object used for MCP post_call_hook response
     """
-    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
+
+    mcp_tool_call_response: List[
+        Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]
+    ]
     hidden_params: HiddenParams

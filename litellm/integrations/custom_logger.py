@@ -355,18 +355,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
-    
+
     #########################################################
     # MCP TOOL CALL HOOKS
     #########################################################
-    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
+    async def async_post_mcp_tool_call_hook(
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+    ) -> Optional[MCPPostCallResponseObject]:
         """
         This log gets called after the MCP tool call is made.
 
         Useful if you want to modiy the standard logging payload after the MCP tool call is made.
         """
         return None
-    
 
     # Useful helpers for custom logger classes
 

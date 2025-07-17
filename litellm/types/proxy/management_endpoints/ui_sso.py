@@ -25,6 +25,7 @@ class LiteLLM_UpperboundKeyGenerateParams(LiteLLMPydanticObjectBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
 
+
 class MicrosoftGraphAPIUserGroupDirectoryObject(TypedDict, total=False):
     """Model for Microsoft Graph API directory object"""
 

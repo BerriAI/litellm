@@ -280,61 +280,61 @@ class LoggingCallbackManager:
     def get_callbacks_by_type(self) -> CallbacksByType:
         """
         Get all active callbacks categorized by their type (success, failure, success_and_failure).
-        
+
         Returns:
             CallbacksByType: Dict with keys 'success', 'failure', 'success_and_failure' containing lists of callback strings
         """
         # Get callback lists
-        success_callbacks = set(litellm.success_callback + litellm._async_success_callback)
-        failure_callbacks = set(litellm.failure_callback + litellm._async_failure_callback)
+        success_callbacks = set(
+            litellm.success_callback + litellm._async_success_callback
+        )
+        failure_callbacks = set(
+            litellm.failure_callback + litellm._async_failure_callback
+        )
         general_callbacks = set(litellm.callbacks)
-        
+
         # Get all unique callbacks
         all_callbacks = success_callbacks | failure_callbacks | general_callbacks
-        
+
         result: CallbacksByType = CallbacksByType(
-            success=[],
-            failure=[],
-            success_and_failure=[]
+            success=[], failure=[], success_and_failure=[]
         )
-        
+
         for callback in all_callbacks:
             callback_str = self._get_callback_string(callback)
-            
+
             is_in_success = callback in success_callbacks
             is_in_failure = callback in failure_callbacks
             is_in_general = callback in general_callbacks
-            
+
             if is_in_general or (is_in_success and is_in_failure):
                 result["success_and_failure"].append(callback_str)
             elif is_in_success:
                 result["success"].append(callback_str)
             elif is_in_failure:
                 result["failure"].append(callback_str)
-        
-
 
         # final de-duplication
         result["success"] = list(set(result["success"]))
         result["failure"] = list(set(result["failure"]))
         result["success_and_failure"] = list(set(result["success_and_failure"]))
-        
+
         return result
-    
-    def _get_callback_string(
-        self,
-        callback: Union[CustomLogger, Callable, str]
-    ) -> str:
+
+    def _get_callback_string(self, callback: Union[CustomLogger, Callable, str]) -> str:
         from litellm.litellm_core_utils.custom_logger_registry import (
             CustomLoggerRegistry,
         )
+
         """Convert a callback to its string representation"""
         if isinstance(callback, str):
             return callback
         elif isinstance(callback, CustomLogger):
             # Try to get the string representation from the registry
-            callback_str = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))
+            callback_str = CustomLoggerRegistry.get_callback_str_from_class_type(
+                type(callback)
+            )
             return callback_str if callback_str is not None else type(callback).__name__
         elif callable(callback):
-            return getattr(callback, '__name__', str(callback))
+            return getattr(callback, "__name__", str(callback))
         return str(callback)

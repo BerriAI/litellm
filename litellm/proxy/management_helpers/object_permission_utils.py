@@ -17,30 +17,32 @@ async def attach_object_permission_to_dict(
 ) -> Dict:
     """
     Helper method to attach object_permission to a dictionary if object_permission_id is set.
-    
+
     This function:
     1. Checks if the dictionary has an object_permission_id
     2. If found, queries the database for the corresponding object permission
     3. Converts the object permission to a dictionary format
     4. Attaches it to the input dictionary under the 'object_permission' key
-    
+
     Args:
         data_dict: The dictionary to attach object_permission to
         prisma_client: The database client
-        
+
     Returns:
         Dict: The input dictionary with object_permission attached if found
-        
+
     Raises:
         ValueError: If prisma_client is None
     """
     if prisma_client is None:
         raise ValueError("Prisma client not found")
-        
+
     object_permission_id = data_dict.get("object_permission_id")
     if object_permission_id:
-        object_permission = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": object_permission_id},
+        object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": object_permission_id},
+            )
         )
         if object_permission:
             # Convert to dict if needed

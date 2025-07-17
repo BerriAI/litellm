@@ -36,7 +36,9 @@ class ImageBlock(TypedDict):
     source: SourceBlock
 
 
-BedrockVideoTypes = Literal["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
+BedrockVideoTypes = Literal[
+    "mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"
+]
 
 
 class VideoBlock(TypedDict):

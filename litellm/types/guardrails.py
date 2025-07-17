@@ -39,6 +39,7 @@ class SupportedGuardrailIntegrations(Enum):
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
     OPENAI_MODERATION = "openai_moderation"
 
+
 class Role(Enum):
     SYSTEM = "system"
     ASSISTANT = "assistant"
@@ -395,7 +396,8 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     )
 
     model: Optional[str] = Field(
-        default=None, description="Optional field if guardrail requires a 'model' parameter"
+        default=None,
+        description="Optional field if guardrail requires a 'model' parameter",
     )
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())

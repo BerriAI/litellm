@@ -16,7 +16,7 @@ else:
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
     LiteLLMLoggingObj = Any
-    
+
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -56,8 +56,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             List of supported parameter names
         """
-        raise NotImplementedError("get_supported_generate_content_optional_params is not implemented")
-
+        raise NotImplementedError(
+            "get_supported_generate_content_optional_params is not implemented"
+        )
 
     @abstractmethod
     def map_generate_content_optional_params(
@@ -75,15 +76,17 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Mapped parameters for the provider
         """
-        raise NotImplementedError("map_generate_content_optional_params is not implemented")
+        raise NotImplementedError(
+            "map_generate_content_optional_params is not implemented"
+        )
 
     @abstractmethod
     def validate_environment(
-        self, 
+        self,
         api_key: Optional[str],
         headers: Optional[dict],
         model: str,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]]
+        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
     ) -> dict:
         """
         Validate the environment and return headers for the request.
@@ -98,7 +101,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             Updated headers
         """
         raise NotImplementedError("validate_environment is not implemented")
-    
+
     def sync_get_auth_token_and_url(
         self,
         api_base: Optional[str],
@@ -119,7 +122,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             Tuple of headers and API base
         """
         raise NotImplementedError("sync_get_auth_token_and_url is not implemented")
-    
+
     async def get_auth_token_and_url(
         self,
         api_base: Optional[str],

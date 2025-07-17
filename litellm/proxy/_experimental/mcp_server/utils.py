@@ -13,6 +13,7 @@ LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
 MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 
+
 def is_mcp_available() -> bool:
     """
     Returns True if the MCP module is available, False otherwise
@@ -23,11 +24,13 @@ def is_mcp_available() -> bool:
     except ImportError:
         return False
 
+
 def normalize_server_name(server_name: str) -> str:
     """
     Normalize server name by replacing spaces with underscores
     """
     return server_name.replace(" ", "_")
+
 
 def add_server_prefix_to_tool_name(tool_name: str, server_name: str) -> str:
     """
@@ -45,8 +48,9 @@ def add_server_prefix_to_tool_name(tool_name: str, server_name: str) -> str:
     return MCP_TOOL_PREFIX_FORMAT.format(
         server_name=formatted_server_name,
         separator=MCP_TOOL_PREFIX_SEPARATOR,
-        tool_name=tool_name
+        tool_name=tool_name,
     )
+
 
 def get_server_name_prefix_tool_mcp(prefixed_tool_name: str) -> Tuple[str, str]:
     """
@@ -64,6 +68,7 @@ def get_server_name_prefix_tool_mcp(prefixed_tool_name: str) -> Tuple[str, str]:
             return parts[1], parts[0]  # tool_name, server_name
     return prefixed_tool_name, ""  # No prefix found, return original name
 
+
 def is_tool_name_prefixed(tool_name: str) -> bool:
     """
     Check if tool name has server prefix
@@ -76,14 +81,17 @@ def is_tool_name_prefixed(tool_name: str) -> bool:
     """
     return MCP_TOOL_PREFIX_SEPARATOR in tool_name
 
-def validate_mcp_server_name(server_name: str, raise_http_exception: bool = False) -> None:
+
+def validate_mcp_server_name(
+    server_name: str, raise_http_exception: bool = False
+) -> None:
     """
     Validate that MCP server name does not contain 'MCP_TOOL_PREFIX_SEPARATOR'.
-    
+
     Args:
         server_name: The server name to validate
         raise_http_exception: If True, raises HTTPException instead of generic Exception
-        
+
     Raises:
         Exception or HTTPException: If server name contains 'MCP_TOOL_PREFIX_SEPARATOR'
     """
@@ -92,9 +100,9 @@ def validate_mcp_server_name(server_name: str, raise_http_exception: bool = Fals
         if raise_http_exception:
             from fastapi import HTTPException
             from starlette import status
+
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": error_message}
+                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message}
             )
         else:
             raise Exception(error_message)

@@ -82,7 +82,9 @@ def perform_redaction(model_call_details: dict, result):
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 for output_item in _result.output:
-                    if hasattr(output_item, "content") and isinstance(output_item.content, list):
+                    if hasattr(output_item, "content") and isinstance(
+                        output_item.content, list
+                    ):
                         for content_part in output_item.content:
                             if hasattr(content_part, "text"):
                                 content_part.text = "redacted-by-litellm"
@@ -156,9 +158,9 @@ def _get_turn_off_message_logging_from_dynamic_params(
 
     handles boolean and string values of `turn_off_message_logging`
     """
-    standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-        model_call_details.get("standard_callback_dynamic_params", None)
-    )
+    standard_callback_dynamic_params: Optional[
+        StandardCallbackDynamicParams
+    ] = model_call_details.get("standard_callback_dynamic_params", None)
     if standard_callback_dynamic_params:
         _turn_off_message_logging = standard_callback_dynamic_params.get(
             "turn_off_message_logging"

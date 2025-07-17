@@ -23,5 +23,5 @@ async def list_callbacks():
 
     # Get callbacks organized by type using the callback manager utility
     callbacks_by_type = logging_callback_manager.get_callbacks_by_type()
-    
+
     return callbacks_by_type

@@ -527,7 +527,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         # DataRobot is OpenAI compatible.
         (
             api_base,
-            dynamic_api_key
+            dynamic_api_key,
         ) = litellm.DataRobotConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )

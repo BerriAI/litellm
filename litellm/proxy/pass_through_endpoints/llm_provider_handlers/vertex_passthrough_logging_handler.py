@@ -201,7 +201,9 @@ class VertexPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
         kwargs: Dict[str, Any] = {}
-        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+        model = model or VertexPassthroughLoggingHandler.extract_model_from_url(
+            url_route
+        )
         complete_streaming_response = (
             VertexPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,

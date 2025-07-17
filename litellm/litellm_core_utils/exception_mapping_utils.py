@@ -42,16 +42,16 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-        
+
         if "429" in error_str or "rate limit" in error_str.lower():
             return True
-        
+
         #######################################
         # Mistral API returns this error string
         #########################################
         if "service tier capacity exceeded" in error_str.lower():
             return True
-        
+
         return False
 
     @staticmethod

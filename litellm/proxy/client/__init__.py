@@ -6,4 +6,12 @@ from .exceptions import UnauthorizedError
 from .users import UsersManagementClient
 from .health import HealthManagementClient
 
-__all__ = ["Client", "ChatClient", "ModelsManagementClient", "ModelGroupsManagementClient", "UsersManagementClient", "UnauthorizedError", "HealthManagementClient"]
+__all__ = [
+    "Client",
+    "ChatClient",
+    "ModelsManagementClient",
+    "ModelGroupsManagementClient",
+    "UsersManagementClient",
+    "UnauthorizedError",
+    "HealthManagementClient",
+]

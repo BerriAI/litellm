@@ -74,16 +74,13 @@ async def get_mcp_server_ids(
     if prisma_client is None:
         return []
 
-
     if user_api_key_dict.object_permission_id is None:
         return []
 
-
     # Make a direct SQL query to get just the mcp_servers
     try:
-
         result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": user_api_key_dict.object_permission_id},
+            where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
             return result.mcp_servers

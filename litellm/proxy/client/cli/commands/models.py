@@ -129,7 +129,9 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
             table.add_row(
                 str(model.get("id", "")),
                 str(model.get("object", "model")),
-                format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created),
+                format_timestamp(created)
+                if isinstance(created, int)
+                else format_iso_datetime_str(created),
                 str(model.get("owned_by", "")),
             )
 
@@ -151,7 +153,9 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
     help="Model info in key=value format (can be specified multiple times)",
 )
 @click.pass_context
-def add_model(ctx: click.Context, model_name: str, param: tuple[str, ...], info: tuple[str, ...]) -> None:
+def add_model(
+    ctx: click.Context, model_name: str, param: tuple[str, ...], info: tuple[str, ...]
+) -> None:
     """Add a new model to the proxy"""
     # Convert parameters from key=value format to dict
     model_params = dict(p.split("=", 1) for p in param)
@@ -180,7 +184,9 @@ def delete_model(ctx: click.Context, model_id: str) -> None:
 @click.option("--id", "model_id", help="ID of the model to retrieve")
 @click.option("--name", "model_name", help="Name of the model to retrieve")
 @click.pass_context
-def get_model(ctx: click.Context, model_id: Optional[str], model_name: Optional[str]) -> None:
+def get_model(
+    ctx: click.Context, model_id: Optional[str], model_name: Optional[str]
+) -> None:
     """Get information about a specific model"""
     if not model_id and not model_name:
         raise click.UsageError("Either --id or --name must be provided")
@@ -205,7 +211,9 @@ def get_model(ctx: click.Context, model_id: Optional[str], model_name: Optional[
     help="Comma-separated list of columns to display. Valid columns: public_model, upstream_model, credential_name, created_at, updated_at, id, input_cost, output_cost. Default: public_model,upstream_model,updated_at",
 )
 @click.pass_context
-def get_models_info(ctx: click.Context, output_format: Literal["table", "json"], columns: str) -> None:
+def get_models_info(
+    ctx: click.Context, output_format: Literal["table", "json"], columns: str
+) -> None:
     """Get detailed information about all models"""
     client = create_client(ctx)
     models_info = client.models.info()
@@ -226,22 +234,30 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
             "upstream_model": {
                 "header": "Upstream Model",
                 "style": "green",
-                "get_value": lambda m: str(m.get("litellm_params", {}).get("model", "")),
+                "get_value": lambda m: str(
+                    m.get("litellm_params", {}).get("model", "")
+                ),
             },
             "credential_name": {
                 "header": "Credential Name",
                 "style": "yellow",
-                "get_value": lambda m: str(m.get("litellm_params", {}).get("litellm_credential_name", "")),
+                "get_value": lambda m: str(
+                    m.get("litellm_params", {}).get("litellm_credential_name", "")
+                ),
             },
             "created_at": {
                 "header": "Created At",
                 "style": "magenta",
-                "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("created_at")),
+                "get_value": lambda m: format_iso_datetime_str(
+                    m.get("model_info", {}).get("created_at")
+                ),
             },
             "updated_at": {
                 "header": "Updated At",
                 "style": "magenta",
-                "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("updated_at")),
+                "get_value": lambda m: format_iso_datetime_str(
+                    m.get("model_info", {}).get("updated_at")
+                ),
             },
             "id": {
                 "header": "ID",
@@ -252,13 +268,17 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
                 "header": "Input Cost",
                 "style": "green",
                 "justify": "right",
-                "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("input_cost_per_token")),
+                "get_value": lambda m: format_cost_per_1k_tokens(
+                    m.get("model_info", {}).get("input_cost_per_token")
+                ),
             },
             "output_cost": {
                 "header": "Output Cost",
                 "style": "green",
                 "justify": "right",
-                "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("output_cost_per_token")),
+                "get_value": lambda m: format_cost_per_1k_tokens(
+                    m.get("model_info", {}).get("output_cost_per_token")
+                ),
             },
         }
 
@@ -267,7 +287,11 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
         for col_name in requested_columns:
             if col_name in column_configs:
                 config = column_configs[col_name]
-                table.add_column(config["header"], style=config["style"], justify=config.get("justify", "left"))
+                table.add_column(
+                    config["header"],
+                    style=config["style"],
+                    justify=config.get("justify", "left"),
+                )
             else:
                 click.echo(f"Warning: Unknown column '{col_name}'", err=True)
 
@@ -298,7 +322,9 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
     help="Model info in key=value format (can be specified multiple times)",
 )
 @click.pass_context
-def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info: tuple[str, ...]) -> None:
+def update_model(
+    ctx: click.Context, model_id: str, param: tuple[str, ...], info: tuple[str, ...]
+) -> None:
     """Update an existing model's configuration"""
     # Convert parameters from key=value format to dict
     model_params = dict(p.split("=", 1) for p in param)
@@ -328,7 +354,10 @@ def _filter_model(model, model_regex, access_group_regex):
     if access_group_regex:
         if not isinstance(access_groups, list):
             return False
-        if not any(isinstance(group, str) and access_group_regex.search(group) for group in access_groups):
+        if not any(
+            isinstance(group, str) and access_group_regex.search(group)
+            for group in access_groups
+        ):
             return False
     return True
 
@@ -364,18 +393,32 @@ def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
     with open(yaml_file, "r") as f:
         data = yaml.safe_load(f)
     if not data or "model_list" not in data:
-        raise click.ClickException("YAML file must contain a 'model_list' key with a list of models.")
+        raise click.ClickException(
+            "YAML file must contain a 'model_list' key with a list of models."
+        )
     model_list = data["model_list"]
     if not isinstance(model_list, list):
         raise click.ClickException("'model_list' must be a list of model definitions.")
     return model_list
 
 
-def _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex):
+def _get_filtered_model_list(
+    model_list, only_models_matching_regex, only_access_groups_matching_regex
+):
     """Return a list of models that pass the filter criteria."""
-    model_regex = re.compile(only_models_matching_regex) if only_models_matching_regex else None
-    access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
-    return [model for model in model_list if _filter_model(model, model_regex, access_group_regex)]
+    model_regex = (
+        re.compile(only_models_matching_regex) if only_models_matching_regex else None
+    )
+    access_group_regex = (
+        re.compile(only_access_groups_matching_regex)
+        if only_access_groups_matching_regex
+        else None
+    )
+    return [
+        model
+        for model in model_list
+        if _filter_model(model, model_regex, access_group_regex)
+    ]
 
 
 def _import_models_get_table_title(dry_run: bool) -> str:
@@ -386,8 +429,14 @@ def _import_models_get_table_title(dry_run: bool) -> str:
 
 
 @models.command("import")
-@click.argument("yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True))
-@click.option("--dry-run", is_flag=True, help="Show what would be imported without making any changes.")
+@click.argument(
+    "yaml_file", type=click.Path(exists=True, dir_okay=False, readable=True)
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be imported without making any changes.",
+)
 @click.option(
     "--only-models-matching-regex",
     default=None,

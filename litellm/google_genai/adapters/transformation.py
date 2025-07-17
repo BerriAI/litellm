@@ -184,7 +184,7 @@ class GoogleGenAIAdapter:
             )
             if tool_choice:
                 completion_request["tool_choice"] = tool_choice
-        
+
         #########################################################
         # forward any litellm specific params
         #########################################################
@@ -192,15 +192,15 @@ class GoogleGenAIAdapter:
         if litellm_params:
             completion_request_dict = self._add_generic_litellm_params_to_request(
                 completion_request_dict=completion_request_dict,
-                litellm_params=litellm_params
+                litellm_params=litellm_params,
             )
 
         return completion_request_dict
-    
+
     def _add_generic_litellm_params_to_request(
-        self, 
-        completion_request_dict: Dict[str, Any], 
-        litellm_params: Optional[GenericLiteLLMParams] = None
+        self,
+        completion_request_dict: Dict[str, Any],
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """Add generic litellm params to request. e.g add api_base, api_key, api_version, etc.
 

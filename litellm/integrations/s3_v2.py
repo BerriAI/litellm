@@ -203,7 +203,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             start_time=start_time,
             end_time=end_time,
         )
-    
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         await self._async_log_event_base(
             kwargs=kwargs,
@@ -212,7 +212,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             end_time=end_time,
         )
         pass
-    
 
     async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -241,7 +240,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception(f"s3 Layer Error - {str(e)}")
             pass
-
 
     async def async_upload_data_to_s3(
         self, batch_logging_element: s3BatchLoggingElement
