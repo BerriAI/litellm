@@ -12,10 +12,11 @@ import {
   message,
   Tooltip,
   Input,
+  Alert,
 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { CredentialItem, vectorStoreCreateCall } from "../networking";
-import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
+import { VectorStoreProviders, vectorStoreProviderLogoMap, vectorStoreProviderMap, getProviderSpecificFields, VectorStoreFieldConfig } from "../vector_store_providers";
 
 interface VectorStoreFormProps {
   isVisible: boolean;
@@ -34,6 +35,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
 }) => {
   const [form] = Form.useForm();
   const [metadataJson, setMetadataJson] = useState("{}");
+  const [selectedProvider, setSelectedProvider] = useState("bedrock");
 
   const handleCreate = async (formValues: any) => {
     if (!accessToken) return;
@@ -47,14 +49,25 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         return;
       }
 
-      await vectorStoreCreateCall(accessToken, {
+      // Prepare the payload with provider-specific fields
+      const payload: any = {
         vector_store_id: formValues.vector_store_id,
         custom_llm_provider: formValues.custom_llm_provider,
         vector_store_name: formValues.vector_store_name,
         vector_store_description: formValues.vector_store_description,
         vector_store_metadata: metadata,
         litellm_credential_name: formValues.litellm_credential_name,
+      };
+
+      // Add provider-specific fields dynamically
+      const providerFields = getProviderSpecificFields(formValues.custom_llm_provider);
+      providerFields.forEach(field => {
+        if (formValues[field.name]) {
+          payload[field.name] = formValues[field.name];
+        }
       });
+
+      await vectorStoreCreateCall(accessToken, payload);
       message.success("Vector store created successfully");
       form.resetFields();
       setMetadataJson("{}");
@@ -68,14 +81,15 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   const handleCancel = () => {
     form.resetFields();
     setMetadataJson("{}");
+    setSelectedProvider("bedrock");
     onCancel();
   };
 
   return (
     <Modal
-      title="Create New Vector Store"
+      title="Add New Vector Store"
       visible={isVisible}
-      width={800}
+      width={1000}
       footer={null}
       onCancel={handleCancel}
     >
@@ -99,38 +113,56 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           rules={[{ required: true, message: "Please select a provider" }]}
           initialValue="bedrock"
         >
-          <Select>
-            {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
-              // Currently only showing Bedrock since it's the only supported provider
-              if (providerEnum === 'Bedrock') {
-                return (
-                  <Select.Option key={providerEnum} value={provider_map[providerEnum]}>
-                    <div className="flex items-center space-x-2">
-                      <img
-                        src={providerLogoMap[providerDisplayName]}
-                        alt={`${providerEnum} logo`}
-                        className="w-5 h-5"
-                        onError={(e) => {
-                          // Create a div with provider initial as fallback
-                          const target = e.target as HTMLImageElement;
-                          const parent = target.parentElement;
-                          if (parent) {
-                            const fallbackDiv = document.createElement('div');
-                            fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                            fallbackDiv.textContent = providerDisplayName.charAt(0);
-                            parent.replaceChild(fallbackDiv, target);
-                          }
-                        }}
-                      />
-                      <span>{providerDisplayName}</span>
-                    </div>
-                  </Select.Option>
-                );
-              }
-              return null;
+          <Select onChange={(value) => setSelectedProvider(value)}>
+            {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => {
+              return (
+                <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
+                  <div className="flex items-center space-x-2">
+                    <img
+                      src={vectorStoreProviderLogoMap[providerDisplayName]}
+                      alt={`${providerEnum} logo`}
+                      className="w-5 h-5"
+                      onError={(e) => {
+                        // Create a div with provider initial as fallback
+                        const target = e.target as HTMLImageElement;
+                        const parent = target.parentElement;
+                        if (parent) {
+                          const fallbackDiv = document.createElement('div');
+                          fallbackDiv.className = 'w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                          fallbackDiv.textContent = providerDisplayName.charAt(0);
+                          parent.replaceChild(fallbackDiv, target);
+                        }
+                      }}
+                    />
+                    <span>{providerDisplayName}</span>
+                  </div>
+                </Select.Option>
+              );
             })}
           </Select>
         </Form.Item>
+
+        {/* PG Vector Setup Instructions */}
+        {selectedProvider === "pg_vector" && (
+          <Alert
+            message="PG Vector Setup Required"
+            description={
+              <div>
+                <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
+                <ol style={{ marginLeft: '16px', marginTop: '8px' }}>
+                  <li>Deploy the litellm-pgvector server from: <a href="https://github.com/BerriAI/litellm-pgvector" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm-pgvector</a></li>
+                  <li>Configure your PostgreSQL database with pgvector extension</li>
+                  <li>Start the server and note the API base URL and API key</li>
+                  <li>Enter those details in the fields below</li>
+                </ol>
+              </div>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: '16px' }}
+          />
+        )}
+
         <Form.Item
           label={
               <span>
@@ -145,6 +177,28 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         >
           <TextInput />
         </Form.Item>
+
+        {/* Provider-specific fields */}
+        {getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => (
+          <Form.Item
+            key={field.name}
+            label={
+              <span>
+                {field.label}{' '}
+                <Tooltip title={field.tooltip}>
+                  <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                </Tooltip>
+              </span>
+            }
+            name={field.name}
+            rules={field.required ? [{ required: true, message: `Please input the ${field.label.toLowerCase()}` }] : []}
+          >
+            <TextInput 
+              type={field.type || "text"}
+              placeholder={field.placeholder} 
+            />
+          </Form.Item>
+        ))}
 
         <Form.Item
           label={
