@@ -5,7 +5,7 @@ import pytest
 import json
 from unittest.mock import MagicMock, AsyncMock, patch, Mock
 
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 import litellm.types.utils
@@ -379,6 +379,15 @@ async def test_model_armor_streaming_response():
     assert len(result_chunks) > 0
     guardrail.async_handler.post.assert_called()
 
+def test_model_armor_ui_friendly_name():
+    """Test the UI-friendly name of the Model Armor guardrail"""
+    from litellm.types.proxy.guardrails.guardrail_hooks.model_armor import (
+        ModelArmorGuardrailConfigModel,
+    )
+
+    assert (
+        ModelArmorGuardrailConfigModel.ui_friendly_name() == "Google Cloud Model Armor"
+    )
 
 def mock_open(read_data=''):
     """Helper to create a mock file object"""
@@ -390,4 +399,4 @@ def mock_open(read_data=''):
     file_object.__exit__ = lambda self, *args: None
     
     mock_file = MagicMock(return_value=file_object)
-    return mock_file
+    return mock_file 
