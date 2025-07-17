@@ -674,17 +674,14 @@ class Logging(LiteLLMLoggingBaseClass):
         # Vector Store / Knowledge Base hooks
         #########################################################
         if litellm.vector_store_registry is not None:
-            if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(
-                non_default_params=non_default_params,
-                tools=tools
-            ):
-                vector_store_custom_logger = (
-                    litellm.ProviderConfigManager.get_provider_vector_store_config(
-                        provider=cast(
-                            litellm.LlmProviders,
-                            vector_store_to_run.get("custom_llm_provider"),
-                        ),
-                    )
+                from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+                    VectorStorePreCallHook,
+                )
+                
+                vector_store_custom_logger = _init_custom_logger_compatible_class(
+                    logging_integration="vector_store_pre_call_hook",
+                    internal_usage_cache=None,
+                    llm_router=None,
                 )
                 self.model_call_details["prompt_integration"] = (
                     vector_store_custom_logger.__class__.__name__
@@ -3490,6 +3487,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             bedrock_vector_store = BedrockVectorStore()
             _in_memory_loggers.append(bedrock_vector_store)
             return bedrock_vector_store  # type: ignore
+        elif logging_integration == "vector_store_pre_call_hook":
+            from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+                VectorStorePreCallHook,
+            )
+            
+            for callback in _in_memory_loggers:
+                if isinstance(callback, VectorStorePreCallHook):
+                    return callback
+            vector_store_pre_call_hook = VectorStorePreCallHook()
+            _in_memory_loggers.append(vector_store_pre_call_hook)
+            return vector_store_pre_call_hook  # type: ignore
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
@@ -3673,6 +3681,14 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "bedrock_vector_store":
             for callback in _in_memory_loggers:
                 if isinstance(callback, BedrockVectorStore):
+                    return callback
+        elif logging_integration == "vector_store_pre_call_hook":
+            from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+                VectorStorePreCallHook,
+            )
+            
+            for callback in _in_memory_loggers:
+                if isinstance(callback, VectorStorePreCallHook):
                     return callback
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
