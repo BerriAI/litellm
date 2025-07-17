@@ -560,6 +560,101 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
+        
+        #########################################################
+        # NEW CODE PATH: Direct Vector Store Search using main.py
+        #########################################################
+        # Check if we should run vector store search using main.py functions
+        vector_store_search_enabled = non_default_params.get("vector_store_search_enabled", False)
+        vector_store_ids = non_default_params.get("vector_store_ids", [])
+        
+        if vector_store_search_enabled and vector_store_ids:
+            # Import the vector store search function from main.py
+            from litellm.vector_stores.main import search
+            from litellm.litellm_core_utils.prompt_templates.common_utils import get_last_user_message
+            
+            try:
+                # Extract the user's query from the last message
+                user_query = get_last_user_message(messages)
+                
+                if user_query:
+                    # Initialize metadata for logging vector store requests
+                    vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []
+                    search_results_content = []
+                    
+                    # Search each vector store
+                    for vector_store_id in vector_store_ids:
+                        try:
+                            start_time = time.time()
+                            
+                            # Perform the vector store search (sync version)
+                            search_response = search(
+                                vector_store_id=vector_store_id,
+                                query=user_query,
+                                custom_llm_provider=non_default_params.get("custom_llm_provider", "openai"),
+                                litellm_logging_obj=self,
+                                max_num_results=non_default_params.get("max_num_results", 10),
+                                filters=non_default_params.get("filters"),
+                                ranking_options=non_default_params.get("ranking_options"),
+                                rewrite_query=non_default_params.get("rewrite_query"),
+                            )
+                            
+                            end_time = time.time()
+                            
+                            # Extract content from search results
+                            if search_response and hasattr(search_response, 'data'):
+                                for result in search_response.data:
+                                    if hasattr(result, 'content'):
+                                        for content_item in result.content:
+                                            if hasattr(content_item, 'text'):
+                                                search_results_content.append(content_item.text)
+                            
+                            # Create metadata for logging
+                            vector_store_metadata = StandardLoggingVectorStoreRequest(
+                                vector_store_id=vector_store_id,
+                                custom_llm_provider=non_default_params.get("custom_llm_provider", "openai"),
+                                query=user_query,
+                                vector_store_search_response=search_response,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                            vector_store_request_metadata.append(vector_store_metadata)
+                            
+                        except Exception as e:
+                            # Log the error but continue with other vector stores
+                            verbose_logger.warning(f"Error searching vector store {vector_store_id}: {str(e)}")
+                            continue
+                    
+                    # If we found search results, append them to the messages
+                    if search_results_content:
+                        context_content = "\n\nContext from vector store search:\n" + "\n".join(search_results_content)
+                        
+                        # Find the last user message and append context
+                        for i in range(len(messages) - 1, -1, -1):
+                            if messages[i].get("role") == "user":
+                                if isinstance(messages[i]["content"], str):
+                                    messages[i]["content"] += context_content
+                                elif isinstance(messages[i]["content"], list):
+                                    # Handle list content (multimodal)
+                                    messages[i]["content"].append({
+                                        "type": "text",
+                                        "text": context_content
+                                    })
+                                break
+                    
+                    # Store vector store metadata for logging
+                    if vector_store_request_metadata:
+                        metadata = non_default_params.get("metadata", {})
+                        metadata["vector_store_request_metadata"] = vector_store_request_metadata
+                        non_default_params["metadata"] = metadata
+                        
+            except Exception as e:
+                # Log the error but don't fail the request
+                verbose_logger.warning(f"Error in vector store search code path: {str(e)}")
+        
+        #########################################################
+        # EXISTING CODE PATH: Custom Logger Approach
+        #########################################################
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
@@ -597,6 +692,101 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
+        
+        #########################################################
+        # NEW CODE PATH: Direct Vector Store Search using main.py
+        #########################################################
+        # Check if we should run vector store search using main.py functions
+        vector_store_search_enabled = non_default_params.get("vector_store_search_enabled", False)
+        vector_store_ids = non_default_params.get("vector_store_ids", [])
+        
+        if vector_store_search_enabled and vector_store_ids:
+            # Import the vector store search function from main.py
+            from litellm.vector_stores.main import asearch
+            from litellm.litellm_core_utils.prompt_templates.common_utils import get_last_user_message
+            
+            try:
+                # Extract the user's query from the last message
+                user_query = get_last_user_message(messages)
+                
+                if user_query:
+                    # Initialize metadata for logging vector store requests
+                    vector_store_request_metadata: List[StandardLoggingVectorStoreRequest] = []
+                    search_results_content = []
+                    
+                    # Search each vector store
+                    for vector_store_id in vector_store_ids:
+                        try:
+                            start_time = time.time()
+                            
+                            # Perform the vector store search
+                            search_response = await asearch(
+                                vector_store_id=vector_store_id,
+                                query=user_query,
+                                custom_llm_provider=non_default_params.get("custom_llm_provider", "openai"),
+                                litellm_logging_obj=self,
+                                max_num_results=non_default_params.get("max_num_results", 10),
+                                filters=non_default_params.get("filters"),
+                                ranking_options=non_default_params.get("ranking_options"),
+                                rewrite_query=non_default_params.get("rewrite_query"),
+                            )
+                            
+                            end_time = time.time()
+                            
+                            # Extract content from search results
+                            if search_response and hasattr(search_response, 'data'):
+                                for result in search_response.data:
+                                    if hasattr(result, 'content'):
+                                        for content_item in result.content:
+                                            if hasattr(content_item, 'text'):
+                                                search_results_content.append(content_item.text)
+                            
+                            # Create metadata for logging
+                            vector_store_metadata = StandardLoggingVectorStoreRequest(
+                                vector_store_id=vector_store_id,
+                                custom_llm_provider=non_default_params.get("custom_llm_provider", "openai"),
+                                query=user_query,
+                                vector_store_search_response=search_response,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                            vector_store_request_metadata.append(vector_store_metadata)
+                            
+                        except Exception as e:
+                            # Log the error but continue with other vector stores
+                            verbose_logger.warning(f"Error searching vector store {vector_store_id}: {str(e)}")
+                            continue
+                    
+                    # If we found search results, append them to the messages
+                    if search_results_content:
+                        context_content = "\n\nContext from vector store search:\n" + "\n".join(search_results_content)
+                        
+                        # Find the last user message and append context
+                        for i in range(len(messages) - 1, -1, -1):
+                            if messages[i].get("role") == "user":
+                                if isinstance(messages[i]["content"], str):
+                                    messages[i]["content"] += context_content
+                                elif isinstance(messages[i]["content"], list):
+                                    # Handle list content (multimodal)
+                                    messages[i]["content"].append({
+                                        "type": "text",
+                                        "text": context_content
+                                    })
+                                break
+                    
+                    # Store vector store metadata for logging
+                    if vector_store_request_metadata:
+                        metadata = non_default_params.get("metadata", {})
+                        metadata["vector_store_request_metadata"] = vector_store_request_metadata
+                        non_default_params["metadata"] = metadata
+                        
+            except Exception as e:
+                # Log the error but don't fail the request
+                verbose_logger.warning(f"Error in vector store search code path: {str(e)}")
+        
+        #########################################################
+        # EXISTING CODE PATH: Custom Logger Approach
+        #########################################################
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
