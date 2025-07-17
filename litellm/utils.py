@@ -7101,6 +7101,12 @@ class ProviderConfigManager:
             )
 
             return VertexVectorStoreConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.vector_stores.transformation import (
+                BedrockVectorStoreConfig,
+            )
+
+            return BedrockVectorStoreConfig()
         return None
 
     @staticmethod
