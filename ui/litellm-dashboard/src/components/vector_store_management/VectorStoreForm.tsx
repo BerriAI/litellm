@@ -12,6 +12,7 @@ import {
   message,
   Tooltip,
   Input,
+  Alert,
 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { CredentialItem, vectorStoreCreateCall } from "../networking";
@@ -88,7 +89,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
     <Modal
       title="Create New Vector Store"
       visible={isVisible}
-      width={800}
+      width={1000}
       footer={null}
       onCancel={handleCancel}
     >
@@ -140,6 +141,28 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             })}
           </Select>
         </Form.Item>
+
+        {/* PG Vector Setup Instructions */}
+        {selectedProvider === "pg_vector" && (
+          <Alert
+            message="PG Vector Setup Required"
+            description={
+              <div>
+                <p>LiteLLM provides a server to connect to PG Vector. To use this provider:</p>
+                <ol style={{ marginLeft: '16px', marginTop: '8px' }}>
+                  <li>Deploy the litellm-pgvector server from: <a href="https://github.com/BerriAI/litellm-pgvector" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm-pgvector</a></li>
+                  <li>Configure your PostgreSQL database with pgvector extension</li>
+                  <li>Start the server and note the API base URL and API key</li>
+                  <li>Enter those details in the fields below</li>
+                </ol>
+              </div>
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: '16px' }}
+          />
+        )}
+
         <Form.Item
           label={
               <span>

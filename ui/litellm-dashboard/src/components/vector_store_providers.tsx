@@ -1,6 +1,6 @@
 export enum VectorStoreProviders {
     Bedrock = "Amazon Bedrock",
-    PgVector = "PostgreSQL with pgvector"
+    PgVector = "PostgreSQL pgvector (LiteLLM Connector)"
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
@@ -32,16 +32,16 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
         {
             name: "api_base",
             label: "API Base",
-            tooltip: "The base URL for your PostgreSQL database (e.g., http://localhost:5432)",
-            placeholder: "http://localhost:5432",
+            tooltip: "Enter the base URL of your deployed litellm-pgvector server (e.g., http://your-server:8000)",
+            placeholder: "http://your-deployed-server:8000",
             required: true,
             type: "text"
         },
         {
             name: "api_key", 
             label: "API Key",
-            tooltip: "Database password or connection string for authentication",
-            placeholder: "Database password or connection string",
+            tooltip: "Enter the API key from your deployed litellm-pgvector server",
+            placeholder: "your-deployed-api-key",
             required: true,
             type: "password"
         }
