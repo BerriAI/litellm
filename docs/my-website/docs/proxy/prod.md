@@ -244,8 +244,9 @@ Using a separate health check app ensures that your liveness and readiness probe
 **How to enable:**
 
 Set the following environment variable:
-Set the environment variable `SEPARATE_HEALTH_APP=1` to enable the separate health check app:
-You can also specify the port for the separate health check app by setting the `SEPARATE_HEALTH_PORT` environment variable. By default, the health app will run on port 4001
+- Set the environment variable `SEPARATE_HEALTH_APP=1` to enable the separate health check app
+
+- You can also specify the port for the separate health check app by setting the `SEPARATE_HEALTH_PORT` environment variable. By default, the health app will run on port 4001
 
 ## Extras
 ### Expected Performance in Production
