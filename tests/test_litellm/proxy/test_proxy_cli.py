@@ -9,6 +9,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+import builtins
+from litellm.proxy.proxy_cli import run_separate_health_app
+import types
 
 
 class TestProxyInitializationHelpers:
@@ -308,3 +311,49 @@ class TestProxyInitializationHelpers:
             # Check that the uvicorn.run was called with the timeout_keep_alive parameter
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["timeout_keep_alive"] == 30
+
+
+def test_run_separate_health_app_runs_only_when_flag(monkeypatch):
+    # Patch print to track output
+    printed = []
+    monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: printed.append(args))
+    # Patch threading.Thread to track if it's started
+    started = {}
+    class DummyThread:
+        def __init__(self, target, daemon):
+            started['called'] = True
+        def start(self):
+            started['started'] = True
+    monkeypatch.setattr("threading.Thread", DummyThread)
+    # Patch uvicorn.run to prevent actual server start
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    # Patch FastAPI import by patching sys.modules['fastapi']
+    class DummyFastAPI:
+        def __init__(self, *a, **k):
+            pass
+        def include_router(self, router):
+            pass
+    dummy_fastapi = types.ModuleType("fastapi")
+    dummy_fastapi.FastAPI = DummyFastAPI
+    monkeypatch.setitem(sys.modules, "fastapi", dummy_fastapi)
+    # Patch the health_endpoints module in sys.modules
+    dummy_health_endpoints = types.ModuleType("litellm.proxy.health_endpoints._health_endpoints")
+    dummy_health_endpoints.router = object()
+    monkeypatch.setitem(sys.modules, "litellm.proxy.health_endpoints._health_endpoints", dummy_health_endpoints)
+
+    # Should NOT run if flag is not set
+    monkeypatch.setenv("SEPARATE_HEALTH_APP", "0")
+    started.clear()
+    printed.clear()
+    run_separate_health_app()
+    assert not started, "Should not start thread if flag is not '1'"
+    assert not printed, "Should not print if flag is not '1'"
+
+    # Should run if flag is set
+    monkeypatch.setenv("SEPARATE_HEALTH_APP", "1")
+    started.clear()
+    printed.clear()
+    run_separate_health_app()
+    assert started.get('called'), "Should create thread if flag is '1'"
+    assert started.get('started') is None or started.get('started'), "Should start thread if flag is '1'"
+    assert any("LiteLLM Health Endpoints" in str(args) for args in printed), "Should print health endpoint message if flag is '1'"
