@@ -232,6 +232,21 @@ To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in 
 
 LiteLLM will use this directory to write migration files.
 
+## 10. Use a Separate Health Check App
+Using a separate health check app ensures that your liveness and readiness probes remain responsive even when the main application is under heavy load. 
+
+**Why is this important?**
+
+- If your health endpoints share the same process as your main app, high traffic or resource exhaustion can cause health checks to hang or fail.
+- When Kubernetes liveness probes hang or time out, it may incorrectly assume your pod is unhealthy and restart it—even if the main app is just busy, not dead.
+- By running health endpoints on a separate lightweight FastAPI app (with its own port), you guarantee that health checks remain fast and reliable, preventing unnecessary pod restarts during traffic spikes or heavy workloads.
+
+**How to enable:**
+
+Set the following environment variable:
+Set the environment variable `SEPARATE_HEALTH_APP=1` to enable the separate health check app:
+You can also specify the port for the separate health check app by setting the `SEPARATE_HEALTH_PORT` environment variable. By default, the health app will run on port 4001
+
 ## Extras
 ### Expected Performance in Production
 
