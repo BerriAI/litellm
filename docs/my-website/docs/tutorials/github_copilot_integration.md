@@ -1,11 +1,11 @@
 ---
-sidebar_label: "Use LiteLLM with GitHub Copilot"
+sidebar_label: "GitHub Copilot"
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Use LiteLLM with GitHub Copilot
+# GitHub Copilot
 
 This tutorial shows you how to integrate GitHub Copilot with LiteLLM Proxy, allowing you to route requests through LiteLLM's unified interface.
 

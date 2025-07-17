@@ -213,7 +213,7 @@ const sidebars = {
           type: "category",
           label: "Secret Managers",
           items: [
-            "set_keys",
+            "secret",
             "oidc"
           ]
         },
@@ -276,6 +276,14 @@ const sidebars = {
           "items": [
             "audio_transcription",
             "text_to_speech",
+          ]
+        },
+        {
+          type: "category",
+          label: "/vector_stores",
+          items: [
+            "vector_stores/create",
+            "vector_stores/search",
           ]
         },
         {
