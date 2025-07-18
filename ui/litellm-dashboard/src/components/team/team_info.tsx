@@ -479,6 +479,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               </Card>
 
+              <Card>
+                <Text className="font-semibold text-gray-900">Virtual Keys</Text>
+                <div className="mt-2">
+                    <Text>
+                      User Keys: {teamData.keys.filter(key => key.user_id).length}
+                    </Text>
+                    <Text>
+                      Service Account Keys: {teamData.keys.filter(key => !key.user_id).length}
+                    </Text>
+                    <Text className="text-gray-500">
+                      Total: {teamData.keys.length}
+                    </Text>
+                  </div>
+              </Card>
+
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
                 variant="card"
