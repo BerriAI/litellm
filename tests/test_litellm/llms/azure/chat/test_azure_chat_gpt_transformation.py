@@ -26,3 +26,5 @@ class TestAzureOpenAIConfig:
         assert not config._is_response_format_supported_model("gpt-3.5-turbo")
         assert not config._is_response_format_supported_model("gpt-3-5-turbo")
         assert not config._is_response_format_supported_model("gpt-3-5-turbo-suffix")
+        assert not config._is_response_format_supported_model("gpt-35-turbo-suffix")
+        assert not config._is_response_format_supported_model("gpt-35-turbo")
