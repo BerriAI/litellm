@@ -1,8 +1,10 @@
-from typing import Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.logging import LiteLLMLoggingObj
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.vector_stores import VectorStoreSearchOptionalRequestParams
 
 
 class PGVectorStoreConfig(OpenAIVectorStoreConfig):
@@ -67,3 +69,22 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/vector_stores" 
+    
+
+    def transform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: Union[str, List[str]],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> Tuple[str, Dict]:
+        url  = f"{api_base}/{vector_store_id}/search"
+        _, request_body = super().transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+        return url, request_body
