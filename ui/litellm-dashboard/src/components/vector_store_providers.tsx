@@ -9,7 +9,7 @@ export enum VectorStoreProviders {
 export const vectorStoreProviderMap: Record<string, string> = {
     Bedrock: "bedrock",
     PgVector: "pg_vector",
-    VertexRagEngine: "vertex_rag_engine",
+    VertexRagEngine: "vertex_ai",
     OpenAI: "openai",
     Azure: "azure"
 };
