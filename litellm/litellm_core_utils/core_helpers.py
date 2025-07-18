@@ -1,5 +1,6 @@
 # What is this?
 ## Helper utilities
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 
 import httpx
@@ -13,6 +14,31 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+def safe_divide(
+    numerator: Union[timedelta, float], 
+    denominator: float,
+    default: Optional[float] = None
+) -> Optional[float]:
+    """
+    Safely divide numerator by denominator, handling zero division and type conversion.
+    
+    Args:
+        numerator: Either a timedelta object or float representing time duration
+        denominator: The divisor (e.g., number of tokens)
+        default: Value to return if division by zero (defaults to None)
+        
+    Returns:
+        The result of the division as a float, or default if denominator is zero
+    """
+    if denominator <= 0:
+        return default
+        
+    if isinstance(numerator, timedelta):
+        return float(numerator.total_seconds() / denominator)
+    else:
+        return float(numerator / denominator)
 
 
 def map_finish_reason(
