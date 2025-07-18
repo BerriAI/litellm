@@ -38,7 +38,7 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     litellm_credential_name: Optional[str]
 
     # litellm_params
-    litellm_params: Optional[GenericLiteLLMParams]
+    litellm_params: Optional[Dict[str, Any]]
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
