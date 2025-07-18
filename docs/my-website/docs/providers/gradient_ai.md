@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # GradientAI
-https://digitalocean.com/products/genai
+https://digitalocean.com/products/gradientai
 
 
 LiteLLM provides native support for GradientAI models.
@@ -76,4 +76,4 @@ for chunk in response:
 
 ---
 
-For more details, see [DigitalOcean GenAI documentation](https://digitalocean.com/products/genai).
+For more details, see [DigitalOcean GradientAI documentation](https://digitalocean.com/products/gradientai).
