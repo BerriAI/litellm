@@ -122,7 +122,7 @@ class AzureOpenAIConfig(BaseConfig):
         # Normalize model name: e.g., gpt-3-5-turbo -> gpt-3.5-turbo
         normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
 
-        if "gpt-3.5" in normalized_model:
+        if "gpt-3.5" in normalized_model or "gpt-35" in model:
             return False
 
         return True
