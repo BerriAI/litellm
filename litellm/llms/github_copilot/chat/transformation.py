@@ -42,9 +42,9 @@ class GithubCopilotConfig(OpenAIConfig):
         model: str,
     ):
         import litellm
-        general_settings = getattr(litellm, 'general_settings', {})
-        copilot_system_to_assistant = general_settings.get('copilot_system_to_assistant', False)
-        if copilot_system_to_assistant:
+        litellm_settings = getattr(litellm, 'litellm_settings', {})
+        disable_copilot_system_to_assistant = litellm_settings.get('disable_copilot_system_to_assistant', False)
+        if not disable_copilot_system_to_assistant:
             for message in messages:
                 if "role" in message and message["role"] == "system":
                     message["role"] = "assistant"
