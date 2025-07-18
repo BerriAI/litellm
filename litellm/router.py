@@ -1279,14 +1279,15 @@ class Router:
         - Adds default litellm params to kwargs, if set.
         """
         model_info = deployment.get("model_info", {}).copy()
-        deployment_model_name = deployment["litellm_params"]["model"]
+        deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
+        deployment_model_name = deployment["model_name"]
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
-            deployment_model_name = deployment_pydantic_obj.litellm_params.model
+            deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
             deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
 
         metadata_variable_name = _get_router_metadata_variable_name(
@@ -1295,9 +1296,10 @@ class Router:
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
-                "deployment": deployment_model_name,
+                "deployment": deployment_litellm_model_name,
                 "model_info": model_info,
                 "api_base": deployment_api_base,
+                "deployment_model_name": deployment_model_name,
             }
         )
         kwargs["model_info"] = model_info

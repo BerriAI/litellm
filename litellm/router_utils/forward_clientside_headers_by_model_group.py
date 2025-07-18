@@ -13,7 +13,7 @@ class ForwardClientSideHeadersByModelGroup(CustomLogger):
         metadata = kwargs.get("litellm_metadata") or kwargs.get("metadata")
         if metadata is None:
             return None
-        return metadata.get("model_group", None)
+        return metadata.get("deployment_model_name", None)
 
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
