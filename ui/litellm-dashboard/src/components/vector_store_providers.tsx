@@ -1,11 +1,13 @@
 export enum VectorStoreProviders {
     Bedrock = "Amazon Bedrock",
-    PgVector = "PostgreSQL pgvector (LiteLLM Connector)"
+    PgVector = "PostgreSQL pgvector (LiteLLM Connector)",
+    VertexRagEngine = "Vertex AI RAG Engine"
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
     Bedrock: "bedrock",
-    PgVector: "pg_vector"
+    PgVector: "pg_vector",
+    VertexRagEngine: "vertex_rag_engine"
 };
 
 const asset_logos_folder = '/assets/logos/';
@@ -13,6 +15,7 @@ const asset_logos_folder = '/assets/logos/';
 export const vectorStoreProviderLogoMap: Record<string, string> = {
     [VectorStoreProviders.Bedrock]: `${asset_logos_folder}bedrock.svg`,
     [VectorStoreProviders.PgVector]: `${asset_logos_folder}postgresql.svg`, // Fallback to a generic database icon if needed
+    [VectorStoreProviders.VertexRagEngine]: `${asset_logos_folder}google.svg`,
 };
 
 // Define field types for provider-specific configurations
@@ -45,7 +48,8 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
             required: true,
             type: "password"
         }
-    ]
+    ],
+    vertex_rag_engine: []
 };
 
 export const getVectorStoreProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
