@@ -567,14 +567,17 @@ const Teams: React.FC<TeamProps> = ({
                   if (teams == null) {
                     return teams;
                   }
-
-                  return teams.map((team) => {
+                  const updated = teams.map((team) => {
                     if (data.team_id === team.team_id) {
                       return updateExistingKeys(team, data);
                     }
-
                     return team;
                   });
+                  // Minimal fix: refresh the full team list after an update
+                  if (accessToken) {
+                    fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+                  }
+                  return updated;
                 });
               }}
               onClose={() => {

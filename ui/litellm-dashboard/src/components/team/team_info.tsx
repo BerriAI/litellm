@@ -550,10 +550,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
                     mcp_servers: info.object_permission?.mcp_servers || [],
-                    mcp_access_groups:
-                      info.object_permission?.mcp_servers || [],
-                    mcp_servers_and_groups:
-                      info.object_permission?.mcp_servers || [],
+                    mcp_access_groups: info.object_permission?.mcp_access_groups || [],
+                    mcp_servers_and_groups: {
+                      servers: info.object_permission?.mcp_servers || [],
+                      accessGroups: info.object_permission?.mcp_access_groups || [],
+                    },
                   }}
                   layout="vertical"
                 >

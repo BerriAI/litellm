@@ -614,9 +614,11 @@ export function AllKeysTable({
               }
               return key
             }))
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after an update
           }}
           onDelete={() => {
             setKeys(keys => keys.filter(key => key.token !== selectedKeyId))
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
           }}
           accessToken={accessToken}
           userID={userID}
