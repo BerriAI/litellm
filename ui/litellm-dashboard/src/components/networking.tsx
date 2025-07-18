@@ -5536,6 +5536,36 @@ export const vectorStoreInfoCall = async (
   }
 };
 
+export const vectorStoreUpdateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/update`
+      : `/vector_store/update`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to update vector store");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating vector store:", error);
+    throw error;
+  }
+};
+
 export const getEmailEventSettings = async (
   accessToken: string
 ): Promise<EmailEventSettingsResponse> => {

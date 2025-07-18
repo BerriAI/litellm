@@ -15,7 +15,8 @@ import {
   Button as AntButton,
 } from "antd";
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { vectorStoreInfoCall, credentialListCall, CredentialItem } from "../networking";
+import { ArrowLeftIcon } from "@heroicons/react/outline";
+import { vectorStoreInfoCall, vectorStoreUpdateCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
 import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
 
@@ -105,9 +106,8 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         vector_store_description: values.vector_store_description,
         vector_store_metadata: metadata,
       };
-      
-      // Use the updated data to call an update endpoint
-      // await vectorStoreUpdateCall(accessToken, updateData);
+
+      await vectorStoreUpdateCall(accessToken, updateData);
       message.success("Vector store updated successfully");
       setIsEditing(false);
       fetchVectorStoreDetails();
@@ -122,10 +122,12 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   }
 
   return (
-    <div className="p-4">
+    <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">← Back to Vector Stores</Button>
+          <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
+            Back to Vector Stores
+          </Button>
           <Title>Vector Store ID: {vectorStoreDetails.vector_store_id}</Title>
           <Text className="text-gray-500">{vectorStoreDetails.vector_store_description || "No description"}</Text>
         </div>
