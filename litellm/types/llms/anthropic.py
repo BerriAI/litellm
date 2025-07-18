@@ -172,6 +172,7 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
 class AnthropicMessagesToolResultContent(TypedDict):
     type: Literal["text"]
     text: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolResultParam(TypedDict, total=False):
