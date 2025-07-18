@@ -110,20 +110,44 @@ class AzureOpenAIConfig(BaseConfig):
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
-        - all 4o models are supported
-        - check if 'supports_response_format' is True from get_model_info
-        - [TODO] support smart retries for 3.5 models (some supported, some not)
+        Determines if the model supports response_format.
+        - Handles Azure deployment names (e.g., azure/gpt-4.1-suffix)
+        - Normalizes model names (e.g., gpt-4-1 -> gpt-4.1)
+        - Strips deployment-specific suffixes
+        - Passes provider to supports_response_schema
+        - Backwards compatible with previous model name patterns
         """
-        if "4o" in model:
-            return True
-
-        # Normalize model name by replacing dashes between numbers with dots
-        # e.g., gpt-4-1 -> gpt-4.1, gpt-3-5-turbo -> gpt-3.5-turbo
         import re
 
-        normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
+        original_model = model  # for backwards compatibility fallback
 
+        # Remove provider prefix if present
+        if model.startswith("azure/"):
+            model = model[len("azure/"):]
+
+        # Normalize model name: gpt-4-1 -> gpt-4.1, gpt-3-5-turbo -> gpt-3.5-turbo
+        model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
+
+        # Remove deployment-specific suffixes (keep only gpt-4.1 or gpt-3.5-turbo, etc.)
+        # This assumes the model name is always at the start, e.g., gpt-4.1-suffix
+        match = re.match(r"^(gpt-\d+\.\d+(-turbo)?)(?:-.+)?$", model)
+        if match:
+            normalized_model = match.group(1)
+        else:
+            normalized_model = model
+
+        # Always support 4o models (backwards compatibility)
+        if "4o" in normalized_model or "4o" in original_model:
+            return True
+
+        # Try with provider-aware check
+        if supports_response_schema(normalized_model, custom_llm_provider="azure"):
+            return True
+        # Fallback: try with just the normalized model (legacy behavior)
         if supports_response_schema(normalized_model):
+            return True
+        # Fallback: try with the original model (legacy behavior)
+        if supports_response_schema(original_model):
             return True
 
         return False
