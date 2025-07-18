@@ -119,38 +119,13 @@ class AzureOpenAIConfig(BaseConfig):
         """
         import re
 
-        original_model = model  # for backwards compatibility fallback
+        # Normalize model name: e.g., gpt-3-5-turbo -> gpt-3.5-turbo
+        normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
 
-        # Remove provider prefix if present
-        if model.startswith("azure/"):
-            model = model[len("azure/"):]
+        if "gpt-3.5" in normalized_model:
+            return False
 
-        # Normalize model name: gpt-4-1 -> gpt-4.1, gpt-3-5-turbo -> gpt-3.5-turbo
-        model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
-
-        # Remove deployment-specific suffixes (keep only gpt-4.1 or gpt-3.5-turbo, etc.)
-        # This assumes the model name is always at the start, e.g., gpt-4.1-suffix
-        match = re.match(r"^(gpt-\d+\.\d+(-turbo)?)(?:-.+)?$", model)
-        if match:
-            normalized_model = match.group(1)
-        else:
-            normalized_model = model
-
-        # Always support 4o models (backwards compatibility)
-        if "4o" in normalized_model or "4o" in original_model:
-            return True
-
-        # Try with provider-aware check
-        if supports_response_schema(normalized_model, custom_llm_provider="azure"):
-            return True
-        # Fallback: try with just the normalized model (legacy behavior)
-        if supports_response_schema(normalized_model):
-            return True
-        # Fallback: try with the original model (legacy behavior)
-        if supports_response_schema(original_model):
-            return True
-
-        return False
+        return True
 
     def _is_response_format_supported_api_version(
         self, api_version_year: str, api_version_month: str

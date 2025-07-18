@@ -23,4 +23,6 @@ class TestAzureOpenAIConfig:
         assert config._is_response_format_supported_model("gpt-4.1")
         assert config._is_response_format_supported_model("gpt-4-1")
         # Negative test: clearly unsupported model
-        assert not config._is_response_format_supported_model("random-model-name")
+        assert not config._is_response_format_supported_model("gpt-3.5-turbo")
+        assert not config._is_response_format_supported_model("gpt-3-5-turbo")
+        assert not config._is_response_format_supported_model("gpt-3-5-turbo-suffix")
