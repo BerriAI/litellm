@@ -42,16 +42,8 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         litellm_params = litellm_params or GenericLiteLLMParams()
         
         # Get credentials and project info
-        vertex_credentials = (
-            litellm_params.vertex_credentials
-            or get_secret_str("VERTEXAI_CREDENTIALS")
-            or get_secret_str("VERTEX_AI_CREDENTIALS")
-        )
-        vertex_project = (
-            litellm_params.vertex_project
-            or get_secret_str("VERTEXAI_PROJECT")
-            or get_secret_str("VERTEX_AI_PROJECT")
-        )
+        vertex_credentials = self.get_vertex_ai_credentials(dict(litellm_params))
+        vertex_project = self.get_vertex_ai_project(dict(litellm_params))
         
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(
@@ -75,17 +67,8 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         """
         Get the Base endpoint for Vertex AI RAG API
         """
-        vertex_location = (
-            litellm_params.get("vertex_location")
-            or get_secret_str("VERTEXAI_LOCATION")
-            or get_secret_str("VERTEX_AI_LOCATION")
-            or "us-central1"
-        )
-        vertex_project = (
-            litellm_params.get("vertex_project")
-            or get_secret_str("VERTEXAI_PROJECT")
-            or get_secret_str("VERTEX_AI_PROJECT")
-        )
+        vertex_location = self.get_vertex_ai_location(litellm_params)
+        vertex_project = self.get_vertex_ai_project(litellm_params)
         
         if api_base:
             return api_base.rstrip("/")
