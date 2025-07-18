@@ -11,6 +11,7 @@ interface RegenerateKeyModalProps {
   visible: boolean;
   onClose: () => void;
   accessToken: string | null;
+  setAccessToken: (token: string) => void;
   premiumUser: boolean;
   onKeyUpdate?: (updatedKeyData: Partial<KeyResponse>) => void;
 }
@@ -20,6 +21,7 @@ export function RegenerateKeyModal({
   visible,
   onClose,
   accessToken,
+  setAccessToken,
   premiumUser,
   onKeyUpdate,
 }: RegenerateKeyModalProps) {
@@ -84,6 +86,8 @@ export function RegenerateKeyModal({
   const handleRegenerateKey = async () => {
     if (!selectedToken || !accessToken) return;
 
+    const isOwnKey = selectedToken.token === accessToken;
+
     setIsRegenerating(true);
     try {
       const formValues = await form.validateFields();
@@ -92,14 +96,22 @@ export function RegenerateKeyModal({
 
       if (onKeyUpdate) {
         const updatedKeyData = {
+          ...selectedToken,
+          token: response.key,
           key_name: response.key,
           max_budget: formValues.max_budget,
           tpm_limit: formValues.tpm_limit,
           rpm_limit: formValues.rpm_limit,
-          expires: formValues.duration ? calculateNewExpiryTime(formValues.duration) : selectedToken.expires,
-          ...formValues,
+          expires: formValues.duration
+            ? calculateNewExpiryTime(formValues.duration) || undefined
+            : selectedToken.expires,
         };
         onKeyUpdate(updatedKeyData);
+      }
+
+      // If user regenerated their own authentication key, update accessToken
+      if (isOwnKey) {
+        setAccessToken(response.key);
       }
 
       message.success("API Key regenerated successfully");

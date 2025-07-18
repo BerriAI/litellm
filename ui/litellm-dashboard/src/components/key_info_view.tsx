@@ -57,6 +57,7 @@ interface KeyInfoViewProps {
   userRole: string | null;
   teams: any[] | null;
   premiumUser: boolean;
+  setAccessToken: (token: string) => void;
 }
 
 export default function KeyInfoView({
@@ -70,6 +71,7 @@ export default function KeyInfoView({
   onKeyDataUpdate,
   onDelete,
   premiumUser,
+  setAccessToken,
 }: KeyInfoViewProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
@@ -299,6 +301,7 @@ export default function KeyInfoView({
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
         accessToken={accessToken}
+        setAccessToken={setAccessToken}
         premiumUser={premiumUser}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
