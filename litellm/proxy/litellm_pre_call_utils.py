@@ -563,6 +563,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     """
 
     from litellm.proxy.proxy_server import llm_router, premium_user
+    from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
     safe_add_api_version_from_query_params(data, request)
 
@@ -598,6 +599,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         "headers": _headers,
         "body": copy.copy(data),  # use copy instead of deepcopy
     }
+
+    data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
     try:

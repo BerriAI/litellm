@@ -25,7 +25,6 @@ class ForwardClientSideHeadersByModelGroup(CustomLogger):
         add the headers to the request
         kwargs["headers"].update(kwargs["proxy_server_request"]["headers"])
         """
-
         import litellm
 
         if litellm.model_group_settings is None:
@@ -37,9 +36,9 @@ class ForwardClientSideHeadersByModelGroup(CustomLogger):
             return None
 
         if (
-            "proxy_server_request" in kwargs
-            and kwargs["proxy_server_request"]["headers"] is not None
-            and isinstance(kwargs["proxy_server_request"]["headers"], dict)
+            "secret_fields" in kwargs
+            and kwargs["secret_fields"]["raw_headers"] is not None
+            and isinstance(kwargs["secret_fields"]["raw_headers"], dict)
         ):
             if (
                 litellm.model_group_settings.forward_client_headers_to_llm_api
@@ -48,7 +47,7 @@ class ForwardClientSideHeadersByModelGroup(CustomLogger):
                 in litellm.model_group_settings.forward_client_headers_to_llm_api
             ):
                 kwargs.setdefault("headers", {}).update(
-                    kwargs["proxy_server_request"]["headers"]
+                    kwargs["secret_fields"]["raw_headers"]
                 )
 
         return kwargs
