@@ -35,3 +35,17 @@ class GithubCopilotConfig(OpenAIConfig):
                 message=str(e),
             )
         return api_base, dynamic_api_key, custom_llm_provider
+
+    def _transform_messages(
+        self,
+        messages,
+        model: str,
+    ):
+        import litellm
+        general_settings = getattr(litellm, 'general_settings', {})
+        copilot_system_to_assistant = general_settings.get('copilot_system_to_assistant', False)
+        if copilot_system_to_assistant:
+            for message in messages:
+                if "role" in message and message["role"] == "system":
+                    message["role"] = "assistant"
+        return messages

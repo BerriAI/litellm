@@ -96,6 +96,7 @@ general_settings:
   master_key: string
   maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
   maximum_spend_logs_retention_interval: 1d # interval in which the spend log cleanup task should run in.
+  copilot_system_to_assistant: boolean  # If true, converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility
 
   # Database Settings
   database_url: string
@@ -198,6 +199,7 @@ general_settings:
 | user_api_key_cache_ttl | int | The time (in seconds) to cache user api keys in memory. |
 | disable_prisma_schema_update | boolean | If true, turns off automatic schema updates to DB |
 | litellm_key_header_name | str | If set, allows passing LiteLLM keys as a custom header. [Doc on custom headers](./virtual_keys.md#custom-headers) |
+| copilot_system_to_assistant | boolean | If true, converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Default: false. Useful for tools (like Claude Code) that send system messages, which Copilot does not support. |
 | moderation_model | str | The default model to use for moderation. |
 | custom_sso | str | Path to a python file that implements custom SSO logic. [Doc on custom SSO](./custom_sso.md) |
 | allow_client_side_credentials | boolean | If true, allows passing client side credentials to the proxy. (Useful when testing finetuning models) [Doc on client side credentials](./virtual_keys.md#client-side-credentials) |
