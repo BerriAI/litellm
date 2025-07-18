@@ -44,6 +44,10 @@ client = TestClient(app)
 
 # Mock prisma_client
 mock_prisma_client = MagicMock()
+# Set up async mock for db operations
+mock_prisma_client.db = MagicMock()
+mock_prisma_client.db.litellm_teamtable = MagicMock()
+mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
 
 
 # Fixture to provide the mock prisma client
@@ -287,6 +291,7 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     mock_db_client.db.litellm_teamtable = MagicMock()
     mock_db_client.db.litellm_teamtable.create = mock_team_create
     mock_db_client.db.litellm_teamtable.count = mock_team_count
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
 
     # 4. Mock user table update behaviour (called for each member)
     mock_db_client.db.litellm_usertable = MagicMock()
