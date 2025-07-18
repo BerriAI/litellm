@@ -13,7 +13,7 @@ import json
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, TypedDict
 
 from pydantic import BaseModel
 
@@ -34,6 +34,14 @@ from .redis_cache import RedisCache
 from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
+
+
+class CachedEmbedding(TypedDict):
+    """Type definition for cached embedding objects"""
+    embedding: List[float]
+    index: int
+    object: str
+    model: str
 
 
 def print_verbose(print_statement):
@@ -600,8 +608,24 @@ class Cache:
         preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
+        
+        # Create a properly typed cached embedding dict
+        if isinstance(embedding_response, dict):
+            embedding_dict: CachedEmbedding = {
+                "embedding": embedding_response["embedding"],
+                "index": embedding_response["index"],
+                "object": embedding_response["object"],
+                "model": result.model
+            }
+        elif hasattr(embedding_response, 'model_dump'):
+            embedding_dict = embedding_response.model_dump()
+            embedding_dict["model"] = result.model
+        else:
+            embedding_dict = embedding_response.__dict__.copy()
+            embedding_dict["model"] = result.model
+            
         cache_key, cached_data, kwargs = self._add_cache_logic(
-            result=embedding_response,
+            result=embedding_dict,
             **kwargs,
         )
         return cache_key, cached_data, kwargs
