@@ -180,7 +180,7 @@ class GuardrailsAI(CustomGuardrail):
                 _result = await self.make_guardrails_ai_api_request(
                     llm_output=text, request_data=data
                 )
-                updated_text = _result.get("rawLlmOutput")
+                updated_text = _result.get("rawLlmOutput") or text
             data["messages"] = set_last_user_message(data["messages"], updated_text)
 
         return data
