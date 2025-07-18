@@ -324,7 +324,7 @@ $ aider --openai-api-base http://0.0.0.0:4000 --openai-api-key fake-key
 <TabItem value="autogen" label="AutoGen">
 
 ```python
-pip install pyautogen
+pip install ag2
 ```
 
 ```python
