@@ -24,6 +24,7 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
+from litellm.types.llms.openai import Reasoning
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -121,6 +122,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_params: dict,
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
+        client: Optional[Any] = None,
     ) -> dict:
         from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
@@ -151,11 +153,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
             elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
                 responses_api_request[key] = value  # type: ignore
-            elif key == "metadata":
+            elif key in ("metadata"):
                 responses_api_request["metadata"] = value
-            elif key == "previous_response_id":
-                # Support for responses API session management
+            elif key in ("previous_response_id"):
                 responses_api_request["previous_response_id"] = value
+            elif key == "reasoning_effort":
+                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
 
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -186,6 +189,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **litellm_params,
+            "client": client,
         }
 
         verbose_logger.debug(
@@ -226,10 +230,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         from litellm.responses.utils import ResponseAPILoggingUtils
         from litellm.types.llms.openai import ResponsesAPIResponse
-        from litellm.types.responses.main import (
-            GenericResponseOutputItem,
-            OutputFunctionToolCall,
-        )
         from litellm.types.utils import Choices, Message
 
         if not isinstance(raw_response, ResponsesAPIResponse):
@@ -273,13 +273,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     Choices(message=msg, finish_reason="tool_calls", index=index)
                 )
                 index += 1
-            elif isinstance(item, GenericResponseOutputItem):
-                raise ValueError("GenericResponseOutputItem not supported")
-            elif isinstance(item, OutputFunctionToolCall):
-                # function/tool calls pass through as-is
-                raise ValueError("Function calling not supported yet.")
             else:
-                raise ValueError(f"Unknown item type: {item}")
+                pass  # don't fail request if item in list is not supported
 
         if len(choices) == 0:
             if (
@@ -288,6 +283,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ):
                 raise ValueError(
                     f"{model} unable to complete request: {raw_response.incomplete_details.reason}"
+                )
+            else:
+                raise ValueError(
+                    f"Unknown items in responses API response: {raw_response.output}"
                 )
 
         setattr(model_response, "choices", choices)
@@ -450,18 +449,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         """Convert chat completion tools to responses API tools format"""
         responses_tools = []
         for tool in tools:
-            if tool.get("type") == "function":
-                function = tool.get("function", {})
-                responses_tools.append(
-                    {
-                        "type": "function",
-                        "name": function.get("name", ""),
-                        "description": function.get("description", ""),
-                        "parameters": function.get("parameters", {}),
-                        "strict": function.get("strict", False),
-                    }
-                )
+            responses_tools.append(tool)
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
+
+    def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
+        if reasoning_effort == "high":
+            return Reasoning(effort="high", summary="detailed")
+        elif reasoning_effort == "medium":
+            # docs say "summary": "concise" is also an option, but it was rejected in practice, so defaulting "auto"
+            return Reasoning(effort="medium", summary="auto")
+        elif reasoning_effort == "low":
+            return Reasoning(effort="low", summary="auto")
+        return None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
         """Map responses API status to chat completion finish_reason"""
@@ -621,6 +620,23 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type == "response.reasoning_summary_text.delta":
+            content_part = parsed_chunk.get("delta", None)
+            if content_part:
+                from litellm.types.utils import (
+                    Delta,
+                    ModelResponseStream,
+                    StreamingChoices,
+                )
+
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=cast(int, parsed_chunk.get("summary_index")),
+                            delta=Delta(reasoning_content=content_part),
+                        )
+                    ]
+                )
         else:
             pass
         # For any unhandled event types, create a minimal valid chunk or skip

@@ -2,10 +2,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from annotated_types import Ge
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from litellm.types.router import CredentialLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
@@ -35,6 +36,9 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
 
     # credential fields
     litellm_credential_name: Optional[str]
+
+    # litellm_params
+    litellm_params: Optional[Dict[str, Any]]
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
@@ -72,9 +76,11 @@ class VectorStoreResultContent(TypedDict, total=False):
 
 class VectorStoreSearchResult(TypedDict, total=False):
     """Result of a vector store search"""
-
     score: Optional[float]
     content: Optional[List[VectorStoreResultContent]]
+    file_id: Optional[str]
+    filename: Optional[str]
+    attributes: Optional[Dict]
 
 
 class VectorStoreSearchResponse(TypedDict, total=False):

@@ -9,50 +9,35 @@ import {
   TableHeaderCell,
   TableCell,
   TableBody,
-  Metric,
   Text,
   Grid,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
+  Col,
+  DateRangePicker,
 } from "@tremor/react";
-import { CredentialItem, credentialListCall, CredentialsResponse } from "./networking";
+import {
+  CredentialItem,
+  credentialListCall,
+  CredentialsResponse,
+} from "./networking";
 
-import ConditionalPublicModelName from "./add_model/conditional_public_model_name";
-import LiteLLMModelNameField from "./add_model/litellm_model_name";
-import AdvancedSettings from "./add_model/advanced_settings";
-import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
 import CredentialsPanel from "@/components/model_add/credentials";
 import { getDisplayModelName } from "./view_model/model_name_display";
-import EditModelModal, { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import {
   TabPanel,
   TabPanels,
   TabGroup,
   TabList,
   Tab,
-  TextInput,
   Icon,
-  DateRangePicker,
 } from "@tremor/react";
-import {
-  Select,
-  SelectItem,
-  MultiSelect,
-  MultiSelectItem,
-  DateRangePickerValue,
-} from "@tremor/react";
+import { Select, SelectItem, DateRangePickerValue } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
 import {
   modelInfoCall,
-  userGetRequesedtModelsCall,
-  modelCreateCall,
   Model,
   modelCostMap,
-  modelDeleteCall,
   healthCheckCall,
-  modelUpdateCall,
   modelMetricsCall,
   streamingModelMetricsCall,
   modelExceptionsCall,
@@ -65,51 +50,21 @@ import {
   allEndUsersCall,
 } from "./networking";
 import { BarChart, AreaChart } from "@tremor/react";
-import {
-  Button as Button2,
-  Modal,
-  Popover,
-  Form,
-  Input,
-  Select as AntdSelect,
-  InputNumber,
-  message,
-  Descriptions,
-  Tooltip,
-  Space,
-  Row,
-  Col,
-  Checkbox,
-} from "antd";
-import { Badge, BadgeDelta, Button } from "@tremor/react";
-import RequestAccess from "./request_model_access";
+import { Popover, Form, InputNumber, message } from "antd";
+import { Button } from "@tremor/react";
 import { Typography } from "antd";
-import TextArea from "antd/es/input/TextArea";
-import {
-  InformationCircleIcon,
-  PencilAltIcon,
-  PencilIcon,
-  StatusOnlineIcon,
-  TrashIcon,
-  RefreshIcon,
-  CheckCircleIcon,
-  XCircleIcon,
-  FilterIcon,
-  ChevronUpIcon,
-  ChevronDownIcon,
-  TableIcon,
-} from "@heroicons/react/outline";
-import DeleteModelButton from "./delete_model_button";
-const { Title: Title2, Link } = Typography;
-import { InfoCircleOutlined, UploadOutlined } from "@ant-design/icons";
+import { RefreshIcon, FilterIcon } from "@heroicons/react/outline";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
-import { Upload } from "antd";
 import TimeToFirstToken from "./model_metrics/time_to_first_token";
-import DynamicFields from "./model_add/dynamic_form";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Team } from "./key_team_helpers/key_list";
 import TeamInfoView from "./team/team_info";
-import { Providers, provider_map, providerLogoMap, getProviderLogoAndName, getPlaceholder, getProviderModels } from "./provider_info_helpers";
+import {
+  Providers,
+  provider_map,
+  getPlaceholder,
+  getProviderModels,
+} from "./provider_info_helpers";
 import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
 import { ModelDataTable } from "./model_dashboard/table";
@@ -117,7 +72,7 @@ import { columns } from "./model_dashboard/columns";
 import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
 import PassThroughSettings from "./pass_through_settings";
 import { all_admin_roles } from "@/utils/roles";
-import { Table as TableInstance } from '@tanstack/react-table';
+import { Table as TableInstance } from "@tanstack/react-table";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -131,23 +86,14 @@ interface ModelDashboardProps {
   teams: Team[] | null;
 }
 
-interface EditModelModalProps {
-  visible: boolean;
-  onCancel: () => void;
-  model: any; // Assuming TeamType is a type representing your team object
-  onSubmit: (data: FormData) => void; // Assuming FormData is the type of data to be submitted
-}
-
 interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
 
-
 interface GlobalExceptionActivityData {
   sum_num_rate_limit_exceptions: number;
-  daily_data: { date: string; num_rate_limit_exceptions: number; }[];
+  daily_data: { date: string; num_rate_limit_exceptions: number }[];
 }
-
 
 //["OpenAI", "Azure OpenAI", "Anthropic", "Gemini (Google AI Studio)", "Amazon Bedrock", "OpenAI-Compatible Endpoints (Groq, Together AI, Mistral AI, etc.)"]
 
@@ -162,7 +108,6 @@ interface ProviderSettings {
   name: string;
   fields: ProviderFields[];
 }
-
 
 const retry_policy_map: Record<string, string> = {
   "BadRequestError (400)": "BadRequestErrorRetries",
@@ -184,23 +129,21 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   premiumUser,
   teams,
 }) => {
-  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [form] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
-  
-  const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
-  const providers = Object.values(Providers).filter((key) =>
-    isNaN(Number(key))
-  );
+  const [providerModels, setProviderModels] = useState<Array<string>>([]); // Explicitly typing providerModels as a string array
 
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>(
     []
   );
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(
+    Providers.OpenAI
+  );
   const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null);
-  const [isHealthCheckLoading, setIsHealthCheckLoading] = useState<boolean>(false);
+  const [isHealthCheckLoading, setIsHealthCheckLoading] =
+    useState<boolean>(false);
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
 
   const [selectedModel, setSelectedModel] = useState<any>(null);
@@ -210,13 +153,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [availableModelAccessGroups, setAvailableModelAccessGroups] = useState<
     Array<string>
   >([]);
-  const [availableProviders, setavailableProviders] = useState<
-  Array<string>
->([]);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(
     null
   );
-  const [modelLatencyMetrics, setModelLatencyMetrics] = useState<any[]>([]);
   const [modelMetrics, setModelMetrics] = useState<any[]>([]);
   const [modelMetricsCategories, setModelMetricsCategories] = useState<any[]>(
     []
@@ -226,7 +165,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     useState<any[]>([]);
   const [modelExceptions, setModelExceptions] = useState<any[]>([]);
   const [allExceptions, setAllExceptions] = useState<any[]>([]);
-  const [failureTableData, setFailureTableData] = useState<any[]>([]);
   const [slowResponsesData, setSlowResponsesData] = useState<any[]>([]);
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
@@ -237,10 +175,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     useState<RetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
 
-  const [globalExceptionData, setGlobalExceptionData] =  useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData);
-  const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] = useState<any[]>([]);
+  const [globalExceptionData, setGlobalExceptionData] =
+    useState<GlobalExceptionActivityData>({} as GlobalExceptionActivityData);
+  const [globalExceptionPerDeployment, setGlobalExceptionPerDeployment] =
+    useState<any[]>([]);
 
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] =
+    useState<boolean>(false);
   const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
 
@@ -249,7 +190,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Add state for advanced settings visibility
-  const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] =
+    useState<boolean>(false);
 
   // Add these state variables
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
@@ -258,12 +200,17 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTeam, setSelectedTeam] = useState<string | null>(null);
 
-  const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(null);
-  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
+  const [selectedTeamFilter, setSelectedTeamFilter] = useState<string | null>(
+    null
+  );
+  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] =
+    useState<string | null>(null);
 
   // Add new state for current team and model view mode
-  const [currentTeam, setCurrentTeam] = useState<string>('personal'); // 'personal' or team_id
-  const [modelViewMode, setModelViewMode] = useState<'current_team' | 'all'>('current_team');
+  const [currentTeam, setCurrentTeam] = useState<string>("personal"); // 'personal' or team_id
+  const [modelViewMode, setModelViewMode] = useState<"current_team" | "all">(
+    "current_team"
+  );
 
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
 
@@ -271,8 +218,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const dropdownRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<TableInstance<any>>(null);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
 
-
+  const handleCreateNewModelClick = () => {
+    if (selectedModelId) {
+      setSelectedModelId(null);
+    }
+    setSelectedTabIndex(1);
+  };
 
   const setProviderModelsFn = (provider: Providers) => {
     const _providerModels = getProviderModels(provider, modelMap);
@@ -283,7 +236,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const updateModelMetrics = async (
     modelGroup: string | null,
     startTime: Date | undefined,
-    endTime: Date | undefined,
+    endTime: Date | undefined
   ) => {
     console.log("Updating model metrics for group:", modelGroup);
     if (!accessToken || !userID || !userRole || !startTime || !endTime) {
@@ -366,29 +319,26 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
       setSlowResponsesData(slowResponses);
 
-
       if (modelGroup) {
         const dailyExceptions = await adminGlobalActivityExceptions(
           accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
+          startTime?.toISOString().split("T")[0],
+          endTime?.toISOString().split("T")[0],
+          modelGroup
         );
 
         setGlobalExceptionData(dailyExceptions);
 
-        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
-          accessToken,
-          startTime?.toISOString().split('T')[0],
-          endTime?.toISOString().split('T')[0],
-          modelGroup,
-        )
+        const dailyExceptionsPerDeplyment =
+          await adminGlobalActivityExceptionsPerDeployment(
+            accessToken,
+            startTime?.toISOString().split("T")[0],
+            endTime?.toISOString().split("T")[0],
+            modelGroup
+          );
 
         setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
-
       }
-
-      
     } catch (error) {
       console.error("Failed to fetch model metrics", error);
     }
@@ -396,32 +346,31 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const fetchCredentials = async (accessToken: string) => {
     try {
-      const response: CredentialsResponse = await credentialListCall(accessToken);
+      const response: CredentialsResponse =
+        await credentialListCall(accessToken);
       console.log(`credentials: ${JSON.stringify(response)}`);
       setCredentialsList(response.credentials);
     } catch (error) {
-      console.error('Error fetching credentials:', error);
+      console.error("Error fetching credentials:", error);
     }
   };
 
-
   useEffect(() => {
-    updateModelMetrics(
-      selectedModelGroup,
-      dateValue.from,
-      dateValue.to
-    );
+    updateModelMetrics(selectedModelGroup, dateValue.from, dateValue.to);
   }, [selectedAPIKey, selectedCustomer, selectedTeam]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
         setIsDropdownOpen(false);
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   function formatCreatedAt(createdAt: string | null) {
@@ -443,7 +392,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     setSelectedModel(null);
   };
 
-
   const uploadProps: UploadProps = {
     name: "file",
     accept: ".json",
@@ -452,10 +400,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         const reader = new FileReader();
         reader.onload = (e) => {
           if (e.target) {
-            const jsonStr = e.target.result as string; 
-            console.log(`Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`);
+            const jsonStr = e.target.result as string;
+            console.log(
+              `Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`
+            );
             form.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values right after setting:", form.getFieldsValue());
+            console.log(
+              "Form values right after setting:",
+              form.getFieldsValue()
+            );
           }
         };
         reader.readAsText(file);
@@ -466,7 +419,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     onChange(info) {
       console.log("Upload onChange triggered with values:", info);
       console.log("Current form values:", form.getFieldsValue());
-      
+
       if (info.file.status !== "uploading") {
         console.log(info.file, info.fileList);
       }
@@ -525,8 +478,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         if (_providerSettings) {
           setProviderSettings(_providerSettings);
         }
-
-
 
         // loop through modelDataResponse and get all`model_name` values
         let all_model_groups: Set<string> = new Set();
@@ -626,27 +577,30 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
         const dailyExceptions = await adminGlobalActivityExceptions(
           accessToken,
-          dateValue.from?.toISOString().split('T')[0],
-          dateValue.to?.toISOString().split('T')[0],
-          _initial_model_group,
+          dateValue.from?.toISOString().split("T")[0],
+          dateValue.to?.toISOString().split("T")[0],
+          _initial_model_group
         );
 
         setGlobalExceptionData(dailyExceptions);
 
-        const dailyExceptionsPerDeplyment = await adminGlobalActivityExceptionsPerDeployment(
-          accessToken,
-          dateValue.from?.toISOString().split('T')[0],
-          dateValue.to?.toISOString().split('T')[0],
-          _initial_model_group,
-        )
+        const dailyExceptionsPerDeplyment =
+          await adminGlobalActivityExceptionsPerDeployment(
+            accessToken,
+            dateValue.from?.toISOString().split("T")[0],
+            dateValue.to?.toISOString().split("T")[0],
+            _initial_model_group
+          );
 
         setGlobalExceptionPerDeployment(dailyExceptionsPerDeplyment);
 
         console.log("dailyExceptions:", dailyExceptions);
 
-        console.log("dailyExceptionsPerDeplyment:", dailyExceptionsPerDeplyment);
+        console.log(
+          "dailyExceptionsPerDeplyment:",
+          dailyExceptionsPerDeplyment
+        );
 
-      
         console.log("slowResponses:", slowResponses);
 
         setSlowResponsesData(slowResponses);
@@ -691,7 +645,15 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
 
     handleRefreshClick();
-  }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam]);
+  }, [
+    accessToken,
+    token,
+    userRole,
+    userID,
+    modelMap,
+    lastRefreshed,
+    selectedTeam,
+  ]);
 
   if (!modelData) {
     return <div>Loading...</div>;
@@ -745,12 +707,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       provider = custom_llm_provider;
       if (!provider) {
         provider =
-        splitModel.length === 1
-          ? getProviderFromModel(litellm_model_name)
-          : firstElement;
-        
+          splitModel.length === 1
+            ? getProviderFromModel(litellm_model_name)
+            : firstElement;
       }
-      
     } else {
       // litellm_model_name is null or undefined, default provider to openai
       provider = "-";
@@ -828,133 +788,120 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
-
-
   const FilterByContent = (
-      <div >
-        <Text className="mb-1">Select API Key Name</Text>
+    <div>
+      <Text className="mb-1">Select API Key Name</Text>
 
-        {
-          premiumUser ? (
-            <div>
-              <Select defaultValue="all-keys">
+      {premiumUser ? (
+        <div>
+          <Select defaultValue="all-keys">
+            <SelectItem
+              key="all-keys"
+              value="all-keys"
+              onClick={() => {
+                setSelectedAPIKey(null);
+              }}
+            >
+              All Keys
+            </SelectItem>
+            {keys?.map((key: any, index: number) => {
+              if (
+                key &&
+                key["key_alias"] !== null &&
+                key["key_alias"].length > 0
+              ) {
+                return (
                   <SelectItem
-                    key="all-keys"
-                    value="all-keys"
+                    key={index}
+                    value={String(index)}
                     onClick={() => {
-                      setSelectedAPIKey(null);
+                      setSelectedAPIKey(key);
                     }}
                   >
-                    All Keys
+                    {key["key_alias"]}
                   </SelectItem>
-                    {keys?.map((key: any, index: number) => {
-                      if (
-                        key &&
-                        key["key_alias"] !== null &&
-                        key["key_alias"].length > 0
-                      ) {
-                        return (
-                          
-                          <SelectItem
-                            key={index}
-                            value={String(index)}
-                            onClick={() => {
-                              setSelectedAPIKey(key);
-                            }}
-                          >
-                            {key["key_alias"]}
-                          </SelectItem>
-                        );
-                      }
-                      return null;
-                    })}
-                  </Select>
-          
-              <Text className="mt-1">
-                Select Customer Name
-              </Text>
-              
-              <Select defaultValue="all-customers">
+                );
+              }
+              return null;
+            })}
+          </Select>
+
+          <Text className="mt-1">Select Customer Name</Text>
+
+          <Select defaultValue="all-customers">
+            <SelectItem
+              key="all-customers"
+              value="all-customers"
+              onClick={() => {
+                setSelectedCustomer(null);
+              }}
+            >
+              All Customers
+            </SelectItem>
+            {allEndUsers?.map((user: any, index: number) => {
+              return (
                 <SelectItem
-                  key="all-customers"
-                  value="all-customers"
+                  key={index}
+                  value={user}
                   onClick={() => {
-                    setSelectedCustomer(null);
+                    setSelectedCustomer(user);
                   }}
                 >
-                  All Customers
+                  {user}
                 </SelectItem>
-                {
-                  allEndUsers?.map((user: any, index: number) => {
-                    return (
-                      <SelectItem
-                        key={index}
-                        value={user}
-                        onClick={() => {
-                          setSelectedCustomer(user);
-                        }}
-                      >
-                        {user}
-                      </SelectItem>
-                    );
-                  })
-                }
-              </Select>
+              );
+            })}
+          </Select>
 
-              <Text className="mt-1">
-                Select Team
-              </Text>
-              
-              <Select
-                className="w-64 relative z-50"
-                defaultValue="all"
-                value={selectedTeamFilter ?? "all"}
-                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
-              >
-                <SelectItem value="all">All Teams</SelectItem>
-                {teams?.filter(team => team.team_id).map((team) => (
-                  <SelectItem
-                    key={team.team_id}
-                    value={team.team_id}
-                  >
-                    {team.team_alias 
-                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
-                      : `Team ${team.team_id.slice(0, 8)}...`
-                    }
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
-          ): (
-            <div>
-              {/* ... existing non-premium user content ... */}
-              <Text className="mt-1">
-                Select Team
-              </Text>
-              
-              <Select
-                className="w-64 relative z-50"
-                defaultValue="all"
-                value={selectedTeamFilter ?? "all"}
-                onValueChange={(value) => setSelectedTeamFilter(value === "all" ? null : value)}
-              >
-                <SelectItem value="all">All Teams</SelectItem>
-                {teams?.filter(team => team.team_id).map((team) => (
-                  <SelectItem
-                    key={team.team_id}
-                    value={team.team_id}
-                  >
-                    {team.team_alias 
-                      ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
-                      : `Team ${team.team_id.slice(0, 8)}...`
-                    }
-                  </SelectItem>
-                ))}
-              </Select>
-            </div>
-          )
-        }
-      </div>
+          <Text className="mt-1">Select Team</Text>
+
+          <Select
+            className="w-64 relative z-50"
+            defaultValue="all"
+            value={selectedTeamFilter ?? "all"}
+            onValueChange={(value) =>
+              setSelectedTeamFilter(value === "all" ? null : value)
+            }
+          >
+            <SelectItem value="all">All Teams</SelectItem>
+            {teams
+              ?.filter((team) => team.team_id)
+              .map((team) => (
+                <SelectItem key={team.team_id} value={team.team_id}>
+                  {team.team_alias
+                    ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                    : `Team ${team.team_id.slice(0, 8)}...`}
+                </SelectItem>
+              ))}
+          </Select>
+        </div>
+      ) : (
+        <div>
+          {/* ... existing non-premium user content ... */}
+          <Text className="mt-1">Select Team</Text>
+
+          <Select
+            className="w-64 relative z-50"
+            defaultValue="all"
+            value={selectedTeamFilter ?? "all"}
+            onValueChange={(value) =>
+              setSelectedTeamFilter(value === "all" ? null : value)
+            }
+          >
+            <SelectItem value="all">All Teams</SelectItem>
+            {teams
+              ?.filter((team) => team.team_id)
+              .map((team) => (
+                <SelectItem key={team.team_id} value={team.team_id}>
+                  {team.team_alias
+                    ? `${team.team_alias} (${team.team_id.slice(0, 8)}...)`
+                    : `Team ${team.team_id.slice(0, 8)}...`}
+                </SelectItem>
+              ))}
+          </Select>
+        </div>
+      )}
+    </div>
   );
 
   const customTooltip = (props: any) => {
@@ -1009,7 +956,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   };
 
-
   const handleOk = () => {
     form
       .validateFields()
@@ -1039,8 +985,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   if (selectedTeamId) {
     return (
       <div className="w-full h-full">
-        <TeamInfoView 
-          teamId={selectedTeamId} 
+        <TeamInfoView
+          teamId={selectedTeamId}
           onClose={() => setSelectedTeamId(null)}
           accessToken={accessToken}
           is_team_admin={userRole === "Admin"}
@@ -1054,283 +1000,380 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   }
 
   return (
-    <div style={{ width: "100%", height: "100%" }}>
-      {selectedModelId ? (
-        <ModelInfoView 
-          modelId={selectedModelId}
-          editModel={true}
-          onClose={() => {
-            setSelectedModelId(null);
-            setEditModel(false);
-          }}
-          modelData={modelData.data.find((model: any) => model.model_info.id === selectedModelId)}
-          accessToken={accessToken}
-          userID={userID}
-          userRole={userRole}
-          setEditModalVisible={setEditModalVisible}
-          setSelectedModel={setSelectedModel}
-          onModelUpdate={(updatedModel) => {
-            // Update the model in the modelData.data array
-            const updatedModelData = {
-              ...modelData,
-              data: modelData.data.map((model: any) => 
-                model.model_info.id === updatedModel.model_info.id ? updatedModel : model
-              )
-            };
-            setModelData(updatedModelData);
-            // Trigger a refresh to update UI
-            handleRefreshClick();
-          }}
-          modelAccessGroups={availableModelAccessGroups}
-        />
-      ) : (
-        <TabGroup className="gap-2 p-8 h-[75vh] w-full mt-2">
-          
-          <TabList className="flex justify-between mt-2 w-full items-center">
-            <div className="flex">
-              {all_admin_roles.includes(userRole) ? <Tab>All Models</Tab> : <Tab>Your Models</Tab>}
-              <Tab>Add Model</Tab>
-              {all_admin_roles.includes(userRole) && <Tab>LLM Credentials</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>Pass-Through Endpoints</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>
-                Health Status
-              </Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>Model Analytics</Tab>}
-              {all_admin_roles.includes(userRole) && <Tab>Model Retry Settings</Tab>}
-              
-            </div>
+    <div className="w-full mx-4 h-[75vh]">
+      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
+        <Col numColSpan={1} className="flex flex-col gap-2">
+          {all_admin_roles.includes(userRole || "") && (
+            <Button className="w-fit" onClick={handleCreateNewModelClick}>
+              + Create New Model
+            </Button>
+          )}
+          {selectedModelId ? (
+            <ModelInfoView
+              modelId={selectedModelId}
+              editModel={true}
+              onClose={() => {
+                setSelectedModelId(null);
+                setEditModel(false);
+              }}
+              modelData={modelData.data.find(
+                (model: any) => model.model_info.id === selectedModelId
+              )}
+              accessToken={accessToken}
+              userID={userID}
+              userRole={userRole}
+              setEditModalVisible={setEditModalVisible}
+              setSelectedModel={setSelectedModel}
+              onModelUpdate={(updatedModel) => {
+                // Update the model in the modelData.data array
+                const updatedModelData = {
+                  ...modelData,
+                  data: modelData.data.map((model: any) =>
+                    model.model_info.id === updatedModel.model_info.id
+                      ? updatedModel
+                      : model
+                  ),
+                };
+                setModelData(updatedModelData);
+                // Trigger a refresh to update UI
+                handleRefreshClick();
+              }}
+              modelAccessGroups={availableModelAccessGroups}
+            />
+          ) : (
+            <TabGroup
+              index={selectedTabIndex}
+              onIndexChange={setSelectedTabIndex}
+              className="gap-2 h-[75vh] w-full "
+            >
+              <TabList className="flex justify-between mt-2 w-full items-center">
+                <div className="flex">
+                  {all_admin_roles.includes(userRole) ? (
+                    <Tab>All Models</Tab>
+                  ) : (
+                    <Tab>Your Models</Tab>
+                  )}
+                  <Tab>Add Model</Tab>
+                  {all_admin_roles.includes(userRole) && (
+                    <Tab>LLM Credentials</Tab>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <Tab>Pass-Through Endpoints</Tab>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <Tab>Health Status</Tab>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <Tab>Model Analytics</Tab>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <Tab>Model Retry Settings</Tab>
+                  )}
+                </div>
 
-            <div className="flex items-center space-x-2">
-              {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-              <Icon
-                icon={RefreshIcon} // Modify as necessary for correct icon name
-                variant="shadow"
-                size="xs"
-                className="self-center"
-                onClick={handleRefreshClick}
-              />
-            </div>
-          </TabList>
-          <TabPanels>
-            <TabPanel>
-              <Grid>
-                <div className="flex flex-col space-y-4">
-                  <div className="flex justify-between items-center mb-4">
-                    <div>
-                      <Title>Model Management</Title>
-                      {!all_admin_roles.includes(userRole) ? (
-                        <Text className="text-tremor-content">
-                          Add models for teams you are an admin for.
-                        </Text>
-                      ) : (
-                        <Text className="text-tremor-content">
-                          Add and manage models for the proxy
-                        </Text>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="bg-white rounded-lg shadow">
-                    <div className="border-b px-6 py-4">
-                      <div className="flex flex-col space-y-4">
-                        {/* Current Team Selector - Prominent */}
-                        <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
-                          <div>
-                          <div className="flex items-center gap-4">
-                            <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
-                            <Select
-                              className="w-80"
-                              defaultValue="personal"
-                              value={currentTeam}
-                              onValueChange={(value) => setCurrentTeam(value)}
-                            >
-                              <SelectItem value="personal">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                                  <span className="font-medium">Personal</span>
-                                </div>
-                              </SelectItem>
-                              {teams?.filter(team => team.team_id).map((team) => (
-                                <SelectItem
-                                  key={team.team_id}
-                                  value={team.team_id}
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                                    <span className="font-medium">
-                                      {team.team_alias 
-                                        ? `${team.team_alias.slice(0, 30)}...`
-                                        : `Team ${team.team_id.slice(0, 30)}...`
-                                      }
-                                    </span>
-                                  </div>
-                                </SelectItem>
-                              ))}
-                            </Select>
-                            </div>
-                            {
-                              modelViewMode === "current_team" && (
-
-                            <div className="flex items-start gap-2 mt-2 bg-gray-50 rounded">
-                              <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
-                              <div className="text-xs text-gray-500">
-                                {currentTeam === "personal" ? (
-                                  <span>
-                                    To access these models: Create a Virtual Key without selecting a team on the {" "}
-                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
-                                      Virtual Keys page
-                                    </a>
-                                  </span>
-                                ) : (
-                                  <span>
-                                    To access these models: Create a Virtual Key and select Team as &quot;{currentTeam}&quot; on the {" "}
-                                    <a href="/?login=success&page=api-keys" className="text-gray-600 hover:text-gray-800 underline">
-                                      Virtual Keys page
-                                    </a>
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            )
-                          }
-                          </div>
-                          
-                          
-                          {/* Model View Mode Toggle - Also prominent */}
-                          <div className="flex items-center gap-4">
-                            <Text className="text-lg font-semibold text-gray-900">View:</Text>
-                            <Select
-                              className="w-64"
-                              defaultValue="current_team"
-                              value={modelViewMode}
-                              onValueChange={(value) => setModelViewMode(value as 'current_team' | 'all')}
-                            >
-                              <SelectItem value="current_team">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                                  <span className="font-medium">Current Team Models</span>
-                                </div>
-                              </SelectItem>
-                              <SelectItem value="all">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
-                                  <span className="font-medium">All Available Models</span>
-                                </div>
-                              </SelectItem>
-                            </Select>
-                          </div>
-                          
-                        </div>
-
-                        
-                        {/* Other Filters */}
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            {/* Model Name Filter */}
-                            <div className="flex items-center gap-2">
-                              <Text>Filter by Public Model Name:</Text>
-                              <Select
-                                className="w-64"
-                                defaultValue={selectedModelGroup ?? "all"}
-                                onValueChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
-                                value={selectedModelGroup ?? "all"}
-                              >
-                                <SelectItem value="all">All Models</SelectItem>
-                                {availableModelGroups.map((group, idx) => (
-                                  <SelectItem
-                                    key={idx}
-                                    value={group}
-                                  >
-                                    {group}
-                                  </SelectItem>
-                                ))}
-                              </Select>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <Text>Filter by Model Access Group:</Text>
-                              <Select
-                                className="w-64"
-                                defaultValue="all"
-                                value={selectedModelAccessGroupFilter ?? "all"}
-                                onValueChange={(value) => setSelectedModelAccessGroupFilter(value === "all" ? null : value)}
-                              >
-                                <SelectItem value="all">All Model Access Groups</SelectItem>
-                                {availableModelAccessGroups.map((accessGroup, idx) => (
-                                  <SelectItem
-                                    key={idx}
-                                    value={accessGroup}
-                                  >
-                                    {accessGroup}
-                                  </SelectItem>
-                                ))}
-                              </Select>
-                            </div>
-                          </div>
-
-                        </div>
-
-                        {/* Results Count */}
-                        <div className="flex justify-between items-center">
-                          <Text className="text-sm text-gray-700">
-                            Showing {modelData && modelData.data.length > 0 ? 
-                              modelData.data.filter((model: any) => {
-                                const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
-                                const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
-                                let teamAccessMatch = true;
-                                if (modelViewMode === 'current_team') {
-                                  if (currentTeam === 'personal') {
-                                    teamAccessMatch = model.model_info?.direct_access === true;
-                                  } else {
-                                    teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
-                                  }
-                                }
-
-                                return modelNameMatch && accessGroupMatch && teamAccessMatch;
-                              }).length : 0} results
-                          </Text>
+                <div className="flex items-center space-x-2">
+                  {lastRefreshed && (
+                    <Text>Last Refreshed: {lastRefreshed}</Text>
+                  )}
+                  <Icon
+                    icon={RefreshIcon} // Modify as necessary for correct icon name
+                    variant="shadow"
+                    size="xs"
+                    className="self-center"
+                    onClick={handleRefreshClick}
+                  />
+                </div>
+              </TabList>
+              <TabPanels>
+                <TabPanel>
+                  <Grid>
+                    <div className="flex flex-col space-y-4">
+                      <div className="flex justify-between items-center mb-4">
+                        <div>
+                          <Title>Model Management</Title>
+                          {!all_admin_roles.includes(userRole) ? (
+                            <Text className="text-tremor-content">
+                              Add models for teams you are an admin for.
+                            </Text>
+                          ) : (
+                            <Text className="text-tremor-content">
+                              Add and manage models for the proxy
+                            </Text>
+                          )}
                         </div>
                       </div>
-                    </div>
+
+                      <div className="bg-white rounded-lg shadow">
+                        <div className="border-b px-6 py-4">
+                          <div className="flex flex-col space-y-4">
+                            {/* Current Team Selector - Prominent */}
+                            <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                              <div>
+                                <div className="flex items-center gap-4">
+                                  <Text className="text-lg font-semibold text-gray-900">
+                                    Current Team:
+                                  </Text>
+                                  <Select
+                                    className="w-80"
+                                    defaultValue="personal"
+                                    value={currentTeam}
+                                    onValueChange={(value) =>
+                                      setCurrentTeam(value)
+                                    }
+                                  >
+                                    <SelectItem value="personal">
+                                      <div className="flex items-center gap-2">
+                                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                                        <span className="font-medium">
+                                          Personal
+                                        </span>
+                                      </div>
+                                    </SelectItem>
+                                    {teams
+                                      ?.filter((team) => team.team_id)
+                                      .map((team) => (
+                                        <SelectItem
+                                          key={team.team_id}
+                                          value={team.team_id}
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                            <span className="font-medium">
+                                              {team.team_alias
+                                                ? `${team.team_alias.slice(0, 30)}...`
+                                                : `Team ${team.team_id.slice(0, 30)}...`}
+                                            </span>
+                                          </div>
+                                        </SelectItem>
+                                      ))}
+                                  </Select>
+                                </div>
+                                {modelViewMode === "current_team" && (
+                                  <div className="flex items-start gap-2 mt-2 bg-gray-50 rounded">
+                                    <InfoCircleOutlined className="text-gray-400 mt-0.5 flex-shrink-0 text-xs" />
+                                    <div className="text-xs text-gray-500">
+                                      {currentTeam === "personal" ? (
+                                        <span>
+                                          To access these models: Create a
+                                          Virtual Key without selecting a team
+                                          on the{" "}
+                                          <a
+                                            href="/?login=success&page=api-keys"
+                                            className="text-gray-600 hover:text-gray-800 underline"
+                                          >
+                                            Virtual Keys page
+                                          </a>
+                                        </span>
+                                      ) : (
+                                        <span>
+                                          To access these models: Create a
+                                          Virtual Key and select Team as &quot;
+                                          {currentTeam}&quot; on the{" "}
+                                          <a
+                                            href="/?login=success&page=api-keys"
+                                            className="text-gray-600 hover:text-gray-800 underline"
+                                          >
+                                            Virtual Keys page
+                                          </a>
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Model View Mode Toggle - Also prominent */}
+                              <div className="flex items-center gap-4">
+                                <Text className="text-lg font-semibold text-gray-900">
+                                  View:
+                                </Text>
+                                <Select
+                                  className="w-64"
+                                  defaultValue="current_team"
+                                  value={modelViewMode}
+                                  onValueChange={(value) =>
+                                    setModelViewMode(
+                                      value as "current_team" | "all"
+                                    )
+                                  }
+                                >
+                                  <SelectItem value="current_team">
+                                    <div className="flex items-center gap-2">
+                                      <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                                      <span className="font-medium">
+                                        Current Team Models
+                                      </span>
+                                    </div>
+                                  </SelectItem>
+                                  <SelectItem value="all">
+                                    <div className="flex items-center gap-2">
+                                      <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                                      <span className="font-medium">
+                                        All Available Models
+                                      </span>
+                                    </div>
+                                  </SelectItem>
+                                </Select>
+                              </div>
+                            </div>
+
+                            {/* Other Filters */}
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                {/* Model Name Filter */}
+                                <div className="flex items-center gap-2">
+                                  <Text>Filter by Public Model Name:</Text>
+                                  <Select
+                                    className="w-64"
+                                    defaultValue={selectedModelGroup ?? "all"}
+                                    onValueChange={(value) =>
+                                      setSelectedModelGroup(
+                                        value === "all" ? "all" : value
+                                      )
+                                    }
+                                    value={selectedModelGroup ?? "all"}
+                                  >
+                                    <SelectItem value="all">
+                                      All Models
+                                    </SelectItem>
+                                    <SelectItem value="wildcard">Wildcard Models (*)</SelectItem>
+                                {availableModelGroups.map((group, idx) => (
+                                      <SelectItem key={idx} value={group}>
+                                        {group}
+                                      </SelectItem>
+                                    ))}
+                                  </Select>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  <Text>Filter by Model Access Group:</Text>
+                                  <Select
+                                    className="w-64"
+                                    defaultValue="all"
+                                    value={
+                                      selectedModelAccessGroupFilter ?? "all"
+                                    }
+                                    onValueChange={(value) =>
+                                      setSelectedModelAccessGroupFilter(
+                                        value === "all" ? null : value
+                                      )
+                                    }
+                                  >
+                                    <SelectItem value="all">
+                                      All Model Access Groups
+                                    </SelectItem>
+                                    {availableModelAccessGroups.map(
+                                      (accessGroup, idx) => (
+                                        <SelectItem
+                                          key={idx}
+                                          value={accessGroup}
+                                        >
+                                          {accessGroup}
+                                        </SelectItem>
+                                      )
+                                    )}
+                                  </Select>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Results Count */}
+                            <div className="flex justify-between items-center">
+                              <Text className="text-sm text-gray-700">
+                                Showing{" "}
+                                {modelData && modelData.data.length > 0
+                                  ? modelData.data.filter((model: any) => {
+                                      const modelNameMatch =
+                                        selectedModelGroup === "all" ||
+                                        model.model_name ===
+                                          selectedModelGroup ||
+                                        !selectedModelGroup;
+                                      const accessGroupMatch =
+                                        selectedModelAccessGroupFilter ===
+                                          "all" ||
+                                        model.model_info[
+                                          "access_groups"
+                                        ]?.includes(
+                                          selectedModelAccessGroupFilter
+                                        ) ||
+                                        !selectedModelAccessGroupFilter;
+                                      let teamAccessMatch = true;
+                                      if (modelViewMode === "current_team") {
+                                        if (currentTeam === "personal") {
+                                          teamAccessMatch =
+                                            model.model_info?.direct_access ===
+                                            true;
+                                        } else {
+                                          teamAccessMatch =
+                                            model.model_info?.access_via_team_ids?.includes(
+                                              currentTeam
+                                            ) === true;
+                                        }
+                                      }
+
+                                      return (
+                                        modelNameMatch &&
+                                        accessGroupMatch &&
+                                        teamAccessMatch
+                                      );
+                                    }).length
+                                  : 0}{" "}
+                                results
+                              </Text>
+                            </div>
+                          </div>
+                        </div>
 
                     <ModelDataTable
-                        columns={columns(
-                          userRole,
-                          userID,
-                          premiumUser,
-                          setSelectedModelId,
-                          setSelectedTeamId,
-                          getDisplayModelName,
-                          handleEditClick,
-                          handleRefreshClick,
-                          setEditModel,
-                          expandedRows,
-                          setExpandedRows,
-                        )}
+                      columns={columns(
+                        userRole,
+                        userID,
+                        premiumUser,
+                        setSelectedModelId,
+                        setSelectedTeamId,
+                        getDisplayModelName,
+                        handleEditClick,
+                        handleRefreshClick,
+                        setEditModel,
+                        expandedRows,
+                        setExpandedRows
+                      )}
                       data={modelData.data.filter(
                         (model: any) => {
                           // Model name filter
-                          const modelNameMatch = selectedModelGroup === "all" || model.model_name === selectedModelGroup || !selectedModelGroup;
-                          
-                          // Model access group filter
-                          const accessGroupMatch = selectedModelAccessGroupFilter === "all" || model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) || !selectedModelAccessGroupFilter;
-                          
+                          const modelNameMatch = selectedModelGroup === "all" ||
+                          model.model_name === selectedModelGroup ||
+                          !selectedModelGroup || (selectedModelGroup === "wildcard" && model.model_name.includes('*'));
+                           // Model access group filter
+                           const accessGroupMatch =
+                           selectedModelAccessGroupFilter === "all" ||
+                           model.model_info["access_groups"]?.includes(
+                             selectedModelAccessGroupFilter
+                           ) ||
+                           !selectedModelAccessGroupFilter;
                           // Team access filter based on current team and view mode
                           let teamAccessMatch = true;
-                          if (modelViewMode === 'current_team') {
-                            if (currentTeam === 'personal') {
+                          if (modelViewMode === "current_team") {
+                            if (currentTeam === "personal") {
                               // Show only models with direct access
-                              teamAccessMatch = model.model_info?.direct_access === true;
+                              teamAccessMatch =
+                                model.model_info?.direct_access === true;
                             } else {
                               // Show only models accessible by the current team
-                              teamAccessMatch = model.model_info?.access_via_team_ids?.includes(currentTeam) === true;
+                              teamAccessMatch =
+                                model.model_info?.access_via_team_ids?.includes(
+                                  currentTeam
+                                ) === true;
                             }
                           }
                           // For 'all' mode, show all models (teamAccessMatch remains true)
-                          
-                          return modelNameMatch && accessGroupMatch && teamAccessMatch;
-                        }
-                      )}
+
+                          return (
+                            modelNameMatch &&
+                            accessGroupMatch &&
+                            teamAccessMatch
+                          );
+                        })}
                       isLoading={false}
                       table={tableRef}
                     />
@@ -1357,69 +1400,78 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
               />
             </TabPanel>
             <TabPanel>
-              <CredentialsPanel accessToken={accessToken} uploadProps={uploadProps} credentialList={credentialsList} fetchCredentials={fetchCredentials} />
-            </TabPanel>
-            <TabPanel>
-              <PassThroughSettings
-                accessToken={accessToken}
-                userRole={userRole}
-                userID={userID}
-                modelData={modelData}
-              />
-            </TabPanel>
-            <TabPanel>
-              <HealthCheckComponent
-                accessToken={accessToken}
-                modelData={modelData}
-                all_models_on_proxy={all_models_on_proxy}
-                getDisplayModelName={getDisplayModelName}
-                setSelectedModelId={setSelectedModelId}
-              />
-            </TabPanel>
-            <TabPanel>
-              <Grid numItems={4} className="mt-2 mb-2">
-                <Col>
-                  <UsageDatePicker
-                    value={dateValue}
-                    className="mr-2"
-                    onValueChange={(value) => {
-                      setDateValue(value);
-                      updateModelMetrics(
-                        selectedModelGroup,
-                        value.from,
-                        value.to
-                      );
-                    }}
+                  <CredentialsPanel
+                    accessToken={accessToken}
+                    uploadProps={uploadProps}
+                    credentialList={credentialsList}
+                    fetchCredentials={fetchCredentials}
                   />
-                </Col>
-                <Col className="ml-2">
-                  <Text>Select Model Group</Text>
-                  <Select
-                    defaultValue={
-                      selectedModelGroup
-                        ? selectedModelGroup
-                        : availableModelGroups[0]
-                    }
-                    value={
-                      selectedModelGroup
-                        ? selectedModelGroup
-                        : availableModelGroups[0]
-                    }
-                  >
-                    {availableModelGroups.map((group, idx) => (
-                      <SelectItem
-                        key={idx}
-                        value={group}
-                        onClick={() =>
-                          updateModelMetrics(group, dateValue.from, dateValue.to)
+                </TabPanel>
+                <TabPanel>
+                  <PassThroughSettings
+                    accessToken={accessToken}
+                    userRole={userRole}
+                    userID={userID}
+                    modelData={modelData}
+                  />
+                </TabPanel>
+                <TabPanel>
+                  <HealthCheckComponent
+                    accessToken={accessToken}
+                    modelData={modelData}
+                    all_models_on_proxy={all_models_on_proxy}
+                    getDisplayModelName={getDisplayModelName}
+                    setSelectedModelId={setSelectedModelId}
+                  />
+                </TabPanel>
+                <TabPanel>
+                  <Grid numItems={4} className="mt-2 mb-2">
+                    <Col>
+                      <UsageDatePicker
+                        value={dateValue}
+                        className="mr-2"
+                        onValueChange={(value) => {
+                          setDateValue(value);
+                          updateModelMetrics(
+                            selectedModelGroup,
+                            value.from,
+                            value.to
+                          );
+                        }}
+                      />
+                    </Col>
+                    <Col className="ml-2">
+                      <Text>Select Model Group</Text>
+                      <Select
+                        defaultValue={
+                          selectedModelGroup
+                            ? selectedModelGroup
+                            : availableModelGroups[0]
+                        }
+                        value={
+                          selectedModelGroup
+                            ? selectedModelGroup
+                            : availableModelGroups[0]
                         }
                       >
-                        {group}
-                      </SelectItem>
-                    ))}
-                  </Select>
-                </Col>
-                <Col>
+                        {availableModelGroups.map((group, idx) => (
+                          <SelectItem
+                            key={idx}
+                            value={group}
+                            onClick={() =>
+                              updateModelMetrics(
+                                group,
+                                dateValue.from,
+                                dateValue.to
+                              )
+                            }
+                          >
+                            {group}
+                          </SelectItem>
+                        ))}
+                      </Select>
+                    </Col>
+                    <Col>
                 <Popover
                   trigger="click" content={FilterByContent}
                   overlayStyle={{
@@ -1442,286 +1494,320 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
                 </Grid>
 
-
-              <Grid numItems={2}>
-                <Col>
-                  <Card className="mr-2 max-h-[400px] min-h-[400px]">
-                    <TabGroup>
-                      <TabList variant="line" defaultValue="1">
-                        <Tab value="1">Avg. Latency per Token</Tab>
-                        <Tab value="2">Time to first token</Tab>
-                      </TabList>
-                      <TabPanels>
-                        <TabPanel>
-                          <p className="text-gray-500 italic"> (seconds/token)</p>
-                          <Text className="text-gray-500 italic mt-1 mb-1">
-                            average Latency for successfull requests divided by
-                            the total tokens
-                          </Text>
-                          {modelMetrics && modelMetricsCategories && (
-                            <AreaChart
-                              title="Model Latency"
-                              className="h-72"
-                              data={modelMetrics}
-                              showLegend={false}
-                              index="date"
-                              categories={modelMetricsCategories}
-                              connectNulls={true}
-                              customTooltip={customTooltip}
-                            />
-                          )}
-                        </TabPanel>
-                        <TabPanel>
-                          <TimeToFirstToken
-                            modelMetrics={streamingModelMetrics}
-                            modelMetricsCategories={
-                              streamingModelMetricsCategories
-                            }
-                            customTooltip={customTooltip}
-                            premiumUser={premiumUser}
-                          />
-                        </TabPanel>
-                      </TabPanels>
-                    </TabGroup>
-                  </Card>
-                </Col>
-                <Col>
-                  <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
-                    <Table>
-                      <TableHead>
-                        <TableRow>
-                          <TableHeaderCell>Deployment</TableHeaderCell>
-                          <TableHeaderCell>Success Responses</TableHeaderCell>
-                          <TableHeaderCell>
-                            Slow Responses <p>Success Responses taking 600+s</p>
-                          </TableHeaderCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {slowResponsesData.map((metric, idx) => (
-                          <TableRow key={idx}>
-                            <TableCell>{metric.api_base}</TableCell>
-                            <TableCell>{metric.total_count}</TableCell>
-                            <TableCell>{metric.slow_count}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </Card>
-                </Col>
-              </Grid>
-              <Grid numItems={1} className="gap-2 w-full mt-2">
-              <Card>
-
-              <Title>All Exceptions for {selectedModelGroup}</Title>
-               
-              <BarChart
-                      className="h-60"
-                      data={modelExceptions}
-                      index="model"
-                      categories={allExceptions}
-                      stack={true}
-                      
-                      yAxisWidth={30}
-                /> 
-                            </Card>
-            
-              </Grid>
-
-
-              <Grid numItems={1} className="gap-2 w-full mt-2">
-                  <Card>
-                  <Title>All Up Rate Limit Errors (429) for {selectedModelGroup}</Title>
-                  <Grid numItems={1}>
-                  <Col>
-                  <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors { (globalExceptionData.sum_num_rate_limit_exceptions)}</Subtitle>
-                  <BarChart
-                      className="h-40"
-                      data={globalExceptionData.daily_data}
-                      index="date"
-                      colors={['rose']}
-                      categories={['num_rate_limit_exceptions']}
-                      onValueChange={(v) => console.log(v)}
-                    />
+                  <Grid numItems={2}>
+                    <Col>
+                      <Card className="mr-2 max-h-[400px] min-h-[400px]">
+                        <TabGroup>
+                          <TabList variant="line" defaultValue="1">
+                            <Tab value="1">Avg. Latency per Token</Tab>
+                            <Tab value="2">Time to first token</Tab>
+                          </TabList>
+                          <TabPanels>
+                            <TabPanel>
+                              <p className="text-gray-500 italic">
+                                {" "}
+                                (seconds/token)
+                              </p>
+                              <Text className="text-gray-500 italic mt-1 mb-1">
+                                average Latency for successfull requests divided
+                                by the total tokens
+                              </Text>
+                              {modelMetrics && modelMetricsCategories && (
+                                <AreaChart
+                                  title="Model Latency"
+                                  className="h-72"
+                                  data={modelMetrics}
+                                  showLegend={false}
+                                  index="date"
+                                  categories={modelMetricsCategories}
+                                  connectNulls={true}
+                                  customTooltip={customTooltip}
+                                />
+                              )}
+                            </TabPanel>
+                            <TabPanel>
+                              <TimeToFirstToken
+                                modelMetrics={streamingModelMetrics}
+                                modelMetricsCategories={
+                                  streamingModelMetricsCategories
+                                }
+                                customTooltip={customTooltip}
+                                premiumUser={premiumUser}
+                              />
+                            </TabPanel>
+                          </TabPanels>
+                        </TabGroup>
+                      </Card>
                     </Col>
                     <Col>
-
-                 
-
-                  </Col>
-
+                      <Card className="ml-2 max-h-[400px] min-h-[400px]  overflow-y-auto">
+                        <Table>
+                          <TableHead>
+                            <TableRow>
+                              <TableHeaderCell>Deployment</TableHeaderCell>
+                              <TableHeaderCell>
+                                Success Responses
+                              </TableHeaderCell>
+                              <TableHeaderCell>
+                                Slow Responses{" "}
+                                <p>Success Responses taking 600+s</p>
+                              </TableHeaderCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {slowResponsesData.map((metric, idx) => (
+                              <TableRow key={idx}>
+                                <TableCell>{metric.api_base}</TableCell>
+                                <TableCell>{metric.total_count}</TableCell>
+                                <TableCell>{metric.slow_count}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </Card>
+                    </Col>
                   </Grid>
-                  
+                  <Grid numItems={1} className="gap-2 w-full mt-2">
+                    <Card>
+                      <Title>All Exceptions for {selectedModelGroup}</Title>
 
-                  </Card>
+                      <BarChart
+                        className="h-60"
+                        data={modelExceptions}
+                        index="model"
+                        categories={allExceptions}
+                        stack={true}
+                        yAxisWidth={30}
+                      />
+                    </Card>
+                  </Grid>
 
-                  {
-                    premiumUser ? ( 
-                      <>
-                      {globalExceptionPerDeployment.map((globalActivity, index) => (
-                    <Card key={index}>
-                      <Title>{globalActivity.api_base ? globalActivity.api_base : "Unknown API Base"}</Title>
+                  <Grid numItems={1} className="gap-2 w-full mt-2">
+                    <Card>
+                      <Title>
+                        All Up Rate Limit Errors (429) for {selectedModelGroup}
+                      </Title>
                       <Grid numItems={1}>
                         <Col>
-                          <Subtitle style={{ fontSize: "15px", fontWeight: "normal", color: "#535452"}}>Num Rate Limit Errors (429) {(globalActivity.sum_num_rate_limit_exceptions)}</Subtitle>
+                          <Subtitle
+                            style={{
+                              fontSize: "15px",
+                              fontWeight: "normal",
+                              color: "#535452",
+                            }}
+                          >
+                            Num Rate Limit Errors{" "}
+                            {globalExceptionData.sum_num_rate_limit_exceptions}
+                          </Subtitle>
                           <BarChart
                             className="h-40"
-                            data={globalActivity.daily_data}
+                            data={globalExceptionData.daily_data}
                             index="date"
-                            colors={['rose']}
-                            categories={['num_rate_limit_exceptions']}
-                
+                            colors={["rose"]}
+                            categories={["num_rate_limit_exceptions"]}
                             onValueChange={(v) => console.log(v)}
                           />
-                          
                         </Col>
+                        <Col></Col>
                       </Grid>
                     </Card>
-                  ))}
-                      </>
-                    ) : 
-                    <>
-                    {globalExceptionPerDeployment && globalExceptionPerDeployment.length > 0 &&
-                      globalExceptionPerDeployment.slice(0, 1).map((globalActivity, index) => (
-                        <Card key={index}>
-                          <Title>✨ Rate Limit Errors by Deployment</Title>
-                          <p className="mb-2 text-gray-500 italic text-[12px]">Upgrade to see exceptions for all deployments</p>
-                          <Button variant="primary" className="mb-2">
-                            <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                              Get Free Trial
-                            </a>
-                          </Button>
-                          <Card>
-                          <Title>{globalActivity.api_base}</Title>
-                          <Grid numItems={1}>
-                            <Col>
-                              <Subtitle
-                                style={{
-                                  fontSize: "15px",
-                                  fontWeight: "normal",
-                                  color: "#535452",
-                                }}
-                              >
-                                Num Rate Limit Errors {(globalActivity.sum_num_rate_limit_exceptions)}
-                              </Subtitle>
-                              <BarChart
-                                  className="h-40"
-                                  data={globalActivity.daily_data}
-                                  index="date"
-                                  colors={['rose']}
-                                  categories={['num_rate_limit_exceptions']}
-                
-                                  onValueChange={(v) => console.log(v)}
-                                />
-                            </Col>
-                            
-                            
-                          </Grid>
-                          </Card>
-                        </Card>
-                      ))}
-                  </>
-                  }              
-                </Grid>
-                
-            </TabPanel>
-            <TabPanel>
-              <div className="flex items-center">
-                <Text>Filter by Public Model Name</Text>
 
-                <Select
-                  className="mb-4 mt-2 ml-2 w-50"
-                  defaultValue={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                  value={
-                    selectedModelGroup
-                      ? selectedModelGroup
-                      : availableModelGroups[0]
-                  }
-                  onValueChange={(value) => setSelectedModelGroup(value)}
-                >
-                  {availableModelGroups.map((group, idx) => (
-                    <SelectItem
-                      key={idx}
-                      value={group}
-                      onClick={() => setSelectedModelGroup(group)}
-                    >
-                      {group}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-
-              <Title>Retry Policy for {selectedModelGroup}</Title>
-              <Text className="mb-6">
-                How many retries should be attempted based on the Exception
-              </Text>
-              {retry_policy_map && (
-                <table>
-                  <tbody>
-                    {Object.entries(retry_policy_map).map(
-                      ([exceptionType, retryPolicyKey], idx) => {
-                        let retryCount =
-                          modelGroupRetryPolicy?.[selectedModelGroup!]?.[
-                            retryPolicyKey
-                          ];
-                        if (retryCount == null) {
-                          retryCount = defaultRetry;
-                        }
-
-                        return (
-                          <tr
-                            key={idx}
-                            className="flex justify-between items-center mt-2"
-                          >
-                            <td>
-                              <Text>{exceptionType}</Text>
-                            </td>
-                            <td>
-                              <InputNumber
-                                className="ml-5"
-                                value={retryCount}
-                                min={0}
-                                step={1}
-                                onChange={(value) => {
-                                  setModelGroupRetryPolicy(
-                                    (prevModelGroupRetryPolicy) => {
-                                      const prevRetryPolicy =
-                                        prevModelGroupRetryPolicy?.[
-                                          selectedModelGroup!
-                                        ] ?? {};
-                                      return {
-                                        ...(prevModelGroupRetryPolicy ?? {}),
-                                        [selectedModelGroup!]: {
-                                          ...prevRetryPolicy,
-                                          [retryPolicyKey!]: value,
-                                        },
-                                      } as RetryPolicyObject;
+                    {premiumUser ? (
+                      <>
+                        {globalExceptionPerDeployment.map(
+                          (globalActivity, index) => (
+                            <Card key={index}>
+                              <Title>
+                                {globalActivity.api_base
+                                  ? globalActivity.api_base
+                                  : "Unknown API Base"}
+                              </Title>
+                              <Grid numItems={1}>
+                                <Col>
+                                  <Subtitle
+                                    style={{
+                                      fontSize: "15px",
+                                      fontWeight: "normal",
+                                      color: "#535452",
+                                    }}
+                                  >
+                                    Num Rate Limit Errors (429){" "}
+                                    {
+                                      globalActivity.sum_num_rate_limit_exceptions
                                     }
-                                  );
-                                }}
-                              />
-                            </td>
-                          </tr>
-                        );
-                      }
+                                  </Subtitle>
+                                  <BarChart
+                                    className="h-40"
+                                    data={globalActivity.daily_data}
+                                    index="date"
+                                    colors={["rose"]}
+                                    categories={["num_rate_limit_exceptions"]}
+                                    onValueChange={(v) => console.log(v)}
+                                  />
+                                </Col>
+                              </Grid>
+                            </Card>
+                          )
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {globalExceptionPerDeployment &&
+                          globalExceptionPerDeployment.length > 0 &&
+                          globalExceptionPerDeployment
+                            .slice(0, 1)
+                            .map((globalActivity, index) => (
+                              <Card key={index}>
+                                <Title>
+                                  ✨ Rate Limit Errors by Deployment
+                                </Title>
+                                <p className="mb-2 text-gray-500 italic text-[12px]">
+                                  Upgrade to see exceptions for all deployments
+                                </p>
+                                <Button variant="primary" className="mb-2">
+                                  <a
+                                    href="https://forms.gle/W3U4PZpJGFHWtHyA9"
+                                    target="_blank"
+                                  >
+                                    Get Free Trial
+                                  </a>
+                                </Button>
+                                <Card>
+                                  <Title>{globalActivity.api_base}</Title>
+                                  <Grid numItems={1}>
+                                    <Col>
+                                      <Subtitle
+                                        style={{
+                                          fontSize: "15px",
+                                          fontWeight: "normal",
+                                          color: "#535452",
+                                        }}
+                                      >
+                                        Num Rate Limit Errors{" "}
+                                        {
+                                          globalActivity.sum_num_rate_limit_exceptions
+                                        }
+                                      </Subtitle>
+                                      <BarChart
+                                        className="h-40"
+                                        data={globalActivity.daily_data}
+                                        index="date"
+                                        colors={["rose"]}
+                                        categories={[
+                                          "num_rate_limit_exceptions",
+                                        ]}
+                                        onValueChange={(v) => console.log(v)}
+                                      />
+                                    </Col>
+                                  </Grid>
+                                </Card>
+                              </Card>
+                            ))}
+                      </>
                     )}
-                  </tbody>
-                </table>
-              )}
-              <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
-                Save
-              </Button>
-            </TabPanel>
-            
-          </TabPanels>
-        </TabGroup>
-      )}
+                  </Grid>
+                </TabPanel>
+                <TabPanel>
+                  <div className="flex items-center">
+                    <Text>Filter by Public Model Name</Text>
 
-    </div>  
+                    <Select
+                      className="mb-4 mt-2 ml-2 w-50"
+                      defaultValue={
+                        selectedModelGroup
+                          ? selectedModelGroup
+                          : availableModelGroups[0]
+                      }
+                      value={
+                        selectedModelGroup
+                          ? selectedModelGroup
+                          : availableModelGroups[0]
+                      }
+                      onValueChange={(value) => setSelectedModelGroup(value)}
+                    >
+                      {availableModelGroups.map((group, idx) => (
+                        <SelectItem
+                          key={idx}
+                          value={group}
+                          onClick={() => setSelectedModelGroup(group)}
+                        >
+                          {group}
+                        </SelectItem>
+                      ))}
+                    </Select>
+                  </div>
+
+                  <Title>Retry Policy for {selectedModelGroup}</Title>
+                  <Text className="mb-6">
+                    How many retries should be attempted based on the Exception
+                  </Text>
+                  {retry_policy_map && (
+                    <table>
+                      <tbody>
+                        {Object.entries(retry_policy_map).map(
+                          ([exceptionType, retryPolicyKey], idx) => {
+                            let retryCount =
+                              modelGroupRetryPolicy?.[selectedModelGroup!]?.[
+                                retryPolicyKey
+                              ];
+                            if (retryCount == null) {
+                              retryCount = defaultRetry;
+                            }
+
+                            return (
+                              <tr
+                                key={idx}
+                                className="flex justify-between items-center mt-2"
+                              >
+                                <td>
+                                  <Text>{exceptionType}</Text>
+                                </td>
+                                <td>
+                                  <InputNumber
+                                    className="ml-5"
+                                    value={retryCount}
+                                    min={0}
+                                    step={1}
+                                    onChange={(value) => {
+                                      setModelGroupRetryPolicy(
+                                        (prevModelGroupRetryPolicy) => {
+                                          const prevRetryPolicy =
+                                            prevModelGroupRetryPolicy?.[
+                                              selectedModelGroup!
+                                            ] ?? {};
+                                          return {
+                                            ...(prevModelGroupRetryPolicy ??
+                                              {}),
+                                            [selectedModelGroup!]: {
+                                              ...prevRetryPolicy,
+                                              [retryPolicyKey!]: value,
+                                            },
+                                          } as RetryPolicyObject;
+                                        }
+                                      );
+                                    }}
+                                  />
+                                </td>
+                              </tr>
+                            );
+                          }
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                  <Button
+                    className="mt-6 mr-8"
+                    onClick={handleSaveRetrySettings}
+                  >
+                    Save
+                  </Button>
+                </TabPanel>
+              </TabPanels>
+            </TabGroup>
+          )}
+        </Col>
+      </Grid>
+    </div>
   );
 };
 

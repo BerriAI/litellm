@@ -88,6 +88,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         if stream:
             completion_kwargs["stream"] = stream
+            completion_kwargs["stream_options"] = {
+                "include_usage": True,
+            }
 
         excluded_keys = {"anthropic_messages"}
         extra_kwargs = extra_kwargs or {}
@@ -100,6 +103,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 from litellm.types.utils import CallTypes
 
                 setattr(value, "call_type", CallTypes.completion.value)
+                setattr(
+                    value, "stream_options", completion_kwargs.get("stream_options")
+                )
             if (
                 key not in excluded_keys
                 and key not in completion_kwargs
