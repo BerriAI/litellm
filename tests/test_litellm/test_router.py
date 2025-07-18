@@ -900,7 +900,13 @@ async def test_router_forward_client_headers_by_model_group():
     """
     Test that router.forward_client_headers_by_model_group returns the correct response
     """
+    from unittest.mock import MagicMock, patch
+
     from litellm.types.router import ModelGroupSettings
+
+    litellm.model_group_settings = ModelGroupSettings(
+        forward_client_headers_to_llm_api=["gpt-3.5-turbo-allow"]
+    )
 
     router = litellm.Router(
         model_list=[
@@ -917,16 +923,17 @@ async def test_router_forward_client_headers_by_model_group():
                 },
             },
         ],
-        model_group_settings=ModelGroupSettings(
-            forward_client_headers_to_llm_api=["gpt-3.5-turbo-allow"]
-        ),
     )
 
-    result = await router.acompletion(
-        model="gpt-3.5-turbo-allow",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        mock_response="Hello, world!",
-    )
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="gpt-3.5-turbo-allow",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            proxy_server_request={"headers": {"test": "test"}},
+        )
 
-    assert result is not None
-    assert result.choices[0].message.content == "Hello, world!"
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])

@@ -259,7 +259,6 @@ class Router:
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
         ignore_invalid_deployments: bool = False,
-        model_group_settings: Optional["ModelGroupSettings"] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -346,8 +345,6 @@ class Router:
         self.router_general_settings: RouterGeneralSettings = (
             router_general_settings or RouterGeneralSettings()
         )
-
-        self.apply_model_group_settings(model_group_settings)
 
         self.assistants_config = assistants_config
         self.deployment_names: List = (
@@ -606,18 +603,17 @@ class Router:
 
         self.initialize_assistants_endpoint()
         self.initialize_router_endpoints()
+        self.apply_default_settings()
 
-    def apply_model_group_settings(
-        self, model_group_settings: Optional["ModelGroupSettings"]
-    ):
+    def apply_default_settings(self):
         """
-        Apply the model group settings to the router.
+        Apply the default settings to the router.
         """
-        if model_group_settings is None:
-            return None
-        self.model_group_settings = model_group_settings
-        if self.model_group_settings.forward_client_headers_to_llm_api is not None:
-            self.add_optional_pre_call_checks(["forward_client_headers_by_model_group"])
+
+        default_pre_call_checks: OptionalPreCallChecks = [
+            "forward_client_headers_by_model_group",
+        ]
+        self.add_optional_pre_call_checks(default_pre_call_checks)
         return None
 
     def discard(self):
@@ -881,6 +877,7 @@ class Router:
                 elif pre_call_check == "forward_client_headers_by_model_group":
                     _callback = ForwardClientSideHeadersByModelGroup()
                 if _callback is not None:
+
                     litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def print_deployment(self, deployment: dict):
