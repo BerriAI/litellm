@@ -57,12 +57,13 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
                 # Check if base64 is in the formats
                 has_base64 = "base64" in formats
                 
-                if has_base64 and not drop_params:
+                if has_base64 and not drop_params and not litellm.drop_params:
                     raise CohereError(
                         status_code=400,
-                        message="Cohere does not support 'base64' encoding format. Set 'drop_params=True' to automatically filter out unsupported parameters."
+                        message="Cohere does not support 'base64' encoding format. Set 'drop_params=True' to automatically filter out unsupported parameters. You can also set litellm.drop_params=True globally. See https://docs.litellm.ai/docs/completion/drop_params for more information."
                     )
                 
+                # Filter to only valid Cohere formats
                 cohere_formats = [f for f in formats if f in valid_formats]
                 if cohere_formats:
                     optional_params["embedding_types"] = cohere_formats

@@ -558,3 +558,42 @@ def test_cohere_embed_base64_encoding_format_with_drop_params():
         
     except Exception as e:
         pytest.fail(f"Should handle base64 encoding_format with drop_params=True, but got error: {e}")
+
+
+def test_cohere_embed_base64_encoding_format_with_global_drop_params():
+    """Test that Cohere embeddings handle base64 encoding_format when global litellm.drop_params=True.
+    
+    This test ensures that when the global litellm.drop_params=True is set, unsupported parameters
+    like base64 encoding format are filtered out gracefully, even without passing drop_params in the call.
+    """
+    import litellm
+    
+    # Store original value
+    original_drop_params = litellm.drop_params
+    
+    try:
+        # Set global drop_params
+        litellm.drop_params = True
+        
+        # This should work when global litellm.drop_params=True
+        response = embedding(
+            model="cohere/embed-multilingual-v3.0",
+            input=["Test base64 encoding format handling with global drop_params"],
+            encoding_format="base64"  # OpenAI-style format that Cohere doesn't support
+            # Note: NOT passing drop_params=True in the call
+        )
+        
+        # Validate response - should return regular float embeddings
+        assert response.model is not None
+        assert len(response.data) == 1
+        assert response.data[0]['object'] == 'embedding'
+        assert len(response.data[0]['embedding']) > 0
+        # Ensure embeddings are floats (default format when base64 is filtered out)
+        assert all(isinstance(x, float) for x in response.data[0]['embedding'])
+        assert isinstance(response.usage, litellm.Usage)
+        
+    except Exception as e:
+        pytest.fail(f"Should handle base64 encoding_format with global litellm.drop_params=True, but got error: {e}")
+    finally:
+        # Restore original value
+        litellm.drop_params = original_drop_params

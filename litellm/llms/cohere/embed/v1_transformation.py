@@ -6,6 +6,7 @@ from typing import Any, List, Optional, Union
 
 import httpx
 
+import litellm
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.bedrock import (
@@ -41,10 +42,10 @@ class CohereEmbeddingConfig:
                 # Check if base64 is in the formats
                 has_base64 = "base64" in formats
                 
-                if has_base64 and not drop_params:
+                if has_base64 and not drop_params and not litellm.drop_params:
                     raise CohereError(
                         status_code=400,
-                        message="Cohere does not support 'base64' encoding format. Set 'drop_params=True' to automatically filter out unsupported parameters."
+                        message="Cohere does not support 'base64' encoding format. Set 'drop_params=True' to automatically filter out unsupported parameters. You can also set litellm.drop_params=True globally. See https://docs.litellm.ai/docs/completion/drop_params for more information."
                     )
                 
                 cohere_formats = [f for f in formats if f in valid_formats]
