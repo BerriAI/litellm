@@ -35,10 +35,9 @@ USER root
 RUN apk upgrade --no-cache && \
     apk add --no-cache bash
 
-# Copy project files
-COPY . .
-    
-# Copy built artifacts from builder stage
+# Copy only necessary artifacts from builder stage for runtime
+COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
+COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
@@ -47,7 +46,7 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
     && rm -f *.whl \
     && rm -rf /wheels
 
-# Ensure correct JWT library is used
+# Ensure correct JWT library is used (pyjwt not jwt)
 RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
