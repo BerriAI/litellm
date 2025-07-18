@@ -6226,3 +6226,35 @@ export const testMCPToolsListRequest = async (
     throw error;
   }
 };
+
+export const vectorStoreSearchCall = async (
+  accessToken: string,
+  vectorStoreId: string,
+  query: string
+): Promise<any> => {
+  try {
+    const url = `${getProxyBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: query
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error testing vector store search:", error);
+    throw error;
+  }
+};
