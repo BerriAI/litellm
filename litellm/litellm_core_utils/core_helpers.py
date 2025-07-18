@@ -177,6 +177,7 @@ def preserve_upstream_non_openai_attributes(
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
+    expected_keys = set(model_response.model_fields.keys()).union({"usage"})
     for key, value in original_chunk.model_dump().items():
-        if key not in model_response.model_fields.keys():
+        if key not in expected_keys:
             setattr(model_response, key, value)
