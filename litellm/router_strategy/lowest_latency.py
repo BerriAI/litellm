@@ -8,7 +8,7 @@ import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import safe_divide
+from litellm.litellm_core_utils.core_helpers import safe_divide_seconds
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -97,12 +97,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = safe_divide(response_ms, completion_tokens, default=response_ms)
+                        final_value = safe_divide_seconds(response_ms, completion_tokens, default=response_ms)
                         if final_value is None:
                             final_value = response_ms
 
                         if time_to_first_token_response_time is not None:
-                            time_to_first_token = safe_divide(
+                            time_to_first_token = safe_divide_seconds(
                                 time_to_first_token_response_time, completion_tokens
                             )
 
@@ -305,12 +305,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = safe_divide(response_ms, completion_tokens, default=response_ms)
+                        final_value = safe_divide_seconds(response_ms, completion_tokens, default=response_ms)
                         if final_value is None:
                             final_value = response_ms
 
                         if time_to_first_token_response_time is not None:
-                            time_to_first_token = safe_divide(
+                            time_to_first_token = safe_divide_seconds(
                                 time_to_first_token_response_time, completion_tokens
                             )
                 # ------------

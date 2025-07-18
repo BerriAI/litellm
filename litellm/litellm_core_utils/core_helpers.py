@@ -16,29 +16,27 @@ else:
     Span = Any
 
 
-def safe_divide(
-    numerator: Union[timedelta, float], 
+def safe_divide_seconds(
+    time_duration: Union[timedelta, float], 
     denominator: float,
     default: Optional[float] = None
 ) -> Optional[float]:
     """
-    Safely divide numerator by denominator, handling zero division and type conversion.
+    Safely divide time duration in seconds by denominator, handling zero division.
     
     Args:
-        numerator: Either a timedelta object or float representing time duration
+        time_duration: Either a timedelta object or float representing seconds
         denominator: The divisor (e.g., number of tokens)
         default: Value to return if division by zero (defaults to None)
         
     Returns:
-        The result of the division as a float, or default if denominator is zero
+        The result of the division as a float (seconds per unit), or default if denominator is zero
     """
     if denominator <= 0:
         return default
         
-    if isinstance(numerator, timedelta):
-        return float(numerator.total_seconds() / denominator)
-    else:
-        return float(numerator / denominator)
+    seconds = time_duration.total_seconds() if isinstance(time_duration, timedelta) else time_duration
+    return float(seconds / denominator)
 
 
 def map_finish_reason(
