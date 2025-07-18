@@ -207,9 +207,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
-from litellm.proxy.common_utils.vector_store_endpoints.endpoints import (
-    router as vector_store_router,
-)
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -332,6 +329,7 @@ from litellm.proxy.utils import (
     hash_token,
     update_spend,
 )
+from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )

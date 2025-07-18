@@ -502,6 +502,7 @@ model LiteLLM_ManagedVectorStoresTable {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   litellm_credential_name String?
+  litellm_params Json?
 }
 
 // Guardrails table for storing guardrail configurations
