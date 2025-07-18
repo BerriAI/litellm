@@ -14,11 +14,6 @@ from prometheus_client import REGISTRY, CollectorRegistry
 import litellm
 from litellm import completion
 from litellm._logging import verbose_logger
-from litellm.integrations.prometheus import (
-    PrometheusLogger,
-    UserAPIKeyLabelValues,
-    get_custom_labels_from_metadata,
-)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingPayload,
@@ -29,7 +24,10 @@ from litellm.types.utils import (
 import pytest
 from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timedelta, timezone
-from litellm.integrations.prometheus import PrometheusLogger
+try:
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues, get_custom_labels_from_metadata
+except Exception:
+    PrometheusLogger = None
 from litellm.proxy._types import UserAPIKeyAuth
 
 verbose_logger.setLevel(logging.DEBUG)
@@ -1055,7 +1053,7 @@ def test_increment_deployment_cooled_down(prometheus_logger):
 
 @pytest.mark.parametrize("enable_end_user_cost_tracking_prometheus_only", [True, False])
 def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheus_only):
-    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm_enterprise.integrations.prometheus import prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     monkeypatch.setattr(
@@ -1097,7 +1095,7 @@ def test_get_custom_labels_from_metadata_tags(monkeypatch):
 
 
 def test_get_custom_labels_from_tags(monkeypatch):
-    from litellm.integrations.prometheus import get_custom_labels_from_tags
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags
 
     monkeypatch.setattr(
         "litellm.custom_prometheus_tags", ["prod", "test-env", "batch.job"]
@@ -1112,7 +1110,7 @@ def test_get_custom_labels_from_tags(monkeypatch):
 
 
 def test_get_custom_labels_from_tags_empty_config(monkeypatch):
-    from litellm.integrations.prometheus import get_custom_labels_from_tags
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags
 
     monkeypatch.setattr("litellm.custom_prometheus_tags", [])
     tags = ["prod", "debug"]
@@ -1121,7 +1119,7 @@ def test_get_custom_labels_from_tags_empty_config(monkeypatch):
 
 
 def test_get_custom_labels_from_tags_no_tags(monkeypatch):
-    from litellm.integrations.prometheus import get_custom_labels_from_tags
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags
 
     monkeypatch.setattr("litellm.custom_prometheus_tags", ["prod", "test"])
     tags = []
@@ -1534,7 +1532,7 @@ def test_prometheus_label_factory_with_custom_tags(monkeypatch):
     """
     Test that prometheus_label_factory correctly handles custom tags
     """
-    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags, prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     # Set custom tags configuration
@@ -1569,7 +1567,7 @@ def test_prometheus_label_factory_with_no_custom_tags(monkeypatch):
     """
     Test that prometheus_label_factory works when no custom tags are configured
     """
-    from litellm.integrations.prometheus import prometheus_label_factory
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags, prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     # Set empty custom tags configuration
