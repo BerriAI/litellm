@@ -598,6 +598,34 @@ class Cache:
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
+    def _convert_to_cached_embedding(self, embedding_response: Any, model: str) -> CachedEmbedding:
+        """
+        Convert any embedding response into the standardized CachedEmbedding TypedDict format.
+        
+        Args:
+            embedding_response: The embedding response (can be dict, Embedding object, or other)
+            model: The model name to include in the cached embedding
+            
+        Returns:
+            CachedEmbedding: Properly typed cached embedding dict
+        """
+        if isinstance(embedding_response, dict):
+            return CachedEmbedding(
+                embedding=embedding_response["embedding"],
+                index=embedding_response["index"],
+                object=embedding_response["object"],
+                model=model
+            )
+        elif hasattr(embedding_response, 'model_dump'):
+            embedding_dict = embedding_response.model_dump()
+            embedding_dict["model"] = model
+            return CachedEmbedding(**embedding_dict)
+        else:
+            # Fallback to __dict__ access
+            embedding_dict = embedding_response.__dict__.copy()
+            embedding_dict["model"] = model
+            return CachedEmbedding(**embedding_dict)
+
     def add_embedding_response_to_cache(
         self,
         result: EmbeddingResponse,
@@ -609,20 +637,8 @@ class Cache:
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
         
-        # Create a properly typed cached embedding dict
-        if isinstance(embedding_response, dict):
-            embedding_dict: CachedEmbedding = {
-                "embedding": embedding_response["embedding"],
-                "index": embedding_response["index"],
-                "object": embedding_response["object"],
-                "model": result.model
-            }
-        elif hasattr(embedding_response, 'model_dump'):
-            embedding_dict = embedding_response.model_dump()
-            embedding_dict["model"] = result.model
-        else:
-            embedding_dict = embedding_response.__dict__.copy()
-            embedding_dict["model"] = result.model
+        # Always convert to properly typed CachedEmbedding
+        embedding_dict = self._convert_to_cached_embedding(embedding_response, result.model)
             
         cache_key, cached_data, kwargs = self._add_cache_logic(
             result=embedding_dict,
