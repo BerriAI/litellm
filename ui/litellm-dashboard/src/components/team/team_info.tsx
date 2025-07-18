@@ -19,6 +19,7 @@ import {
   TableBody,
   Table,
   Icon,
+  TextInput,
 } from "@tremor/react";
 import TeamMembersComponent from "./team_member_view";
 import MemberPermissions from "./member_permissions";
@@ -478,6 +479,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               </Card>
 
+              <Card>
+                <Text className="font-semibold text-gray-900">Virtual Keys</Text>
+                <div className="mt-2">
+                    <Text>
+                      User Keys: {teamData.keys.filter(key => key.user_id).length}
+                    </Text>
+                    <Text>
+                      Service Account Keys: {teamData.keys.filter(key => !key.user_id).length}
+                    </Text>
+                    <Text className="text-gray-500">
+                      Total: {teamData.keys.length}
+                    </Text>
+                  </div>
+              </Card>
+
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
                 variant="card"
@@ -605,15 +621,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item
-                    label="Team Member Key Duration"
+                    label="Team Member Key Duration (eg: 1d, 1mo)"
                     name="team_member_key_duration"
-                    tooltip="Set a limit to the duration of a team member's key."
+                    tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                   >
-                    <Select placeholder="n/a">
-                      <Select.Option value="1d">1 day</Select.Option>
-                      <Select.Option value="1w">1 week</Select.Option>
-                      <Select.Option value="1mo">1 month</Select.Option>
-                    </Select>
+                    <TextInput placeholder="e.g., 30d" />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
