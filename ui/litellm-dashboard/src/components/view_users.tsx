@@ -243,7 +243,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   )
 
   return (
-    <div className="w-full p-6">
+    <div className="w-full p-6 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <div className="flex space-x-3">
           <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
@@ -435,7 +435,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
                   </div>
                 </div>
               </div>
-
+              <div className="h-[75vh] overflow-auto">
               <UserDataTable
                 data={userListQuery.data?.users || []}
                 columns={tableColumns}
@@ -455,6 +455,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
                 handleDelete={handleDelete}
                 handleResetPassword={handleResetPassword}
               />
+              </div>
+              
             </div>
           </TabPanel>
 
