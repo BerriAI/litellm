@@ -3323,7 +3323,13 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type in ("responses", "generate_content", "generate_content_stream", "vector_store_search", "vector_store_create"):
+        if call_type in (
+            "responses",
+            "generate_content",
+            "generate_content_stream",
+            "vector_store_search",
+            "vector_store_create",
+        ):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[

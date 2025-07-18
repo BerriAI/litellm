@@ -3480,7 +3480,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
             )
-            
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, VectorStorePreCallHook):
                     return callback
@@ -3671,7 +3671,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
             )
-            
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, VectorStorePreCallHook):
                     return callback

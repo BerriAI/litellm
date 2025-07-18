@@ -2719,7 +2719,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = await async_httpx_client.post(
@@ -2818,7 +2820,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = sync_httpx_client.post(

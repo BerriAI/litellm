@@ -9,8 +9,14 @@ router = APIRouter()
 # OpenAI Compatible Endpoints
 ########################################################
 
-@router.post("/v1/vector_stores/{vector_store_id}/search", dependencies=[Depends(user_api_key_auth)])
-@router.post("/vector_stores/{vector_store_id}/search", dependencies=[Depends(user_api_key_auth)])
+
+@router.post(
+    "/v1/vector_stores/{vector_store_id}/search",
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.post(
+    "/vector_stores/{vector_store_id}/search", dependencies=[Depends(user_api_key_auth)]
+)
 async def vector_store_search(
     request: Request,
     vector_store_id: str,
@@ -68,7 +74,6 @@ async def vector_store_search(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-
 
 
 @router.post("/v1/vector_stores", dependencies=[Depends(user_api_key_auth)])
