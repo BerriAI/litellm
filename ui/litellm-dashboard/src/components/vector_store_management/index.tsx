@@ -17,6 +17,8 @@ import { VectorStore } from "./types";
 import VectorStoreTable from "./VectorStoreTable";
 import VectorStoreForm from "./VectorStoreForm";
 import DeleteModal from "./DeleteModal";
+import VectorStoreInfoView from "./vector_store_info";
+import { isAdminRole } from "@/utils/roles";
 
 interface VectorStoreProps {
   accessToken: string | null;
@@ -35,6 +37,8 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
   const [vectorStoreToDelete, setVectorStoreToDelete] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
+  const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
+  const [editVectorStore, setEditVectorStore] = useState(false);
 
   const fetchVectorStores = async () => {
     if (!accessToken) return;
@@ -72,6 +76,22 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
     setIsDeleteModalOpen(true);
   };
 
+  const handleView = (vectorStoreId: string) => {
+    setSelectedVectorStoreId(vectorStoreId);
+    setEditVectorStore(false);
+  };
+
+  const handleEdit = (vectorStoreId: string) => {
+    setSelectedVectorStoreId(vectorStoreId);
+    setEditVectorStore(true);
+  };
+
+  const handleCloseInfo = () => {
+    setSelectedVectorStoreId(null);
+    setEditVectorStore(false);
+    fetchVectorStores();
+  };
+
   const confirmDelete = async () => {
     if (!accessToken || !vectorStoreToDelete) return;
     try {
@@ -96,7 +116,17 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
     fetchCredentials();
   }, [accessToken]);
 
-  return (
+  return selectedVectorStoreId ? (
+    <div className="w-full h-full">
+      <VectorStoreInfoView
+        vectorStoreId={selectedVectorStoreId}
+        onClose={handleCloseInfo}
+        accessToken={accessToken}
+        is_admin={isAdminRole(userRole || "")}
+        editVectorStore={editVectorStore}
+      />
+    </div>
+  ) : (
     <div className="w-full mx-4 h-[75vh]">
       <div className="gap-2 p-8 h-[75vh] w-full mt-2">
         <div className="flex justify-between mt-2 w-full items-center mb-4">
@@ -128,6 +158,8 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
           <Col numColSpan={1}>
             <VectorStoreTable
               data={vectorStores}
+              onView={handleView}
+              onEdit={handleEdit}
               onDelete={handleDelete}
             />
           </Col>
