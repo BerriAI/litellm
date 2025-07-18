@@ -42,6 +42,10 @@ export const mcpServerHasAuth = (authType?: string | null): boolean => {
 export interface InputSchemaProperty {
     type: string;
     description?: string;
+    properties?: Record<string, InputSchemaProperty>; // For nested object properties
+    required?: string[]; // For required fields in nested objects
+    enum?: string[]; // For enum values
+    default?: any; // For default values
   }
   
   // Define the structure for the input schema of a tool
@@ -54,6 +58,7 @@ export interface InputSchemaProperty {
   // Define MCPServerCostInfo for cost tracking
   export interface MCPServerCostInfo {
     default_cost_per_query?: number | null;
+    tool_name_to_cost_per_query?: Record<string, number | null>;
   }
 
   // Define MCP provider info
@@ -133,6 +138,7 @@ export interface MCPServer {
   updated_at: string;
   updated_by: string;
   teams?: Team[];
+  mcp_access_groups?: string[];
 }
 
 export interface MCPServerProps {

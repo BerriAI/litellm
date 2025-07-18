@@ -141,6 +141,7 @@ general_settings:
 | key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
 | disable_add_transform_inline_image_block | boolean | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model. |
 | disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
+| enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
 
 ### general_settings - Reference
 
@@ -512,6 +513,7 @@ router_settings:
 | LAGO_API_KEY | API key for accessing Lago services
 | LANGFUSE_DEBUG | Toggle debug mode for Langfuse
 | LANGFUSE_FLUSH_INTERVAL | Interval for flushing Langfuse logs
+| LANGFUSE_TRACING_ENVIRONMENT | Environment for Langfuse tracing
 | LANGFUSE_HOST | Host URL for Langfuse service
 | LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
 | LANGFUSE_RELEASE | Release version of Langfuse integration
@@ -638,6 +640,8 @@ router_settings:
 | REQUEST_TIMEOUT | Timeout in seconds for requests. Default is 6000
 | ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
 | SECRET_MANAGER_REFRESH_INTERVAL | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)
+| SEPARATE_HEALTH_APP | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.
+| SEPARATE_HEALTH_PORT | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.
 | SERVER_ROOT_PATH | Root path for the server application
 | SET_VERBOSE | Flag to enable verbose logging
 | SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD | Minimum number of requests to consider "reasonable traffic" for single-deployment cooldown logic. Default is 1000

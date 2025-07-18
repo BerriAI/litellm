@@ -1,3 +1,6 @@
+
+
+
 """
 1. Allow proxy admin to perform create, update, and delete operations on MCP servers in the db.
 2. Allows users to view the mcp servers they have access to.
@@ -10,10 +13,12 @@ Endpoints here:
 - PUT `/v1/mcp/server` -  Edits an existing mcp server.
 - DELETE `/v1/mcp/server/{server_id}` - Deletes the mcp server given `server_id`.
 - GET `/v1/mcp/tools - lists all the tools available for a key
+- GET `/v1/mcp/access_groups` - lists all available MCP access groups
+
 """
 
 import importlib
-from typing import Iterable, List, Optional, Dict, cast
+from typing import Dict, Iterable, List, Optional, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -21,9 +26,7 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy.auth.model_checks import (
-    get_mcp_server_ids,
-)
+from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -37,10 +40,10 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
-        get_mcp_servers,
         get_all_mcp_servers,
         get_all_mcp_servers_for_user,
         get_mcp_server,
+        get_mcp_servers,
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -91,19 +94,19 @@ if MCP_AVAILABLE:
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
-        Get all MCP tools available for the current key
+        Get all MCP tools available for the current key, including those from access groups
         """
-
-        server_ids = await get_mcp_server_ids(
-            user_api_key_dict=user_api_key_dict,
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
         )
-
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
 
-        tools = []
+        # This now includes both direct and access group servers
+        server_ids = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_dict)
 
+        tools = []
         for server_id in server_ids:
             tools.extend(await global_mcp_server_manager.get_tools_for_server(server_id))
 
@@ -111,6 +114,40 @@ if MCP_AVAILABLE:
 
         return {"tools": tools}
 
+    @router.get(
+        "/access_groups",
+        tags=["mcp"],
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def get_mcp_access_groups(
+            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Get all available MCP access groups from the database AND config
+        """
+        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        access_groups = set()
+
+        # Get from config-loaded servers
+        for server in global_mcp_server_manager.config_mcp_servers.values():
+            if server.access_groups:
+                access_groups.update(server.access_groups)
+
+        # Get from DB
+        if prisma_client is not None:
+            try:
+                mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+                for server in mcp_servers:
+                    if hasattr(server, 'mcp_access_groups') and server.mcp_access_groups:
+                        access_groups.update(server.mcp_access_groups)
+            except Exception as e:
+                verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
+
+        # Convert to sorted list
+        access_groups_list = sorted(list(access_groups))
+        return {"access_groups": access_groups_list}
 
     ## FastAPI Routes
     @router.get(
@@ -205,6 +242,11 @@ if MCP_AVAILABLE:
                         auth_type=_server_config.auth_type,
                         created_at=datetime.now(),
                         updated_at=datetime.now(),
+                        mcp_info=_server_config.mcp_info,
+                        # Stdio-specific fields
+                        command=getattr(_server_config, 'command', None),
+                        args=getattr(_server_config, 'args', None) or [],
+                        env=getattr(_server_config, 'env', None) or {},
                     )
                 )
 
@@ -222,7 +264,13 @@ if MCP_AVAILABLE:
                 created_by=server.created_by,
                 updated_at=server.updated_at,
                 updated_by=server.updated_by,
-                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, []))
+                mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
+                mcp_info=server.mcp_info,
+                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
+                # Stdio-specific fields
+                command=getattr(server, 'command', None),
+                args=getattr(server, 'args', None) or [],
+                env=getattr(server, 'env', None) or {},
             )
             for server in LIST_MCP_SERVERS
         ]
@@ -303,6 +351,10 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
+
+        # Server name validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -444,6 +496,10 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
+        # Server name validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
+
         # Authz - restrict only admins to delete mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
@@ -476,3 +532,4 @@ if MCP_AVAILABLE:
             pass
 
         return mcp_server_record_updated
+

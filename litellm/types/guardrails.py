@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
+    OpenAIModerationGuardrailConfigModel,
+)
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
@@ -33,7 +37,7 @@ class SupportedGuardrailIntegrations(Enum):
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
-
+    OPENAI_MODERATION = "openai_moderation"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -269,6 +273,10 @@ class BedrockGuardrailConfigModel(BaseModel):
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
     )
+    disable_exception_on_block: Optional[bool] = Field(
+        default=False,
+        description="If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
+    )
     aws_region_name: Optional[str] = Field(
         default=None, description="AWS region where your guardrail is deployed"
     )
@@ -386,7 +394,18 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=None, description="Recipe for output (LLM response)"
     )
 
+    model: Optional[str] = Field(
+        default=None, description="Optional field if guardrail requires a 'model' parameter"
+    )
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
+class Mode(BaseModel):
+    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
+    default: Optional[str] = Field(
+        default=None, description="Default mode when no tags match"
+    )
 
 
 class LitellmParams(
@@ -397,7 +416,7 @@ class LitellmParams(
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: Union[str, List[str]] = Field(
+    mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
 

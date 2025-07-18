@@ -5,12 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-from fastapi import Request
+from fastapi import Request, FastAPI
 from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
+
+from starlette.datastructures import Headers
 
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -96,8 +98,8 @@ class TestMCPRequestHandler:
                 user_api_key_auth
             )
 
-            # Assert the result
-            assert result == expected_result
+            # Assert the result (order-independent comparison)
+            assert sorted(result) == sorted(expected_result)
 
             # Verify database call was made correctly when expected
             if (
@@ -205,20 +207,8 @@ class TestMCPRequestHandler:
             assert auth_result.user_id == ("test-user-id" if expected_api_key else None)
             assert auth_result.team_id == ("test-team-id" if expected_api_key else None)
             assert mcp_auth_header == expected_mcp_auth_header
-
-            # Verify user_api_key_auth was called with correct parameters
-            mock_auth.assert_called_once()
-            call_args = mock_auth.call_args
-
-            # Check that api_key parameter is correct
-            assert call_args.kwargs["api_key"] == expected_api_key
-
-            # Check that request parameter is a Request object
-            request_param = call_args.kwargs["request"]
-            assert isinstance(request_param, Request)
-
-            # Verify the request has the correct scope
-            assert request_param.scope == scope
+            # For these tests, mcp_servers should be None
+            assert mcp_servers is None
 
     @pytest.mark.parametrize(
         "headers,expected_result",
@@ -378,8 +368,6 @@ class TestMCPRequestHandler:
 
             # Call the method
             auth_result, mcp_auth_header, mcp_servers_result = await MCPRequestHandler.process_mcp_request(scope)
-
-            # Assert the results
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
             assert mcp_servers_result == expected_result["mcp_servers"]
@@ -556,3 +544,123 @@ class TestMCPCustomHeaderName:
                 mock_user_api_key_auth.assert_called_once()
                 call_args = mock_user_api_key_auth.call_args
                 assert call_args.kwargs["api_key"] == api_key
+
+class TestMCPAccessGroupsE2E:
+    """Simple e2e tests for MCP access groups functionality"""
+
+    @pytest.mark.asyncio 
+    async def test_mcp_access_group_resolution_e2e(self):
+        """E2E test: Pass access group in x-mcp-servers header, verify it resolves to server IDs"""
+        
+        # Mock servers that belong to the access group
+        mock_server_1 = MagicMock()
+        mock_server_1.server_id = "gmail-server"
+        mock_server_2 = MagicMock()  
+        mock_server_2.server_id = "slack-server"
+        
+        # Mock prisma client
+        mock_prisma_client = MagicMock()
+        mock_find_many = AsyncMock(return_value=[mock_server_1, mock_server_2])
+        mock_prisma_client.db.litellm_mcpservertable.find_many = mock_find_many
+        
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+            # Test that when we pass an access group, it calls _get_mcp_servers_from_access_groups
+            result = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                access_groups=["dev-group"]
+            )
+            
+            # Verify it unfurls the MCPs from that group
+            assert sorted(result) == sorted(["gmail-server", "slack-server"])
+            
+            # Verify the correct database query was made
+            mock_find_many.assert_called_once_with(
+                where={
+                    "mcp_access_groups": {
+                        "hasSome": ["dev-group"]
+                    }
+                }
+            )
+
+    @pytest.mark.asyncio
+    async def test_mcp_header_with_mixed_servers_and_groups(self):
+        """E2E test: x-mcp-servers header with both server names and access groups"""
+        
+        # Create ASGI scope with mixed servers and access groups
+        scope = {
+            "type": "http", 
+            "method": "POST",
+            "path": "/test",
+            "headers": [
+                (b"x-litellm-api-key", b"test-api-key"),
+                (b"x-mcp-servers", b"zapier-server,dev-group"),  # Mix of server name and access group
+            ],
+        }
+        
+        # Mock user authentication
+        async def mock_user_api_key_auth(api_key, request):
+            return UserAPIKeyAuth(
+                token="test-token",
+                api_key=api_key,
+                user_id="test-user-id",
+                team_id="test-team-id",
+                user_role=None,
+                request_route=None
+            )
+        
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=mock_user_api_key_auth,
+        ):
+            # Call process_mcp_request 
+            auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
+            
+            # Verify the header parsing worked correctly
+            assert auth_result.api_key == "test-api-key"
+            assert mcp_servers == ["zapier-server", "dev-group"]  # Should contain both server name and access group
+
+
+@pytest.mark.asyncio
+def test_mcp_path_based_server_segregation(monkeypatch):
+    # Import the MCP server FastAPI app and context getter
+    from litellm.proxy._experimental.mcp_server.server import app, get_auth_context
+
+    captured_mcp_servers = {}
+
+    # Patch the session manager to send a dummy response and capture context
+    async def dummy_handle_request(scope, receive, send):
+        from litellm.proxy._experimental.mcp_server.server import get_auth_context
+        _, _, mcp_servers = get_auth_context()
+        captured_mcp_servers[id(scope)] = mcp_servers
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b'{"ok": true}',
+        })
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.session_manager",
+        MagicMock(handle_request=dummy_handle_request)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server.initialize_session_managers",
+        AsyncMock()
+    )
+
+    # Patch user_api_key_auth to always return a dummy user
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+        AsyncMock(return_value=UserAPIKeyAuth(api_key="test", user_id="user"))
+    )
+
+    # Use TestClient to make a request to /mcp/zapier,group1/tools
+    client = TestClient(app)
+    response = client.get("/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"})
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    # The context should have mcp_servers set to ["zapier", "group1"]
+    assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]

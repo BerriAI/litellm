@@ -254,3 +254,41 @@ async def test_create_mcp_server_auth_failure():
         # Verify the exception details
         assert exc_info.value.status_code == 403
         assert "permission" in str(exc_info.value.detail)
+
+@pytest.mark.asyncio 
+async def test_create_mcp_server_invalid_alias():
+    """
+    Test that creating an MCP server with a '-' in the alias fails with the correct error.
+    """
+    with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server:
+        
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import add_mcp_server
+        from fastapi import HTTPException
+        
+        mock_prisma = mock.Mock()
+        mock_get_prisma.return_value = mock_prisma
+        
+        # Set up test data with invalid alias
+        server_id = str(uuid.uuid4())
+        mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
+        mcp_server_request.alias = "invalid-alias"  # This should trigger the validation error
+        
+        # Mock that server does not exist
+        mock_get_server.return_value = None
+        
+        user_auth = UserAPIKeyAuth(
+            api_key=TEST_MASTER_KEY,
+            user_id="test-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await add_mcp_server(
+                payload=mcp_server_request,
+                user_api_key_dict=user_auth
+            )
+        
+        assert exc_info.value.status_code == 400
+        assert "Server name cannot contain '-'. Use an alternative character instead Found: invalid-alias" in str(exc_info.value.detail)

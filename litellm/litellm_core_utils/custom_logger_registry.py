@@ -7,6 +7,7 @@ Example:
     "datadog" -> DataDogLogger
     "prometheus" -> PrometheusLogger
 """
+from typing import Union
 
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -33,8 +34,8 @@ from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
-from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
-    BedrockVectorStore,
+from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    VectorStorePreCallHook,
 )
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 
@@ -71,11 +72,11 @@ class CustomLoggerRegistry:
         "gcs_pubsub": GcsPubSubLogger,
         "anthropic_cache_control_hook": AnthropicCacheControlHook,
         "agentops": AgentOps,
-        "bedrock_vector_store": BedrockVectorStore,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
         "aws_sqs": SQSLogger,
         "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
+        "vector_store_pre_call_hook": VectorStorePreCallHook,
     }
 
     try:
@@ -103,7 +104,7 @@ class CustomLoggerRegistry:
         pass  # enterprise not installed
 
     @classmethod
-    def get_callback_str_from_class_type(cls, class_type: type) -> str | None:
+    def get_callback_str_from_class_type(cls, class_type: type) -> Union[str, None]:
         """
         Get the callback string from the class type.
         

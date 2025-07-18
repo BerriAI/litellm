@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import Image from '@theme/IdealImage';
 
-# /mcp [BETA] - Model Context Protocol
+# /mcp - Model Context Protocol
 
 LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint for all MCP tools and control MCP access by Key, Team. 
 
@@ -18,7 +18,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 | Feature | Description |
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools |
-| Supported MCP Transports | • Streamable HTTP<br/>• SSE |
+| Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | ✨ Enterprise Only<br/>• By Key<br/>• By Team<br/>• By Organization |
 
 ## Adding your MCP
@@ -33,9 +33,19 @@ On this form, you should enter your MCP Server URL and the transport you want to
 LiteLLM supports the following MCP transports:
 - Streamable HTTP
 - SSE (Server-Sent Events)
+- Standard Input/Output (stdio)
 
 <Image 
   img={require('../img/add_mcp.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+### Adding a stdio MCP Server
+
+For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport type and provide the stdio configuration in JSON format:
+
+<Image 
+  img={require('../img/add_stdio_mcp.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -60,6 +70,15 @@ mcp_servers:
   zapier_mcp:
     url: "https://actions.zapier.com/mcp/sk-akxxxxx/sse"
   
+  # Standard Input/Output (stdio) Server - CircleCI Example
+  circleci_mcp:
+    transport: "stdio"
+    command: "npx"
+    args: ["-y", "@circleci/mcp-server-circleci"]
+    env:
+      CIRCLECI_TOKEN: "your-circleci-token"
+      CIRCLECI_BASE_URL: "https://circleci.com"
+  
   # Full configuration with all optional fields
   my_http_server:
     url: "https://my-mcp-server.com/mcp"
@@ -70,11 +89,15 @@ mcp_servers:
 ```
 
 **Configuration Options:**
-- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`)
-- **URL**: The endpoint URL for your MCP server (required)
+- **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
+- **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
 - **Transport**: Optional transport type (defaults to `sse`)
   - `sse` - SSE (Server-Sent Events) transport
   - `http` - Streamable HTTP transport
+  - `stdio` - Standard Input/Output transport
+- **Command**: The command to execute for stdio transport (required for stdio)
+- **Args**: Array of arguments to pass to the command (optional for stdio)
+- **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server
 - **Auth Type**: Optional authentication type
 - **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
@@ -174,7 +197,123 @@ Use tools directly from Cursor IDE with LiteLLM MCP:
 </TabItem>
 </Tabs>
 
-## Segregating MCP Server Access
+## Selecting MCP Servers/Groups via URL Namespacing
+
+You can now directly access specific MCP servers and groups by specifying them in the MCP URL itself. This allows you to:
+- Limit tool access to one or more specific MCP servers or groups using the URL
+- Control which tools are available in different environments or use cases
+
+**This is the preferred method for MCP server/group selection.**
+
+The URL pattern is:
+
+```
+<your-litellm-proxy-base-url>/mcp/<server_name>
+```
+
+- You can specify one or more server/group names, separated by commas after `/mcp/`.
+- Server/group names with spaces should be replaced with underscores.
+- If you do not use this URL pattern, all available MCP servers will be accessible (unless restricted by other means).
+- You can still use the `x-mcp-servers` header as an alternative (see below).
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+```bash title="cURL Example with URL Namespacing" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+In this example, the request will only have access to tools from the "Zapier_Gmail" MCP servers.
+
+</TabItem>
+
+<TabItem value="litellm" label="LiteLLM Proxy">
+
+```bash title="cURL Example with URL Namespacing" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,Group1",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This configuration restricts the request to only use tools from the specified MCP servers/groups via the URL.
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with URL Namespacing" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
+
+This configuration in Cursor IDE settings will limit tool access to only the specified MCP servers/groups via the URL.
+
+</TabItem>
+</Tabs>
+
+:::info
+**Note:** You can add multiple servers or access groups in the URL instead of just one, by making it comma-separated. This allows you to restrict access to several MCP servers/groups at once.
+:::
+
+**Example:**
+
+```json title="Multiple Servers/Access Groups in URL" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp/Zapier_Gmail,dev_access_group,deepwiki_mcp",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
+
+
+## Segregating MCP Server Access Using Headers
 
 You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
 - Limit tool access to one or more specific MCP servers
@@ -265,6 +404,8 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 
 </TabItem>
 </Tabs>
+
+---
 
 ## Using your MCP with client side credentials
 

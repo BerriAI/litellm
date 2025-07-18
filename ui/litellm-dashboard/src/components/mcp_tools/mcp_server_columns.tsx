@@ -3,6 +3,7 @@ import { MCPServer } from "./types";
 import { Icon } from "@tremor/react";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
+import { Tooltip } from "antd";
 
 export const mcpServerColumns = (
   userRole: string,
@@ -57,8 +58,53 @@ export const mcpServerColumns = (
     ),
   },
   {
+    id: "mcp_access_groups",
+    header: "Access Groups",
+    cell: ({ row }) => {
+      const groups = row.original.mcp_access_groups;
+      if (Array.isArray(groups) && groups.length > 0) {
+        // If string array
+        if (typeof groups[0] === "string") {
+          const joined = groups.join(", ");
+          return (
+            <Tooltip title={joined}>
+              <span className="max-w-[200px] truncate block">{joined.length > 30 ? `${joined.slice(0, 30)}...` : joined}</span>
+            </Tooltip>
+          );
+        }
+      }
+      return <span className="text-gray-400 italic">None</span>;
+    },
+  },
+  {
+    header: "Created At",
+    accessorKey: "created_at",
+    sortingFn: "datetime",
+    cell: ({ row }) => {
+      const server = row.original;
+      return (
+        <span className="text-xs">
+          {server.created_at ? new Date(server.created_at).toLocaleDateString() : "-"}
+        </span>
+      );
+    },
+  },
+  {
+    header: "Updated At",
+    accessorKey: "updated_at",
+    sortingFn: "datetime",
+    cell: ({ row }) => {
+      const server = row.original;
+      return (
+        <span className="text-xs">
+          {server.updated_at ? new Date(server.updated_at).toLocaleDateString() : "-"}
+        </span>
+      );
+    },
+  },
+  {
     id: "actions",
-    header: "Info",
+    header: "Actions",
     cell: ({ row }) => (
       <div className="flex items-center gap-2">
         <Icon

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.74.1"
+version = "1.74.5"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -49,6 +49,7 @@ cryptography = {version = "^43.0.1", optional = true}
 prisma = {version = "0.11.0", optional = true}
 azure-identity = {version = "^1.15.0", optional = true}
 azure-keyvault-secrets = {version = "^4.8.0", optional = true}
+azure-storage-blob = {version="^12.25.1", optional=true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 resend = {version = "^0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
@@ -56,9 +57,9 @@ websockets = {version = "^13.1.0", optional = true}
 boto3 = {version = "1.34.34", optional = true}
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = "1.10.0", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.2.9", optional = true}
+litellm-proxy-extras = {version = "0.2.10", optional = true}
 rich = {version = "13.7.1", optional = true}
-litellm-enterprise = {version = "0.1.12", optional = true}
+litellm-enterprise = {version = "0.1.13", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 
 [tool.poetry.extras]
@@ -79,6 +80,8 @@ proxy = [
     "pynacl",
     "websockets",
     "boto3",
+    "azure-identity",
+    "azure-storage-blob",
     "mcp",
     "litellm-proxy-extras",
     "litellm-enterprise",
@@ -141,7 +144,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.74.1"
+version = "1.74.5"
 version_files = [
     "pyproject.toml:^version"
 ]
