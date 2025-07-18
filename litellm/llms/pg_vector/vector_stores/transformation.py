@@ -71,7 +71,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
 
-        return f"{api_base}/vector_stores" 
+        return f"{api_base}/v1/vector_stores" 
     
 
     def transform_search_vector_store_request(
