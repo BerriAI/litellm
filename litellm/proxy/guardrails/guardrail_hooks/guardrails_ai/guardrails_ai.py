@@ -62,6 +62,7 @@ class GuardrailsAI(CustomGuardrail):
         self,
         guard_name: str,
         api_base: Optional[str] = None,
+        guardrails_ai_api_input_format: Literal["inputs", "llmOutput"] = "llmOutput",
         **kwargs,
     ):
         if guard_name is None:
@@ -74,6 +75,7 @@ class GuardrailsAI(CustomGuardrail):
         )
         self.guardrails_ai_guard_name = guard_name
         self.optional_params = kwargs
+        self.guardrails_ai_api_input_format = guardrails_ai_api_input_format
         supported_event_hooks = [
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_call,
@@ -81,7 +83,9 @@ class GuardrailsAI(CustomGuardrail):
         ]
         super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
 
-    async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict):
+    async def make_guardrails_ai_api_request(
+        self, llm_output: str, request_data: dict
+    ) -> GuardrailsAIResponse:
         from httpx import URL
 
         data = {
@@ -166,9 +170,17 @@ class GuardrailsAI(CustomGuardrail):
             text = get_last_user_message(data["messages"])
             if text is None:
                 return data
-            updated_text = await self.make_guardrails_ai_api_request_pre_call_request(
-                text_input=text, request_data=data
-            )
+            if self.guardrails_ai_api_input_format == "inputs":
+                updated_text = (
+                    await self.make_guardrails_ai_api_request_pre_call_request(
+                        text_input=text, request_data=data
+                    )
+                )
+            else:
+                _result = await self.make_guardrails_ai_api_request(
+                    llm_output=text, request_data=data
+                )
+                updated_text = _result.get("rawLlmOutput") or text
             data["messages"] = set_last_user_message(data["messages"], updated_text)
 
         return data
