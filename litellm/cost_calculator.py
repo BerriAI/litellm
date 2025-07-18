@@ -681,9 +681,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -851,7 +851,10 @@ def completion_cost(  # noqa: PLR0915
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
-                    return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
+
+                    return MCPCostCalculator.calculate_mcp_tool_call_cost(
+                        litellm_logging_obj=litellm_logging_obj
+                    )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model

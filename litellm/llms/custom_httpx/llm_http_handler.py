@@ -2481,10 +2481,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.
@@ -2693,14 +2690,15 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
         )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -2721,7 +2719,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = await async_httpx_client.post(
@@ -2789,14 +2789,15 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
         )
 
         all_optional_params: Dict[str, Any] = dict(litellm_params)
@@ -2819,7 +2820,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = sync_httpx_client.post(
@@ -2868,11 +2871,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -2943,11 +2947,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -3024,13 +3029,14 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            generate_content_provider_config.sync_get_auth_token_and_url(
-                api_base=litellm_params.api_base,
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-            )
+        (
+            headers,
+            api_base,
+        ) = generate_content_provider_config.sync_get_auth_token_and_url(
+            api_base=litellm_params.api_base,
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         if extra_headers:
@@ -3128,13 +3134,14 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            await generate_content_provider_config.get_auth_token_and_url(
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-                api_base=litellm_params.api_base,
-            )
+        (
+            headers,
+            api_base,
+        ) = await generate_content_provider_config.get_auth_token_and_url(
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:

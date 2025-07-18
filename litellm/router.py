@@ -350,9 +350,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
-        )
+        cache_type: Literal[
+            "local", "redis", "redis-semantic", "s3", "disk"
+        ] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -574,9 +574,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
-            model_group_retry_policy
-        )
+        self.model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = model_group_retry_policy
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -2525,7 +2525,6 @@ class Router:
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         function_name = "_ageneric_api_call_with_fallbacks"
         try:
-
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             try:
                 deployment = await self.async_get_available_deployment(
@@ -2967,9 +2966,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = (
-                model_file_id_mapping
-            )
+            returned_response._hidden_params[
+                "model_file_id_mapping"
+            ] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -3324,7 +3323,13 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type in ("responses", "generate_content", "generate_content_stream", "vector_store_search", "vector_store_create"):
+        if call_type in (
+            "responses",
+            "generate_content",
+            "generate_content_stream",
+            "vector_store_search",
+            "vector_store_create",
+        ):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
@@ -3531,11 +3536,11 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
-                            self._get_fallback_model_group_from_fallbacks(
-                                fallbacks=context_window_fallbacks,
-                                model_group=model_group,
-                            )
+                        fallback_model_group: Optional[
+                            List[str]
+                        ] = self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=context_window_fallbacks,
+                            model_group=model_group,
                         )
                         if fallback_model_group is None:
                             raise original_exception
@@ -3567,11 +3572,11 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
-                            self._get_fallback_model_group_from_fallbacks(
-                                fallbacks=content_policy_fallbacks,
-                                model_group=model_group,
-                            )
+                        fallback_model_group: Optional[
+                            List[str]
+                        ] = self._get_fallback_model_group_from_fallbacks(
+                            fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
                         )
                         if fallback_model_group is None:
                             raise original_exception

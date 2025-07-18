@@ -192,13 +192,11 @@ class GuardrailsAI(CustomGuardrail):
     ) -> Optional[
         Union[Exception, str, dict]
     ]:  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
-
         return await self.process_input(data=data, call_type=call_type)
 
     async def async_logging_hook(
         self, kwargs: dict, result: Any, call_type: str
     ) -> Tuple[dict, Any]:
-
         if call_type == "acompletion" or call_type == "completion":
             kwargs = await self.process_input(data=kwargs, call_type=call_type)
 

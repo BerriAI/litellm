@@ -264,7 +264,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     )
                     self.sent_content_block_finish = True
                     if processed_chunk.get("delta", {}).get("stop_reason") is not None:
-
                         self.holding_stop_reason_chunk = processed_chunk
                     else:
                         self.chunk_queue.append(processed_chunk)

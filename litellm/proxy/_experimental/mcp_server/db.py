@@ -19,10 +19,10 @@ def _prepare_mcp_server_data(
     """
     Helper function to prepare MCP server data for database operations.
     Handles JSON field serialization for mcp_info and env fields.
-    
+
     Args:
         data: NewMCPServerRequest or UpdateMCPServerRequest object
-        
+
     Returns:
         Dict with properly serialized JSON fields
     """
@@ -30,18 +30,17 @@ def _prepare_mcp_server_data(
 
     # Convert model to dict
     data_dict = data.model_dump()
-    
+
     # Handle mcp_info serialization
     if data.mcp_info is not None:
         data_dict["mcp_info"] = safe_dumps(data.mcp_info)
-    
+
     # Handle env serialization
     if data.env is not None:
         data_dict["env"] = safe_dumps(data.env)
-    
+
     # mcp_access_groups is already List[str], no serialization needed
-    
-    
+
     return data_dict
 
 
@@ -249,10 +248,10 @@ async def create_mcp_server(
     """
     if data.server_id is None:
         data.server_id = str(uuid.uuid4())
-    
+
     # Use helper to prepare data with proper JSON serialization
     data_dict = _prepare_mcp_server_data(data)
-    
+
     # Add audit fields
     data_dict["created_by"] = touched_by
     data_dict["updated_by"] = touched_by
@@ -272,7 +271,7 @@ async def update_mcp_server(
     """
     # Use helper to prepare data with proper JSON serialization
     data_dict = _prepare_mcp_server_data(data)
-    
+
     # Add audit fields
     data_dict["updated_by"] = touched_by
 

@@ -205,7 +205,9 @@ class BaseOpenAILLM:
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=ssl_config,
             transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
+                ssl_context=ssl_config
+                if isinstance(ssl_config, ssl.SSLContext)
+                else None,
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             ),
             follow_redirects=True,
@@ -215,10 +217,10 @@ class BaseOpenAILLM:
     def _get_sync_http_client() -> Optional[httpx.Client]:
         if litellm.client_session is not None:
             return litellm.client_session
-        
+
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration()
-        
+
         return httpx.Client(
             limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
             verify=ssl_config,

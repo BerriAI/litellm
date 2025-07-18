@@ -44,16 +44,16 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
     """
     Helper function to deserialize environment dictionary from database storage.
     Handles both JSON string and dictionary formats.
-    
+
     Args:
         env_data: The environment data from database (could be JSON string or dict)
-        
+
     Returns:
         Dict[str, str] or None: Deserialized environment dictionary
     """
     if not env_data:
         return None
-        
+
     if isinstance(env_data, str):
         try:
             return json.loads(env_data)
@@ -159,12 +159,12 @@ class MCPServerManager:
     def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
             _mcp_info: MCPInfo = mcp_server.mcp_info or {}
-            
+
             # Use helper to deserialize environment dictionary
             # Safely access env field which may not exist on Prisma model objects
-            env_data = getattr(mcp_server, 'env', None)
+            env_data = getattr(mcp_server, "env", None)
             env_dict = _deserialize_env_dict(env_data)
-            
+
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
                 name=mcp_server.alias or mcp_server.server_id,
@@ -178,8 +178,8 @@ class MCPServerManager:
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
                 # Stdio-specific fields
-                command=getattr(mcp_server, 'command', None),
-                args=getattr(mcp_server, 'args', None) or [],
+                command=getattr(mcp_server, "command", None),
+                args=getattr(mcp_server, "args", None) or [],
                 env=env_dict,
             )
             self.registry[mcp_server.server_id] = new_server
@@ -207,7 +207,6 @@ class MCPServerManager:
             )
             return list(self.get_registry().keys())
 
-
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
         Get the tools for a given server
@@ -216,10 +215,9 @@ class MCPServerManager:
         if server is None:
             return []
         return await self._get_tools_from_server(server)
-        
 
     async def list_tools(
-        self, 
+        self,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
     ) -> List[MCPTool]:
@@ -255,7 +253,9 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
-    def _create_mcp_client(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> MCPClient:
+    def _create_mcp_client(
+        self, server: MCPServer, mcp_auth_header: Optional[str] = None
+    ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
 
@@ -267,18 +267,16 @@ class MCPServerManager:
             MCPClient: Configured MCP client instance
         """
         transport = server.transport or MCPTransport.sse
-        
+
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             # For stdio, we need to get the stdio config from the server
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
-                    command=server.command,
-                    args=server.args,
-                    env=server.env or {}
+                    command=server.command, args=server.args, env=server.env or {}
                 )
-            
+
             return MCPClient(
                 server_url="",  # Not used for stdio
                 transport_type=transport,
@@ -298,7 +296,9 @@ class MCPServerManager:
                 timeout=60.0,
             )
 
-    async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
+    async def _get_tools_from_server(
+        self, server: MCPServer, mcp_auth_header: Optional[str] = None
+    ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
 
@@ -333,29 +333,39 @@ class MCPServerManager:
                 prefixed_tools = []
                 for tool in tools:
                     # Create prefixed tool name
-                    prefixed_name = add_server_prefix_to_tool_name(tool.name, server.name)
+                    prefixed_name = add_server_prefix_to_tool_name(
+                        tool.name, server.name
+                    )
 
                     # Create new tool with prefixed name
                     prefixed_tool = MCPTool(
                         name=prefixed_name,
                         description=tool.description,
-                        inputSchema=tool.inputSchema
+                        inputSchema=tool.inputSchema,
                     )
                     prefixed_tools.append(prefixed_tool)
 
                     # Update tool to server mapping with both original and prefixed names
                     self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_name] = server.name
+                    self.tool_name_to_mcp_server_name_mapping[
+                        prefixed_name
+                    ] = server.name
 
                 return prefixed_tools
             except asyncio.CancelledError:
-                verbose_logger.warning(f"Task cancelled while listing tools from {server.name}")
+                verbose_logger.warning(
+                    f"Task cancelled while listing tools from {server.name}"
+                )
                 raise  # Re-raise the cancellation
             except Exception as e:
-                verbose_logger.exception(f"Error listing tools from {server.name}: {str(e)}")
+                verbose_logger.exception(
+                    f"Error listing tools from {server.name}: {str(e)}"
+                )
                 raise
         except Exception as e:
-            verbose_logger.exception(f"Failed to get tools from server {server.name}: {str(e)}")
+            verbose_logger.exception(
+                f"Failed to get tools from server {server.name}: {str(e)}"
+            )
             return []  # Return empty list on failure
         finally:
             if client:
@@ -365,11 +375,11 @@ class MCPServerManager:
                     pass
 
     async def call_tool(
-            self,
-            name: str,
-            arguments: Dict[str, Any],
-            user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-            mcp_auth_header: Optional[str] = None,
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -384,7 +394,9 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         # Remove prefix if present to get the original tool name
-        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(name)
+        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
+            name
+        )
 
         # Get the MCP server
         mcp_server = self._get_mcp_server_from_tool_name(name)
@@ -392,9 +404,12 @@ class MCPServerManager:
             raise ValueError(f"Tool {name} not found")
 
         # Validate that the server from prefix matches the actual server (if prefix was used)
-        if server_name_from_prefix and normalize_server_name(server_name_from_prefix) != normalize_server_name(mcp_server.name):
+        if server_name_from_prefix and normalize_server_name(
+            server_name_from_prefix
+        ) != normalize_server_name(mcp_server.name):
             raise ValueError(
-                f"Tool {name} server prefix mismatch: expected {mcp_server.name}, got {server_name_from_prefix}")
+                f"Tool {name} server prefix mismatch: expected {mcp_server.name}, got {server_name_from_prefix}"
+            )
 
         client = self._create_mcp_client(
             server=mcp_server,
@@ -411,7 +426,6 @@ class MCPServerManager:
     #########################################################
     # End of Methods that call the upstream MCP servers
     #########################################################
-
 
     def initialize_tool_name_to_mcp_server_name_mapping(self):
         """
@@ -455,14 +469,18 @@ class MCPServerManager:
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
             server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
             for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(server_name):
+                if normalize_server_name(server.name) == normalize_server_name(
+                    server_name
+                ):
                     return server
 
         # If not found and tool name is prefixed, try extracting server name from prefix
         if is_tool_name_prefixed(tool_name):
             _, server_name_from_prefix = get_server_name_prefix_tool_mcp(tool_name)
             for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(server_name_from_prefix):
+                if normalize_server_name(server.name) == normalize_server_name(
+                    server_name_from_prefix
+                ):
                     return server
 
         return None

@@ -62,7 +62,7 @@ if MCP_AVAILABLE:
         try:
             list_tools_result = []
             error_message = None
-            
+
             # If server_id is specified, only query that specific server
             if server_id:
                 server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
@@ -70,7 +70,7 @@ if MCP_AVAILABLE:
                     return {
                         "tools": [],
                         "error": "server_not_found",
-                        "message": f"Server with id {server_id} not found"
+                        "message": f"Server with id {server_id} not found",
                     }
                 try:
                     tools = await global_mcp_server_manager._get_tools_from_server(
@@ -86,11 +86,13 @@ if MCP_AVAILABLE:
                             )
                         )
                 except Exception as e:
-                    verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+                    verbose_logger.exception(
+                        f"Error getting tools from {server.name}: {e}"
+                    )
                     return {
                         "tools": [],
                         "error": "server_error",
-                        "message": f"Failed to get tools from server {server.name}: {str(e)}"
+                        "message": f"Failed to get tools from server {server.name}: {str(e)}",
                     }
             else:
                 # Query all servers
@@ -110,25 +112,33 @@ if MCP_AVAILABLE:
                                 )
                             )
                     except Exception as e:
-                        verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
+                        verbose_logger.exception(
+                            f"Error getting tools from {server.name}: {e}"
+                        )
                         errors.append(f"{server.name}: {str(e)}")
                         continue
-                
+
                 if errors and not list_tools_result:
-                    error_message = "Failed to get tools from servers: " + "; ".join(errors)
-            
+                    error_message = "Failed to get tools from servers: " + "; ".join(
+                        errors
+                    )
+
             return {
                 "tools": list_tools_result,
                 "error": "partial_failure" if error_message else None,
-                "message": error_message if error_message else "Successfully retrieved tools"
+                "message": error_message
+                if error_message
+                else "Successfully retrieved tools",
             }
-            
+
         except Exception as e:
-            verbose_logger.exception("Unexpected error in list_tool_rest_api: %s", str(e))
+            verbose_logger.exception(
+                "Unexpected error in list_tool_rest_api: %s", str(e)
+            )
             return {
                 "tools": [],
                 "error": "unexpected_error",
-                "message": f"An unexpected error occurred: {str(e)}"
+                "message": f"An unexpected error occurred: {str(e)}",
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
@@ -149,7 +159,7 @@ if MCP_AVAILABLE:
             proxy_config=proxy_config,
         )
         return await call_mcp_tool(**data)
-    
+
     ########################################################
     # MCP Connection testing routes
     # /health -> Test if we can connect to the MCP server
@@ -160,6 +170,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         NewMCPServerRequest,
     )
+
     @router.post("/test/connection")
     async def test_connection(
         request: NewMCPServerRequest,
@@ -186,8 +197,7 @@ if MCP_AVAILABLE:
             verbose_logger.error(f"Error in test_connection: {e}", exc_info=True)
             return {"status": "error", "message": "An internal error has occurred."}
         return {"status": "ok"}
-        
-    
+
     @router.post("/test/tools/list")
     async def test_tools_list(
         request: NewMCPServerRequest,
@@ -216,5 +226,5 @@ if MCP_AVAILABLE:
         return {
             "tools": list_tools_result,
             "error": None,
-            "message": "Successfully retrieved tools"
+            "message": "Successfully retrieved tools",
         }

@@ -1365,7 +1365,6 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider or "",
             )
             if exception is not None:
-
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(
                         metric_name="litellm_deployment_failure_responses"
@@ -1398,12 +1397,11 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
         output_tokens: float = 1.0,
     ):
-
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: Optional[StandardLoggingPayload] = (
-                request_kwargs.get("standard_logging_object")
-            )
+            standard_logging_payload: Optional[
+                StandardLoggingPayload
+            ] = request_kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
                 return
@@ -2152,10 +2150,10 @@ class PrometheusLogger(CustomLogger):
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.integrations.prometheus import PrometheusLogger
 
-        prometheus_loggers: List[CustomLogger] = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=PrometheusLogger
-            )
+        prometheus_loggers: List[
+            CustomLogger
+        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            callback_type=PrometheusLogger
         )
         # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
         verbose_logger.debug("found %s prometheus loggers", len(prometheus_loggers))

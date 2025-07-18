@@ -306,15 +306,23 @@ def run_separate_health_app():
     separate_health = os.getenv("SEPARATE_HEALTH_APP", "0")
     if separate_health == "1":
         from fastapi import FastAPI
-        from litellm.proxy.health_endpoints._health_endpoints import router as health_router
+        from litellm.proxy.health_endpoints._health_endpoints import (
+            router as health_router,
+        )
+
         health_app = FastAPI(title="LiteLLM Health Endpoints")
         health_app.include_router(health_router)
         health_port = int(os.getenv("SEPARATE_HEALTH_PORT", 4001))
-        print(f"\033[1;32mLiteLLM Health Endpoints: Running on http://0.0.0.0:{health_port}\033[0m")
+        print(
+            f"\033[1;32mLiteLLM Health Endpoints: Running on http://0.0.0.0:{health_port}\033[0m"
+        )
         import threading
+
         def run_health_app():
             import uvicorn
+
             uvicorn.run(health_app, host="0.0.0.0", port=health_port, log_level="info")
+
         t = threading.Thread(target=run_health_app, daemon=True)
         t.start()
 
@@ -807,11 +815,11 @@ def run_server(  # noqa: PLR0915
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
-        
+
         # --- SEPARATE HEALTH APP LOGIC ---
         run_separate_health_app()
         # --- END SEPARATE HEALTH APP LOGIC ---
-        
+
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print(  # noqa
