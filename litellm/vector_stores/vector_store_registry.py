@@ -254,6 +254,16 @@ class VectorStoreRegistry:
             if vector_store.get("vector_store_id") != vector_store_id
         ]
 
+    def update_vector_store_in_registry(
+        self, vector_store_id: str, updated_data: LiteLLM_ManagedVectorStore
+    ):
+        """Update or add a vector store in the registry"""
+        for i, vector_store in enumerate(self.vector_stores):
+            if vector_store.get("vector_store_id") == vector_store_id:
+                self.vector_stores[i] = updated_data
+                return
+        self.vector_stores.append(updated_data)
+
     #########################################################
     ########### DB management helpers for vector stores ###########
     #########################################################
