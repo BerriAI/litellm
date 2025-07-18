@@ -59,13 +59,14 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         litellm_credential_name: formValues.litellm_credential_name,
       };
 
-      // Add provider-specific fields dynamically
+      // pass all provider fields as litellm params dict
       const providerFields = getProviderSpecificFields(formValues.custom_llm_provider);
-      providerFields.forEach(field => {
-        if (formValues[field.name]) {
-          payload[field.name] = formValues[field.name];
-        }
-      });
+      const litellmParams = providerFields.reduce((acc, field) => {
+        acc[field.name] = formValues[field.name];
+        return acc;
+      }, {} as Record<string, any>);
+
+      payload["litellm_params"] = litellmParams;
 
       await vectorStoreCreateCall(accessToken, payload);
       message.success("Vector store created successfully");
