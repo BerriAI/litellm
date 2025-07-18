@@ -660,7 +660,7 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
         await _check_duplicate_user_email("user@example.com", mock_prisma_client)
 
     assert exc_info.value.status_code == 400
-    assert "User with email user@example.com already exists" in str(
+    assert "User with email User@Example.com already exists" in str(
         exc_info.value.detail
     )
 
