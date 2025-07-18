@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 
@@ -14,6 +14,11 @@ class GuardrailsAIGuardrailConfigModel(GuardrailConfigModel):
     guard_name: Optional[str] = Field(
         default=None,
         description="The name of the Guardrails AI guardrail. Required for the Guardrails AI guardrail.",
+    )
+
+    guardrails_ai_api_input_format: Optional[Literal["inputs", "llmOutput"]] = Field(
+        default="llmOutput",
+        description="The format of the input to the Guardrails AI API. Defaults to 'llmOutput'.",
     )
 
     @staticmethod
