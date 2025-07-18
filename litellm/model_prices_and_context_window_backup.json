@@ -3839,7 +3839,7 @@
         "litellm_provider": "azure_ai",
         "mode": "chat",
         "source": "https://azure.microsoft.com/en-us/products/ai-services/ai-foundry/models/jais-30b-chat"
-    }
+    },
     "azure_ai/mistral-nemo": {
         "max_tokens": 4096,
         "max_input_tokens": 131072,
