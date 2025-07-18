@@ -329,6 +329,7 @@ from litellm.proxy.utils import (
     hash_token,
     update_spend,
 )
+from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
@@ -734,11 +735,12 @@ def custom_openapi():
         if route in openapi_schema["paths"]:
             paths_to_include[route] = openapi_schema["paths"][route]
     openapi_schema["paths"] = paths_to_include
-    
+
     # Add LLM API request schema bodies for documentation
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
+
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
@@ -5779,7 +5781,9 @@ async def get_all_team_and_direct_access_models(
     direct_access_models: List[str] = []
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         user_teams = "*"
-        direct_access_models = llm_router.get_model_ids()  # has access to all models
+        direct_access_models = llm_router.get_model_ids(
+            exclude_team_models=True
+        )  # has access to all models
     elif user_api_key_dict.user_id is not None:
         user_db_object = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": user_api_key_dict.user_id}
@@ -5798,14 +5802,15 @@ async def get_all_team_and_direct_access_models(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
-
         for _model in all_models:
             model_id = _model.get("model_info", {}).get("id", None)
             team_only_model_id = _model.get("model_info", {}).get("team_id", None)
             if model_id is not None:
                 can_use_model = False
                 if team_only_model_id is not None:
-                    pass
+                    team_ids = team_models.get(model_id, [])
+                    if team_ids and team_only_model_id in team_ids:
+                        can_use_model = True
                 else:
                     can_use_model = True
                 if can_use_model:
@@ -8654,16 +8659,19 @@ async def get_routes():
     Get a list of available routes in the FastAPI application.
     """
     from litellm.proxy.common_utils.get_routes import GetRoutes
+
     routes = []
     for route in app.routes:
         endpoint_route = getattr(route, "endpoint", None)
         if endpoint_route is not None:
-            routes.extend(GetRoutes.get_app_routes(
-                route=route,
-                endpoint_route=endpoint_route,
-            ))
+            routes.extend(
+                GetRoutes.get_app_routes(
+                    route=route,
+                    endpoint_route=endpoint_route,
+                )
+            )
         # Handle mounted sub-applications (like MCP app)
-        elif hasattr(route, 'app') and hasattr(route, 'path'):
+        elif hasattr(route, "app") and hasattr(route, "path"):
             routes.extend(GetRoutes.get_routes_for_mounted_app(route=route))
 
     return {"routes": routes}
@@ -8701,6 +8709,7 @@ app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
+app.include_router(vector_store_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)

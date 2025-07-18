@@ -554,6 +554,7 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
     mode: Optional[
         Union[
             str,

@@ -544,7 +544,6 @@ async def test_openai_codex(sync_mode):
 
     assert response.choices[0].message.content is not None
 
-
 @pytest.mark.asyncio
 async def test_openai_via_gemini_streaming_bridge():
     """
@@ -586,3 +585,19 @@ async def test_openai_via_gemini_streaming_bridge():
         assert not isinstance(chunk, ModelResponseStream)
 
     assert len(printed_chunks) > 0
+
+def test_openai_deepresearch_model_bridge():
+    """
+    Test that the deepresearch model bridge works correctly
+    """
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="o3-deep-research-2025-06-26",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        tools=[
+            {"type": "web_search_preview"},
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+        ],
+    )
+
+    print("response: ", response)

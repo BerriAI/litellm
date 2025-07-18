@@ -499,6 +499,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/team/member_update",
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
@@ -562,14 +563,16 @@ class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
                 )
         return values
 
+
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(ChatCompletionRequest):
     # Optional LiteLLM params
-    guardrails: Optional[List[str]] 
-    caching: Optional[bool] 
-    num_retries: Optional[int] 
-    context_window_fallback_dict: Optional[Dict[str, str]] 
-    fallbacks: Optional[List[str]] 
+    guardrails: Optional[List[str]]
+    caching: Optional[bool]
+    num_retries: Optional[int]
+    context_window_fallback_dict: Optional[Dict[str, str]]
+    fallbacks: Optional[List[str]]
+
 
 class ModelInfoDelete(LiteLLMPydanticObjectBase):
     id: str
@@ -828,7 +831,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
-    
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
@@ -843,7 +846,6 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url"):
                     raise ValueError("url is required for HTTP/SSE transport")
         return values
-
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -860,7 +862,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
-    
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
@@ -875,7 +877,6 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url"):
                     raise ValueError("url is required for HTTP/SSE transport")
         return values
-
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -1736,11 +1737,15 @@ class UserAPIKeyAuth(
     @classmethod
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
-            values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+            values.update(
+                {"token": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+            )
             if isinstance(values.get("api_key"), str):
-                values.update({"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+                values.update(
+                    {"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+                )
         return values
-    
+
     @classmethod
     def _safe_hash_litellm_api_key(cls, api_key: str) -> str:
         """
@@ -1752,6 +1757,7 @@ class UserAPIKeyAuth(
         if api_key.startswith("sk-"):
             return hash_token(api_key)
         from litellm.proxy.auth.handle_jwt import JWTHandler
+
         if JWTHandler.is_jwt(token=api_key):
             return f"hashed-jwt-{hash_token(token=api_key)}"
         return api_key
@@ -2534,7 +2540,10 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [Member(**item) for item in member_data]
+            members = [
+                Member(**item) if isinstance(item, dict) else item
+                for item in member_data
+            ]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):

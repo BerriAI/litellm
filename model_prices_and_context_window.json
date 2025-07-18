@@ -3727,6 +3727,64 @@
         "litellm_provider": "azure",
         "mode": "image_generation"
     },
+    "azure_ai/grok-3": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3.3e-06,
+        "output_cost_per_token": 16.5e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
+    "azure_ai/global/grok-3": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 15e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
+    "azure_ai/global/grok-3-mini": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.25e-06,
+        "output_cost_per_token": 1.27e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
+    "azure_ai/grok-3-mini": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.275e-06,
+        "output_cost_per_token": 1.38e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
     "azure_ai/deepseek-r1": {
         "max_tokens": 8192,
         "max_input_tokens": 128000,
@@ -4226,15 +4284,6 @@
         "output_cost_per_token": 2e-06,
         "litellm_provider": "text-completion-openai",
         "mode": "completion"
-    },
-    "claude-instant-1": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-06,
-        "output_cost_per_token": 5.51e-06,
-        "litellm_provider": "anthropic",
-        "mode": "chat"
     },
     "mistral/mistral-tiny": {
         "max_tokens": 8191,
@@ -5371,6 +5420,18 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "groq/moonshotai-kimi-k2-instruct": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "groq/playai-tts": {
         "max_tokens": 10000,
         "max_input_tokens": 10000,
@@ -5468,16 +5529,6 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
-    },
-    "claude-instant-1.2": {
-        "max_tokens": 8191,
-        "max_input_tokens": 100000,
-        "max_output_tokens": 8191,
-        "input_cost_per_token": 1.63e-07,
-        "output_cost_per_token": 5.51e-07,
-        "litellm_provider": "anthropic",
-        "mode": "chat",
         "supports_tool_choice": true
     },
     "claude-2": {
@@ -11299,7 +11350,7 @@
     },
     "amazon.nova-micro-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 300000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 3.5e-08,
         "output_cost_per_token": 1.4e-07,
@@ -11311,7 +11362,7 @@
     },
     "us.amazon.nova-micro-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 300000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 3.5e-08,
         "output_cost_per_token": 1.4e-07,
@@ -11323,7 +11374,7 @@
     },
     "eu.amazon.nova-micro-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 300000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 4.6e-08,
         "output_cost_per_token": 1.84e-07,
@@ -11335,7 +11386,7 @@
     },
     "amazon.nova-lite-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 300000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 6e-08,
         "output_cost_per_token": 2.4e-07,
@@ -11349,7 +11400,7 @@
     },
     "us.amazon.nova-lite-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 300000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 6e-08,
         "output_cost_per_token": 2.4e-07,
@@ -11363,7 +11414,7 @@
     },
     "eu.amazon.nova-lite-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 300000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 7.8e-08,
         "output_cost_per_token": 3.12e-07,
@@ -11426,7 +11477,7 @@
     },
     "apac.amazon.nova-micro-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 300000,
+        "max_input_tokens": 128000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 3.7e-08,
         "output_cost_per_token": 1.48e-07,
@@ -11438,7 +11489,7 @@
     },
     "apac.amazon.nova-lite-v1:0": {
         "max_tokens": 10000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 300000,
         "max_output_tokens": 10000,
         "input_cost_per_token": 6.3e-08,
         "output_cost_per_token": 2.52e-07,
@@ -13407,6 +13458,8 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8": {
+        "input_cost_per_token": 2.7e-07,
+        "output_cost_per_token": 8.5e-07,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13414,6 +13467,8 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 5.9e-07,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13442,6 +13497,17 @@
         "supports_tool_choice": true
     },
     "together_ai/deepseek-ai/DeepSeek-V3": {
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 1.25e-06,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1": {
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 7e-06,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13454,6 +13520,16 @@
         "supports_parallel_function_calling": true,
         "mode": "chat",
         "supports_tool_choice": true
+    },
+    "together_ai/moonshotai/Kimi-K2-Instruct": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "together_ai",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_parallel_function_calling": true,
+        "mode": "chat",
+        "source": "https://www.together.ai/models/kimi-k2-instruct"
     },
     "ollama/codegemma": {
         "max_tokens": 8192,

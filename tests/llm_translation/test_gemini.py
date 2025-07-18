@@ -24,7 +24,7 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         return {"model": "gemini/gemini-2.0-flash"}
 
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
-        return {"model": "gemini/gemini-2.5-flash-preview-04-17"}
+        return {"model": "gemini/gemini-2.5-flash"}
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
@@ -291,13 +291,13 @@ def test_gemini_thinking():
     raw_request = return_raw_request(
         endpoint=CallTypes.completion,
         kwargs={
-            "model": "gemini/gemini-2.5-flash-preview-04-17",
+            "model": "gemini/gemini-2.5-flash",
             "messages": messages,
         },
     )
     assert reasoning_content in json.dumps(raw_request)
     response = completion(
-        model="gemini/gemini-2.5-flash-preview-04-17",
+        model="gemini/gemini-2.5-flash",
         messages=messages,  # make sure call works
     )
     print(response.choices[0].message)
@@ -313,7 +313,7 @@ def test_gemini_thinking_budget_0():
     raw_request = return_raw_request(
         endpoint=CallTypes.completion,
         kwargs={
-            "model": "gemini/gemini-2.5-flash-preview-04-17",
+            "model": "gemini/gemini-2.5-flash",
             "messages": [
                 {
                     "role": "user",
