@@ -435,7 +435,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
                   </div>
                 </div>
               </div>
-              <div className="h-[75vh] overflow-auto">
+              <div className="overflow-auto">
               <UserDataTable
                 data={userListQuery.data?.users || []}
                 columns={tableColumns}
