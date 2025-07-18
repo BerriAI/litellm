@@ -12,6 +12,7 @@ import {
 } from "@tremor/react";
 import {
   TrashIcon,
+  PencilAltIcon,
   SwitchVerticalIcon,
   ChevronUpIcon,
   ChevronDownIcon,
@@ -30,11 +31,15 @@ import { getProviderLogoAndName } from "../provider_info_helpers";
 
 interface VectorStoreTableProps {
   data: VectorStore[];
+  onView: (vectorStoreId: string) => void;
+  onEdit: (vectorStoreId: string) => void;
   onDelete: (vectorStoreId: string) => void;
 }
 
 const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
   data,
+  onView,
+  onEdit,
   onDelete,
 }) => {
   const [sorting, setSorting] = React.useState<SortingState>([
@@ -50,9 +55,12 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
         return (
           <div className="overflow-hidden">
             <Tooltip title={vectorStore.vector_store_id}>
-              <span className="font-mono text-blue-500 text-xs font-normal">
+              <button
+                onClick={() => onView(vectorStore.vector_store_id)}
+                className="font-mono text-blue-500 text-xs font-normal truncate"
+              >
                 {vectorStore.vector_store_id}
-              </span>
+              </button>
             </Tooltip>
           </div>
         );
@@ -120,6 +128,12 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({
         const vectorStore = row.original;
         return (
           <div className="flex space-x-2">
+            <Icon
+              icon={PencilAltIcon}
+              size="sm"
+              onClick={() => onEdit(vectorStore.vector_store_id)}
+              className="cursor-pointer"
+            />
             <Icon
               icon={TrashIcon}
               size="sm"
