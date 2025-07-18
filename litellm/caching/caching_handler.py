@@ -374,7 +374,7 @@ class LLMCachingHandler:
             prompt_tokens = 0
             for val in non_null_list:
                 idx, cr = val  # (idx, cr) tuple
-                if cr is not None:
+                if cr is not None and cr.get("embedding") is not None:
                     final_embedding_cached_response.data[idx] = Embedding(
                         embedding=cr["embedding"],
                         index=idx,
