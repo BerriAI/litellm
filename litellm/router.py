@@ -2548,7 +2548,6 @@ class Router:
             self.total_calls[model_name] += 1
 
             ### get custom
-
             response = original_generic_function(
                 **{
                     **data,
@@ -2585,6 +2584,7 @@ class Router:
             verbose_router_logger.info(
                 f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m"
             )
+
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -3259,7 +3259,7 @@ class Router:
 
     #### PASSTHROUGH API ####
 
-    async def _pass_through_endpoint_without_required_model(
+    async def _pass_through_moderation_endpoint_factory(
         self,
         original_function: Callable,
         **kwargs,
@@ -3354,8 +3354,8 @@ class Router:
                     client=client,
                     **kwargs,
                 )
-            elif call_type in ("moderation", "avector_store_search", "avector_store_create"):
-                return await self._pass_through_endpoint_without_required_model(
+            elif call_type == "moderation":
+                return await self._pass_through_moderation_endpoint_factory(
                     original_function=original_function, **kwargs
                 )
             elif call_type in (
@@ -3370,6 +3370,8 @@ class Router:
                 "aimage_edit",
                 "agenerate_content",
                 "agenerate_content_stream",
+                "avector_store_search",
+                "avector_store_create",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
