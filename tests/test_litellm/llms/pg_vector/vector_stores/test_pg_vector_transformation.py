@@ -59,7 +59,7 @@ class TestPGVectorStoreConfig:
         
         result_url = config.get_complete_url(api_base, litellm_params)
         
-        assert result_url == "https://my-pg-vector-service.example.com/vector_stores"
+        assert result_url == "https://my-pg-vector-service.example.com/v1/vector_stores"
 
     def test_get_complete_url_removes_trailing_slashes(self):
         """
@@ -73,7 +73,7 @@ class TestPGVectorStoreConfig:
         
         result_url = config.get_complete_url(api_base, litellm_params)
         
-        assert result_url == "https://my-pg-vector-service.example.com/vector_stores"
+        assert result_url == "https://my-pg-vector-service.example.com/v1/vector_stores"
 
     def test_get_complete_url_missing_api_base(self):
         """
@@ -139,7 +139,7 @@ class TestPGVectorStoreConfig:
         
         # Verify results
         assert headers["Authorization"] == "Bearer test_key"
-        assert url == "https://example.com/vector_stores"
+        assert url == "https://example.com/v1/vector_stores"
 
     @pytest.mark.serial
     def test_environment_variable_support(self):
@@ -166,7 +166,7 @@ class TestPGVectorStoreConfig:
         with patch.dict(os.environ, {'PG_VECTOR_API_BASE': 'https://env-pg-vector.example.com'}):
             url = config.get_complete_url(None, {})
             
-            assert url == "https://env-pg-vector.example.com/vector_stores"
+            assert url == "https://env-pg-vector.example.com/v1/vector_stores"
         
         # Test that params take precedence over environment variables
         with patch.dict(os.environ, {'PG_VECTOR_API_KEY': 'env_key'}):
