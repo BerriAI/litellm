@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.13-alpine
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.13-alpine
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -10,7 +10,9 @@ FROM $LITELLM_BUILD_IMAGE AS builder
 WORKDIR /app
 
 # Install build dependencies and pip
-RUN apk add --no-cache gcc g++ python3-dev musl-dev nodejs npm bash curl \
+USER root
+
+RUN apk add --no-cache build-base nodejs npm bash \
     && pip install --no-cache-dir --upgrade pip build
 
 # Copy the current directory contents into the container at /app
@@ -34,9 +36,11 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
+USER root
+
 # Update dependencies and install runtime tools
-RUN apk upgrade --no-cache \
-    && apk add --no-cache nodejs npm bash curl
+RUN apk upgrade --no-cache && \
+    apk add --no-cache bash
 
 WORKDIR /app
 COPY . .
@@ -63,7 +67,8 @@ RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 ENV PRISMA_BINARY_CACHE_DIR=/nonexistent
 ENV NPM_CONFIG_CACHE=/.npm
 
-RUN pip install --no-cache-dir prisma
+RUN pip install --no-cache-dir prisma && \
+    ls -lR /usr/local/lib/python*/site-packages/ | grep prisma || true
 
 RUN chmod +x docker/entrypoint.sh
 RUN chmod +x docker/prod_entrypoint.sh
@@ -72,12 +77,15 @@ RUN chmod +x docker/prod_entrypoint.sh
 RUN mkdir -p /nonexistent /.npm && \
     chown -R nobody:nogroup /app && \
     chown -R nobody:nogroup /nonexistent /.npm && \
-    chown -R nobody:nogroup /usr/local/lib/python3.13/site-packages/prisma/
+    PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
+    chown -R nobody:nogroup $PRISMA_PATH
 
 # Run Prisma generate as user = nobody
 USER nobody
 
+ENV HOME=/app
 RUN prisma generate
+
 ### End of Prisma Handling for Non-Root #########################################
 
 EXPOSE 4000/tcp
