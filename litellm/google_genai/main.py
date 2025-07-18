@@ -384,13 +384,15 @@ async def agenerate_content_stream(
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
-            return await GenerateContentToCompletionHandler.async_generate_content_handler(
-                model=model,
-                contents=contents,  # type: ignore
-                config=setup_result.generate_content_config_dict,
-                litellm_params=setup_result.litellm_params,
-                stream=True,
-                **kwargs
+            return (
+                await GenerateContentToCompletionHandler.async_generate_content_handler(
+                    model=model,
+                    contents=contents,  # type: ignore
+                    config=setup_result.generate_content_config_dict,
+                    litellm_params=setup_result.litellm_params,
+                    stream=True,
+                    **kwargs,
+                )
             )
 
         # Call the handler with async enabled and streaming
