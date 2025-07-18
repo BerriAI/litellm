@@ -36,6 +36,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching.caching import S3Cache
+from litellm.types.caching import CachedEmbedding
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
@@ -305,10 +306,25 @@ class LLMCachingHandler:
         else:
             raise ValueError("input must be a string or a list")
 
+    def _extract_model_from_cached_results(self, non_null_list: List[Tuple[int, CachedEmbedding]]) -> Optional[str]:
+        """
+        Helper method to extract the model name from cached results.
+        
+        Args:
+            non_null_list: List of (idx, cr) tuples where cr is the cached result dict
+            
+        Returns:
+            Optional[str]: The model name if found, None otherwise
+        """
+        for _, cr in non_null_list:
+            if isinstance(cr, dict) and cr.get("model"):
+                return cr["model"]
+        return None
+
     def _process_async_embedding_cached_response(
         self,
         final_embedding_cached_response: Optional[EmbeddingResponse],
-        cached_result: List[Optional[Dict[str, Any]]],
+        cached_result: List[Optional[CachedEmbedding]],
         kwargs: Dict[str, Any],
         logging_obj: LiteLLMLoggingObj,
         start_time: datetime.datetime,
@@ -345,9 +361,12 @@ class LLMCachingHandler:
                 non_null_list.append((idx, cr))
         kwargs["input"] = remaining_list
         if len(non_null_list) > 0:
-            verbose_logger.debug(f"EMBEDDING CACHE HIT! - {len(non_null_list)}")
+            # Use the model from the first non-null cached result, fallback to kwargs if not present
+            model_name = self._extract_model_from_cached_results(non_null_list)
+            if not model_name:
+                model_name = kwargs.get("model")
             final_embedding_cached_response = EmbeddingResponse(
-                model=kwargs.get("model"),
+                model=model_name,
                 data=[None] * len(kwargs_input_as_list),
             )
             final_embedding_cached_response._hidden_params["cache_hit"] = True
@@ -356,11 +375,13 @@ class LLMCachingHandler:
             for val in non_null_list:
                 idx, cr = val  # (idx, cr) tuple
                 if cr is not None:
-                    final_embedding_cached_response.data[idx] = Embedding(
-                        embedding=cr["embedding"],
-                        index=idx,
-                        object="embedding",
-                    )
+                    embedding_data = cr.get("embedding")
+                    if embedding_data is not None:
+                        final_embedding_cached_response.data[idx] = Embedding(
+                            embedding=embedding_data,
+                            index=idx,
+                            object="embedding",
+                        )
                     if isinstance(kwargs_input_as_list[idx], str):
                         from litellm.utils import token_counter
 
