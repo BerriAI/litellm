@@ -1,11 +1,14 @@
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.logging import LiteLLMLoggingObj
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import VectorStoreSearchOptionalRequestParams
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 class PGVectorStoreConfig(OpenAIVectorStoreConfig):
     """
