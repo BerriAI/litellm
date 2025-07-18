@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_BUILD_IMAGE=python:3.13.1-slim
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
+ARG LITELLM_RUNTIME_IMAGE=python:3.13.1-slim
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -12,8 +12,10 @@ WORKDIR /app
 # Set the shell to bash
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Install build dependencies (Alpine)
-RUN apk update && apk add --no-cache gcc g++ python3-dev
+# Install build dependencies
+RUN apt-get clean && apt-get update && \
+    apt-get install -y gcc g++ python3-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir build
@@ -41,8 +43,8 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 # Ensure we are root for package installation
 USER root
-# Update dependencies and clean up - handles alpine security issue
-RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
+# Update dependencies and clean up - handles debian security issue
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -88,7 +90,7 @@ RUN prisma generate
 EXPOSE 4000/tcp
 
 USER root
-RUN apk add --no-cache supervisor
+RUN apt-get update && apt-get install -y supervisor && rm -rf /var/lib/apt/lists/*
 USER nobody
 COPY docker/supervisord.conf /etc/supervisord.conf
 
