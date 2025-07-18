@@ -10,7 +10,7 @@ WORKDIR /app
 
 # Install build dependencies
 USER root
-RUN apk add --no-cache build-base nodejs npm bash \
+RUN apk add --no-cache build-base bash \
     && pip install --no-cache-dir --upgrade pip build
 
 # Copy project files
@@ -51,9 +51,6 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
 RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
-
-# Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # --- Prisma Handling for Non-Root User ---
 # Set Prisma cache directories
