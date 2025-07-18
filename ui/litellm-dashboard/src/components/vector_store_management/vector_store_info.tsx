@@ -130,12 +130,18 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
 
   return (
     <div className="p-4 max-w-full">
-      <div className="mb-6">
-        <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
-          Back to Vector Stores
-        </Button>
-        <Title>Vector Store ID: {vectorStoreDetails.vector_store_id}</Title>
-        <Text className="text-gray-500">{vectorStoreDetails.vector_store_description || "No description"}</Text>
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onClose}>
+            Back to Vector Stores
+          </Button>
+          <Title>Vector Store ID: {vectorStoreDetails.vector_store_id}</Title>
+          <Text className="text-gray-500">{vectorStoreDetails.vector_store_description || "No description"}</Text>
+        </div>
+        {is_admin && !isEditing && (
+          <Button onClick={() => setIsEditing(true)}>Edit Vector Store</Button>
+        )}
+
       </div>
 
       <TabGroup>

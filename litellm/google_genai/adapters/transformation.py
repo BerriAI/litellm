@@ -18,6 +18,7 @@ from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     Choices,
     ModelResponse,
+    ModelResponseStream,
     StreamingChoices,
 )
 
@@ -35,6 +36,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
     def __init__(self, completion_stream: Any):
         self.sent_first_chunk = False
         self.accumulated_tool_calls = {}
+        super().__init__(completion_stream)
 
     def __next__(self):
         try:
@@ -78,7 +80,7 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
         """
         Convert Google GenAI streaming chunks to Server-Sent Events format.
         """
-        for chunk in self:
+        for chunk in self.completion_stream:
             if isinstance(chunk, dict):
                 payload = f"data: {json.dumps(chunk)}\n\n"
                 yield payload.encode()
@@ -89,12 +91,25 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
         """
         Async version of google_genai_sse_wrapper.
         """
-        async for chunk in self:
+        from litellm.types.utils import ModelResponseStream
+
+        async for chunk in self.completion_stream:
             if isinstance(chunk, dict):
                 payload = f"data: {json.dumps(chunk)}\n\n"
                 yield payload.encode()
+            elif isinstance(chunk, ModelResponseStream):
+                # Transform OpenAI streaming chunk to Google GenAI format
+                transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(
+                    chunk, self
+                )
+
+                if isinstance(transformed_chunk, dict):  # Only return non-empty chunks
+                    payload = f"data: {json.dumps(transformed_chunk)}\n\n"
+                    yield payload.encode()
+                else:
+                    raise ValueError(f"Invalid chunk 1: {chunk}")
             else:
-                yield chunk
+                raise ValueError(f"Invalid chunk 2: {chunk}")
 
 
 class GoogleGenAIAdapter:
@@ -184,7 +199,7 @@ class GoogleGenAIAdapter:
             )
             if tool_choice:
                 completion_request["tool_choice"] = tool_choice
-        
+
         #########################################################
         # forward any litellm specific params
         #########################################################
@@ -192,15 +207,15 @@ class GoogleGenAIAdapter:
         if litellm_params:
             completion_request_dict = self._add_generic_litellm_params_to_request(
                 completion_request_dict=completion_request_dict,
-                litellm_params=litellm_params
+                litellm_params=litellm_params,
             )
 
         return completion_request_dict
-    
+
     def _add_generic_litellm_params_to_request(
-        self, 
-        completion_request_dict: Dict[str, Any], 
-        litellm_params: Optional[GenericLiteLLMParams] = None
+        self,
+        completion_request_dict: Dict[str, Any],
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """Add generic litellm params to request. e.g add api_base, api_key, api_version, etc.
 
@@ -420,7 +435,9 @@ class GoogleGenAIAdapter:
         return generate_content_response
 
     def translate_streaming_completion_to_generate_content(
-        self, response: ModelResponse, wrapper: GoogleGenAIStreamWrapper
+        self,
+        response: Union[ModelResponse, ModelResponseStream],
+        wrapper: GoogleGenAIStreamWrapper,
     ) -> Dict[str, Any]:
         """
         Transform streaming litellm completion chunk to Google GenAI generate_content format
