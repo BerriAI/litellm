@@ -103,10 +103,9 @@ class GradientAIConfig(OpenAILikeChatConfig):
         stream: Optional[bool] = None,
     ) -> str:
         gradient_ai_endpoint = get_secret_str("GRADIENT_AI_AGENT_ENDPOINT")
+        complete_url = f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
 
-        if not api_base and not gradient_ai_endpoint:
-            complete_url = f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
-        else:
+        if api_base != GRADIENT_AI_SERVERLESS_ENDPOINT and gradient_ai_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
             base_url = api_base or gradient_ai_endpoint
             complete_url = f"{base_url}/api/v1/chat/completions"
 
