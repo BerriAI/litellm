@@ -162,6 +162,8 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.types.router import ModelGroupSettings
+
     Span = Union[_Span, Any]
 else:
     Span = Any
@@ -257,6 +259,7 @@ class Router:
             RouterGeneralSettings
         ] = RouterGeneralSettings(),
         ignore_invalid_deployments: bool = False,
+        model_group_settings: Optional["ModelGroupSettings"] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -343,6 +346,8 @@ class Router:
         self.router_general_settings: RouterGeneralSettings = (
             router_general_settings or RouterGeneralSettings()
         )
+
+        self.apply_model_group_settings(model_group_settings)
 
         self.assistants_config = assistants_config
         self.deployment_names: List = (
@@ -602,6 +607,19 @@ class Router:
         self.initialize_assistants_endpoint()
         self.initialize_router_endpoints()
 
+    def apply_model_group_settings(
+        self, model_group_settings: Optional["ModelGroupSettings"]
+    ):
+        """
+        Apply the model group settings to the router.
+        """
+        if model_group_settings is None:
+            return None
+        self.model_group_settings = model_group_settings
+        if self.model_group_settings.forward_client_headers_to_llm_api is not None:
+            self.add_optional_pre_call_checks(["forward_client_headers_by_model_group"])
+        return None
+
     def discard(self):
         """
         Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
@@ -843,6 +861,10 @@ class Router:
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
+        from litellm.router_utils.forward_clientside_headers_by_model_group import (
+            ForwardClientSideHeadersByModelGroup,
+        )
+
         if optional_pre_call_checks is not None:
             for pre_call_check in optional_pre_call_checks:
                 _callback: Optional[CustomLogger] = None
@@ -856,6 +878,8 @@ class Router:
                     )
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
+                elif pre_call_check == "forward_client_headers_by_model_group":
+                    _callback = ForwardClientSideHeadersByModelGroup()
                 if _callback is not None:
                     litellm.logging_callback_manager.add_litellm_callback(_callback)
 
@@ -3324,7 +3348,13 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type in ("responses", "generate_content", "generate_content_stream", "vector_store_search", "vector_store_create"):
+        if call_type in (
+            "responses",
+            "generate_content",
+            "generate_content_stream",
+            "vector_store_search",
+            "vector_store_create",
+        ):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[

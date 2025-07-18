@@ -661,7 +661,6 @@ def test_arouter_responses_api_bridge():
         assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
 
 
-
 @pytest.mark.asyncio
 async def test_router_v1_messages_fallbacks():
     """
@@ -699,17 +698,17 @@ async def test_router_v1_messages_fallbacks():
     print(result)
     assert result["content"][0]["text"] == "Hello, world I am a fallback!"
 
-    
+
 def test_add_invalid_provider_to_router():
     """
     Test that router.add_deployment raises an error if the provider is invalid
     """
     from litellm.types.router import Deployment
-    
+
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",     
+                "model_name": "gpt-3.5-turbo",
                 "litellm_params": {"model": "gpt-3.5-turbo"},
             }
         ],
@@ -727,6 +726,7 @@ def test_add_invalid_provider_to_router():
         )
 
     assert router.pattern_router.patterns == {}
+
 
 @pytest.mark.asyncio
 async def test_router_ageneric_api_call_with_fallbacks_helper():
@@ -893,3 +893,40 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                     assert "Mock failure" in str(exc_info.value)
                     # Check that fail_calls was incremented
                     assert router.fail_calls["gpt-3.5-turbo"] == initial_fail_count + 1
+
+
+@pytest.mark.asyncio
+async def test_router_forward_client_headers_by_model_group():
+    """
+    Test that router.forward_client_headers_by_model_group returns the correct response
+    """
+    from litellm.types.router import ModelGroupSettings
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo-allow",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo-disallow",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+        ],
+        model_group_settings=ModelGroupSettings(
+            forward_client_headers_to_llm_api=["gpt-3.5-turbo-allow"]
+        ),
+    )
+
+    result = await router.acompletion(
+        model="gpt-3.5-turbo-allow",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Hello, world!",
+    )
+
+    assert result is not None
+    assert result.choices[0].message.content == "Hello, world!"
