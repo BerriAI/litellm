@@ -50,6 +50,7 @@ async def new_vector_store(
     - vector_store_metadata: Optional[Dict] - Additional metadata for the vector store
     """
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.types.router import GenericLiteLLMParams
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -74,12 +75,11 @@ async def new_vector_store(
 
         # Safely handle JSON serialization of litellm_params
         litellm_params_json: Optional[str] = None
-        if vector_store.get("litellm_params") is not None:
-            litellm_params_json = safe_dumps(
-                vector_store.get("litellm_params")
-            )
+        _input_litellm_params: dict = vector_store.get("litellm_params", {}) or {}
+        if _input_litellm_params is not None:
+            litellm_params_dict = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
+            litellm_params_json = safe_dumps(litellm_params_dict)
             del vector_store["litellm_params"]
-
 
         _new_vector_store = (
             await prisma_client.db.litellm_managedvectorstorestable.create(
