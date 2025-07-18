@@ -15,6 +15,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_S3_BATCH_SIZE, DEFAULT_S3_FLUSH_INTERVAL_SECONDS
 from litellm.integrations.s3 import get_s3_object_key
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
@@ -281,7 +282,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 url = self.s3_endpoint_url + "/" + batch_logging_element.s3_object_key
 
             # Convert JSON to string
-            json_string = json.dumps(batch_logging_element.payload)
+            json_string = safe_dumps(batch_logging_element.payload)
 
             # Calculate SHA256 hash of the content
             content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
@@ -421,7 +422,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 url = self.s3_endpoint_url + "/" + batch_logging_element.s3_object_key
 
             # Convert JSON to string
-            json_string = json.dumps(batch_logging_element.payload)
+            json_string = safe_dumps(batch_logging_element.payload)
 
             # Calculate SHA256 hash of the content
             content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
