@@ -97,7 +97,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _extract_content_from_response(
         self, response: Union[Any, ModelResponse]
     ) -> str:
-        """Extract text content from model response."""
+        """
+        Extract text content from model response.
+        
+        Returns empty string for non-text responses (TTS, images, etc.) to skip guardrail processing.
+        """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             get_content_from_model_response,
         )
@@ -107,7 +111,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return get_content_from_model_response(response)
 
         # For non-ModelResponse types (e.g., TTS, images), return empty string
-        # These response types are not text-based and shouldn't be processed
+        # These response types are not text-based and shouldn't be processed by text guardrails
+        verbose_proxy_logger.debug(
+            "Model Armor: Skipping non-ModelResponse type: %s", type(response).__name__
+        )
         return ""
 
     async def make_model_armor_request(
@@ -316,6 +323,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Extract content from response
         content = self._extract_content_from_response(response)
         if not content:
+            verbose_proxy_logger.debug(
+                "Model Armor: No text content to process in response, skipping guardrail"
+            )
             return
 
         # Make Model Armor request
@@ -429,6 +439,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     )
                     if self.optional_params.get("fail_on_error", True):
                         raise
+            else:
+                verbose_proxy_logger.debug(
+                    "Model Armor: No text content in streaming response, skipping guardrail"
+                )
 
         # Return original chunks if no sanitization needed
         for chunk in all_chunks:

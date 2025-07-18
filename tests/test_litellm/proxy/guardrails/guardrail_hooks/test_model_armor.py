@@ -766,6 +766,45 @@ async def test_model_armor_token_refresh():
     assert guardrail._ensure_access_token_async.called
 
 
+@pytest.mark.asyncio
+async def test_model_armor_non_model_response():
+    """Test Model Armor handles non-ModelResponse types (e.g., TTS) correctly"""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+    
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+    
+    # Mock a TTS response (not a ModelResponse)
+    class TTSResponse:
+        def __init__(self):
+            self.audio_data = b"fake audio data"
+    
+    tts_response = TTSResponse()
+    
+    # Mock the access token
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    guardrail.async_handler = AsyncMock()
+    
+    # Call post-call hook with non-ModelResponse
+    await guardrail.async_post_call_success_hook(
+        data={
+            "model": "tts-1",
+            "input": "Hello world",
+            "metadata": {"guardrails": ["model-armor-test"]}
+        },
+        user_api_key_dict=mock_user_api_key_dict,
+        response=tts_response
+    )
+    
+    # Verify that Model Armor API was NOT called since there's no text content
+    assert not guardrail.async_handler.post.called
+
+
 def mock_open(read_data=''):
     """Helper to create a mock file object"""
     import io
