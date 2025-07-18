@@ -1,6 +1,5 @@
 # What is this?
 ## Helper utilities
-from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 
 import httpx
