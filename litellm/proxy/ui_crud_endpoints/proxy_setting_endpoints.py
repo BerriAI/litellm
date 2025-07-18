@@ -471,6 +471,7 @@ async def update_sso_settings(sso_config: SSOConfig):
 
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump(exclude_none=True)
+    mapped_env_vars = {}
     for field_name, value in sso_data.items():
 
         if field_name == "user_email" and value is not None:
@@ -483,11 +484,17 @@ async def update_sso_settings(sso_config: SSOConfig):
             env_var_name = env_var_mapping[field_name]
             # Update in config
             config["environment_variables"][env_var_name] = value
+            mapped_env_vars[env_var_name] = value
             # Update in runtime environment
             os.environ[env_var_name] = value
 
+    stored_config = config
+    if len(mapped_env_vars) > 0:
+        stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
+            environment_variables=mapped_env_vars
+        )
     # Save the updated config
-    await proxy_config.save_config(new_config=config)
+    await proxy_config.save_config(new_config=stored_config)
 
     return {
         "message": "SSO settings updated successfully",
