@@ -3,7 +3,7 @@ Allow proxy admin to add/update/delete models in the db
 
 Currently most endpoints are in `proxy_server.py`, but those should  be moved here over time.
 
-Endpoints here: 
+Endpoints here:
 
 model/{model_id}/update - PATCH endpoint for model update.
 """
@@ -17,7 +17,7 @@ import uuid
 from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
@@ -53,6 +53,16 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+
+class UpdatePublicModelGroupsRequest(BaseModel):
+    """Request model for updating public model groups"""
+
+    model_groups: List[str] = Field(
+        description="List of model group names to make public"
+    )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 async def get_db_model(
@@ -219,9 +229,23 @@ async def patch_model(
             where={"model_id": model_id},
             data=update_data,
         )
-        
+
         # Clear cache and reload models
         await clear_cache()
+
+        ## CREATE AUDIT LOG ##
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=model_id,
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                before_value=db_model.model_dump_json(exclude_none=True),
+                after_value=updated_model.model_dump_json(exclude_none=True),
+                litellm_changed_by=user_api_key_dict.user_id,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+        )
 
         return updated_model
 
@@ -931,6 +955,86 @@ async def update_model(
         )
 
 
+@router.post(
+    "/model_group/make_public",
+    description="Update which model groups are public",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_public_model_groups(
+    request: UpdatePublicModelGroupsRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update which model groups are public.
+
+    This endpoint allows admins to specify which model groups should be publicly accessible.
+    Public model groups are visible via the /public/model_hub endpoint.
+
+    Args:
+        request: Request containing list of model group names to make public
+        user_api_key_dict: User authentication information
+
+    Returns:
+        Success message with updated public model groups
+
+    Raises:
+        ProxyException: For various error conditions including authentication errors
+    """
+    try:
+        # Update the public model groups
+        import litellm
+        from litellm.proxy.proxy_server import proxy_config
+
+        # Check if user has admin permissions
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can update public model groups. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        litellm.public_model_groups = request.model_groups
+
+        # Load existing config
+        config = await proxy_config.get_config()
+
+        # Update config with new settings
+        if "litellm_settings" not in config:
+            config["litellm_settings"] = {}
+
+        config["litellm_settings"]["public_model_groups"] = request.model_groups
+
+        # Save the updated config
+        await proxy_config.save_config(new_config=config)
+
+        verbose_proxy_logger.info(
+            f"Updated public model groups to: {request.model_groups} by user: {user_api_key_dict.user_id}"
+        )
+
+        return {
+            "message": "Successfully updated public model groups",
+            "public_model_groups": request.model_groups,
+            "updated_by": user_api_key_dict.user_id,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating public model groups: {str(e)}")
+
+        if isinstance(e, HTTPException):
+            raise e
+
+        raise ProxyException(
+            message=f"Error updating public model groups: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+
 def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
     """
     Deduplicate models based on their model_info.id field.
@@ -951,23 +1055,30 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
             seen_ids.add(model_id)
     return unique_models
 
+
 async def clear_cache():
     """
     Clear router caches and reload models.
     """
     from litellm.proxy.proxy_server import (
-        proxy_config,
         llm_router,
         prisma_client,
+        proxy_config,
         proxy_logging_obj,
         verbose_proxy_logger,
     )
+
+    if llm_router is None or prisma_client is None:
+        verbose_proxy_logger.debug(
+            "llm_router or prisma_client is None, skipping cache clear"
+        )
+        return
+
     try:
         llm_router.model_list.clear()
-        
+
         await proxy_config.add_deployment(
-            prisma_client=prisma_client, 
-            proxy_logging_obj=proxy_logging_obj
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
         )
     except Exception as e:
         verbose_proxy_logger.exception(

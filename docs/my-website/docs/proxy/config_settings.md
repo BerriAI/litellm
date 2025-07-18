@@ -76,6 +76,7 @@ litellm_settings:
                           # /chat/completions, /completions, /embeddings, /audio/transcriptions
     mode: default_off # if default_off, you need to opt in to caching on a per call basis
     ttl: 600 # ttl for caching
+    disable_copilot_system_to_assistant: False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 
 
 callback_settings:
@@ -141,6 +142,8 @@ general_settings:
 | key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
 | disable_add_transform_inline_image_block | boolean | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model. |
 | disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
+| enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
+| disable_copilot_system_to_assistant | boolean | If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior. Useful for tools (like Claude Code) that send system messages, which Copilot does not support. |
 
 ### general_settings - Reference
 
@@ -211,7 +214,7 @@ general_settings:
 | pass_through_endpoints | List[Dict[str, Any]] | Define the pass through endpoints. [Docs](./pass_through) |
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
-| forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers) to the backend LLM call |
+| forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers and `anthropic-beta` headers) to the backend LLM call |
 | maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
 | maximum_spend_logs_retention_interval | str | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
 ### router_settings - Reference
@@ -319,6 +322,7 @@ router_settings:
 | ATHINA_API_KEY | API key for Athina service
 | ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
+| ANTHROPIC_API_KEY | API key for Anthropic service
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_PROFILE_NAME | AWS CLI profile name to be used
 | AWS_REGION_NAME | Default AWS region for service interactions
@@ -415,6 +419,8 @@ router_settings:
 | DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND | Default price per second for Replicate GPU. Default is 0.001400
 | DEFAULT_REPLICATE_POLLING_DELAY_SECONDS | Default delay in seconds for Replicate polling. Default is 1
 | DEFAULT_REPLICATE_POLLING_RETRIES | Default number of retries for Replicate polling. Default is 5
+| DEFAULT_SQS_BATCH_SIZE | Default batch size for SQS logging. Default is 512
+| DEFAULT_SQS_FLUSH_INTERVAL_SECONDS | Default flush interval for SQS logging. Default is 10
 | DEFAULT_S3_BATCH_SIZE | Default batch size for S3 logging. Default is 512
 | DEFAULT_S3_FLUSH_INTERVAL_SECONDS | Default flush interval for S3 logging. Default is 10
 | DEFAULT_SLACK_ALERTING_THRESHOLD | Default threshold for Slack alerting. Default is 300
@@ -431,6 +437,9 @@ router_settings:
 | DOCS_URL | The path to the Swagger API documentation. **By default this is "/"**
 | EMAIL_LOGO_URL | URL for the logo used in emails
 | EMAIL_SUPPORT_CONTACT | Support contact email address
+| EMAIL_SIGNATURE | Custom HTML footer/signature for all emails. Can include HTML tags for formatting and links.
+| EMAIL_SUBJECT_INVITATION | Custom subject template for invitation emails. 
+| EMAIL_SUBJECT_KEY_CREATED | Custom subject template for key creation emails. 
 | EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING | Flag to enable new multi-instance rate limiting. **Default is False**
 | FIREWORKS_AI_4_B | Size parameter for Fireworks AI 4B model. Default is 4
 | FIREWORKS_AI_16_B | Size parameter for Fireworks AI 16B model. Default is 16
@@ -469,12 +478,16 @@ router_settings:
 | GALILEO_PASSWORD | Password for Galileo authentication
 | GALILEO_PROJECT_ID | Project ID for Galileo usage
 | GALILEO_USERNAME | Username for Galileo authentication
+| GITHUB_COPILOT_TOKEN_DIR | Directory to store GitHub Copilot token for `github_copilot` llm provider
+| GITHUB_COPILOT_API_KEY_FILE | File to store GitHub Copilot API key for `github_copilot` llm provider
+| GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
 | GREENSCALE_API_KEY | API key for Greenscale service
 | GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
 | GOOGLE_APPLICATION_CREDENTIALS | Path to Google Cloud credentials JSON file
 | GOOGLE_CLIENT_ID | Client ID for Google OAuth
 | GOOGLE_CLIENT_SECRET | Client secret for Google OAuth
 | GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
+| GUARDRAILS_AI_API_BASE | Base URL for Guardrails AI API
 | HEALTH_CHECK_TIMEOUT_SECONDS | Timeout in seconds for health checks. Default is 60
 | HF_API_BASE | Base URL for Hugging Face API
 | HCP_VAULT_ADDR | Address for [Hashicorp Vault Secret Manager](../secret.md#hashicorp-vault)
@@ -502,6 +515,7 @@ router_settings:
 | LAGO_API_KEY | API key for accessing Lago services
 | LANGFUSE_DEBUG | Toggle debug mode for Langfuse
 | LANGFUSE_FLUSH_INTERVAL | Interval for flushing Langfuse logs
+| LANGFUSE_TRACING_ENVIRONMENT | Environment for Langfuse tracing
 | LANGFUSE_HOST | Host URL for Langfuse service
 | LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
 | LANGFUSE_RELEASE | Release version of Langfuse integration
@@ -513,6 +527,10 @@ router_settings:
 | LANGSMITH_PROJECT | Project name for Langsmith integration
 | LANGSMITH_SAMPLING_RATE | Sampling rate for Langsmith logging
 | LANGTRACE_API_KEY | API key for Langtrace service
+| LASSO_API_BASE | Base URL for Lasso API
+| LASSO_API_KEY | API key for Lasso service
+| LASSO_USER_ID | User ID for Lasso service
+| LASSO_CONVERSATION_ID | Conversation ID for Lasso service
 | LENGTH_OF_LITELLM_GENERATED_KEY | Length of keys generated by LiteLLM. Default is 16
 | LITERAL_API_KEY | API key for Literal integration
 | LITERAL_API_URL | API URL for Literal service
@@ -529,6 +547,7 @@ router_settings:
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOG | Enable detailed logging for LiteLLM
+| LITELLM_MASTER_KEY | Master key for proxy authentication
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
 | LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
@@ -582,10 +601,13 @@ router_settings:
 | OTEL_EXPORTER | Exporter type for OpenTelemetry
 | OTEL_EXPORTER_OTLP_PROTOCOL | Exporter type for OpenTelemetry
 | OTEL_HEADERS | Headers for OpenTelemetry requests
+| OTEL_MODEL_ID | Model ID for OpenTelemetry tracing
 | OTEL_EXPORTER_OTLP_HEADERS | Headers for OpenTelemetry requests
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
+| PANW_PRISMA_AIRS_API_KEY | API key for PANW Prisma AIRS service
+| PANW_PRISMA_AIRS_API_BASE | Base URL for PANW Prisma AIRS service
 | PHOENIX_API_KEY | API key for Arize Phoenix
 | PHOENIX_COLLECTOR_ENDPOINT | API endpoint for Arize Phoenix
 | PHOENIX_COLLECTOR_HTTP_ENDPOINT | API http endpoint for Arize Phoenix
@@ -603,7 +625,6 @@ router_settings:
 | PROXY_BUDGET_RESCHEDULER_MAX_TIME | Maximum time in seconds to wait before checking database for budget resets. Default is 605
 | PROXY_BUDGET_RESCHEDULER_MIN_TIME | Minimum time in seconds to wait before checking database for budget resets. Default is 597
 | PROXY_LOGOUT_URL | URL for logging out of the proxy service
-| LITELLM_MASTER_KEY | Master key for proxy authentication
 | QDRANT_API_BASE | Base URL for Qdrant API
 | QDRANT_API_KEY | API key for Qdrant service
 | QDRANT_SCALAR_QUANTILE | Scalar quantile for Qdrant operations. Default is 0.99
@@ -621,6 +642,8 @@ router_settings:
 | REQUEST_TIMEOUT | Timeout in seconds for requests. Default is 6000
 | ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
 | SECRET_MANAGER_REFRESH_INTERVAL | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)
+| SEPARATE_HEALTH_APP | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.
+| SEPARATE_HEALTH_PORT | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.
 | SERVER_ROOT_PATH | Root path for the server application
 | SET_VERBOSE | Flag to enable verbose logging
 | SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD | Minimum number of requests to consider "reasonable traffic" for single-deployment cooldown logic. Default is 1000
@@ -638,6 +661,7 @@ router_settings:
 | SSL_CERTIFICATE | Path to the SSL certificate file
 | SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
 | SSL_VERIFY | Flag to enable or disable SSL certificate verification
+| SSL_CERT_FILE | Path to the SSL certificate file for custom CA bundle
 | SUPABASE_KEY | API key for Supabase service
 | SUPABASE_URL | Base URL for Supabase instance
 | STORE_MODEL_IN_DB | If true, enables storing model + credential information in the DB. 

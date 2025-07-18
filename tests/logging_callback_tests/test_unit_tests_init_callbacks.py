@@ -28,7 +28,6 @@ for collector in collectors:
 ######################################
 
 
-
 expected_env_vars = {
     "LAGO_API_KEY": "api_key",
     "LAGO_API_BASE": "mock_base",
@@ -56,6 +55,7 @@ expected_env_vars = {
     "AWS_SECRET_ACCESS_KEY": "aws_secret_access_key",
     "AWS_ACCESS_KEY_ID": "aws_access_key_id",
     "AWS_REGION": "aws_region",
+    "AWS_SQS_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue",
 }
 
 

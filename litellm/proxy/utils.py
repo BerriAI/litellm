@@ -54,8 +54,6 @@ from litellm import (
 )
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -63,6 +61,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -71,6 +71,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
@@ -362,7 +363,11 @@ class ProxyLogging:
             if self.alerting is not None and "slack" in self.alerting:
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
-                if "daily_reports" in self.alert_types:
+                if (
+                    "daily_reports" in self.alert_types
+                    or "outage_alerts" in self.alert_types
+                    or "region_outage_alerts" in self.alert_types
+                ):
                     litellm.logging_callback_manager.add_litellm_callback(self.slack_alerting_instance)  # type: ignore
                 litellm.logging_callback_manager.add_litellm_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
@@ -843,8 +848,10 @@ class ProxyLogging:
             )
 
         ### LOGGING ###
-        if self._is_proxy_only_error(
-            original_exception=original_exception, error_type=error_type
+        if self._is_proxy_only_llm_api_error(
+            original_exception=original_exception,
+            error_type=error_type,
+            route=user_api_key_dict.request_route,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -877,13 +884,14 @@ class ProxyLogging:
                 )
         return
 
-    def _is_proxy_only_error(
+    def _is_proxy_only_llm_api_error(
         self,
         original_exception: Exception,
         error_type: Optional[ProxyErrorTypes] = None,
+        route: Optional[str] = None,
     ) -> bool:
         """
-        Return True if the error is a Proxy Only Error
+        Return True if the error is a Proxy Only LLM API Error
 
         Prevents double logging of LLM API exceptions
 
@@ -891,6 +899,19 @@ class ProxyLogging:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
         """
+
+        #########################################################
+        # Only log LLM API errors for proxy level hooks
+        # eg. Authentication errors, rate limit errors, etc.
+        # Note: This fixes a security issue where we
+        #       would log temporary keys/auth info
+        #       from management endpoints
+        #########################################################
+        if route is None:
+            return False
+        if RouteChecks.is_llm_api_route(route) is not True:
+            return False
+
         return isinstance(original_exception, HTTPException) or (
             error_type == ProxyErrorTypes.auth_error
         )
@@ -1044,6 +1065,7 @@ class ProxyLogging:
 
     async def async_post_call_streaming_hook(
         self,
+        data: dict,
         response: Union[
             ModelResponse, EmbeddingResponse, ImageResponse, ModelResponseStream
         ],
@@ -1062,6 +1084,17 @@ class ProxyLogging:
             for callback in litellm.callbacks:
                 try:
                     _callback: Optional[CustomLogger] = None
+                    if isinstance(callback, CustomGuardrail):
+                        # Main - V2 Guardrails implementation
+                        from litellm.types.guardrails import GuardrailEventHooks
+
+                        if (
+                            callback.should_run_guardrail(
+                                data=data, event_type=GuardrailEventHooks.post_call
+                            )
+                            is not True
+                        ):
+                            continue
                     if isinstance(callback, str):
                         _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
                             callback
@@ -1741,7 +1774,6 @@ class PrismaClient:
                         WHERE v.token = '{token}'
                     """
 
-                    print_verbose("sql_query being made={}".format(sql_query))
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
@@ -2461,15 +2493,23 @@ class PrismaClient:
         )
 
     # Health Check Database Methods
-    def _validate_response_time(self, response_time_ms: Optional[float]) -> Optional[float]:
+    def _validate_response_time(
+        self, response_time_ms: Optional[float]
+    ) -> Optional[float]:
         """Validate and clean response time value"""
         if response_time_ms is None:
             return None
         try:
             value = float(response_time_ms)
-            return value if value == value and value not in (float('inf'), float('-inf')) else None
+            return (
+                value
+                if value == value and value not in (float("inf"), float("-inf"))
+                else None
+            )
         except (ValueError, TypeError):
-            verbose_proxy_logger.warning(f"Invalid response_time_ms value: {response_time_ms}")
+            verbose_proxy_logger.warning(
+                f"Invalid response_time_ms value: {response_time_ms}"
+            )
             return None
 
     def _clean_details(self, details: Optional[dict]) -> Optional[dict]:
@@ -2503,7 +2543,7 @@ class PrismaClient:
                 "healthy_count": int(healthy_count),
                 "unhealthy_count": int(unhealthy_count),
             }
-            
+
             # Add optional fields using dict comprehension and helper methods
             optional_fields = {
                 "error_message": str(error_message)[:500] if error_message else None,
@@ -2512,15 +2552,19 @@ class PrismaClient:
                 "checked_by": str(checked_by) if checked_by else None,
                 "model_id": str(model_id) if model_id else None,
             }
-            
+
             # Add only non-None optional fields
-            health_check_data.update({k: v for k, v in optional_fields.items() if v is not None})
-            
+            health_check_data.update(
+                {k: v for k, v in optional_fields.items() if v is not None}
+            )
+
             verbose_proxy_logger.debug(f"Saving health check data: {health_check_data}")
             return await self.db.litellm_healthchecktable.create(data=health_check_data)
-            
+
         except Exception as e:
-            verbose_proxy_logger.error(f"Error saving health check result for model {model_name}: {e}")
+            verbose_proxy_logger.error(
+                f"Error saving health check result for model {model_name}: {e}"
+            )
             return None
 
     async def get_health_check_history(
@@ -2560,13 +2604,13 @@ class PrismaClient:
             all_checks = await self.db.litellm_healthchecktable.find_many(
                 order={"checked_at": "desc"}
             )
-            
+
             # Group by model_name and get the latest for each
             latest_checks = {}
             for check in all_checks:
                 if check.model_name not in latest_checks:
                     latest_checks[check.model_name] = check
-            
+
             return list(latest_checks.values())
         except Exception as e:
             verbose_proxy_logger.error(f"Error getting all latest health checks: {e}")
@@ -2574,6 +2618,7 @@ class PrismaClient:
 
 
 ### HELPER FUNCTIONS ###
+
 
 async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     """
@@ -2995,7 +3040,7 @@ def _get_redoc_url() -> Optional[str]:
     - If NO_REDOC is True, return None.
     - Otherwise, default to "/redoc".
     """
-    if (redoc_url := os.getenv("REDOC_URL")):
+    if redoc_url := os.getenv("REDOC_URL"):
         return redoc_url
 
     if str_to_bool(os.getenv("NO_REDOC")) is True:
@@ -3012,7 +3057,7 @@ def _get_docs_url() -> Optional[str]:
     - If NO_DOCS is True, return None.
     - Otherwise, default to "/".
     """
-    if (docs_url := os.getenv("DOCS_URL")):
+    if docs_url := os.getenv("DOCS_URL"):
         return docs_url
 
     if str_to_bool(os.getenv("NO_DOCS")) is True:
@@ -3080,15 +3125,15 @@ def join_paths(base_path: str, route: str) -> str:
     # Remove trailing slashes from base_path and leading slashes from route
     base_path = base_path.rstrip("/")
     route = route.lstrip("/")
-    
+
     # If base_path is empty, return route with leading slash
     if not base_path:
         return f"/{route}" if route else "/"
-    
+
     # If route is empty, return just base_path
     if not route:
         return base_path
-    
+
     # Join with single slash
     return f"{base_path}/{route}"
 
@@ -3100,7 +3145,7 @@ def get_custom_url(request_base_url: str, route: Optional[str] = None) -> str:
         base_url = server_base_url
     else:
         base_url = request_base_url
-    
+
     server_root_path = get_server_root_path()
     if route is not None:
         if server_root_path != "":
@@ -3128,3 +3173,14 @@ def get_server_root_path() -> str:
     - Otherwise, default to "/".
     """
     return os.getenv("SERVER_ROOT_PATH", "/")
+
+
+def get_prisma_client_or_throw(message: str):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": message},
+        )
+    return prisma_client

@@ -78,6 +78,7 @@ export interface KeyResponse {
     object_permission?: {
         object_permission_id: string;
         mcp_servers: string[];
+        mcp_access_groups?: string[];
         vector_stores: string[];
     };
 }

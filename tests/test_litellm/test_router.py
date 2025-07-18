@@ -37,7 +37,7 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
         "metadata": {"baz": 123},
     }
     original = copy.deepcopy(router.default_litellm_params)
-    kwargs = {}
+    kwargs: dict = {}
 
     # invoke the helper
     router._update_kwargs_with_default_litellm_params(
@@ -82,7 +82,7 @@ def test_router_with_model_info_and_model_group():
 
 
 @pytest.mark.asyncio
-async def test_router_with_tags_and_fallbacks():
+async def test_arouter_with_tags_and_fallbacks():
     """
     If fallback model missing tag, raise error
     """
@@ -122,7 +122,7 @@ async def test_router_with_tags_and_fallbacks():
 
 
 @pytest.mark.asyncio
-async def test_router_acreate_file():
+async def test_async_router_acreate_file():
     """
     Write to all deployments of a model
     """
@@ -151,7 +151,7 @@ async def test_router_acreate_file():
 
 
 @pytest.mark.asyncio
-async def test_router_acreate_file_with_jsonl():
+async def test_async_router_acreate_file_with_jsonl():
     """
     Test router.acreate_file with both JSONL and non-JSONL files
     """
@@ -239,7 +239,7 @@ async def test_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
-async def test_router_async_get_healthy_deployments():
+async def test_arouter_async_get_healthy_deployments():
     """
     Test that afile_content returns the correct file content
     """
@@ -268,7 +268,7 @@ async def test_router_async_get_healthy_deployments():
 
 @pytest.mark.asyncio
 @patch("litellm.amoderation")
-async def test_router_amoderation_with_credential_name(mock_amoderation):
+async def test_arouter_amoderation_with_credential_name(mock_amoderation):
     """
     Test that router.amoderation passes litellm_credential_name to the underlying litellm.amoderation call
     """
@@ -298,7 +298,7 @@ async def test_router_amoderation_with_credential_name(mock_amoderation):
     assert call_kwargs["model"] == "text-moderation-stable"
 
 
-def test_router_test_team_model():
+def test_arouter_test_team_model():
     """
     Test that router.test_team_model returns the correct model
     """
@@ -319,7 +319,7 @@ def test_router_test_team_model():
     assert result is not None
 
 
-def test_router_ignore_invalid_deployments():
+def test_arouter_ignore_invalid_deployments():
     """
     Test that router.ignore_invalid_deployments is set to True
     """
@@ -342,7 +342,7 @@ def test_router_ignore_invalid_deployments():
     router.upsert_deployment(
         Deployment(
             model_name="gpt-3.5-turbo",
-            litellm_params={"model": "my-bad-model"},
+            litellm_params={"model": "my-bad-model"},  # type: ignore
             model_info={"tpm": 1000, "rpm": 1000},
         )
     )
@@ -351,7 +351,7 @@ def test_router_ignore_invalid_deployments():
 
 
 @pytest.mark.asyncio
-async def test_router_aretrieve_batch():
+async def test_arouter_aretrieve_batch():
     """
     Test that router.aretrieve_batch returns the correct response
     """
@@ -387,7 +387,7 @@ async def test_router_aretrieve_batch():
 
 
 @pytest.mark.asyncio
-async def test_router_aretrieve_file_content():
+async def test_arouter_aretrieve_file_content():
     """
     Test that router.acreate_file with JSONL file returns the correct response
     """
@@ -426,7 +426,7 @@ async def test_router_aretrieve_file_content():
 
 
 @pytest.mark.asyncio
-async def test_router_filter_team_based_models():
+async def test_arouter_filter_team_based_models():
     """
     Test that router.filter_team_based_models filters out models that are not in the team
     """
@@ -468,7 +468,7 @@ async def test_router_filter_team_based_models():
     router.add_deployment(
         Deployment(
             model_name="gpt-3.5-turbo",
-            litellm_params={"model": "gpt-3.5-turbo"},
+            litellm_params={"model": "gpt-3.5-turbo"},  # type: ignore
             model_info={"tpm": 1000, "rpm": 1000},
         )
     )
@@ -483,7 +483,7 @@ async def test_router_filter_team_based_models():
     assert result is not None
 
 
-def test_router_should_include_deployment():
+def test_arouter_should_include_deployment():
     """
     Test the should_include_deployment method with various scenarios
 
@@ -602,3 +602,294 @@ def test_router_should_include_deployment():
     assert (
         result is True
     ), "Should return True when matching model with exact model_name"
+
+
+def test_arouter_responses_api_bridge():
+    """
+    Test that router.responses_api_bridge returns the correct response
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "[IP-approved] o3-pro",
+                "litellm_params": {
+                    "model": "azure/responses/o_series/webinterface-o3-pro",
+                    "api_base": "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55",
+                    "api_key": "sk-1234567890",
+                    "api_version": "preview",
+                    "stream": True,
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.00002,
+                    "output_cost_per_token": 0.00008,
+                },
+            }
+        ],
+    )
+
+    ## CONFIRM BRIDGE IS CALLED
+    with patch.object(litellm, "responses", return_value=AsyncMock()) as mock_responses:
+        result = router.completion(
+            model="[IP-approved] o3-pro",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+        )
+        assert mock_responses.call_count == 1
+
+    ## CONFIRM MODEL NAME IS STRIPPED
+    client = HTTPHandler()
+
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+        try:
+            result = router.completion(
+                model="[IP-approved] o3-pro",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                client=client,
+                num_retries=0,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        assert mock_post.call_count == 1
+        assert (
+            mock_post.call_args.kwargs["url"]
+            == "https://webhook.site/fba79dae-220a-4bb7-9a3a-8caa49604e55/openai/v1/responses?api-version=preview"
+        )
+        assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
+
+
+
+@pytest.mark.asyncio
+async def test_router_v1_messages_fallbacks():
+    """
+    Test that router.v1_messages_fallbacks returns the correct response
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-3-5-sonnet-latest",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-latest",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "mock_response": "Hello, world I am a fallback!",
+                },
+            },
+        ],
+        fallbacks=[
+            {"claude-3-5-sonnet-latest": ["bedrock-claude"]},
+        ],
+    )
+
+    result = await router.aanthropic_messages(
+        model="claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        max_tokens=256,
+    )
+    assert result is not None
+
+    print(result)
+    assert result["content"][0]["text"] == "Hello, world I am a fallback!"
+
+    
+def test_add_invalid_provider_to_router():
+    """
+    Test that router.add_deployment raises an error if the provider is invalid
+    """
+    from litellm.types.router import Deployment
+    
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",     
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    with pytest.raises(Exception) as e:
+        router.add_deployment(
+            Deployment(
+                model_name="vertex_ai/*",
+                litellm_params={
+                    "model": "vertex_ai/*",
+                    "custom_llm_provider": "vertex_ai_eu",
+                },
+            )
+        )
+
+    assert router.pattern_router.patterns == {}
+
+@pytest.mark.asyncio
+async def test_router_ageneric_api_call_with_fallbacks_helper():
+    """
+    Test the _ageneric_api_call_with_fallbacks_helper method with various scenarios
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                "model_info": {
+                    "tpm": 1000,
+                    "rpm": 1000,
+                },
+            },
+        ],
+    )
+
+    # Test 1: Successful call
+    async def mock_generic_function(**kwargs):
+        return {"result": "success", "model": kwargs.get("model")}
+
+    with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
+        mock_get_deployment.return_value = {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "test-key",
+                "api_base": "https://api.openai.com/v1",
+            },
+        }
+
+        with patch.object(
+            router, "_update_kwargs_with_deployment"
+        ) as mock_update_kwargs:
+            with patch.object(
+                router, "async_routing_strategy_pre_call_checks"
+            ) as mock_pre_call_checks:
+                with patch.object(
+                    router, "_get_client", return_value=None
+                ) as mock_get_client:
+                    result = await router._ageneric_api_call_with_fallbacks_helper(
+                        model="gpt-3.5-turbo",
+                        original_generic_function=mock_generic_function,
+                        messages=[{"role": "user", "content": "test"}],
+                    )
+
+                    assert result is not None
+                    assert result["result"] == "success"
+                    mock_get_deployment.assert_called_once()
+                    mock_update_kwargs.assert_called_once()
+                    mock_pre_call_checks.assert_called_once()
+
+    # Test 2: Passthrough on no deployment (success case)
+    async def mock_passthrough_function(**kwargs):
+        return {"result": "passthrough", "model": kwargs.get("model")}
+
+    with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
+        mock_get_deployment.side_effect = Exception("No deployment available")
+
+        result = await router._ageneric_api_call_with_fallbacks_helper(
+            model="gpt-3.5-turbo",
+            original_generic_function=mock_passthrough_function,
+            passthrough_on_no_deployment=True,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        assert result is not None
+        assert result["result"] == "passthrough"
+        assert result["model"] == "gpt-3.5-turbo"
+
+    # Test 3: No deployment available and passthrough=False (should raise exception)
+    with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
+        mock_get_deployment.side_effect = Exception("No deployment available")
+
+        with pytest.raises(Exception) as exc_info:
+            await router._ageneric_api_call_with_fallbacks_helper(
+                model="gpt-3.5-turbo",
+                original_generic_function=mock_generic_function,
+                passthrough_on_no_deployment=False,
+                messages=[{"role": "user", "content": "test"}],
+            )
+
+        assert "No deployment available" in str(exc_info.value)
+
+    # Test 4: Test with semaphore (rate limiting)
+    import asyncio
+
+    async def mock_semaphore_function(**kwargs):
+        return {"result": "semaphore_success", "model": kwargs.get("model")}
+
+    with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
+        mock_get_deployment.return_value = {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "test-key",
+                "api_base": "https://api.openai.com/v1",
+            },
+        }
+
+        mock_semaphore = asyncio.Semaphore(1)
+
+        with patch.object(
+            router, "_update_kwargs_with_deployment"
+        ) as mock_update_kwargs:
+            with patch.object(
+                router, "_get_client", return_value=mock_semaphore
+            ) as mock_get_client:
+                with patch.object(
+                    router, "async_routing_strategy_pre_call_checks"
+                ) as mock_pre_call_checks:
+                    result = await router._ageneric_api_call_with_fallbacks_helper(
+                        model="gpt-3.5-turbo",
+                        original_generic_function=mock_semaphore_function,
+                        messages=[{"role": "user", "content": "test"}],
+                    )
+
+                    assert result is not None
+                    assert result["result"] == "semaphore_success"
+                    mock_get_client.assert_called_once()
+                    mock_pre_call_checks.assert_called_once()
+
+    # Test 5: Test call tracking (success and failure counts)
+    initial_success_count = router.success_calls.get("gpt-3.5-turbo", 0)
+    initial_fail_count = router.fail_calls.get("gpt-3.5-turbo", 0)
+
+    async def mock_failing_function(**kwargs):
+        raise Exception("Mock failure")
+
+    with patch.object(router, "async_get_available_deployment") as mock_get_deployment:
+        mock_get_deployment.return_value = {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "test-key",
+                "api_base": "https://api.openai.com/v1",
+            },
+        }
+
+        with patch.object(
+            router, "_update_kwargs_with_deployment"
+        ) as mock_update_kwargs:
+            with patch.object(
+                router, "_get_client", return_value=None
+            ) as mock_get_client:
+                with patch.object(
+                    router, "async_routing_strategy_pre_call_checks"
+                ) as mock_pre_call_checks:
+                    with pytest.raises(Exception) as exc_info:
+                        await router._ageneric_api_call_with_fallbacks_helper(
+                            model="gpt-3.5-turbo",
+                            original_generic_function=mock_failing_function,
+                            messages=[{"role": "user", "content": "test"}],
+                        )
+
+                    assert "Mock failure" in str(exc_info.value)
+                    # Check that fail_calls was incremented
+                    assert router.fail_calls["gpt-3.5-turbo"] == initial_fail_count + 1

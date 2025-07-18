@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
+    OpenAIModerationGuardrailConfigModel,
+)
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
@@ -22,7 +26,7 @@ guardrails:
 class SupportedGuardrailIntegrations(Enum):
     APORIA = "aporia"
     BEDROCK = "bedrock"
-    GURDRAILS_AI = "guardrails_ai"
+    GUARDRAILS_AI = "guardrails_ai"
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
@@ -31,7 +35,10 @@ class SupportedGuardrailIntegrations(Enum):
     PANGEA = "pangea"
     LASSO = "lasso"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
-
+    AZURE_PROMPT_SHIELD = "azure/prompt_shield"
+    AZURE_TEXT_MODERATIONS = "azure/text_moderations"
+    MODEL_ARMOR = "model_armor"
+    OPENAI_MODERATION = "openai_moderation"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -267,6 +274,10 @@ class BedrockGuardrailConfigModel(BaseModel):
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
     )
+    disable_exception_on_block: Optional[bool] = Field(
+        default=False,
+        description="If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
+    )
     aws_region_name: Optional[str] = Field(
         default=None, description="AWS region where your guardrail is deployed"
     )
@@ -297,6 +308,7 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_bedrock_runtime_endpoint: Optional[str] = Field(
         default=None, description="AWS Bedrock runtime endpoint URL"
     )
+
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
@@ -337,16 +349,7 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
-class LitellmParams(
-    PresidioConfigModel,
-    BedrockGuardrailConfigModel,
-    LakeraV2GuardrailConfigModel,
-    LassoGuardrailConfigModel,
-):
-    guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: Union[str, List[str]] = Field(
-        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
-    )
+class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
     )
@@ -393,11 +396,76 @@ class LitellmParams(
         default=None, description="Recipe for output (LLM response)"
     )
 
+    model: Optional[str] = Field(
+        default=None, description="Optional field if guardrail requires a 'model' parameter"
+    )
+
+    # Model Armor params
+    template_id: Optional[str] = Field(
+        default=None, description="The ID of your Model Armor template"
+    )
+    location: Optional[str] = Field(
+        default=None, description="Google Cloud location/region (e.g., us-central1)"
+    )
+    credentials: Optional[str] = Field(
+        default=None,
+        description="Path to Google Cloud credentials JSON file or JSON string",
+    )
+    api_endpoint: Optional[str] = Field(
+        default=None, description="Optional custom API endpoint for Model Armor"
+    )
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description="Whether to fail the request if Model Armor encounters an error",
+    )
+    
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
+class Mode(BaseModel):
+    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
+    default: Optional[str] = Field(
+        default=None, description="Default mode when no tags match"
+    )
+
+
+class LitellmParams(
+    PresidioConfigModel,
+    BedrockGuardrailConfigModel,
+    LakeraV2GuardrailConfigModel,
+    LassoGuardrailConfigModel,
+    BaseLitellmParams,
+):
+    guardrail: str = Field(description="The type of guardrail integration to use")
+    mode: Union[str, List[str], Mode] = Field(
+        description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
+    )
+
+    def __init__(self, **kwargs):
+        default_on = kwargs.pop("default_on", None)
+        if default_on is not None:
+            kwargs["default_on"] = default_on
+        else:
+            kwargs["default_on"] = False
+        super().__init__(**kwargs)
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
 
 class Guardrail(TypedDict, total=False):
     guardrail_id: Optional[str]
-    guardrail_name: str
-    litellm_params: LitellmParams
+    guardrail_name: Required[str]
+    litellm_params: Required[LitellmParams]
     guardrail_info: Optional[Dict]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
@@ -418,26 +486,10 @@ class DynamicGuardrailParams(TypedDict):
     extra_body: Dict[str, Any]
 
 
-class GuardrailInfoLiteLLMParamsResponse(BaseModel):
-    """The returned LiteLLM Params object for /guardrails/list"""
-
-    guardrail: str
-    mode: Union[str, List[str]]
-    default_on: Optional[bool] = False
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
-
-    def __init__(self, **kwargs):
-        default_on = kwargs.get("default_on")
-        if default_on is None:
-            default_on = False
-
-        super().__init__(**kwargs)
-
-
 class GuardrailInfoResponse(BaseModel):
     guardrail_id: Optional[str] = None
     guardrail_name: str
-    litellm_params: Optional[GuardrailInfoLiteLLMParamsResponse] = None
+    litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -478,12 +530,7 @@ class ApplyGuardrailResponse(BaseModel):
     response_text: str
 
 
-class PatchGuardrailLitellmParams(BaseModel):
-    default_on: Optional[bool] = None
-    pii_entities_config: Optional[Dict[PiiEntityType, PiiAction]] = None
-
-
 class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
-    litellm_params: Optional[PatchGuardrailLitellmParams] = None
+    litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None
