@@ -126,3 +126,40 @@ def test_completion_github_copilot_mock_response(mock_completion, mock_get_api_k
     assert kwargs.get("messages") == messages
 
 
+def test_transform_messages_copilot_system_to_assistant(monkeypatch):
+    """Test that system messages are converted to assistant when config flag is set."""
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+    import litellm
+
+    # Save and patch general_settings
+    original_settings = getattr(litellm, 'general_settings', None)
+    try:
+        # Case 1: Flag is True
+        litellm.general_settings = {'copilot_system_to_assistant': True}
+        config = GithubCopilotConfig()
+        messages = [
+            {"role": "system", "content": "System message."},
+            {"role": "user", "content": "User message."},
+        ]
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        assert out[0]["role"] == "assistant"
+        assert out[1]["role"] == "user"
+
+        # Case 2: Flag is False
+        litellm.general_settings = {'copilot_system_to_assistant': False}
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        assert out[0]["role"] == "system"
+        assert out[1]["role"] == "user"
+
+        # Case 3: Flag missing
+        litellm.general_settings = {}
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        assert out[0]["role"] == "system"
+        assert out[1]["role"] == "user"
+    finally:
+        if original_settings is not None:
+            litellm.general_settings = original_settings
+        else:
+            delattr(litellm, 'general_settings')
+
+
