@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /vector_stores/{vector_store_id}/search - Search Vector Store
+# /vector_stores/\{vector_store_id\}/search - Search Vector Store
 
 Search a vector store for relevant chunks based on a query and file attributes filter. This is useful for retrieval-augmented generation (RAG) use cases.
 
