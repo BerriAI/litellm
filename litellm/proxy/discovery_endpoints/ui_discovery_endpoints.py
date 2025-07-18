@@ -16,5 +16,6 @@ async def get_ui_config():
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
     return UiDiscoveryEndpoints(
-        server_root_path=get_server_root_path(), proxy_base_url=get_proxy_base_url()
+        server_root_path=get_server_root_path(),
+        proxy_base_url=get_proxy_base_url(),
     )

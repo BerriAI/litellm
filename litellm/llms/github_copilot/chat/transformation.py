@@ -8,7 +8,7 @@ from ..common_utils import GetAPIKeyError
 
 
 class GithubCopilotConfig(OpenAIConfig):
-    GITHUB_COPILOT_API_BASE = "https://api.github.com/copilot/v1"
+    GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com/"
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -35,3 +35,16 @@ class GithubCopilotConfig(OpenAIConfig):
                 message=str(e),
             )
         return api_base, dynamic_api_key, custom_llm_provider
+
+    def _transform_messages(
+        self,
+        messages,
+        model: str,
+    ):
+        import litellm
+        disable_copilot_system_to_assistant = litellm.disable_copilot_system_to_assistant 
+        if not disable_copilot_system_to_assistant:
+            for message in messages:
+                if "role" in message and message["role"] == "system":
+                    message["role"] = "assistant"
+        return messages

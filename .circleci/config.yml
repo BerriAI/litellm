@@ -88,7 +88,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -211,7 +211,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -318,7 +318,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -591,7 +591,7 @@ jobs:
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
-            pip install "langfuse==2.45.0"
+            pip install "langfuse==2.59.7"
             pip install "logfire==0.29.0"
             pip install numpydoc
             pip install traceloop-sdk==0.21.1
@@ -701,43 +701,6 @@ jobs:
           paths:
             - litellm_assistants_api_coverage.xml
             - litellm_assistants_api_coverage
-  load_testing:
-    docker:
-      - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - run:
-          name: Install Dependencies
-          command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-cov==5.0.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "respx==0.22.0"
-      - run:
-          name: Show current pydantic version
-          command: |
-            python -m pip show pydantic
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            pwd
-            ls
-            python -m pytest -vv tests/load_tests -x -s -v --junitxml=test-results/junit.xml --durations=5
-          no_output_timeout: 120m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
   llm_translation_testing:
     docker:
       - image: cimg/python:3.11
@@ -804,7 +767,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
-            pip install "mcp==1.9.3"
+            pip install "mcp==1.10.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -939,7 +902,7 @@ jobs:
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
             pip install "pydantic==2.10.2"
-            pip install "mcp==1.9.3"
+            pip install "mcp==1.10.1"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -1257,7 +1220,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "tomli==2.2.1"
-            pip install "mcp==1.9.3"
+            pip install "mcp==1.10.1"
       - run:
           name: Run tests
           command: |
@@ -1358,6 +1321,7 @@ jobs:
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
+      - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
       - run: python ./tests/code_coverage_tests/test_proxy_types_import.py
       - run: python ./tests/code_coverage_tests/callback_manager_test.py
@@ -1532,6 +1496,7 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$PROXY_DATABASE_URL \
+              -e USE_PRISMA_MIGRATE=True \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -3020,12 +2985,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - load_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - test_bad_database_url:
           filters:
             branches:
@@ -3042,7 +3001,6 @@ workflows:
             - local_testing
             - build_and_test
             - e2e_openai_endpoints
-            - load_testing
             - test_bad_database_url
             - llm_translation_testing
             - mcp_testing

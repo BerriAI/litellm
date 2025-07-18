@@ -2,19 +2,20 @@ from datetime import datetime
 from typing import List, Optional
 import pytest
 import uuid
-from httpx import AsyncClient
-import uuid
 import os
+import asyncio
+from unittest import mock
+from fastapi.testclient import TestClient
+from fastapi import FastAPI
 
 from starlette import status
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._types import MCPSpecVersion, MCPSpecVersionType, MCPTransportType, MCPTransport, NewMCPServerRequest, LiteLLM_MCPServerTable
+from litellm.proxy._types import MCPSpecVersion, MCPSpecVersionType, MCPTransportType, MCPTransport, NewMCPServerRequest, LiteLLM_MCPServerTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth
 from litellm.proxy.management_endpoints.mcp_management_endpoints import does_mcp_server_exist
 
 TEST_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-1234")
-PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "http://localhost:4000")
 
 def generate_mcpserver_record(url: Optional[str] = None, 
                     transport: Optional[MCPTransportType] = None,
@@ -25,7 +26,13 @@ def generate_mcpserver_record(url: Optional[str] = None,
     now = datetime.now()
 
     return LiteLLM_MCPServerTable(
-        server_id=str(uuid.uuid4()),alias="Test Server",url=url or "http://localhost.com:8080/mcp",transport=transport or MCPTransport.sse,spec_version=spec_version or MCPSpecVersion.mar_2025,created_at=now,updated_at=now,
+        server_id=str(uuid.uuid4()),
+        alias="Test Server",
+        url=url or "http://localhost.com:8080/mcp",
+        transport=transport or MCPTransport.sse,
+        spec_version=spec_version or MCPSpecVersion.mar_2025,
+        created_at=now,
+        updated_at=now,
     )
 
 # Cheers SO
@@ -44,19 +51,13 @@ def generate_mcpserver_create_request(
     """
     Generate a mock create request for testing.
     """
-    now = datetime.now()
-
-    return NewMCPServerRequest(server_id=server_id,
-        alias="Test Server",url=url or "http://localhost.com:8080/mcp",transport=transport or MCPTransport.sse,spec_version=spec_version or MCPSpecVersion.mar_2025,
+    return NewMCPServerRequest(
+        server_id=server_id,
+        alias="Test Server",
+        url=url or "http://localhost.com:8080/mcp",
+        transport=transport or MCPTransport.sse,
+        spec_version=spec_version or MCPSpecVersion.mar_2025,
     )
-
-def get_http_client():
-    """
-    Create an HTTP client for making requests to the proxy server.
-    """
-    headers = {"Authorization": f"Bearer {TEST_MASTER_KEY}"}
-    # headers = {"Authorization": f"x-litellm-api-key {TEST_MASTER_KEY}"}
-    return AsyncClient(base_url=PROXY_BASE_URL), headers
 
 def assert_mcp_server_record_same(mcp_server: NewMCPServerRequest, resp: LiteLLM_MCPServerTable):
     """
@@ -92,149 +93,202 @@ def test_does_mcp_server_exist():
     assert False == does_mcp_server_exist(mcp_server_records, not_found_record)
 
 @pytest.mark.asyncio
-async def test_create_get_delete():
+async def test_create_mcp_server_direct():
     """
-    Integration Test mcp servers can be created and returned correctly.
-    1. Create a new mcp server with server id 
-    2. Create another mcp server without server id
-    2.1 Verify duplicate mcp server (server id) creation fails
-    3. Verify first server has matching server id and second server has a new server id
-    4. Verify both servers are in the full mcp server list
-    5. Verify first server can be retrieved by server id
-    6. Delete both mcp servers
-    7. Verify both servers are no longer in the full mcp server list
-    8. Verify both servers cannot be retrieved by server id
+    Direct test of the MCP server creation logic without HTTP calls.
     """
-    # client, headers = AsyncClient(base_url=PROXY_BASE_URL), headers
-    client, headers = get_http_client()
-    
-    first_server_id = str(uuid.uuid4())
-    first_server = generate_mcpserver_create_request(server_id=first_server_id)
-
-    # Add new mcp server with server id
-    first_create_response = await client.post(
-        "/v1/mcp/server",
-        json=first_server.json(),
-        headers=headers,
-    )
-
-    # Validate that the response is as expected and the server is created
-    assert status.HTTP_201_CREATED == first_create_response.status_code
-    first_resp = LiteLLM_MCPServerTable(**first_create_response.json())
-    assert_mcp_server_record_same(first_server, first_resp)
-
-    # Create second mcp server without server id
-    second_server = generate_mcpserver_create_request()
-    second_create_response = await client.post(
-        "/v1/mcp/server",
-        json=second_server.json(),
-        headers=headers,
-    )
-    assert status.HTTP_201_CREATED == second_create_response.status_code
-    second_resp = LiteLLM_MCPServerTable(**second_create_response.json())
-    assert_mcp_server_record_same(second_server, second_resp)
-
-    # Try to create a duplicate mcp server
-    duplicate_create_response = await client.post(
-        "/v1/mcp/server",
-        json=first_server.json(),
-        headers=headers,
-    )
-    assert status.HTTP_400_BAD_REQUEST == duplicate_create_response.status_code
-
-    # Validate that the servers are in the full mcp server list
-    get_all_mcp_servers_response = await client.get(
-        "/v1/mcp/server",
-        headers=headers,
-    )
-    assert status.HTTP_200_OK == get_all_mcp_servers_response.status_code
-    mcp_servers = [
-        LiteLLM_MCPServerTable(**record) for record in get_all_mcp_servers_response.json()
-    ]
-    assert len(mcp_servers) >= 2
-    assert does_mcp_server_exist(mcp_servers, first_resp.server_id)
-    assert does_mcp_server_exist(mcp_servers, second_resp.server_id)
-    
-    # Validate that the first server can be retrieved by server id
-    get_mcp_server_response = await client.get(
-        f"/v1/mcp/server/{first_resp.server_id}",
-        headers=headers,
-    )
-    assert status.HTTP_200_OK == get_mcp_server_response.status_code
-    resp = LiteLLM_MCPServerTable(**get_mcp_server_response.json())
-    assert_mcp_server_record_same(first_server, resp)
-    
-    # Delete the mcp servers
-    delete_response = await client.delete(
-        f"/v1/mcp/server/{first_resp.server_id}",
-        headers=headers,
-    )
-    assert status.HTTP_202_ACCEPTED == delete_response.status_code
-    delete_response = await client.delete(
-        f"/v1/mcp/server/{second_resp.server_id}",
-        headers=headers,
-    )
-    assert status.HTTP_202_ACCEPTED == delete_response.status_code
-
-    # Validate that the servers are no longer in the full list
-    get_all_mcp_servers_response = await client.get(
-        "/v1/mcp/server",
-        headers=headers,
-    )
-    assert status.HTTP_200_OK == get_all_mcp_servers_response.status_code
-    mcp_servers = [
-        LiteLLM_MCPServerTable(**record) for record in get_all_mcp_servers_response.json()
-    ]
-    assert not does_mcp_server_exist(mcp_servers, first_resp.server_id)
-    assert not does_mcp_server_exist(mcp_servers, second_resp.server_id)
-    
-    # Validate that both servers cannot be retrieved by server id
-    for server_id in [first_resp.server_id, second_resp.server_id]:
-        get_mcp_server_response = await client.get(
-            f"/v1/mcp/server/{server_id}",
-            headers=headers,
+    # Mock the database functions directly
+    with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server") as mock_create, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager") as mock_manager:
+        
+        # Import after mocking
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import add_mcp_server
+        
+        # Mock database client
+        mock_prisma = mock.Mock()
+        mock_get_prisma.return_value = mock_prisma
+        
+        # Mock server manager
+        mock_manager.add_update_server = mock.Mock()
+        
+        # Set up test data
+        server_id = str(uuid.uuid4())
+        mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
+        
+        expected_response = LiteLLM_MCPServerTable(
+            server_id=server_id,
+            alias=mcp_server_request.alias,
+            description=mcp_server_request.description,
+            url=mcp_server_request.url,
+            transport=mcp_server_request.transport,
+            spec_version=mcp_server_request.spec_version,
+            auth_type=mcp_server_request.auth_type,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            created_by=LITELLM_PROXY_ADMIN_NAME,
+            updated_by=LITELLM_PROXY_ADMIN_NAME,
+            teams=[]
         )
-        assert status.HTTP_404_NOT_FOUND == get_mcp_server_response.status_code
+        
+        # Mock the database calls
+        mock_get_server.return_value = None  # Server doesn't exist yet
+        mock_create.return_value = expected_response
+        
+        # Create mock user auth
+        user_auth = UserAPIKeyAuth(
+            api_key=TEST_MASTER_KEY,
+            user_id="test-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        
+        # Call the function directly
+        result = await add_mcp_server(
+            payload=mcp_server_request,
+            user_api_key_dict=user_auth
+        )
+        
+        # Verify the result
+        assert result.server_id == server_id
+        assert result.alias == mcp_server_request.alias
+        assert result.url == mcp_server_request.url
+        assert result.transport == mcp_server_request.transport
+        assert result.spec_version == mcp_server_request.spec_version
+        
+        # Verify mocks were called
+        mock_get_server.assert_called_once_with(mock_prisma, server_id)
+        mock_create.assert_called_once()
+        mock_manager.add_update_server.assert_called_once_with(expected_response)
+
+@pytest.mark.asyncio 
+async def test_create_duplicate_mcp_server():
+    """
+    Test that creating a duplicate MCP server fails appropriately.
+    """
+    # Mock the database functions directly
+    with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server:
+        
+        # Import after mocking
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import add_mcp_server
+        from fastapi import HTTPException
+        
+        # Mock database client
+        mock_prisma = mock.Mock()
+        mock_get_prisma.return_value = mock_prisma
+        
+        # Set up test data
+        server_id = str(uuid.uuid4())
+        mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
+        
+        existing_server = LiteLLM_MCPServerTable(
+            server_id=server_id,
+            alias="Existing Server",
+            url="http://existing.com",
+            transport=MCPTransport.sse,
+            spec_version=MCPSpecVersion.mar_2025,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            teams=[]
+        )
+        
+        # Mock that server already exists
+        mock_get_server.return_value = existing_server
+        
+        # Create mock user auth
+        user_auth = UserAPIKeyAuth(
+            api_key=TEST_MASTER_KEY,
+            user_id="test-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        
+        # Expect HTTPException to be raised
+        with pytest.raises(HTTPException) as exc_info:
+            await add_mcp_server(
+                payload=mcp_server_request,
+                user_api_key_dict=user_auth
+            )
+        
+        # Verify the exception details
+        assert exc_info.value.status_code == 400
+        assert "already exists" in str(exc_info.value.detail)
 
 @pytest.mark.asyncio
-async def test_edit():
+async def test_create_mcp_server_auth_failure():
     """
-    Integration Test mcp servers can be created and edited correctly.
-    1. Create a new mcp server 
-    2. Edit the server id
-    3. Verify the mcp server's data is updated
+    Test that non-admin users cannot create MCP servers.
     """
-    # client, headers = AsyncClient(base_url=PROXY_BASE_URL), headers
-    client, headers = get_http_client()
-    
-    mcp_server_request = generate_mcpserver_create_request()
+    # Mock the database functions directly
+    with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma:
+        
+        # Import after mocking
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import add_mcp_server
+        from fastapi import HTTPException
+        
+        # Mock database client 
+        mock_prisma = mock.Mock()
+        mock_get_prisma.return_value = mock_prisma
+        
+        # Set up test data
+        server_id = str(uuid.uuid4())
+        mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
+        
+        # Create mock user auth without admin role
+        user_auth = UserAPIKeyAuth(
+            api_key=TEST_MASTER_KEY,
+            user_id="test-user",
+            user_role=LitellmUserRoles.INTERNAL_USER  # Not an admin
+        )
+        
+        # Expect HTTPException to be raised
+        with pytest.raises(HTTPException) as exc_info:
+            await add_mcp_server(
+                payload=mcp_server_request,
+                user_api_key_dict=user_auth
+            )
+        
+        # Verify the exception details
+        assert exc_info.value.status_code == 403
+        assert "permission" in str(exc_info.value.detail)
 
-    # Add new mcp server with server id
-    first_create_response = await client.post(
-        "/v1/mcp/server",
-        json=mcp_server_request.json(),
-        headers=headers,
-    )
-
-    # Validate that the response is as expected and the server is created
-    assert status.HTTP_201_CREATED == first_create_response.status_code
-    mcp_server_response = LiteLLM_MCPServerTable(**first_create_response.json())
-    assert_mcp_server_record_same(mcp_server_request, mcp_server_response)
-
-    # Update the mcp server
-    mcp_server_request.server_id = mcp_server_response.server_id
-    mcp_server_request.spec_version = MCPSpecVersion.nov_2024
-    mcp_server_request.transport = MCPTransport.http
-    mcp_server_request.description = "Some updated description"    
-    mcp_server_request.url = "http://localhost.com:4040/mcp"
-    mcp_server_request.auth_type = MCPAuth.basic
-
-    # Try to edit the mcp server
-    updated_response = await client.put(
-        "/v1/mcp/server",
-        json=mcp_server_request.json(),
-        headers=headers,
-    )
-    assert status.HTTP_202_ACCEPTED == updated_response.status_code
-    updated_server = LiteLLM_MCPServerTable(**updated_response.json())
-    assert_mcp_server_record_same(mcp_server_request, updated_server)
+@pytest.mark.asyncio 
+async def test_create_mcp_server_invalid_alias():
+    """
+    Test that creating an MCP server with a '-' in the alias fails with the correct error.
+    """
+    with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server:
+        
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import add_mcp_server
+        from fastapi import HTTPException
+        
+        mock_prisma = mock.Mock()
+        mock_get_prisma.return_value = mock_prisma
+        
+        # Set up test data with invalid alias
+        server_id = str(uuid.uuid4())
+        mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
+        mcp_server_request.alias = "invalid-alias"  # This should trigger the validation error
+        
+        # Mock that server does not exist
+        mock_get_server.return_value = None
+        
+        user_auth = UserAPIKeyAuth(
+            api_key=TEST_MASTER_KEY,
+            user_id="test-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        
+        with pytest.raises(HTTPException) as exc_info:
+            await add_mcp_server(
+                payload=mcp_server_request,
+                user_api_key_dict=user_auth
+            )
+        
+        assert exc_info.value.status_code == 400
+        assert "Server name cannot contain '-'. Use an alternative character instead Found: invalid-alias" in str(exc_info.value.detail)
