@@ -2548,7 +2548,6 @@ class Router:
             self.total_calls[model_name] += 1
 
             ### get custom
-
             response = original_generic_function(
                 **{
                     **data,
@@ -2585,6 +2584,7 @@ class Router:
             verbose_router_logger.info(
                 f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m"
             )
+
             return response
         except Exception as e:
             verbose_router_logger.info(
