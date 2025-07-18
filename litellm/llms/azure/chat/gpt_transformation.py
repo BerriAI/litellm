@@ -12,7 +12,6 @@ from litellm.types.llms.azure import (
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
 )
 from litellm.types.utils import ModelResponse
-from litellm.utils import supports_response_schema
 
 from ....exceptions import UnsupportedParamsError
 from ....types.llms.openai import AllMessageValues
