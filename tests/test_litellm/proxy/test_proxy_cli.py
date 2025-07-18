@@ -3,14 +3,15 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+import fastapi
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+from litellm.proxy.health_endpoints.health_app_factory import build_health_app
 import builtins
-from litellm.proxy.proxy_cli import run_separate_health_app
 import types
 
 
@@ -313,47 +314,55 @@ class TestProxyInitializationHelpers:
             assert call_args[1]["timeout_keep_alive"] == 30
 
 
-def test_run_separate_health_app_runs_only_when_flag(monkeypatch):
-    # Patch print to track output
-    printed = []
-    monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: printed.append(args))
-    # Patch threading.Thread to track if it's started
-    started = {}
-    class DummyThread:
-        def __init__(self, target, daemon):
-            started['called'] = True
-        def start(self):
-            started['started'] = True
-    monkeypatch.setattr("threading.Thread", DummyThread)
-    # Patch uvicorn.run to prevent actual server start
-    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
-    # Patch FastAPI import by patching sys.modules['fastapi']
-    class DummyFastAPI:
-        def __init__(self, *a, **k):
-            pass
-        def include_router(self, router):
-            pass
-    dummy_fastapi = types.ModuleType("fastapi")
-    dummy_fastapi.FastAPI = DummyFastAPI
-    monkeypatch.setitem(sys.modules, "fastapi", dummy_fastapi)
-    # Patch the health_endpoints module in sys.modules
-    dummy_health_endpoints = types.ModuleType("litellm.proxy.health_endpoints._health_endpoints")
-    dummy_health_endpoints.router = object()
-    monkeypatch.setitem(sys.modules, "litellm.proxy.health_endpoints._health_endpoints", dummy_health_endpoints)
-
-    # Should NOT run if flag is not set
-    monkeypatch.setenv("SEPARATE_HEALTH_APP", "0")
-    started.clear()
-    printed.clear()
-    run_separate_health_app()
-    assert not started, "Should not start thread if flag is not '1'"
-    assert not printed, "Should not print if flag is not '1'"
-
-    # Should run if flag is set
-    monkeypatch.setenv("SEPARATE_HEALTH_APP", "1")
-    started.clear()
-    printed.clear()
-    run_separate_health_app()
-    assert started.get('called'), "Should create thread if flag is '1'"
-    assert started.get('started') is None or started.get('started'), "Should start thread if flag is '1'"
-    assert any("LiteLLM Health Endpoints" in str(args) for args in printed), "Should print health endpoint message if flag is '1'"
+class TestHealthAppFactory:
+    """Test cases for the health app factory module"""
+    
+    def test_build_health_app(self):
+        """Test that build_health_app creates a FastAPI app with the correct title and includes the health router"""
+        # Execute
+        health_app = build_health_app()
+        
+        # Assert
+        assert health_app.title == "LiteLLM Health Endpoints"
+        assert isinstance(health_app, fastapi.FastAPI)
+        
+        # Verify that the app has the expected health endpoints by checking route paths
+        # When a router is included, its routes are flattened into the main app's routes
+        route_paths = []
+        for route in health_app.routes:
+            if hasattr(route, 'path'):
+                route_paths.append(route.path)
+        
+        # Check for some expected health endpoints
+        expected_paths = [
+            "/test",
+            "/health/services", 
+            "/health",
+            "/health/history",
+            "/health/latest",
+            "/settings",
+            "/active/callbacks",
+            "/health/readiness",
+            "/health/liveliness",
+            "/health/liveness",
+            "/health/test_connection"
+        ]
+        
+        # At least some of the expected health endpoints should be present
+        found_paths = [path for path in expected_paths if path in route_paths]
+        assert len(found_paths) > 0, f"Expected to find health endpoints, but found: {route_paths}"
+        
+        # Verify that the app has routes (indicating the router was included)
+        assert len(health_app.routes) > 0, "Health app should have routes from the included router"
+        
+    def test_build_health_app_returns_different_instances(self):
+        """Test that build_health_app returns different FastAPI instances on each call"""
+        # Execute
+        health_app_1 = build_health_app()
+        health_app_2 = build_health_app()
+        
+        # Assert
+        assert health_app_1 is not health_app_2
+        assert health_app_1.title == health_app_2.title
+        assert isinstance(health_app_1, fastapi.FastAPI)
+        assert isinstance(health_app_2, fastapi.FastAPI)

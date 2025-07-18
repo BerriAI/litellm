@@ -233,6 +233,10 @@ To fix this, just set `LITELLM_MIGRATION_DIR="/path/to/writeable/directory"` in 
 LiteLLM will use this directory to write migration files.
 
 ## 10. Use a Separate Health Check App
+:::info
+The Separate Health Check App only runs when running via the the LiteLLM Docker Image and using Docker and setting the SEPARATE_HEALTH_APP env var to "1"
+:::
+
 Using a separate health check app ensures that your liveness and readiness probes remain responsive even when the main application is under heavy load. 
 
 **Why is this important?**
@@ -240,7 +244,8 @@ Using a separate health check app ensures that your liveness and readiness probe
 - If your health endpoints share the same process as your main app, high traffic or resource exhaustion can cause health checks to hang or fail.
 - When Kubernetes liveness probes hang or time out, it may incorrectly assume your pod is unhealthy and restart it—even if the main app is just busy, not dead.
 - By running health endpoints on a separate lightweight FastAPI app (with its own port), you guarantee that health checks remain fast and reliable, preventing unnecessary pod restarts during traffic spikes or heavy workloads.
-- Since the proxy and health app are running in the same pod, if health check app fails, it signifies that the pod is unhealthy and needs to restart/have action taken upon.
+- The way it works is, if either of the health or main proxy app dies due to whatever reason, it will kill the pod and which would be marked as unhealthy prompting the orchestrator to restart the pod
+- Since the proxy and health app are running in the same pod, if the pod dies the health check probe fails, it signifies that the pod is unhealthy and needs to restart/have action taken upon.
 
 **How to enable:**
 
@@ -249,6 +254,14 @@ Set the following environment variable(s):
 SEPARATE_HEALTH_APP="1" # Default "0" 
 SEPARATE_HEALTH_PORT="8001" # Default "4001", Works only if `SEPARATE_HEALTH_APP` is "1"
 ```
+
+<video controls width="100%" style={{ borderRadius: '8px', marginBottom: '1em' }}>
+  <source src="https://cdn.loom.com/sessions/thumbnails/b08be303331246b88fdc053940d03281-1718990992822.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
+
+Or [watch on Loom](https://www.loom.com/share/b08be303331246b88fdc053940d03281?sid=a145ec66-d55f-41f7-aade-a9f41fbe752d).
+
 
 ## Extras
 ### Expected Performance in Production
