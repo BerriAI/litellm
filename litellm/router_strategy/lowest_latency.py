@@ -8,6 +8,7 @@ import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import safe_divide_seconds
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -78,8 +79,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 current_minute = datetime.now().strftime("%M")
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms: timedelta = end_time - start_time
-                time_to_first_token_response_time: Optional[timedelta] = None
+                response_ms = end_time - start_time
+                time_to_first_token_response_time = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
@@ -96,14 +97,26 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = float(
-                            response_ms.total_seconds() / completion_tokens
-                        )
+                        
+                        # Handle both timedelta and float response times
+                        if isinstance(response_ms, timedelta):
+                            response_seconds = response_ms.total_seconds()
+                        else:
+                            response_seconds = response_ms
+                            
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if final_value is not None:
+                            final_value = float(final_value)
+                        else:
+                            final_value = response_ms
 
                         if time_to_first_token_response_time is not None:
-                            time_to_first_token = float(
-                                time_to_first_token_response_time.total_seconds()
-                                / completion_tokens
+                            if isinstance(time_to_first_token_response_time, timedelta):
+                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                            else:
+                                ttft_seconds = time_to_first_token_response_time
+                            time_to_first_token = safe_divide_seconds(
+                                ttft_seconds, completion_tokens
                             )
 
                 # ------------
@@ -288,8 +301,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 current_minute = datetime.now().strftime("%M")
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms: timedelta = end_time - start_time
-                time_to_first_token_response_time: Optional[timedelta] = None
+                response_ms = end_time - start_time
+                time_to_first_token_response_time = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = (
@@ -305,14 +318,26 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = float(
-                            response_ms.total_seconds() / completion_tokens
-                        )
+                        
+                        # Handle both timedelta and float response times
+                        if isinstance(response_ms, timedelta):
+                            response_seconds = response_ms.total_seconds()
+                        else:
+                            response_seconds = response_ms
+                            
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if final_value is not None:
+                            final_value = float(final_value)
+                        else:
+                            final_value = response_ms
 
                         if time_to_first_token_response_time is not None:
-                            time_to_first_token = float(
-                                time_to_first_token_response_time.total_seconds()
-                                / completion_tokens
+                            if isinstance(time_to_first_token_response_time, timedelta):
+                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                            else:
+                                ttft_seconds = time_to_first_token_response_time
+                            time_to_first_token = safe_divide_seconds(
+                                ttft_seconds, completion_tokens
                             )
                 # ------------
                 # Update usage
