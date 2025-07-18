@@ -22,7 +22,7 @@ export const columns = (
     ),
   },
   {
-    header: "User Email",
+    header: "Email",
     accessorKey: "user_email",
     cell: ({ row }) => (
       <span className="text-xs">{row.original.user_email || "-"}</span>
@@ -38,7 +38,7 @@ export const columns = (
     ),
   },
   {
-    header: "User Spend ($ USD)",
+    header: "Spend (USD)",
     accessorKey: "spend",
     cell: ({ row }) => (
       <span className="text-xs">
@@ -47,7 +47,7 @@ export const columns = (
     ),
   },
   {
-    header: "User Max Budget ($ USD)",
+    header: "Budget (USD)",
     accessorKey: "max_budget",
     cell: ({ row }) => (
       <span className="text-xs">
