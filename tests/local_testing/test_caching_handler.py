@@ -399,7 +399,9 @@ async def test_embedding_cache_model_field_consistency():
     assert cached_response.final_embedding_cached_response.model == original_model
     assert len(cached_response.final_embedding_cached_response.data) == 2
     assert cached_response.final_embedding_cached_response.data[0].embedding == [0.1, 0.2, 0.3]
+    assert cached_response.final_embedding_cached_response.data[0].index == 0
     assert cached_response.final_embedding_cached_response.data[1].embedding == [0.4, 0.5, 0.6]
+    assert cached_response.final_embedding_cached_response.data[1].index == 1
     
     # Verify cache hit flag is set
     assert cached_response.final_embedding_cached_response._hidden_params["cache_hit"] == True

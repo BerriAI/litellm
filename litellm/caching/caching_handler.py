@@ -35,7 +35,8 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.caching import S3Cache, CachedEmbedding
+from litellm.caching.caching import S3Cache
+from litellm.types.caching import CachedEmbedding
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )

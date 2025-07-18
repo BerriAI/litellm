@@ -36,14 +36,6 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 
-class CachedEmbedding(TypedDict):
-    """Type definition for cached embedding objects"""
-    embedding: List[float]
-    index: int
-    object: str
-    model: Optional[str]
-
-
 def print_verbose(print_statement):
     try:
         verbose_logger.debug(print_statement)
@@ -605,25 +597,25 @@ class Cache:
         try:
             if isinstance(embedding_response, dict):
                 return {
-                    "embedding": embedding_response["embedding"],
-                    "index": embedding_response["index"],
-                    "object": embedding_response["object"],
+                    "embedding": embedding_response.get("embedding"),
+                    "index": embedding_response.get("index"),
+                    "object": embedding_response.get("object"),
                     "model": model,
                 }
             elif hasattr(embedding_response, 'model_dump'):
                 data = embedding_response.model_dump()
                 return {
-                    "embedding": data["embedding"],
-                    "index": data["index"],
-                    "object": data["object"],
+                    "embedding": data.get("embedding"),
+                    "index": data.get("index"),
+                    "object": data.get("object"),
                     "model": model,
                 }
             else:
                 data = vars(embedding_response)
                 return {
-                    "embedding": data["embedding"],
-                    "index": data["index"],
-                    "object": data["object"],
+                    "embedding": data.get("embedding"),
+                    "index": data.get("index"),
+                    "object": data.get("object"),
                     "model": model,
                 }
         except KeyError as e:
@@ -643,7 +635,7 @@ class Cache:
         
         # Always convert to properly typed CachedEmbedding
         model_name = result.model
-        embedding_dict = self._convert_to_cached_embedding(embedding_response, model_name)
+        embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(embedding_response, model_name)
             
         cache_key, cached_data, kwargs = self._add_cache_logic(
             result=embedding_dict,
