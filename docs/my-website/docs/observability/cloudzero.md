@@ -133,6 +133,7 @@ If data isn't appearing in CloudZero:
 
 ## Support
 
-- CloudZero Documentation: https://docs.cloudzero.com/docs/unit-cost-analytics
-- CloudZero API Reference: https://docs.cloudzero.com/reference/postmetrictelemetry
+- CloudZero Documentation: https://docs.cloudzero.com/docs/cloudzero
+- CloudZero Unit Cost Analytics: https://docs.cloudzero.com/docs/cloudzero/cost-allocation/unit-cost-analytics
+- CloudZero API Reference: https://docs.cloudzero.com/reference
 - LiteLLM Issues: https://github.com/BerriAI/litellm/issues
