@@ -3727,6 +3727,64 @@
         "litellm_provider": "azure",
         "mode": "image_generation"
     },
+    "azure_ai/grok-3": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3.3e-06,
+        "output_cost_per_token": 16.5e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
+    "azure_ai/global/grok-3": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 15e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
+    "azure_ai/global/grok-3-mini": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.25e-06,
+        "output_cost_per_token": 1.27e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
+    "azure_ai/grok-3-mini": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 0.275e-06,
+        "output_cost_per_token": 1.38e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "supports_web_search": true
+    },
     "azure_ai/deepseek-r1": {
         "max_tokens": 8192,
         "max_input_tokens": 128000,
@@ -3771,6 +3829,16 @@
         "litellm_provider": "azure_ai",
         "mode": "chat",
         "supports_tool_choice": true
+    },
+    "azure_ai/jais-30b-chat": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 0.0032,
+        "output_cost_per_token": 0.00971,
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "source": "https://azure.microsoft.com/en-us/products/ai-services/ai-foundry/models/jais-30b-chat"
     },
     "azure_ai/mistral-nemo": {
         "max_tokens": 4096,
