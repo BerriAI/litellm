@@ -14,6 +14,7 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from litellm.integrations.braintrust_logging import BraintrustLogger
+from litellm.integrations.cloudzero import CloudZeroLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
@@ -46,6 +47,7 @@ class CustomLoggerRegistry:
     """
     CALLBACK_CLASS_STR_TO_CLASS_TYPE = {
         "lago": LagoLogger,
+        "cloudzero": CloudZeroLogger,
         "openmeter": OpenMeterLogger,
         "braintrust": BraintrustLogger,
         "galileo": GalileoObserve,
