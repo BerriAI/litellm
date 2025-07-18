@@ -329,6 +329,7 @@ from litellm.proxy.utils import (
     hash_token,
     update_spend,
 )
+from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
@@ -8715,6 +8716,7 @@ app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
+app.include_router(vector_store_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
