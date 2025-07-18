@@ -406,7 +406,6 @@ async def new_team(  # noqa: PLR0915
 
             _model_id = model_dict.id
 
-
         ## Handle Object Permission - MCP, Vector Stores etc.
         object_permission_id = await _set_object_permission(
             data=data,
@@ -447,27 +446,34 @@ async def new_team(  # noqa: PLR0915
                 budget_duration=complete_team_data.budget_duration,
             )
 
+        ## Add Team Member Budget Table
+        members_with_roles: List[Member] = []
+        if complete_team_data.members_with_roles is not None:
+            members_with_roles = complete_team_data.members_with_roles
+            complete_team_data.members_with_roles = []
+
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
         complete_team_data_dict = prisma_client.jsonify_team_object(
             db_data=complete_team_data_dict
         )
+
         team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.create(
             data=complete_team_data_dict,
             include={"litellm_model_table": True},  # type: ignore
         )
 
         ## ADD TEAM ID TO USER TABLE ##
-        for user in complete_team_data.members_with_roles:
-            ## add team id to user row ##
-            await prisma_client.update_data(
-                user_id=user.user_id,
-                data={"user_id": user.user_id, "teams": [team_row.team_id]},
-                update_key_values_custom_query={
-                    "teams": {
-                        "push ": [team_row.team_id],
-                    }
-                },
-            )
+        team_member_add_request = TeamMemberAddRequest(
+            team_id=data.team_id,
+            member=members_with_roles,
+        )
+        await _add_team_members_to_team(
+            data=team_member_add_request,
+            complete_team_data=team_row,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
@@ -1131,6 +1137,40 @@ async def _update_team_members_list(
                 complete_team_data.members_with_roles.append(nm)
 
 
+async def _add_team_members_to_team(
+    data: TeamMemberAddRequest,
+    complete_team_data: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> Tuple[LiteLLM_TeamTable, List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
+    """Add team members to the team."""
+    # Process and add new members
+    updated_users, updated_team_memberships = await _process_team_members(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+
+    # Update team members list
+    await _update_team_members_list(
+        data=data,
+        complete_team_data=complete_team_data,
+        updated_users=updated_users,
+    )
+
+    # ADD MEMBER TO TEAM
+    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
+    )
+
+    return updated_team, updated_users, updated_team_memberships
+
+
 @router.post(
     "/team/member_add",
     tags=["team management"],
@@ -1206,27 +1246,14 @@ async def team_member_add(
         complete_team_data=complete_team_data,
     )
 
-    # Process and add new members
-    updated_users, updated_team_memberships = await _process_team_members(
-        data=data,
-        complete_team_data=complete_team_data,
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_proxy_admin_name=litellm_proxy_admin_name,
-    )
-
-    # Update team members list
-    await _update_team_members_list(
-        data=data,
-        complete_team_data=complete_team_data,
-        updated_users=updated_users,
-    )
-
-    # ADD MEMBER TO TEAM
-    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
-    updated_team = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id},
-        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
+    updated_team, updated_users, updated_team_memberships = (
+        await _add_team_members_to_team(
+            data=data,
+            complete_team_data=complete_team_data,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
     )
 
     # Check if updated_team is None
