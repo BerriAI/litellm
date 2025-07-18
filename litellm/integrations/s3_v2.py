@@ -7,7 +7,6 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 """
 
 import asyncio
-import json
 from datetime import datetime
 from typing import List, Optional, cast
 
