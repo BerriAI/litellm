@@ -41,7 +41,7 @@ class CachedEmbedding(TypedDict):
     embedding: List[float]
     index: int
     object: str
-    model: str
+    model: Optional[str]
 
 
 def print_verbose(print_statement):
