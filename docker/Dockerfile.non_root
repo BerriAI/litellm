@@ -12,10 +12,8 @@ WORKDIR /app
 # Set the shell to bash
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Install build dependencies
-RUN apt-get clean && apt-get update && \
-    apt-get install -y gcc g++ python3-dev && \
-    rm -rf /var/lib/apt/lists/*
+# Install build dependencies (Alpine)
+RUN apk update && apk add --no-cache gcc g++ python3-dev
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir build
