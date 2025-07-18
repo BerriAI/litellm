@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, Literal, Optional, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 from pydantic import BaseModel
 
@@ -87,3 +87,11 @@ class HealthCheckCacheParams(BaseModel):
     redis_kwargs: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
     redis_version: Optional[Union[str, int, float]] = None
+
+
+class CachedEmbedding(TypedDict):
+    """Type definition for cached embedding objects"""
+    embedding: Optional[List[float]]
+    index: Optional[int]
+    object: Optional[str]
+    model: Optional[str]
