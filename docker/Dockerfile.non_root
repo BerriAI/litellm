@@ -41,6 +41,8 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
+# Ensure we are root for package installation
+USER root
 # Update dependencies and clean up - handles debian security issue
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 
@@ -86,6 +88,11 @@ RUN prisma generate
 ### End of Prisma Handling for Non-Root #########################################
 
 EXPOSE 4000/tcp
+
+USER root
+RUN apt-get update && apt-get install -y supervisor && rm -rf /var/lib/apt/lists/*
+USER nobody
+COPY docker/supervisord.conf /etc/supervisord.conf
 
 # # Set your entrypoint and command
 ENTRYPOINT ["docker/prod_entrypoint.sh"]

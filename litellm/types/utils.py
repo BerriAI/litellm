@@ -41,6 +41,7 @@ from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
+from .llms.base import HiddenParams
 from .llms.openai import (
     Batch,
     ChatCompletionAnnotation,
@@ -471,40 +472,6 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
-
-
-class HiddenParams(OpenAIObject):
-    original_response: Optional[Union[str, Any]] = None
-    model_id: Optional[str] = None  # used in Router for individual deployments
-    api_base: Optional[str] = None  # returns api base used for making completion call
-    _response_ms: Optional[float] = None
-
-    model_config = ConfigDict(extra="allow", protected_namespaces=())
-
-    def get(self, key, default=None):
-        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        # Allow dictionary-style access to attributes
-        return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        # Allow dictionary-style assignment of attributes
-        setattr(self, key, value)
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump()  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict()
-
-    def model_dump(self, **kwargs):
-        # Override model_dump to include private attributes
-        data = super().model_dump(**kwargs)
-        data["_response_ms"] = self._response_ms
-        return data
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
@@ -1821,7 +1788,7 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_request_route: Optional[str]
 
 
-class StandardLoggingMCPToolCall(TypedDict, total=False):    
+class StandardLoggingMCPToolCall(TypedDict, total=False):
     name: str
     """
     Name of the tool to call
@@ -1845,6 +1812,13 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Optional logo URL of the MCP server that the tool call was made to
 
     (this is to render the logo on the logs page on litellm ui)
+    """
+
+    namespaced_tool_name: Optional[str]
+    """
+    Namespaced tool name of the MCP tool that the tool call was made to
+
+    Includes the server name prefix if it exists - eg. `deepwiki-mcp/get_page_content`
     """
 
     mcp_server_cost_info: Optional[MCPServerCostInfo]
@@ -1979,9 +1953,16 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_message: Optional[str]
 
 
+class GuardrailMode(TypedDict, total=False):
+    tags: Optional[Dict[str, str]]
+    default: Optional[str]
+
+
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
-    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
+    guardrail_mode: Optional[
+        Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]
+    ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: Literal["success", "failure"]
@@ -2257,6 +2238,7 @@ class LlmProviders(str, Enum):
     CLARIFAI = "clarifai"
     ANTHROPIC = "anthropic"
     ANTHROPIC_TEXT = "anthropic_text"
+    BYTEZ = "bytez"
     REPLICATE = "replicate"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
@@ -2289,6 +2271,8 @@ class LlmProviders(str, Enum):
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DASHSCOPE = "dashscope"
+    MOONSHOT = "moonshot"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -2325,11 +2309,11 @@ class LlmProviders(str, Enum):
     SNOWFLAKE = "snowflake"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
+    PG_VECTOR = "pg_vector"
 
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
-
 
 class LiteLLMLoggingBaseClass:
     """

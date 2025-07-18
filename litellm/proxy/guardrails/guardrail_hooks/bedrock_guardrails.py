@@ -55,6 +55,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         guardrailIdentifier: Optional[str] = None,
         guardrailVersion: Optional[str] = None,
+        disable_exception_on_block: Optional[bool] = False,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -65,6 +66,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # store kwargs as optional_params
         self.optional_params = kwargs
+
+        self.disable_exception_on_block: bool = disable_exception_on_block or False
+        """
+        If True, will not raise an exception when the guardrail is blocked.
+        """
+        
 
         super().__init__(**kwargs)
         BaseAWSLLM.__init__(self)
@@ -262,12 +269,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if self._should_raise_guardrail_blocked_exception(
                 bedrock_guardrail_response
             ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Violated guardrail policy",
-                        "bedrock_guardrail_response": _json_response,
-                    },
+                raise self._get_http_exception_for_blocked_guardrail(
+                    bedrock_guardrail_response
                 )
         else:
             verbose_proxy_logger.error(
@@ -277,6 +280,30 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
 
         return bedrock_guardrail_response
+    
+
+    def _get_http_exception_for_blocked_guardrail(self, response: BedrockGuardrailResponse) -> HTTPException:
+        """
+        Get the HTTP exception for a blocked guardrail.
+        """
+        bedrock_guardrail_output_text: str = ""
+        outputs: Optional[List[BedrockGuardrailOutput]] = (
+            response.get("outputs", []) or []
+        )
+        if outputs:
+            for output in outputs:
+                if output.get("text"):
+                    bedrock_guardrail_output_text += output.get("text") or ""
+                
+        
+        return HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy", 
+                "bedrock_guardrail_response": bedrock_guardrail_output_text,
+            }
+        )
+
 
     def _should_raise_guardrail_blocked_exception(
         self, response: BedrockGuardrailResponse
@@ -289,6 +316,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # if user opted into masking, return False. since we'll use the masked output from the guardrail
         if self.mask_request_content or self.mask_response_content:
+            return False
+        
+        if self.disable_exception_on_block is True:
             return False
 
         # if no intervention, return False

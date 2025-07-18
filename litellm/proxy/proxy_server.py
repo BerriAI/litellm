@@ -169,6 +169,7 @@ from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
     get_complete_model_list,
     get_key_models,
+    get_mcp_server_ids,
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
@@ -299,6 +300,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
@@ -327,6 +329,7 @@ from litellm.proxy.utils import (
     hash_token,
     update_spend,
 )
+from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
@@ -353,6 +356,9 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseUsageBlock,
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    ModelGroupInfoProxy,
+)
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
@@ -480,7 +486,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -490,6 +496,7 @@ def cleanup_router_config_variables():
     user_custom_auth_path = None
     user_custom_key_generate = None
     user_custom_sso = None
+    user_custom_ui_sso_sign_in_handler = None
     use_background_health_checks = None
     health_check_interval = None
     prisma_client = None
@@ -637,6 +644,8 @@ async def proxy_startup_event(app: FastAPI):
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        await ProxyStartupEvent._update_default_team_member_budget()
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -726,6 +735,12 @@ def custom_openapi():
         if route in openapi_schema["paths"]:
             paths_to_include[route] = openapi_schema["paths"][route]
     openapi_schema["paths"] = paths_to_include
+
+    # Add LLM API request schema bodies for documentation
+    from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
+
+    openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
@@ -910,6 +925,7 @@ redis_usage_cache: Optional[RedisCache] = (
 user_custom_auth = None
 user_custom_key_generate = None
 user_custom_sso = None
+user_custom_ui_sso_sign_in_handler = None
 use_background_health_checks = None
 use_queue = False
 health_check_interval = None
@@ -1637,26 +1653,52 @@ class ProxyConfig:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
 
+    def _load_environment_variables(self, config: dict):
+        ## ENVIRONMENT VARIABLES
+        global premium_user
+        environment_variables = config.get("environment_variables", None)
+        if environment_variables:
+            for key, value in environment_variables.items():
+                #########################################################
+                # handles this scenario:
+                # ```yaml
+                # environment_variables:
+                #     ARIZE_ENDPOINT: os.environ/ARIZE_ENDPOINT
+                # ```
+                #########################################################
+                if isinstance(value, str) and value.startswith("os.environ/"):
+                    resolved_secret_string: Optional[str] = get_secret_str(
+                        secret_name=value
+                    )
+                    if resolved_secret_string is not None:
+                        os.environ[key] = resolved_secret_string
+                else:
+                    #########################################################
+                    # handles this scenario:
+                    # ```yaml
+                    # environment_variables:
+                    #     ARIZE_ENDPOINT: https://otlp.arize.com/v1
+                    # ```
+                    #########################################################
+                    os.environ[key] = str(value)
+
+            # check if litellm_license in general_settings
+            if "LITELLM_LICENSE" in environment_variables:
+                _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
+                premium_user = _license_check.is_premium()
+        return
+
     async def load_config(  # noqa: PLR0915
         self, router: Optional[litellm.Router], config_file_path: str
     ):
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
-        ## ENVIRONMENT VARIABLES
-        environment_variables = config.get("environment_variables", None)
-        if environment_variables:
-            for key, value in environment_variables.items():
-                os.environ[key] = str(get_secret(secret_name=key, default_value=value))
-
-            # check if litellm_license in general_settings
-            if "LITELLM_LICENSE" in environment_variables:
-                _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
-                premium_user = _license_check.is_premium()
+        self._load_environment_variables(config=config)
 
         ## Callback settings
         callback_settings = config.get("callback_settings", None)
@@ -1808,11 +1850,16 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                from litellm.integrations.prometheus import (
-                                    PrometheusLogger,
-                                )
+                                try:
+                                    from litellm_enterprise.integrations.prometheus import (
+                                        PrometheusLogger,
+                                    )
+                                except Exception:
+                                    PrometheusLogger = None
 
-                                PrometheusLogger._mount_metrics_endpoint(premium_user)
+                                if PrometheusLogger is not None:
+                                    verbose_proxy_logger.debug("mounting metrics endpoint")
+                                    PrometheusLogger._mount_metrics_endpoint(premium_user)
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -1868,6 +1915,7 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
+
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -1944,6 +1992,15 @@ class ProxyConfig:
             if custom_sso is not None:
                 user_custom_sso = get_instance_fn(
                     value=custom_sso, config_file_path=config_file_path
+                )
+
+            custom_ui_sso_sign_in_handler = general_settings.get(
+                "custom_ui_sso_sign_in_handler", None
+            )
+            if custom_ui_sso_sign_in_handler is not None:
+                user_custom_ui_sso_sign_in_handler = get_instance_fn(
+                    value=custom_ui_sso_sign_in_handler,
+                    config_file_path=config_file_path,
                 )
 
             if enterprise_proxy_config is not None:
@@ -3305,6 +3362,7 @@ class ProxyStartupEvent:
         asyncio.create_task(
             generate_key_helper_fn(  # type: ignore
                 request_type="user",
+                table_name="user",
                 user_id=litellm_proxy_budget_name,
                 duration=None,
                 models=[],
@@ -3320,6 +3378,23 @@ class ProxyStartupEvent:
                 },
             )
         )
+
+    @classmethod
+    async def _update_default_team_member_budget(cls):
+        """Update the default team member budget"""
+        if litellm.default_internal_user_params is None:
+            return
+
+        _teams = litellm.default_internal_user_params.get("teams") or []
+        if _teams and all(isinstance(team, dict) for team in _teams):
+            from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+                update_default_team_member_budget,
+            )
+
+            teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
+            await update_default_team_member_budget(
+                teams=teams_pydantic_obj, user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key))  # type: ignore
+            )
 
     @classmethod
     async def initialize_scheduled_background_jobs(
@@ -3347,6 +3422,7 @@ class ProxyStartupEvent:
                 proxy_logging_obj=proxy_logging_obj,
                 prisma_client=prisma_client,
             )
+
             scheduler.add_job(
                 budget_reset_job.reset_budget,
                 "interval",
@@ -3435,9 +3511,11 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
         if litellm.prometheus_initialize_budget_metrics is True:
-            from litellm.integrations.prometheus import PrometheusLogger
-
-            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+            try:
+                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+            except Exception:
+                PrometheusLogger = None
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
@@ -5710,7 +5788,9 @@ async def get_all_team_and_direct_access_models(
     direct_access_models: List[str] = []
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         user_teams = "*"
-        direct_access_models = llm_router.get_model_ids()  # has access to all models
+        direct_access_models = llm_router.get_model_ids(
+            exclude_team_models=True
+        )  # has access to all models
     elif user_api_key_dict.user_id is not None:
         user_db_object = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": user_api_key_dict.user_id}
@@ -5729,14 +5809,15 @@ async def get_all_team_and_direct_access_models(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
-
         for _model in all_models:
             model_id = _model.get("model_info", {}).get("id", None)
             team_only_model_id = _model.get("model_info", {}).get("team_id", None)
             if model_id is not None:
                 can_use_model = False
                 if team_only_model_id is not None:
-                    pass
+                    team_ids = team_models.get(model_id, [])
+                    if team_ids and team_only_model_id in team_ids:
+                        can_use_model = True
                 else:
                     can_use_model = True
                 if can_use_model:
@@ -6495,22 +6576,32 @@ async def model_info_v1(  # noqa: PLR0915
 
 def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
-) -> List[ModelGroupInfo]:
-    model_groups: List[ModelGroupInfo] = []
+) -> List[ModelGroupInfoProxy]:
+    model_groups: List[ModelGroupInfoProxy] = []
+    # ensure all_models_str is a set
+    all_models_str_set = set(all_models_str)
 
-    for model in all_models_str:
+    for model in all_models_str_set:
         if model_group is not None and model_group != model:
             continue
 
         _model_group_info = llm_router.get_model_group_info(model_group=model)
+
         if _model_group_info is not None:
-            model_groups.append(_model_group_info)
+            model_groups.append(ModelGroupInfoProxy(**_model_group_info.model_dump()))
         else:
-            model_group_info = ModelGroupInfo(
+            model_group_info = ModelGroupInfoProxy(
                 model_group=model,
                 providers=[],
             )
             model_groups.append(model_group_info)
+
+    ## check for public model groups
+    if litellm.public_model_groups is not None:
+        for mg in model_groups:
+            if mg.model_group in litellm.public_model_groups:
+                mg.is_public_model_group = True
+
     return model_groups
 
 
@@ -6735,7 +6826,7 @@ async def model_group_info(
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
     )
-    model_groups: List[ModelGroupInfo] = _get_model_group_info(
+    model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
     )
 
@@ -8574,21 +8665,21 @@ async def get_routes():
     """
     Get a list of available routes in the FastAPI application.
     """
+    from litellm.proxy.common_utils.get_routes import GetRoutes
+
     routes = []
     for route in app.routes:
         endpoint_route = getattr(route, "endpoint", None)
         if endpoint_route is not None:
-            route_info = {
-                "path": getattr(route, "path", None),
-                "methods": getattr(route, "methods", None),
-                "name": getattr(route, "name", None),
-                "endpoint": (
-                    endpoint_route.__name__
-                    if getattr(route, "endpoint", None)
-                    else None
-                ),
-            }
-            routes.append(route_info)
+            routes.extend(
+                GetRoutes.get_app_routes(
+                    route=route,
+                    endpoint_route=endpoint_route,
+                )
+            )
+        # Handle mounted sub-applications (like MCP app)
+        elif hasattr(route, "app") and hasattr(route, "path"):
+            routes.extend(GetRoutes.get_routes_for_mounted_app(route=route))
 
     return {"routes": routes}
 
@@ -8621,9 +8712,11 @@ async def get_routes():
 app.include_router(router)
 app.include_router(response_router)
 app.include_router(batches_router)
+app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
+app.include_router(vector_store_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
