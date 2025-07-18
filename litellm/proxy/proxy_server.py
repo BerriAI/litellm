@@ -1804,6 +1804,11 @@ class ProxyConfig:
                         litellm_settings=litellm_settings,
                     )
 
+                elif key == "model_group_settings":
+                    from litellm.types.router import ModelGroupSettings
+
+                    litellm.model_group_settings = ModelGroupSettings(**value)
+
                 elif key == "post_call_rules":
                     litellm.post_call_rules = [
                         get_instance_fn(value=value, config_file_path=config_file_path)
