@@ -79,8 +79,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 current_minute = datetime.now().strftime("%M")
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms = end_time - start_time
-                time_to_first_token_response_time = None
+                response_ms: Union[timedelta, float] = end_time - start_time
+                time_to_first_token_response_time: Optional[Union[timedelta, float]] = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
@@ -88,7 +88,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         kwargs.get("completion_start_time", end_time) - start_time
                     )
 
-                final_value = response_ms
+                final_value: Union[float, timedelta] = response_ms
                 time_to_first_token: Optional[float] = None
                 total_tokens = 0
 
@@ -290,15 +290,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 current_minute = datetime.now().strftime("%M")
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms = end_time - start_time
-                time_to_first_token_response_time = None
+                response_ms: Union[timedelta, float] = end_time - start_time
+                time_to_first_token_response_time: Optional[Union[timedelta, float]] = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = (
                         kwargs.get("completion_start_time", end_time) - start_time
                     )
 
-                final_value = response_ms
+                final_value: Union[float, timedelta] = response_ms
                 total_tokens = 0
                 time_to_first_token: Optional[float] = None
 
