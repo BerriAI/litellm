@@ -97,13 +97,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = safe_divide_seconds(response_ms, completion_tokens, default=response_ms)
+                        response_seconds = response_ms.total_seconds() if isinstance(response_ms, timedelta) else response_ms
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens, default=response_seconds)
                         if final_value is None:
                             final_value = response_ms
 
                         if time_to_first_token_response_time is not None:
+                            ttft_seconds = time_to_first_token_response_time.total_seconds() if isinstance(time_to_first_token_response_time, timedelta) else time_to_first_token_response_time
                             time_to_first_token = safe_divide_seconds(
-                                time_to_first_token_response_time, completion_tokens
+                                ttft_seconds, completion_tokens
                             )
 
                 # ------------
@@ -305,13 +307,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = safe_divide_seconds(response_ms, completion_tokens, default=response_ms)
+                        response_seconds = response_ms.total_seconds() if isinstance(response_ms, timedelta) else response_ms
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens, default=response_seconds)
                         if final_value is None:
                             final_value = response_ms
 
                         if time_to_first_token_response_time is not None:
+                            ttft_seconds = time_to_first_token_response_time.total_seconds() if isinstance(time_to_first_token_response_time, timedelta) else time_to_first_token_response_time
                             time_to_first_token = safe_divide_seconds(
-                                time_to_first_token_response_time, completion_tokens
+                                ttft_seconds, completion_tokens
                             )
                 # ------------
                 # Update usage

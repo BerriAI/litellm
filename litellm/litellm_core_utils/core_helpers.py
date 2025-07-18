@@ -17,15 +17,15 @@ else:
 
 
 def safe_divide_seconds(
-    time_duration: Union[timedelta, float], 
+    seconds: float, 
     denominator: float,
     default: Optional[float] = None
 ) -> Optional[float]:
     """
-    Safely divide time duration in seconds by denominator, handling zero division.
+    Safely divide seconds by denominator, handling zero division.
     
     Args:
-        time_duration: Either a timedelta object or float representing seconds
+        seconds: Time duration in seconds
         denominator: The divisor (e.g., number of tokens)
         default: Value to return if division by zero (defaults to None)
         
@@ -35,7 +35,6 @@ def safe_divide_seconds(
     if denominator <= 0:
         return default
         
-    seconds = time_duration.total_seconds() if isinstance(time_duration, timedelta) else time_duration
     return float(seconds / denominator)
 
 
