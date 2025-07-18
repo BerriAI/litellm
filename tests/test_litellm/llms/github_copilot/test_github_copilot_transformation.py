@@ -126,3 +126,38 @@ def test_completion_github_copilot_mock_response(mock_completion, mock_get_api_k
     assert kwargs.get("messages") == messages
 
 
+def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
+    """Test that system messages are converted to assistant unless disable_copilot_system_to_assistant is True."""
+    from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
+    import litellm
+
+    # Save original value
+    original_flag = litellm.disable_copilot_system_to_assistant
+    try:
+        # Case 1: Flag is False (default, conversion happens)
+        litellm.disable_copilot_system_to_assistant = False
+        config = GithubCopilotConfig()
+        messages = [
+            {"role": "system", "content": "System message."},
+            {"role": "user", "content": "User message."},
+        ]
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        assert out[0]["role"] == "assistant"
+        assert out[1]["role"] == "user"
+
+        # Case 2: Flag is True (conversion does not happen)
+        litellm.disable_copilot_system_to_assistant = True
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        assert out[0]["role"] == "system"
+        assert out[1]["role"] == "user"
+
+        # Case 3: Flag is False again (conversion happens)
+        litellm.disable_copilot_system_to_assistant = False
+        out = config._transform_messages([m.copy() for m in messages], model="github_copilot/gpt-4")
+        assert out[0]["role"] == "assistant"
+        assert out[1]["role"] == "user"
+    finally:
+        # Restore original value
+        litellm.disable_copilot_system_to_assistant = original_flag
+
+
