@@ -83,7 +83,9 @@ class GuardrailsAI(CustomGuardrail):
         ]
         super().__init__(supported_event_hooks=supported_event_hooks, **kwargs)
 
-    async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict):
+    async def make_guardrails_ai_api_request(
+        self, llm_output: str, request_data: dict
+    ) -> GuardrailsAIResponse:
         from httpx import URL
 
         data = {

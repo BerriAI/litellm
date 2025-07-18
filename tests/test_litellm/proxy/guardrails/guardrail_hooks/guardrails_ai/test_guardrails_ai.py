@@ -15,6 +15,9 @@ from litellm.types.utils import Choices, Message, ModelResponse
 @pytest.mark.asyncio
 async def test_guardrails_ai_process_input():
     """Test the process_input method of GuardrailsAI with various scenarios"""
+    from litellm.proxy.guardrails.guardrail_hooks.guardrails_ai.guardrails_ai import (
+        GuardrailsAIResponse,
+    )
 
     # Initialize the GuardrailsAI instance
     guardrails_ai_guardrail = GuardrailsAI(
@@ -27,7 +30,9 @@ async def test_guardrails_ai_process_input():
     with patch.object(
         guardrails_ai_guardrail,
         "make_guardrails_ai_api_request",
-        return_value="processed text",
+        return_value=GuardrailsAIResponse(
+            rawLlmOutput="processed text",
+        ),
     ) as mock_api_request:
 
         data = {
@@ -53,7 +58,9 @@ async def test_guardrails_ai_process_input():
     with patch.object(
         guardrails_ai_guardrail,
         "make_guardrails_ai_api_request",
-        return_value="async processed text",
+        return_value=GuardrailsAIResponse(
+            rawLlmOutput="async processed text",
+        ),
     ) as mock_api_request:
 
         data = {"messages": [{"role": "user", "content": "What is the weather?"}]}
@@ -100,7 +107,9 @@ async def test_guardrails_ai_process_input():
     with patch.object(
         guardrails_ai_guardrail,
         "make_guardrails_ai_api_request",
-        return_value="sanitized message",
+        return_value=GuardrailsAIResponse(
+            rawLlmOutput="sanitized message",
+        ),
     ) as mock_api_request:
 
         data = {
