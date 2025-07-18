@@ -40,9 +40,14 @@ class GCSBucketBase(CustomBatchLogger):
         if vertex_instance is None:
             vertex_instance = vertex_chat_completion
 
+        # Get project_id from environment if available, otherwise None
+        # This helps support use of this library to auth to pull secrets 
+        # from Secret Manager.
+        project_id = os.getenv("GOOGLE_SECRET_MANAGER_PROJECT_ID")
+        
         _auth_header, vertex_project = await vertex_instance._ensure_access_token_async(
             credentials=service_account_json,
-            project_id=None,
+            project_id=project_id,
             custom_llm_provider="vertex_ai",
         )
 
