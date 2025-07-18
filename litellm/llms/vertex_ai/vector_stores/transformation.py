@@ -83,6 +83,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform search request for Vertex AI RAG API
@@ -94,12 +95,19 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         # Vertex AI RAG API endpoint for retrieving contexts
         url = f"{api_base}:retrieveContexts"
         
+        # Use helper methods to get project and location, then construct full rag corpus path
+        vertex_project = self.get_vertex_ai_project(litellm_params)
+        vertex_location = self.get_vertex_ai_location(litellm_params)
+        
+        # Construct full rag corpus path
+        full_rag_corpus = f"projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{vector_store_id}"
+        
         # Build the request body for Vertex AI RAG API
         request_body: Dict[str, Any] = {
             "vertex_rag_store": {
                 "rag_resources": [
                     {
-                        "rag_corpus": vector_store_id
+                        "rag_corpus": full_rag_corpus
                     }
                 ]
             },

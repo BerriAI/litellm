@@ -83,6 +83,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
     ) -> Tuple[str, Dict]:
         url = f"{api_base}/{vector_store_id}/search"
         typed_request_body = VectorStoreSearchRequest(
