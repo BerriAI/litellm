@@ -905,7 +905,7 @@ async def test_router_forward_client_headers_by_model_group():
     from litellm.types.router import ModelGroupSettings
 
     litellm.model_group_settings = ModelGroupSettings(
-        forward_client_headers_to_llm_api=["gpt-3.5-turbo-allow"]
+        forward_client_headers_to_llm_api=["gpt-3.5-turbo-allow", "openai/*"]
     )
 
     router = litellm.Router(
@@ -922,9 +922,22 @@ async def test_router_forward_client_headers_by_model_group():
                     "model": "gpt-3.5-turbo",
                 },
             },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                },
+            },
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                },
+            },
         ],
     )
 
+    ## Scenario 1: Direct model name
     with patch.object(
         litellm.main, "completion", return_value=MagicMock()
     ) as mock_completion:
@@ -932,8 +945,36 @@ async def test_router_forward_client_headers_by_model_group():
             model="gpt-3.5-turbo-allow",
             messages=[{"role": "user", "content": "Hello, world!"}],
             mock_response="Hello, world!",
-            proxy_server_request={"headers": {"test": "test"}},
+            secret_fields={"raw_headers": {"test": "test"}},
         )
 
         mock_completion.assert_called_once()
         print(mock_completion.call_args.kwargs["headers"])
+
+    ## Scenario 2: Wildcard model name
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="openai/gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])
+
+    ## Scenario 3: Not in model_group_settings
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs.get("headers") is None
