@@ -230,10 +230,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         from litellm.responses.utils import ResponseAPILoggingUtils
         from litellm.types.llms.openai import ResponsesAPIResponse
-        from litellm.types.responses.main import (
-            GenericResponseOutputItem,
-            OutputFunctionToolCall,
-        )
         from litellm.types.utils import Choices, Message
 
         if not isinstance(raw_response, ResponsesAPIResponse):
@@ -277,13 +273,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     Choices(message=msg, finish_reason="tool_calls", index=index)
                 )
                 index += 1
-            elif isinstance(item, GenericResponseOutputItem):
-                raise ValueError("GenericResponseOutputItem not supported")
-            elif isinstance(item, OutputFunctionToolCall):
-                # function/tool calls pass through as-is
-                raise ValueError("Function calling not supported yet.")
             else:
-                raise ValueError(f"Unknown item type: {item}")
+                pass  # don't fail request if item in list is not supported
 
         if len(choices) == 0:
             if (
@@ -292,6 +283,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ):
                 raise ValueError(
                     f"{model} unable to complete request: {raw_response.incomplete_details.reason}"
+                )
+            else:
+                raise ValueError(
+                    f"Unknown items in responses API response: {raw_response.output}"
                 )
 
         setattr(model_response, "choices", choices)
@@ -454,17 +449,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         """Convert chat completion tools to responses API tools format"""
         responses_tools = []
         for tool in tools:
-            if tool.get("type") == "function":
-                function = tool.get("function", {})
-                responses_tools.append(
-                    {
-                        "type": "function",
-                        "name": function.get("name", ""),
-                        "description": function.get("description", ""),
-                        "parameters": function.get("parameters", {}),
-                        "strict": function.get("strict", False),
-                    }
-                )
+            responses_tools.append(tool)
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
     def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
@@ -647,7 +632,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
-                            index=parsed_chunk.get("summary_index"), delta=Delta(reasoning_content=content_part)
+                            index=cast(int, parsed_chunk.get("summary_index")),
+                            delta=Delta(reasoning_content=content_part),
                         )
                     ]
                 )

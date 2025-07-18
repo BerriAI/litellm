@@ -567,14 +567,17 @@ const Teams: React.FC<TeamProps> = ({
                   if (teams == null) {
                     return teams;
                   }
-
-                  return teams.map((team) => {
+                  const updated = teams.map((team) => {
                     if (data.team_id === team.team_id) {
                       return updateExistingKeys(team, data);
                     }
-
                     return team;
                   });
+                  // Minimal fix: refresh the full team list after an update
+                  if (accessToken) {
+                    fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
+                  }
+                  return updated;
                 });
               }}
               onClose={() => {
@@ -1337,15 +1340,11 @@ const Teams: React.FC<TeamProps> = ({
                         <NumericalInput step={0.01} precision={2} width={200} />
                       </Form.Item>
                       <Form.Item
-                        label="Team Member Key Duration"
+                        label="Team Member Key Duration (eg: 1d, 1mo)"
                         name="team_member_key_duration"
-                        tooltip="Set a limit to the duration of a team member's key."
+                        tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                       >
-                        <Select2 defaultValue={null} placeholder="n/a">
-                          <Select2.Option value="1d">1 day</Select2.Option>
-                          <Select2.Option value="1w">1 week</Select2.Option>
-                          <Select2.Option value="1mo">1 month</Select2.Option>
-                        </Select2>
+                        <TextInput placeholder="e.g., 30d" />
                       </Form.Item>
                       <Form.Item
                         label="Metadata"

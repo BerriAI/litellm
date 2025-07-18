@@ -73,6 +73,7 @@ const sidebars = {
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
         "tutorials/litellm_gemini_cli",
+        "tutorials/github_copilot_integration",
         "tutorials/claude_responses_api",
       ]
     },
@@ -275,6 +276,14 @@ const sidebars = {
           "items": [
             "audio_transcription",
             "text_to_speech",
+          ]
+        },
+        {
+          type: "category",
+          label: "/vector_stores",
+          items: [
+            "vector_stores/create",
+            "vector_stores/search",
           ]
         },
         {

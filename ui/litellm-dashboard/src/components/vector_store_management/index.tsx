@@ -121,7 +121,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
           className="mb-4"
           onClick={() => setIsCreateModalVisible(true)}
         >
-          + Create Vector Store
+          + Add Vector Store
         </TremorButton>
 
         <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
