@@ -905,7 +905,11 @@ async def test_router_forward_client_headers_by_model_group():
     from litellm.types.router import ModelGroupSettings
 
     litellm.model_group_settings = ModelGroupSettings(
-        forward_client_headers_to_llm_api=["gpt-3.5-turbo-allow", "openai/*"]
+        forward_client_headers_to_llm_api=[
+            "gpt-3.5-turbo-allow",
+            "openai/*",
+            "gpt-3.5-turbo-custom",
+        ]
     )
 
     router = litellm.Router(
@@ -935,6 +939,9 @@ async def test_router_forward_client_headers_by_model_group():
                 },
             },
         ],
+        model_group_alias={
+            "gpt-3.5-turbo-custom": "gpt-3.5-turbo-disallow",
+        },
     )
 
     ## Scenario 1: Direct model name
@@ -978,3 +985,17 @@ async def test_router_forward_client_headers_by_model_group():
 
         mock_completion.assert_called_once()
         assert mock_completion.call_args.kwargs.get("headers") is None
+
+    ## Scenario 4: Model group alias
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="gpt-3.5-turbo-custom",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])

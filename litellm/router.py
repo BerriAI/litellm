@@ -1215,7 +1215,12 @@ class Router:
         """
         kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
-        kwargs.setdefault(metadata_variable_name, {}).update({"model_group": model})
+        model_group_alias: Optional[str] = None
+        if self._get_model_from_alias(model=model):
+            model_group_alias = model
+        kwargs.setdefault(metadata_variable_name, {}).update(
+            {"model_group": model, "model_group_alias": model_group_alias}
+        )
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
