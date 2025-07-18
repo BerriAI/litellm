@@ -64,12 +64,6 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
       
       setSearchHistory(prev => [historyEntry, ...prev]);
       setQuery("");
-      
-      if (response && response.data && response.data.length > 0) {
-        message.success(`Found ${response.data.length} results`);
-      } else {
-        message.info("No results found");
-      }
     } catch (error) {
       console.error("Error searching vector store:", error);
       message.error("Failed to search vector store");
