@@ -374,12 +374,14 @@ class LLMCachingHandler:
             prompt_tokens = 0
             for val in non_null_list:
                 idx, cr = val  # (idx, cr) tuple
-                if cr is not None and cr.get("embedding") is not None:
-                    final_embedding_cached_response.data[idx] = Embedding(
-                        embedding=cr["embedding"],
-                        index=idx,
-                        object="embedding",
-                    )
+                if cr is not None:
+                    embedding_data = cr.get("embedding")
+                    if embedding_data is not None:
+                        final_embedding_cached_response.data[idx] = Embedding(
+                            embedding=embedding_data,
+                            index=idx,
+                            object="embedding",
+                        )
                     if isinstance(kwargs_input_as_list[idx], str):
                         from litellm.utils import token_counter
 
