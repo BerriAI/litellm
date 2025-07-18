@@ -39,6 +39,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         headers.update(
             {
                 "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
             }
         )
 
