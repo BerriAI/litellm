@@ -252,6 +252,7 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
+    AzureBlobCache,
     Cache,
     QdrantSemanticCache,
     RedisCache,
@@ -800,6 +801,7 @@ def function_setup(  # noqa: PLR0915
         litellm_params: Dict[str, Any] = {"api_base": ""}
         if "metadata" in kwargs:
             litellm_params["metadata"] = kwargs["metadata"]
+
         logging_obj.update_environment_variables(
             model=model,
             user="",
@@ -1152,6 +1154,7 @@ def client(original_function):  # noqa: PLR0915
                 and (
                     call_type == CallTypes.acompletion.value
                     or call_type == CallTypes.completion.value
+                    or call_type == CallTypes.anthropic_messages.value
                 )
             ):
                 try:
@@ -1370,6 +1373,40 @@ def client(original_function):  # noqa: PLR0915
             elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                 return _caching_handler_response.final_embedding_cached_response
 
+            # CHECK MAX TOKENS
+            if (
+                kwargs.get("max_tokens", None) is not None
+                and model is not None
+                and litellm.modify_params
+                is True  # user is okay with params being modified
+                and (
+                    call_type == CallTypes.acompletion.value
+                    or call_type == CallTypes.completion.value
+                    or call_type == CallTypes.anthropic_messages.value
+                )
+            ):
+                try:
+                    base_model = model
+                    if kwargs.get("hf_model_name", None) is not None:
+                        base_model = f"huggingface/{kwargs.get('hf_model_name')}"
+                    messages = None
+                    if len(args) > 1:
+                        messages = args[1]
+                    elif kwargs.get("messages", None):
+                        messages = kwargs["messages"]
+                    user_max_tokens = kwargs.get("max_tokens")
+                    modified_max_tokens = get_modified_max_tokens(
+                        model=model,
+                        base_model=base_model,
+                        messages=messages,
+                        user_max_tokens=user_max_tokens,
+                        buffer_num=None,
+                        buffer_perc=None,
+                    )
+                    kwargs["max_tokens"] = modified_max_tokens
+                except Exception as e:
+                    print_verbose(f"Error while checking max token limit: {str(e)}")
+
             # MODEL CALL
             result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -1584,7 +1621,6 @@ def _is_streaming_request(
     ):
         return True
     #########################################################
-
     return False
 
 
@@ -2415,6 +2451,7 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[bool] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -2451,6 +2488,7 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
+        "input_fidelity": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -2510,13 +2548,29 @@ def get_optional_params_image_gen(
             non_default_params=non_default_params, optional_params={}
         )
     elif custom_llm_provider == "vertex_ai":
-        supported_params = ["n"]
+        supported_params = ["n", "size"]
         """
         All params here: https://console.cloud.google.com/vertex-ai/publishers/google/model-garden/imagegeneration?project=adroit-crow-413218
         """
         _check_valid_arg(supported_params=supported_params)
         if n is not None:
             optional_params["sampleCount"] = int(n)
+
+        # Map OpenAI size parameter to Vertex AI aspectRatio
+        if size is not None:
+            # Map OpenAI size strings to Vertex AI aspect ratio strings
+            # Vertex AI accepts: "1:1", "9:16", "16:9", "4:3", "3:4"
+            size_to_aspect_ratio = {
+                "256x256": "1:1",  # Square
+                "512x512": "1:1",  # Square
+                "1024x1024": "1:1",  # Square (default)
+                "1792x1024": "16:9",  # Landscape
+                "1024x1792": "9:16",  # Portrait
+            }
+            aspect_ratio = size_to_aspect_ratio.get(
+                size, "1:1"
+            )  # Default to square if size not recognized
+            optional_params["aspectRatio"] = aspect_ratio
 
     for k in passed_params.keys():
         if k not in default_params.keys():
@@ -4334,7 +4388,7 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
 
 
 def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
-    if custom_llm_provider and custom_llm_provider == "bedrock":
+    if custom_llm_provider and custom_llm_provider in ["bedrock", "bedrock_converse"]:
         stripped_bedrock_model = _get_base_bedrock_model(model_name=model)
         return stripped_bedrock_model
     elif custom_llm_provider and (
@@ -5295,6 +5349,16 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("NEBIUS_API_KEY")
+        elif custom_llm_provider == "dashscope":
+            if "DASHSCOPE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("DASHSCOPE_API_KEY")
+        elif custom_llm_provider == "moonshot":
+            if "MOONSHOT_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MOONSHOT_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -5660,7 +5724,9 @@ class TextCompletionStreamWrapper:
                 chunk, Choices
             ):  # chunk should always be of type StreamingChoices
                 raise Exception
-            text_choices["text"] = chunk["choices"][0]["delta"]["content"]
+            delta = chunk["choices"][0]["delta"]
+            text_choices["text"] = delta["content"]
+            text_choices["reasoning_content"] = delta.get("reasoning_content")
             text_choices["index"] = chunk["choices"][0]["index"]
             text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
             response["choices"] = [text_choices]
@@ -5941,6 +6007,7 @@ def trim_messages(
     """
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
+    original_messages = messages
     messages = copy.deepcopy(messages)
     try:
         if max_tokens is None:
@@ -5969,6 +6036,7 @@ def trim_messages(
             if message["role"] != "tool":
                 break
             tool_messages.append(message)
+        tool_messages.reverse()
         # # Remove the collected tool messages from the original list
         if len(tool_messages):
             messages = messages[: -len(tool_messages)]
@@ -5978,7 +6046,7 @@ def trim_messages(
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
-            return messages
+            return messages + tool_messages
 
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(
@@ -6023,7 +6091,7 @@ def trim_messages(
         verbose_logger.exception(
             "Got exception while token trimming - {}".format(str(e))
         )
-        return messages
+        return original_messages
 
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -6571,6 +6639,14 @@ def validate_chat_completion_tool_choice(
     elif isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
+        # Handle Cursor IDE format: {"type": "auto"} -> return as-is
+        if (
+            tool_choice.get("type") in ["auto", "none", "required"]
+            and "function" not in tool_choice
+        ):
+            return tool_choice
+
+        # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
             raise Exception(
                 f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
@@ -6589,6 +6665,7 @@ class ProviderConfigManager:
         """
         Returns the provider config for a given provider.
         """
+
         if (
             provider == LlmProviders.OPENAI
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
@@ -6598,6 +6675,8 @@ class ProviderConfigManager:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
+        elif litellm.LlmProviders.BYTEZ == provider:
+            return litellm.BytezChatConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
@@ -6652,6 +6731,8 @@ class ProviderConfigManager:
             return litellm.EmpowerChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
@@ -6742,11 +6823,16 @@ class ProviderConfigManager:
             return litellm.NovitaConfig()
         elif litellm.LlmProviders.NEBIUS == provider:
             return litellm.NebiusConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            return litellm.DashScopeChatConfig()
+        elif litellm.LlmProviders.MOONSHOT == provider:
+            return litellm.MoonshotChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
                 model=model
             )
+
             base_model = BedrockModelInfo.get_base_model(model)
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
@@ -6760,10 +6846,13 @@ class ProviderConfigManager:
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
-                if base_model.startswith("anthropic.claude-3"):
-                    return litellm.AmazonAnthropicClaude3Config()
-                else:
+                if (
+                    base_model
+                    in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
+                ):
                     return litellm.AmazonAnthropicConfig()
+                else:
+                    return litellm.AmazonAnthropicClaude3Config()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
@@ -6868,6 +6957,7 @@ class ProviderConfigManager:
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,
             )
+
             return ElevenLabsAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             if "gpt-4o" in model:
@@ -7009,6 +7099,24 @@ class ProviderConfigManager:
             )
 
             return AzureOpenAIVectorStoreConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.vector_stores.transformation import (
+                VertexVectorStoreConfig,
+            )
+
+            return VertexVectorStoreConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.vector_stores.transformation import (
+                BedrockVectorStoreConfig,
+            )
+
+            return BedrockVectorStoreConfig()
+        elif litellm.LlmProviders.PG_VECTOR == provider:
+            from litellm.llms.pg_vector.vector_stores.transformation import (
+                PGVectorStoreConfig,
+            )
+
+            return PGVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7028,6 +7136,12 @@ class ProviderConfigManager:
             )
 
             return get_azure_image_generation_config(model)
+        elif LlmProviders.XINFERENCE == provider:
+            from litellm.llms.xinference.image_generation import (
+                get_xinference_image_generation_config,
+            )
+
+            return get_xinference_image_generation_config(model)
         return None
 
     @staticmethod
@@ -7075,7 +7189,22 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.google_genai.transformation import (
                 VertexAIGoogleGenAIConfig,
             )
+            from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+                VertexAIPartnerModels,
+            )
 
+            #########################################################
+            # If Vertex Partner models like Anthropic, Mistral, etc. are used,
+            # return None as we want this to go through the litellm.completion() adapter
+            # and not the Google Gen AI adapter
+            #########################################################
+            if VertexAIPartnerModels.is_vertex_partner_model(model):
+                return None
+
+            #########################################################
+            # If the model is not a Vertex Partner model, return the Vertex AI Google Gen AI Config
+            # This is for Vertex `gemini` models
+            #########################################################
             return VertexAIGoogleGenAIConfig()
         return None
 
@@ -7350,3 +7479,13 @@ def get_empty_usage() -> Usage:
         completion_tokens=0,
         total_tokens=0,
     )
+
+
+def should_run_mock_completion(
+    mock_response: Optional[Any],
+    mock_tool_calls: Optional[Any],
+    mock_timeout: Optional[Any],
+) -> bool:
+    if mock_response or mock_tool_calls or mock_timeout:
+        return True
+    return False

@@ -142,19 +142,61 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+class KeyAndTeamLoggingSettings:
+    """
+    Helper class to get the dynamic logging settings for the key and team
+    """
+
+    @staticmethod
+    def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+        if (
+            user_api_key_dict.metadata is not None
+            and "logging" in user_api_key_dict.metadata
+        ):
+            return user_api_key_dict.metadata["logging"]
+        return None
+
+    @staticmethod
+    def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+        if (
+            user_api_key_dict.team_metadata is not None
+            and "logging" in user_api_key_dict.team_metadata
+        ):
+            return user_api_key_dict.team_metadata["logging"]
+        return None
+
+
 def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    if (
-        user_api_key_dict.metadata is not None
-        and "logging" in user_api_key_dict.metadata
-    ):
-        for item in user_api_key_dict.metadata["logging"]:
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
+    #########################################################################################
+    # Key-based callbacks
+    #########################################################################################
+    if key_dynamic_logging_settings is not None:
+        for item in key_dynamic_logging_settings:
             callback_settings_obj = convert_key_logging_metadata_to_callback(
                 data=AddTeamCallback(**item),
                 team_callback_settings_obj=callback_settings_obj,
             )
+    #########################################################################################
+    # Team-based callbacks
+    #########################################################################################
+    elif team_dynamic_logging_settings is not None:
+        for item in team_dynamic_logging_settings:
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+    #########################################################################################
+    # Deprecated format - maintained for backwards compatibility
+    #########################################################################################
     elif (
         user_api_key_dict.team_metadata is not None
         and "callback_settings" in user_api_key_dict.team_metadata
@@ -174,6 +216,9 @@ def _get_dynamic_logging_metadata(
         verbose_proxy_logger.debug(
             "Team callback settings activated: %s", callback_settings_obj
         )
+    #########################################################################################
+    # Enter here when configured on the config.yaml file.
+    #########################################################################################
     elif user_api_key_dict.team_id is not None:
         callback_settings_obj = (
             LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
@@ -235,12 +280,16 @@ class LiteLLMProxyRequestSetup:
         Get the headers that should be forwarded to the LLM Provider.
 
         Looks for any `x-` headers and sends them to the LLM Provider.
+
+        [07/09/2025] - Support 'anthropic-beta' header as well.
         """
         forwarded_headers = {}
         for header, value in headers.items():
             if header.lower().startswith("x-") and not header.lower().startswith(
                 "x-stainless"
             ):  # causes openai sdk to fail
+                forwarded_headers[header] = value
+            elif header.lower().startswith("anthropic-beta"):
                 forwarded_headers[header] = value
 
         return forwarded_headers

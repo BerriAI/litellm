@@ -520,11 +520,13 @@ def unpack_defs(schema: dict, defs: dict) -> None:
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, seen_ids)
-    queue: deque[tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]] = deque([(schema, None, None, root_defs, set())])
-    
+    queue: deque[
+        tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]
+    ] = deque([(schema, None, None, root_defs, set())])
+
     while queue:
         node, parent, key, active_defs, seen = queue.popleft()
-        
+
         # Avoid infinite loops on self-referential schemas
         if id(node) in seen:
             continue
@@ -560,7 +562,7 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                     schema.clear()
                     schema.update(resolved)
                     resolved = schema
-                
+
                 # Add resolved node to queue for further processing
                 queue.append((resolved, parent, key, child_defs, seen))
                 continue
@@ -750,3 +752,73 @@ def migrate_file_to_image_url(
     if format and isinstance(image_url_object["image_url"], dict):
         image_url_object["image_url"]["format"] = format
     return image_url_object
+
+
+def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
+    """
+    Get the last consecutive block of messages from the user.
+
+    Example:
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {"role": "assistant", "content": "I'm good, thank you!"},
+        {"role": "user", "content": "What is the weather in Tokyo?"},
+    ]
+    get_user_prompt(messages) -> "What is the weather in Tokyo?"
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_content_list_to_str,
+    )
+
+    if not messages:
+        return None
+
+    # Iterate from the end to find the last consecutive block of user messages
+    user_messages = []
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            user_messages.append(message)
+        else:
+            # Stop when we hit a non-user message
+            break
+
+    if not user_messages:
+        return None
+
+    # Reverse to get the messages in chronological order
+    user_messages.reverse()
+
+    user_prompt = ""
+    for message in user_messages:
+        text_content = convert_content_list_to_str(message)
+        user_prompt += text_content + "\n"
+
+    result = user_prompt.strip()
+    return result if result else None
+
+
+def set_last_user_message(
+    messages: List[AllMessageValues], content: str
+) -> List[AllMessageValues]:
+    """
+    Set the last user message
+
+    1. remove all the last consecutive user messages (FROM THE END)
+    2. add the new message
+    """
+    idx_to_remove = []
+    for idx, message in enumerate(reversed(messages)):
+        if message.get("role") == "user":
+            idx_to_remove.append(idx)
+        else:
+            # Stop when we hit a non-user message
+            break
+    if idx_to_remove:
+        messages = [
+            message
+            for idx, message in enumerate(reversed(messages))
+            if idx not in idx_to_remove
+        ]
+        messages.reverse()
+    messages.append({"role": "user", "content": content})
+    return messages

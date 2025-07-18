@@ -339,6 +339,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             request_data=data,
             api_base=api_base,
+            api_key=api_key,
             stream=stream,
             fake_stream=fake_stream,
             model=model,
@@ -1008,12 +1009,12 @@ class BaseLLMHTTPHandler:
         """
         Shared logic for preparing audio transcription requests.
         Returns: (headers, complete_url, data, files)
-        """     
+        """
         # Handle the response based on type
         from litellm.llms.base_llm.audio_transcription.transformation import (
             AudioTranscriptionRequestData,
         )
-        
+
         headers = provider_config.validate_environment(
             api_key=api_key,
             headers=headers or {},
@@ -1038,11 +1039,13 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        
+
         # All providers now return AudioTranscriptionRequestData
         if not isinstance(transformed_result, AudioTranscriptionRequestData):
-            raise ValueError(f"Provider {provider_config.__class__.__name__} must return AudioTranscriptionRequestData")
-        
+            raise ValueError(
+                f"Provider {provider_config.__class__.__name__} must return AudioTranscriptionRequestData"
+            )
+
         data = transformed_result.data
         files = transformed_result.files
 
@@ -1143,7 +1146,9 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=data,
                 files=files,
-                json=data if files is None and isinstance(data, dict) else None,  # Use json param only when no files and data is dict
+                json=(
+                    data if files is None and isinstance(data, dict) else None
+                ),  # Use json param only when no files and data is dict
                 timeout=timeout,
             )
         except Exception as e:
@@ -1214,7 +1219,9 @@ class BaseLLMHTTPHandler:
                 headers=headers,
                 data=data,
                 files=files,
-                json=data if files is None and isinstance(data, dict) else None,  # Use json param only when no files and data is dict
+                json=(
+                    data if files is None and isinstance(data, dict) else None
+                ),  # Use json param only when no files and data is dict
                 timeout=timeout,
             )
         except Exception as e:
@@ -1318,6 +1325,7 @@ class BaseLLMHTTPHandler:
             ),  # dynamic aws_* params are passed under litellm_params
             request_data=request_body,
             api_base=request_url,
+            api_key=api_key,
             stream=stream,
             fake_stream=False,
             model=model,
@@ -1432,6 +1440,7 @@ class BaseLLMHTTPHandler:
         Handles responses API requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
         """
+
         if _is_async:
             # Return the async coroutine if called with _is_async=True
             return self.async_response_api_handler(
@@ -2690,7 +2699,16 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
+        )
+        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params.update(vector_store_search_optional_params or {})
+        headers, signed_json_body = vector_store_provider_config.sign_request(
+            headers=headers,
+            optional_params=all_optional_params,
+            request_data=request_body,
+            api_base=url,
         )
 
         logging_obj.pre_call(
@@ -2703,15 +2721,21 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+
         try:
             response = await async_httpx_client.post(
-                url=url, headers=headers, json=request_body, timeout=timeout
+                url=url,
+                headers=headers,
+                data=request_data,
+                timeout=timeout,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     def vector_store_search_handler(
@@ -2771,7 +2795,18 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
+        )
+
+        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params.update(vector_store_search_optional_params or {})
+
+        headers, signed_json_body = vector_store_provider_config.sign_request(
+            headers=headers,
+            optional_params=all_optional_params,
+            request_data=request_body,
+            api_base=url,
         )
 
         logging_obj.pre_call(
@@ -2784,15 +2819,20 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+
         try:
             response = sync_httpx_client.post(
-                url=url, headers=headers, json=request_body
+                url=url,
+                headers=headers,
+                data=request_data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     async def async_vector_store_create_handler(

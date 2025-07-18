@@ -1212,6 +1212,7 @@ def convert_to_anthropic_tool_result(
                     AnthropicMessagesToolResultContent(
                         type="text",
                         text=content["text"],
+                        cache_control=content.get("cache_control", None),
                     )
                 )
             elif content["type"] == "image_url":
@@ -2631,7 +2632,7 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
-                arguments_dict = json.loads(arguments)
+                arguments_dict = json.loads(arguments) if arguments else {}
                 bedrock_tool = BedrockToolUseBlock(
                     input=arguments_dict, name=name, toolUseId=id
                 )

@@ -6,6 +6,7 @@ from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
+from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
 from litellm.types.utils import ChatCompletionMessageToolCall
@@ -26,6 +27,16 @@ def transform_mcp_tool_to_openai_tool(mcp_tool: MCPTool) -> ChatCompletionToolPa
         ),
     )
 
+
+def transform_mcp_tool_to_openai_responses_api_tool(mcp_tool: MCPTool) -> FunctionToolParam:
+    """Convert an MCP tool to an OpenAI Responses API tool."""
+    return FunctionToolParam(
+        name=mcp_tool.name,
+        parameters=mcp_tool.inputSchema,
+        strict=False,
+        type="function",
+        description=mcp_tool.description or "",
+    )
 
 async def load_mcp_tools(
     session: ClientSession, format: Literal["mcp", "openai"] = "mcp"
