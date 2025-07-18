@@ -76,6 +76,7 @@ litellm_settings:
                           # /chat/completions, /completions, /embeddings, /audio/transcriptions
     mode: default_off # if default_off, you need to opt in to caching on a per call basis
     ttl: 600 # ttl for caching
+    disable_copilot_system_to_assistant: False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 
 
 callback_settings:
@@ -96,7 +97,6 @@ general_settings:
   master_key: string
   maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
   maximum_spend_logs_retention_interval: 1d # interval in which the spend log cleanup task should run in.
-  disable_copilot_system_to_assistant: boolean  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 
   # Database Settings
   database_url: string
