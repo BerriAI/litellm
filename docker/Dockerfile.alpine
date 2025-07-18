@@ -51,9 +51,6 @@ RUN chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 
-RUN apk add --no-cache supervisor
-COPY docker/supervisord.conf /etc/supervisord.conf
-
 # Set your entrypoint and command
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]
