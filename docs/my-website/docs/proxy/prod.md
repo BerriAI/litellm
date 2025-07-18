@@ -255,6 +255,14 @@ SEPARATE_HEALTH_APP="1" # Default "0"
 SEPARATE_HEALTH_PORT="8001" # Default "4001", Works only if `SEPARATE_HEALTH_APP` is "1"
 ```
 
+<video controls width="100%" style={{ borderRadius: '8px', marginBottom: '1em' }}>
+  <source src="https://cdn.loom.com/sessions/thumbnails/b08be303331246b88fdc053940d03281-1718990992822.mp4" type="video/mp4" />
+  Your browser does not support the video tag.
+</video>
+
+Or [watch on Loom](https://www.loom.com/share/b08be303331246b88fdc053940d03281?sid=a145ec66-d55f-41f7-aade-a9f41fbe752d).
+
+
 ## Extras
 ### Expected Performance in Production
 
