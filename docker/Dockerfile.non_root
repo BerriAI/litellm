@@ -1,60 +1,53 @@
-# Base image for building
+# Base images
 ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/python:latest-dev
-
-# Runtime image
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/python:latest-dev
-# Builder stage
-FROM $LITELLM_BUILD_IMAGE AS builder
 
-# Set the working directory to /app
+# -----------------
+# Builder Stage
+# -----------------
+FROM $LITELLM_BUILD_IMAGE AS builder
 WORKDIR /app
 
-# Install build dependencies and pip
+# Install build dependencies
 USER root
-
 RUN apk add --no-cache build-base nodejs npm bash \
     && pip install --no-cache-dir --upgrade pip build
 
-# Copy the current directory contents into the container at /app
+# Copy project files
 COPY . .
 
 # Build Admin UI
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-# Build the package
-RUN rm -rf dist/* && python -m build
+# Build package and wheel dependencies
+RUN rm -rf dist/* && python -m build && \
+    pip install dist/*.whl && \
+    pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
-# There should be only one wheel file now, assume the build only creates one
-RUN ls -1 dist/*.whl | head -1
-
-# Install the package
-RUN pip install dist/*.whl
-
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-
-# Runtime stage
+# -----------------
+# Runtime Stage
+# -----------------
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
+WORKDIR /app
 
+# Install runtime dependencies
 USER root
-
-# Update dependencies and install runtime tools
 RUN apk upgrade --no-cache && \
     apk add --no-cache bash
 
-WORKDIR /app
+# Copy project files
 COPY . .
     
-# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
+# Copy built artifacts from builder stage
 COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
-# Install the built wheel and wheeled dependencies
+# Install package from wheel and dependencies
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
     && rm -f *.whl \
     && rm -rf /wheels
 
-# ensure pyjwt is used, not jwt
+# Ensure correct JWT library is used
 RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
@@ -62,35 +55,34 @@ RUN pip uninstall jwt -y && \
 # Build Admin UI
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-### Prisma Handling for Non-Root #################################################
-# Prisma allows you to specify the binary cache directory to use
+# --- Prisma Handling for Non-Root User ---
+# Set Prisma cache directories
 ENV PRISMA_BINARY_CACHE_DIR=/nonexistent
 ENV NPM_CONFIG_CACHE=/.npm
 
+# Install prisma and make entrypoints executable
 RUN pip install --no-cache-dir prisma && \
-    ls -lR /usr/local/lib/python*/site-packages/ | grep prisma || true
+    chmod +x docker/entrypoint.sh && \
+    chmod +x docker/prod_entrypoint.sh
 
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x docker/prod_entrypoint.sh
-
-# Make a /non-existent folder and assign chown to nobody
+# Create directories and set permissions for non-root user
 RUN mkdir -p /nonexistent /.npm && \
     chown -R nobody:nogroup /app && \
     chown -R nobody:nogroup /nonexistent /.npm && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup $PRISMA_PATH
 
-# Run Prisma generate as user = nobody
+# Switch to non-root user
 USER nobody
 
+# Set HOME for prisma generate to have a writable directory
 ENV HOME=/app
 RUN prisma generate
-
-### End of Prisma Handling for Non-Root #########################################
+# --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp
 
-# # Set your entrypoint and command
+# Set entrypoint and command
 ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
 
 # Append "--detailed_debug" to the end of CMD to view detailed debug logs
