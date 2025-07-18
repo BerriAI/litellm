@@ -38,5 +38,8 @@ RUN chmod +x docker/prod_entrypoint.sh
 # Expose the necessary port
 EXPOSE 4000/tcp
 
+RUN apk add --no-cache supervisor
+COPY docker/supervisord.conf /etc/supervisord.conf
+
 # Override the CMD instruction with your desired command and arguments
 CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
