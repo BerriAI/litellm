@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.74.3-stable"
+title: "v1.74.3-stable"
 slug: "v1-74-3-stable"
 date: 2025-07-12T10:00:00
 authors:
@@ -28,14 +28,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.3.rc.2
+ghcr.io/berriai/litellm:v1.74.3-stable
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.74.3rc2  
+pip install litellm==1.74.3.post1
 ```
 
 </TabItem>
