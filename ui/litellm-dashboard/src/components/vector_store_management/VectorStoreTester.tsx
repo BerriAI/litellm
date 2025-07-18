@@ -23,6 +23,12 @@ interface VectorStoreSearchResponse {
   object: string;
   search_query: string;
   data: VectorStoreResult[];
+  error?: {
+    message: string;
+    type?: string;
+    param?: string;
+    code?: string;
+  };
 }
 
 interface VectorStoreTesterProps {
@@ -41,6 +47,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
   const [searchHistory, setSearchHistory] = useState<{
     query: string;
     response: VectorStoreSearchResponse | null;
+    error?: string;
     timestamp: number;
   }[]>([]);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
@@ -64,9 +71,39 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
       
       setSearchHistory(prev => [historyEntry, ...prev]);
       setQuery("");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error searching vector store:", error);
-      message.error("Failed to search vector store");
+      
+      // Extract error message from the response
+      let errorMessage = "Failed to search vector store";
+      let detailedError = "";
+      
+      if (error?.response?.data?.error?.message) {
+        // API returned structured error
+        detailedError = error.response.data.error.message;
+        errorMessage = detailedError.split('\n')[0] || detailedError; // First line for toast
+      } else if (error?.message) {
+        // General error message
+        detailedError = error.message;
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        detailedError = error;
+        errorMessage = error;
+      }
+      
+      // Show error in toast
+      message.error(errorMessage);
+      
+      // Add error to search history
+      const errorHistoryEntry = {
+        query,
+        response: null,
+        error: detailedError,
+        timestamp: Date.now(),
+      };
+      
+      setSearchHistory(prev => [errorHistoryEntry, ...prev]);
+      setQuery("");
     } finally {
       setIsLoading(false);
     }
@@ -152,7 +189,17 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
                           )}
                         </div>
                         
-                        {entry.response && entry.response.data && entry.response.data.length > 0 ? (
+                        {entry.error ? (
+                          /* Error Response */
+                          <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-red-500 font-medium text-sm">Error</span>
+                            </div>
+                            <div className="text-sm text-red-700 bg-red-100 p-3 rounded border max-h-60 overflow-y-auto font-mono whitespace-pre-wrap">
+                              {entry.error}
+                            </div>
+                          </div>
+                        ) : entry.response && entry.response.data && entry.response.data.length > 0 ? (
                           <div className="space-y-3">
                             {entry.response.data.map((result, resultIndex) => {
                               const isExpanded = expandedResults[`${index}-${resultIndex}`] || false;
