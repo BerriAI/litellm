@@ -243,10 +243,19 @@ async def test_reset_budget_endusers_partial_failure():
         enduser["spend"] = 0.0
         return enduser
 
+    async def fake_reset_team_members(budgets_to_reset):
+        return 1
+
     with patch.object(
-        ResetBudgetJob, "_reset_budget_for_enduser", side_effect=fake_reset_enduser
-    ) as mock_reset_enduser:
-        await job.reset_budget_for_litellm_endusers()
+        ResetBudgetJob,
+        "_reset_budget_for_enduser",
+        side_effect=fake_reset_enduser,
+    ) as mock_reset_enduser, patch.object(
+        ResetBudgetJob,
+        "reset_budget_for_litellm_team_members",
+        side_effect=fake_reset_team_members,
+    ) as mock_reset_team_members:
+        await job.reset_budget_for_litellm_budget_table()
         await asyncio.sleep(0.1)
 
     assert mock_reset_enduser.call_count == 6
@@ -415,6 +424,9 @@ async def test_reset_budget_continues_other_categories_on_failure():
         enduser["spend"] = 0.0
         return enduser
 
+    async def fake_reset_team_members(budgets_to_reset):
+        return 1
+
     with patch.object(
         ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key
     ) as mock_reset_key, patch.object(
@@ -423,7 +435,11 @@ async def test_reset_budget_continues_other_categories_on_failure():
         ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team
     ) as mock_reset_team, patch.object(
         ResetBudgetJob, "_reset_budget_for_enduser", side_effect=fake_reset_enduser
-    ) as mock_reset_enduser:
+    ) as mock_reset_enduser, patch.object(
+        ResetBudgetJob,
+        "reset_budget_for_litellm_team_members",
+        side_effect=fake_reset_team_members,
+    ) as mock_reset_team_members:
         # Call the overall reset_budget method.
         await job.reset_budget()
         await asyncio.sleep(0.1)
@@ -432,7 +448,16 @@ async def test_reset_budget_continues_other_categories_on_failure():
     called_tables = {
         call.kwargs.get("table_name") for call in prisma_client.get_data.await_args_list
     }
-    assert called_tables == {"key", "user", "team", "budget", "enduser"}
+    if mock_reset_team_members.call_count > 0:
+        called_tables.add("team_membership")
+    assert called_tables == {
+        "key",
+        "user",
+        "team",
+        "budget",
+        "enduser",
+        "team_membership",
+    }
 
     # Verify that update_data was called three times (one per category, enduser update includes two)
     assert prisma_client.update_data.await_count == 5
@@ -850,15 +875,22 @@ async def test_service_logger_endusers_success():
         enduser["spend"] = 0.0
         return enduser
 
+    async def fake_reset_team_members(budgets_to_reset):
+        return 1
+
     with patch.object(
         ResetBudgetJob,
         "_reset_budget_for_enduser",
         side_effect=fake_reset_enduser,
-    ):
+    ) as mock_reset_enduser, patch.object(
+        ResetBudgetJob,
+        "reset_budget_for_litellm_team_members",
+        side_effect=fake_reset_team_members,
+    ) as mock_reset_team_members:
         with patch(
             "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
         ) as mock_verbose_exc:
-            await job.reset_budget_for_litellm_endusers()
+            await job.reset_budget_for_litellm_budget_table()
             await asyncio.sleep(0.1)
             mock_verbose_exc.assert_not_called()
 
@@ -876,7 +908,7 @@ async def test_service_logger_endusers_success():
 
 
 @pytest.mark.asyncio
-async def test_service_logger_users_failure():
+async def test_service_logger_endusers_failure():
     """
     Test that a failure during enduser reset calls the failure hook with appropriate metadata,
     logs the exception, and does not call the success hook.
@@ -920,15 +952,22 @@ async def test_service_logger_users_failure():
         enduser["spend"] = 0.0
         return enduser
 
+    async def fake_reset_team_members(budgets_to_reset):
+        return 1
+
     with patch.object(
         ResetBudgetJob,
         "_reset_budget_for_enduser",
         side_effect=fake_reset_enduser,
-    ):
+    ) as mock_reset_enduser, patch.object(
+        ResetBudgetJob,
+        "reset_budget_for_litellm_team_members",
+        side_effect=fake_reset_team_members,
+    ) as mock_reset_team_members:
         with patch(
             "litellm.proxy.common_utils.reset_budget_job.verbose_proxy_logger.exception"
         ) as mock_verbose_exc:
-            await job.reset_budget_for_litellm_endusers()
+            await job.reset_budget_for_litellm_budget_table()
             await asyncio.sleep(0.1)
             # Verify exception logging
             assert mock_verbose_exc.call_count >= 1
@@ -949,3 +988,69 @@ async def test_service_logger_users_failure():
     endusers_found_str = event_metadata.get("endusers_found", "")
     assert "user1" in endusers_found_str
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_for_litellm_team_members_called():
+    """
+    Test that when reset_budget_for_litellm_budget_table is called,
+    team members' budgets are also reset via reset_budget_for_litellm_team_members
+    """
+    # Arrange
+    budget1 = LiteLLM_BudgetTableFull(
+        **{
+            "budget_id": "budget1",
+            "max_budget": 100.0,
+            "budget_duration": "1d",
+            "created_at": datetime.now(timezone.utc) - timedelta(days=2),
+        }
+    )
+
+    enduser1 = {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"}
+
+    prisma_client = MagicMock()
+
+    async def fake_get_data(*, table_name, query_type, **kwargs):
+        if table_name == "budget":
+            return [budget1]
+        elif table_name == "enduser":
+            return [enduser1]
+        return []
+
+    prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
+    prisma_client.update_data = AsyncMock()
+
+    # Mock the db.litellm_teammembership.update_many call
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_teammembership = MagicMock()
+    prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 2}
+    )
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj = MagicMock()
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock()
+    proxy_logging_obj.service_logging_obj.async_service_failure_hook = AsyncMock()
+
+    job = ResetBudgetJob(proxy_logging_obj, prisma_client)
+
+    async def fake_reset_enduser(enduser):
+        enduser["spend"] = 0.0
+        return enduser
+
+    with patch.object(
+        ResetBudgetJob,
+        "_reset_budget_for_enduser",
+        side_effect=fake_reset_enduser,
+    ):
+        # Act
+        await job.reset_budget_for_litellm_budget_table()
+
+    # Assert
+    # Verify that the team membership update was called
+    prisma_client.db.litellm_teammembership.update_many.assert_called_once()
+
+    # Verify the call was made with correct parameters
+    call_args = prisma_client.db.litellm_teammembership.update_many.call_args
+    assert call_args.kwargs["where"]["budget_id"]["in"] == ["budget1"]
+    assert call_args.kwargs["data"]["spend"] == 0

@@ -611,3 +611,331 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
 
     result = await proxy_config._get_config_from_file(None)
     assert result == test_config
+
+
+@pytest.mark.asyncio
+async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
+    """
+    Test that _add_proxy_budget_to_db only creates a user and no keys are added.
+
+    This validates that generate_key_helper_fn is called with table_name="user"
+    which should prevent key creation in LiteLLM_VerificationToken table.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    # Set up required litellm settings
+    litellm.budget_duration = "30d"
+    litellm.max_budget = 100.0
+
+    litellm_proxy_budget_name = "litellm-proxy-budget"
+
+    # Mock generate_key_helper_fn to capture its call arguments
+    mock_generate_key_helper = AsyncMock(
+        return_value={
+            "user_id": litellm_proxy_budget_name,
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "spend": 0,
+            "models": [],
+        }
+    )
+
+    # Patch generate_key_helper_fn in proxy_server where it's being called from
+    with patch(
+        "litellm.proxy.proxy_server.generate_key_helper_fn", mock_generate_key_helper
+    ):
+        # Call the function under test
+        ProxyStartupEvent._add_proxy_budget_to_db(litellm_proxy_budget_name)
+
+        # Allow async task to complete
+        import asyncio
+
+        await asyncio.sleep(0.1)
+
+        # Verify that generate_key_helper_fn was called
+        mock_generate_key_helper.assert_called_once()
+        call_args = mock_generate_key_helper.call_args
+
+        # Verify critical parameters that prevent key creation
+        assert call_args.kwargs["request_type"] == "user"
+        assert call_args.kwargs["table_name"] == "user"
+        assert call_args.kwargs["user_id"] == litellm_proxy_budget_name
+        assert call_args.kwargs["max_budget"] == 100.0
+        assert call_args.kwargs["budget_duration"] == "30d"
+        assert call_args.kwargs["query_type"] == "update_data"
+
+
+@pytest.mark.asyncio
+async def test_custom_ui_sso_sign_in_handler_config_loading():
+    """
+    Test that custom_ui_sso_sign_in_handler from config gets properly loaded into the global variable
+    """
+    import tempfile
+    from unittest.mock import MagicMock, patch
+
+    import yaml
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Create a test config with custom_ui_sso_sign_in_handler
+    test_config = {
+        "general_settings": {
+            "custom_ui_sso_sign_in_handler": "custom_hooks.custom_ui_sso_hook.custom_ui_sso_sign_in_handler"
+        },
+        "model_list": [],
+        "router_settings": {},
+        "litellm_settings": {},
+    }
+
+    # Create temporary config file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(test_config, f)
+        config_file_path = f.name
+
+    # Mock the get_instance_fn to return a mock handler
+    mock_custom_handler = MagicMock()
+
+    try:
+        with patch(
+            "litellm.proxy.proxy_server.get_instance_fn",
+            return_value=mock_custom_handler,
+        ) as mock_get_instance:
+            # Create ProxyConfig instance and load config
+            proxy_config = ProxyConfig()
+            # Create a mock router since load_config requires it
+            mock_router = MagicMock()
+            await proxy_config.load_config(
+                router=mock_router, config_file_path=config_file_path
+            )
+
+            # Verify get_instance_fn was called with correct parameters
+            mock_get_instance.assert_called_with(
+                value="custom_hooks.custom_ui_sso_hook.custom_ui_sso_sign_in_handler",
+                config_file_path=config_file_path,
+            )
+
+            # Verify the global variable was set
+            from litellm.proxy.proxy_server import user_custom_ui_sso_sign_in_handler
+
+            assert user_custom_ui_sso_sign_in_handler == mock_custom_handler
+
+    finally:
+        # Clean up temporary file
+        import os
+
+        os.unlink(config_file_path)
+
+
+@pytest.mark.asyncio
+async def test_load_environment_variables_direct_and_os_environ():
+    """
+    Test _load_environment_variables method with direct values and os.environ/ prefixed values
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test config with both direct values and os.environ/ prefixed values
+    test_config = {
+        "environment_variables": {
+            "DIRECT_VAR": "direct_value",
+            "NUMERIC_VAR": 12345,
+            "BOOL_VAR": True,
+            "SECRET_VAR": "os.environ/ACTUAL_SECRET_VAR",
+        }
+    }
+
+    # Mock get_secret_str to return a resolved value
+    mock_secret_value = "resolved_secret_value"
+
+    with patch(
+        "litellm.proxy.proxy_server.get_secret_str", return_value=mock_secret_value
+    ) as mock_get_secret:
+        with patch.dict(
+            os.environ, {}, clear=False
+        ):  # Don't clear existing env vars, just track changes
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config)
+
+            # Verify direct environment variables were set correctly
+            assert os.environ["DIRECT_VAR"] == "direct_value"
+            assert os.environ["NUMERIC_VAR"] == "12345"  # Should be converted to string
+            assert os.environ["BOOL_VAR"] == "True"  # Should be converted to string
+
+            # Verify os.environ/ prefixed variable was resolved and set
+            assert os.environ["SECRET_VAR"] == mock_secret_value
+
+            # Verify get_secret_str was called with the correct value
+            mock_get_secret.assert_called_once_with(
+                secret_name="os.environ/ACTUAL_SECRET_VAR"
+            )
+
+
+@pytest.mark.asyncio
+async def test_load_environment_variables_litellm_license_and_edge_cases():
+    """
+    Test _load_environment_variables method with LITELLM_LICENSE special handling and edge cases
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: LITELLM_LICENSE in environment_variables
+    test_config_with_license = {
+        "environment_variables": {
+            "LITELLM_LICENSE": "test_license_key",
+            "OTHER_VAR": "other_value",
+        }
+    }
+
+    # Mock _license_check
+    mock_license_check = MagicMock()
+    mock_license_check.is_premium.return_value = True
+
+    with patch("litellm.proxy.proxy_server._license_check", mock_license_check):
+        with patch.dict(os.environ, {}, clear=False):
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config_with_license)
+
+            # Verify LITELLM_LICENSE was set in environment
+            assert os.environ["LITELLM_LICENSE"] == "test_license_key"
+
+            # Verify license check was updated
+            assert mock_license_check.license_str == "test_license_key"
+            mock_license_check.is_premium.assert_called_once()
+
+    # Test Case 2: No environment_variables in config
+    test_config_no_env_vars = {}
+
+    # This should not raise any errors and should return without doing anything
+    result = proxy_config._load_environment_variables(test_config_no_env_vars)
+    assert result is None  # Method returns None
+
+    # Test Case 3: environment_variables is None
+    test_config_none_env_vars = {"environment_variables": None}
+
+    # This should not raise any errors and should return without doing anything
+    result = proxy_config._load_environment_variables(test_config_none_env_vars)
+    assert result is None  # Method returns None
+
+    # Test Case 4: os.environ/ prefix but get_secret_str returns None
+    test_config_secret_none = {
+        "environment_variables": {"FAILED_SECRET": "os.environ/NONEXISTENT_SECRET"}
+    }
+
+    with patch("litellm.proxy.proxy_server.get_secret_str", return_value=None):
+        with patch.dict(os.environ, {}, clear=False):
+            # Call the method under test
+            proxy_config._load_environment_variables(test_config_secret_none)
+
+            # Verify that the environment variable was not set when secret resolution fails
+            assert "FAILED_SECRET" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_write_config_to_file(monkeypatch):
+    """
+    Do not write config to file if store_model_in_db is True
+    """
+    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Set store_model_in_db to True
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+    # Mock prisma_client to not be None (so DB path is taken)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.insert_data = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Mock general_settings
+    mock_general_settings = {"store_model_in_db": True}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", mock_general_settings
+    )
+
+    # Mock user_config_file_path
+    test_config_path = "/tmp/test_config.yaml"
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_config_file_path", test_config_path
+    )
+
+    proxy_config = ProxyConfig()
+
+    # Mock the open function to track if file writing is attempted
+    mock_file_open = mock_open()
+
+    with patch("builtins.open", mock_file_open), patch("yaml.dump") as mock_yaml_dump:
+        # Call save_config with test data
+        test_config = {"key": "value", "model_list": ["model1", "model2"]}
+        await proxy_config.save_config(new_config=test_config)
+
+        # Verify that file was NOT opened for writing (since store_model_in_db=True)
+        mock_file_open.assert_not_called()
+        mock_yaml_dump.assert_not_called()
+
+        # Verify that database insert was called instead
+        mock_prisma_client.insert_data.assert_called_once()
+
+        # Verify the config passed to DB has model_list removed
+        call_args = mock_prisma_client.insert_data.call_args
+        assert call_args.kwargs["data"] == {
+            "key": "value"
+        }  # model_list should be popped
+        assert call_args.kwargs["table_name"] == "config"
+
+
+@pytest.mark.asyncio
+async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
+    """
+    Test that config IS written to file when store_model_in_db is False
+    """
+    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    # Set store_model_in_db to False
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+
+    # Mock prisma_client to be None (so file path is taken)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    # Mock general_settings
+    mock_general_settings = {"store_model_in_db": False}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings", mock_general_settings
+    )
+
+    # Mock user_config_file_path
+    test_config_path = "/tmp/test_config.yaml"
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_config_file_path", test_config_path
+    )
+
+    proxy_config = ProxyConfig()
+
+    # Mock the open function and yaml.dump
+    mock_file_open = mock_open()
+
+    with patch("builtins.open", mock_file_open), patch("yaml.dump") as mock_yaml_dump:
+        # Call save_config with test data
+        test_config = {"key": "value", "other_key": "other_value"}
+        await proxy_config.save_config(new_config=test_config)
+
+        # Verify that file WAS opened for writing (since store_model_in_db=False)
+        mock_file_open.assert_called_once_with(f"{test_config_path}", "w")
+
+        # Verify yaml.dump was called with the config
+        mock_yaml_dump.assert_called_once_with(
+            test_config,
+            mock_file_open.return_value.__enter__.return_value,
+            default_flow_style=False,
+        )

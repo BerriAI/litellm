@@ -278,16 +278,7 @@ class PrometheusLogger(CustomLogger):
                     "litellm_deployment_failure_responses"
                 ),
             )
-            self.litellm_deployment_failure_by_tag_responses = self._counter_factory(
-                "litellm_deployment_failure_by_tag_responses",
-                "Total number of failed LLM API calls for a specific LLM deploymeny by custom metadata tags",
-                labelnames=[
-                    UserAPIKeyLabelNames.REQUESTED_MODEL.value,
-                    UserAPIKeyLabelNames.TAG.value,
-                ]
-                + _logged_llm_labels
-                + EXCEPTION_LABELS,
-            )
+
             self.litellm_deployment_total_requests = self._counter_factory(
                 name="litellm_deployment_total_requests",
                 documentation="LLM Deployment Analytics - Total number of LLM API calls via litellm - success + failure",
@@ -356,37 +347,39 @@ class PrometheusLogger(CustomLogger):
         # Parse and validate all configuration groups
         parsed_configs = []
         self.enabled_metrics = set()
-        
+
         for group_config in config:
             # Validate configuration using Pydantic
             if isinstance(group_config, dict):
                 parsed_config = PrometheusMetricsConfig(**group_config)
             else:
                 parsed_config = group_config
-            
+
             parsed_configs.append(parsed_config)
             self.enabled_metrics.update(parsed_config.metrics)
 
         # Validate all configurations
         validation_results = self._validate_all_configurations(parsed_configs)
-        
+
         if validation_results.has_errors:
             self._pretty_print_validation_errors(validation_results)
-            error_message = "Configuration validation failed:\n" + "\n".join(validation_results.all_error_messages)
+            error_message = "Configuration validation failed:\n" + "\n".join(
+                validation_results.all_error_messages
+            )
             raise ValueError(error_message)
 
         # Build label filters from valid configurations
         label_filters = self._build_label_filters(parsed_configs)
-        
+
         # Pretty print the processed configuration
         self._pretty_print_prometheus_config(label_filters)
         return label_filters
- 
+
     def _validate_all_configurations(self, parsed_configs: List) -> ValidationResults:
         """Validate all metric configurations and return collected errors"""
         metric_errors = []
         label_errors = []
-        
+
         for config in parsed_configs:
             for metric_name in config.metrics:
                 # Validate metric name
@@ -394,54 +387,63 @@ class PrometheusLogger(CustomLogger):
                 if metric_error:
                     metric_errors.append(metric_error)
                     continue  # Skip label validation if metric name is invalid
-                
+
                 # Validate labels if provided
                 if config.include_labels:
-                    label_error = self._validate_single_metric_labels(metric_name, config.include_labels)
+                    label_error = self._validate_single_metric_labels(
+                        metric_name, config.include_labels
+                    )
                     if label_error:
                         label_errors.append(label_error)
-        
+
         return ValidationResults(metric_errors=metric_errors, label_errors=label_errors)
-    
-    def _validate_single_metric_name(self, metric_name: str) -> Optional[MetricValidationError]:
+
+    def _validate_single_metric_name(
+        self, metric_name: str
+    ) -> Optional[MetricValidationError]:
         """Validate a single metric name"""
         from typing import get_args
+
         if metric_name not in set(get_args(DEFINED_PROMETHEUS_METRICS)):
             return MetricValidationError(
                 metric_name=metric_name,
-                valid_metrics=get_args(DEFINED_PROMETHEUS_METRICS)
+                valid_metrics=get_args(DEFINED_PROMETHEUS_METRICS),
             )
         return None
 
-    def _validate_single_metric_labels(self, metric_name: str, labels: List[str]) -> Optional[LabelValidationError]:
+    def _validate_single_metric_labels(
+        self, metric_name: str, labels: List[str]
+    ) -> Optional[LabelValidationError]:
         """Validate labels for a single metric"""
         from typing import cast
 
         # Get valid labels for this metric from PrometheusMetricLabels
-        valid_labels = PrometheusMetricLabels.get_labels(cast(DEFINED_PROMETHEUS_METRICS, metric_name))
-        
+        valid_labels = PrometheusMetricLabels.get_labels(
+            cast(DEFINED_PROMETHEUS_METRICS, metric_name)
+        )
+
         # Find invalid labels
         invalid_labels = [label for label in labels if label not in valid_labels]
-        
+
         if invalid_labels:
             return LabelValidationError(
                 metric_name=metric_name,
                 invalid_labels=invalid_labels,
-                valid_labels=valid_labels
+                valid_labels=valid_labels,
             )
         return None
-    
+
     def _build_label_filters(self, parsed_configs: List) -> Dict[str, List[str]]:
         """Build label filters from validated configurations"""
         label_filters = {}
-        
+
         for config in parsed_configs:
             for metric_name in config.metrics:
                 if config.include_labels:
                     # Only add if metric name is valid (validation already passed)
                     if self._validate_single_metric_name(metric_name) is None:
                         label_filters[metric_name] = config.include_labels
-        
+
         return label_filters
 
     def _validate_configured_metric_labels(self, metric_name: str, labels: List[str]):
@@ -455,17 +457,19 @@ class PrometheusLogger(CustomLogger):
             self._pretty_print_invalid_labels_error(
                 metric_name=label_error.metric_name,
                 invalid_labels=label_error.invalid_labels,
-                valid_labels=label_error.valid_labels
+                valid_labels=label_error.valid_labels,
             )
             raise ValueError(label_error.message)
-        
+
         return True
-    
+
     #########################################################
     # Pretty print functions
     #########################################################
 
-    def _pretty_print_validation_errors(self, validation_results: ValidationResults) -> None:
+    def _pretty_print_validation_errors(
+        self, validation_results: ValidationResults
+    ) -> None:
         """Pretty print all validation errors using rich"""
         try:
             from rich.console import Console
@@ -484,15 +488,19 @@ class PrometheusLogger(CustomLogger):
 
             # Show invalid metric names if any
             if validation_results.metric_errors:
-                invalid_metrics = [e.metric_name for e in validation_results.metric_errors]
-                valid_metrics = validation_results.metric_errors[0].valid_metrics  # All should have same valid metrics
-                
+                invalid_metrics = [
+                    e.metric_name for e in validation_results.metric_errors
+                ]
+                valid_metrics = validation_results.metric_errors[
+                    0
+                ].valid_metrics  # All should have same valid metrics
+
                 metrics_error_text = Text(
-                    f"Invalid Metric Names: {', '.join(invalid_metrics)}", 
-                    style="bold red"
+                    f"Invalid Metric Names: {', '.join(invalid_metrics)}",
+                    style="bold red",
                 )
                 console.print(Panel(metrics_error_text, border_style="red"))
-                
+
                 metrics_table = Table(
                     title="📊 Valid Metric Names",
                     show_header=True,
@@ -500,7 +508,9 @@ class PrometheusLogger(CustomLogger):
                     title_justify="left",
                     border_style="green",
                 )
-                metrics_table.add_column("Available Metrics", style="cyan", no_wrap=True)
+                metrics_table.add_column(
+                    "Available Metrics", style="cyan", no_wrap=True
+                )
 
                 for metric in sorted(valid_metrics):
                     metrics_table.add_row(metric)
@@ -511,11 +521,11 @@ class PrometheusLogger(CustomLogger):
             if validation_results.label_errors:
                 for error in validation_results.label_errors:
                     labels_error_text = Text(
-                        f"Invalid Labels for '{error.metric_name}': {', '.join(error.invalid_labels)}", 
-                        style="bold red"
+                        f"Invalid Labels for '{error.metric_name}': {', '.join(error.invalid_labels)}",
+                        style="bold red",
                     )
                     console.print(Panel(labels_error_text, border_style="red"))
-                    
+
                     labels_table = Table(
                         title=f"🏷️ Valid Labels for '{error.metric_name}'",
                         show_header=True,
@@ -553,8 +563,8 @@ class PrometheusLogger(CustomLogger):
 
             # Create error panel title
             title = Text(
-                f"🚨🚨 Invalid Labels for Metric: '{metric_name}'\nInvalid labels: {', '.join(invalid_labels)}\nPlease specify only valid labels below", 
-                style="bold red"
+                f"🚨🚨 Invalid Labels for Metric: '{metric_name}'\nInvalid labels: {', '.join(invalid_labels)}\nPlease specify only valid labels below",
+                style="bold red",
             )
 
             # Create valid labels table
@@ -581,7 +591,7 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.error(
                 f"Invalid labels for metric '{metric_name}': {invalid_labels}. Valid labels: {sorted(valid_labels)}"
             )
-    
+
     def _pretty_print_invalid_metric_error(
         self, invalid_metric_name: str, valid_metrics: tuple
     ) -> None:
@@ -595,7 +605,10 @@ class PrometheusLogger(CustomLogger):
             console = Console()
 
             # Create error panel title
-            title = Text(f"🚨🚨 Invalid Metric Name: '{invalid_metric_name}'\nPlease specify one of the allowed metrics below", style="bold red")
+            title = Text(
+                f"🚨🚨 Invalid Metric Name: '{invalid_metric_name}'\nPlease specify one of the allowed metrics below",
+                style="bold red",
+            )
 
             # Create valid metrics table
             metrics_table = Table(
@@ -621,7 +634,7 @@ class PrometheusLogger(CustomLogger):
             verbose_logger.error(
                 f"Invalid metric name: {invalid_metric_name}. Valid metrics: {sorted(valid_metrics)}"
             )
-    
+
     #########################################################
     # End of pretty print functions
     #########################################################
@@ -633,8 +646,8 @@ class PrometheusLogger(CustomLogger):
         error = self._validate_single_metric_name(metric_name)
         if error:
             self._pretty_print_invalid_metric_error(
-                invalid_metric_name=error.metric_name, 
-                valid_metrics=error.valid_metrics)
+                invalid_metric_name=error.metric_name, valid_metrics=error.valid_metrics
+            )
             raise ValueError(error.message)
 
     def _pretty_print_prometheus_config(
@@ -706,7 +719,6 @@ class PrometheusLogger(CustomLogger):
                 f"Enabled metrics: {sorted(self.enabled_metrics) if hasattr(self, 'enabled_metrics') else 'All metrics'}"
             )
             verbose_logger.info(f"Label filters: {label_filters}")
-
 
     def _is_metric_enabled(self, metric_name: str) -> bool:
         """Check if a metric is enabled based on configuration"""
@@ -1361,27 +1373,6 @@ class PrometheusLogger(CustomLogger):
                     enum_values=enum_values,
                 )
                 self.litellm_deployment_failure_responses.labels(**_labels).inc()
-
-                # tag based tracking
-                if standard_logging_payload is not None and isinstance(
-                    standard_logging_payload, dict
-                ):
-                    _tags = standard_logging_payload["request_tags"]
-                    for tag in _tags:
-                        self.litellm_deployment_failure_by_tag_responses.labels(
-                            **{
-                                UserAPIKeyLabelNames.REQUESTED_MODEL.value: model_group,
-                                UserAPIKeyLabelNames.TAG.value: tag,
-                                UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value: litellm_model_name,
-                                UserAPIKeyLabelNames.MODEL_ID.value: model_id,
-                                UserAPIKeyLabelNames.API_BASE.value: api_base,
-                                UserAPIKeyLabelNames.API_PROVIDER.value: llm_provider,
-                                UserAPIKeyLabelNames.EXCEPTION_CLASS.value: exception.__class__.__name__,
-                                UserAPIKeyLabelNames.EXCEPTION_STATUS.value: str(
-                                    getattr(exception, "status_code", None)
-                                ),
-                            }
-                        ).inc()
 
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
@@ -2242,6 +2233,13 @@ def prometheus_label_factory(
             if key in supported_enum_labels:
                 filtered_labels[key] = value
 
+    # Add custom tags if configured
+    if enum_values.tags is not None:
+        custom_tag_labels = get_custom_labels_from_tags(enum_values.tags)
+        for key, value in custom_tag_labels.items():
+            if key in supported_enum_labels:
+                filtered_labels[key] = value
+
     for label in supported_enum_labels:
         if label not in filtered_labels:
             filtered_labels[label] = None
@@ -2274,5 +2272,29 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
 
         if value is not None and isinstance(value, str):
             result[original_key.replace(".", "_")] = value
+
+    return result
+
+
+def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
+    """
+    Get custom labels from tags based on admin configuration
+    """
+    configured_tags = litellm.custom_prometheus_tags
+    if configured_tags is None or len(configured_tags) == 0:
+        return {}
+
+    result: Dict[str, str] = {}
+
+    # Map each configured tag to its presence in the request tags
+    for configured_tag in configured_tags:
+        # Create a safe prometheus label name
+        label_name = f"tag_{configured_tag}".replace("-", "_").replace(".", "_")
+
+        # Check if this tag is present in the request tags
+        if configured_tag in tags:
+            result[label_name] = "true"
+        else:
+            result[label_name] = "false"
 
     return result

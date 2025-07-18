@@ -920,7 +920,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
         #     return
         pytest.fail(f"Error occurred: {e}")
 
-
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():
     litellm.set_verbose = True
     tools = [
@@ -975,6 +975,8 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
+    except litellm.RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

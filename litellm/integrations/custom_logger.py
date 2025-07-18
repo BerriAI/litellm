@@ -33,12 +33,14 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp import MCPPostCallResponseObject
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     LiteLLMLoggingObj = Any
     UserAPIKeyAuth = Any
+    MCPPostCallResponseObject = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -89,6 +91,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -107,6 +110,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -351,6 +355,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
+    
+    #########################################################
+    # MCP TOOL CALL HOOKS
+    #########################################################
+    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
+        """
+        This log gets called after the MCP tool call is made.
+
+        Useful if you want to modiy the standard logging payload after the MCP tool call is made.
+        """
+        return None
+    
 
     # Useful helpers for custom logger classes
 
@@ -408,9 +424,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if len(text) > max_length
             else text
         )
-    
 
-    def _select_metadata_field(self, request_kwargs: Optional[Dict] = None) -> Optional[str]:
+    def _select_metadata_field(
+        self, request_kwargs: Optional[Dict] = None
+    ) -> Optional[str]:
         """
         Select the metadata field to use for logging
 
@@ -418,9 +435,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         2. Otherwise, use `metadata`
         """
         from litellm.constants import LITELLM_METADATA_FIELD, OLD_LITELLM_METADATA_FIELD
+
         if request_kwargs is None:
             return None
         if LITELLM_METADATA_FIELD in request_kwargs:
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
-        

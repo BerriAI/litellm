@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall } from "../networking";
+import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall, allEndUsersCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
@@ -33,6 +33,7 @@ import {
 } from "@tremor/react";
 import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -101,7 +102,15 @@ export default function SpendLogsTable({
 
   const queryClient = useQueryClient();
 
-  const [isLiveTail, setIsLiveTail] = useState(true); // Default to true
+  const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
+    const storedValue = sessionStorage.getItem("isLiveTail");
+    // default to true if nothing is stored
+    return storedValue !== null ? JSON.parse(storedValue) : true;
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
+  }, [isLiveTail]);
 
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({ 
     value: 24, 
@@ -243,7 +252,7 @@ export default function SpendLogsTable({
       return response;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
-    refetchInterval: isLiveTail ? 15000 : false,
+    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
     refetchIntervalInBackground: true,
   });
 
@@ -433,13 +442,27 @@ export default function SpendLogsTable({
       searchFn: async (searchText: string) => {
         if (!accessToken) return [];
         const keyAliases = await fetchAllKeyAliases(accessToken);
-        const filtered = keyAliases.filter(alias => 
+        const filtered = keyAliases.filter(alias =>
           alias.toLowerCase().includes(searchText.toLowerCase())
         );
         return filtered.map(alias => ({
           label: alias,
           value: alias
         }));
+      }
+    },
+    {
+      name: 'End User',
+      label: 'End User',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!accessToken) return [];
+        const data = await allEndUsersCall(accessToken);
+        const users = data?.end_users || [];
+        const filtered = users.filter((u: string) =>
+          u.toLowerCase().includes(searchText.toLowerCase())
+        );
+        return filtered.map((u: string) => ({ label: u, value: u }));
       }
     },
     {
@@ -734,7 +757,7 @@ export default function SpendLogsTable({
                     </div>
                   </div>
                 </div>
-                {isLiveTail && (
+                {isLiveTail && currentPage === 1 && (
                   <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-green-700">
@@ -906,7 +929,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cost:</span>
-              <span>${Number(row.original.spend || 0).toFixed(6)}</span>
+              <span>${formatNumberWithCommas(row.original.spend || 0, 4)}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cache Hit:</span>

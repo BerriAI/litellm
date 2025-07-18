@@ -6,6 +6,7 @@ import MCPServerPermissions from "./permissions/MCPServerPermissions";
 interface ObjectPermission {
   object_permission_id: string;
   mcp_servers: string[];
+  mcp_access_groups?: string[];
   vector_stores: string[];
 }
 
@@ -24,6 +25,7 @@ export function ObjectPermissionsView({
 }: ObjectPermissionsViewProps) {
   const vectorStores = objectPermission?.vector_stores || [];
   const mcpServers = objectPermission?.mcp_servers || [];
+  const mcpAccessGroups = objectPermission?.mcp_access_groups || [];
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 md:grid-cols-2 gap-6" : "space-y-4"}>
@@ -33,6 +35,7 @@ export function ObjectPermissionsView({
       />
       <MCPServerPermissions 
         mcpServers={mcpServers} 
+        mcpAccessGroups={mcpAccessGroups}
         accessToken={accessToken} 
       />
     </div>

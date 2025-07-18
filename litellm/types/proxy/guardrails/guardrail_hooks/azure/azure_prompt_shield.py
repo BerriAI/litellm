@@ -1,4 +1,10 @@
-from typing import Any, Dict, List, TypedDict
+from typing import Any, Dict, List
+
+from typing_extensions import TypedDict
+
+from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+from .base import AzureContentSafetyConfigModel
 
 
 class AzurePromptShieldGuardrailRequestBody(TypedDict):
@@ -17,3 +23,12 @@ class AzurePromptShieldGuardrailResponse(TypedDict):
 
     userPromptAnalysis: UserPromptAnalysis
     documentsAnalysis: List[Dict[str, Any]]
+
+
+class AzurePromptShieldGuardrailConfigModel(
+    AzureContentSafetyConfigModel,
+    GuardrailConfigModel,
+):
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Azure Content Safety Prompt Shield"

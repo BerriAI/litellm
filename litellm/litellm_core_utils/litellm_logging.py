@@ -59,9 +59,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
-from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
-    BedrockVectorStore,
-)
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -82,6 +79,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
+from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
@@ -435,6 +433,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
         """
+
         return _initialize_standard_callback_dynamic_params(kwargs)
 
     def initialize_standard_built_in_tools_params(
@@ -556,6 +555,7 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_variables: Optional[dict],
         prompt_management_logger: Optional[CustomLogger] = None,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
@@ -577,6 +577,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_variables=prompt_variables,
                 dynamic_callback_params=self.standard_callback_dynamic_params,
                 prompt_label=prompt_label,
+                prompt_version=prompt_version,
             )
         self.messages = messages
         return model, messages, non_default_params
@@ -591,11 +592,14 @@ class Logging(LiteLLMLoggingBaseClass):
         prompt_management_logger: Optional[CustomLogger] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model, non_default_params=non_default_params
+                model=model, 
+                tools=tools,
+                non_default_params=non_default_params
             )
         )
 
@@ -614,12 +618,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_logging_obj=self,
                 tools=tools,
                 prompt_label=prompt_label,
+                prompt_version=prompt_version,
             )
         self.messages = messages
         return model, messages, non_default_params
 
     def get_custom_logger_for_prompt_management(
-        self, model: str, non_default_params: Dict
+        self, model: str, non_default_params: Dict, tools: Optional[List[Dict]] = None
     ) -> Optional[CustomLogger]:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
@@ -666,16 +671,11 @@ class Logging(LiteLLMLoggingBaseClass):
         # Vector Store / Knowledge Base hooks
         #########################################################
         if litellm.vector_store_registry is not None:
-            if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(
-                non_default_params=non_default_params
-            ):
-                vector_store_custom_logger = (
-                    litellm.ProviderConfigManager.get_provider_vector_store_config(
-                        provider=cast(
-                            litellm.LlmProviders,
-                            vector_store_to_run.get("custom_llm_provider"),
-                        ),
-                    )
+                
+                vector_store_custom_logger = _init_custom_logger_compatible_class(
+                    logging_integration="vector_store_pre_call_hook",
+                    internal_usage_cache=None,
+                    llm_router=None,
                 )
                 self.model_call_details["prompt_integration"] = (
                     vector_store_custom_logger.__class__.__name__
@@ -1056,6 +1056,71 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             )
 
+    async def async_post_mcp_tool_call_hook(
+        self,
+        kwargs: dict,
+        response_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ):
+        """
+        Post MCP Tool Call Hook
+
+        Use this to modify the MCP tool call response before it is returned to the user.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPPostCallResponseObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_success_callbacks,
+            global_callbacks=litellm.success_callback,
+        )
+        post_mcp_tool_call_response_obj: MCPPostCallResponseObject = (
+            MCPPostCallResponseObject(
+                mcp_tool_call_response=response_obj, hidden_params=HiddenParams()
+            )
+        )
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    response: Optional[MCPPostCallResponseObject] = (
+                        await callback.async_post_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            response_obj=post_mcp_tool_call_response_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                    )
+                    ######################################################################
+                    # if any of the callbacks modify the response, use the modified response
+                    # current implementation returns the first modified response
+                    ######################################################################
+                    if response is not None:
+                        response_obj = self._parse_post_mcp_call_hook_response(
+                            response=response
+                        )
+            except Exception as e:
+                verbose_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return response_obj
+
+    def _parse_post_mcp_call_hook_response(
+        self, response: Optional[MCPPostCallResponseObject]
+    ) -> Any:
+        """
+        Parse the response from the post_mcp_tool_call_hook
+
+        1. Unpack the mcp_tool_call_response
+        2. save the updated response_cost to the model_call_details
+        """
+        if response is None:
+            return None
+        self.model_call_details["response_cost"] = response.hidden_params.response_cost
+        return response.mcp_tool_call_response
+
     def get_response_ms(self) -> float:
         return (
             self.model_call_details.get("end_time", datetime.datetime.now())
@@ -1135,6 +1200,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
+                "litellm_logging_obj": self,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -1340,21 +1406,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 and result is not None
                 and self.stream is not True
             ):
-                if (
-                    isinstance(logging_result, ModelResponse)
-                    or isinstance(logging_result, ModelResponseStream)
-                    or isinstance(logging_result, EmbeddingResponse)
-                    or isinstance(logging_result, ImageResponse)
-                    or isinstance(logging_result, TranscriptionResponse)
-                    or isinstance(logging_result, TextCompletionResponse)
-                    or isinstance(logging_result, HttpxBinaryResponseContent)  # tts
-                    or isinstance(logging_result, RerankResponse)
-                    or isinstance(logging_result, FineTuningJob)
-                    or isinstance(logging_result, LiteLLMBatch)
-                    or isinstance(logging_result, ResponsesAPIResponse)
-                    or isinstance(logging_result, OpenAIFileObject)
-                    or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
-                    or isinstance(logging_result, OpenAIModerationResponse)
+                if self._is_recognized_call_type_for_logging(
+                    logging_result=logging_result
                 ):
                     ## HIDDEN PARAMS ##
                     hidden_params = getattr(logging_result, "_hidden_params", {})
@@ -1451,6 +1504,33 @@ class Logging(LiteLLMLoggingBaseClass):
             return start_time, end_time, result
         except Exception as e:
             raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
+
+    def _is_recognized_call_type_for_logging(
+        self,
+        logging_result: Any,
+    ):
+        """
+        Returns True if the call type is recognized for logging (eg. ModelResponse, ModelResponseStream, etc.)
+        """
+        if (
+            isinstance(logging_result, ModelResponse)
+            or isinstance(logging_result, ModelResponseStream)
+            or isinstance(logging_result, EmbeddingResponse)
+            or isinstance(logging_result, ImageResponse)
+            or isinstance(logging_result, TranscriptionResponse)
+            or isinstance(logging_result, TextCompletionResponse)
+            or isinstance(logging_result, HttpxBinaryResponseContent)  # tts
+            or isinstance(logging_result, RerankResponse)
+            or isinstance(logging_result, FineTuningJob)
+            or isinstance(logging_result, LiteLLMBatch)
+            or isinstance(logging_result, ResponsesAPIResponse)
+            or isinstance(logging_result, OpenAIFileObject)
+            or isinstance(logging_result, LiteLLMRealtimeStreamLoggingObject)
+            or isinstance(logging_result, OpenAIModerationResponse)
+            or (self.call_type == CallTypes.call_mcp_tool.value)
+        ):
+            return True
+        return False
 
     def _flush_passthrough_collected_chunks_helper(
         self,
@@ -2906,31 +2986,37 @@ def _get_masked_values(
     ]
     return {
         k: (
-            (
-                v[: unmasked_length // 2]
-                + "*" * number_of_asterisks
-                + v[-unmasked_length // 2 :]
-            )
-            if (
-                isinstance(v, str)
-                and len(v) > unmasked_length
-                and number_of_asterisks is not None
+            # If ignore_sensitive_values is True, or if this key doesn't contain sensitive keywords, return original value
+            v
+            if ignore_sensitive_values
+            or not any(
+                sensitive_keyword in k.lower()
+                for sensitive_keyword in sensitive_keywords
             )
             else (
+                # Apply masking to sensitive keys
                 (
                     v[: unmasked_length // 2]
-                    + "*" * (len(v) - unmasked_length)
+                    + "*" * number_of_asterisks
                     + v[-unmasked_length // 2 :]
                 )
-                if (isinstance(v, str) and len(v) > unmasked_length)
-                else "*****"
+                if (
+                    isinstance(v, str)
+                    and len(v) > unmasked_length
+                    and number_of_asterisks is not None
+                )
+                else (
+                    (
+                        v[: unmasked_length // 2]
+                        + "*" * (len(v) - unmasked_length)
+                        + v[-unmasked_length // 2 :]
+                    )
+                    if (isinstance(v, str) and len(v) > unmasked_length)
+                    else ("*****" if isinstance(v, str) else v)
+                )
             )
         )
         for k, v in sensitive_object.items()
-        if not ignore_sensitive_values
-        or not any(
-            sensitive_keyword in k.lower() for sensitive_keyword in sensitive_keywords
-        )
     }
 
 
@@ -2953,8 +3039,6 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     import sentry_sdk
                 from sentry_sdk.scrubber import EventScrubber
 
-                
-
                 sentry_sdk_instance = sentry_sdk
                 sentry_trace_rate = (
                     os.environ.get("SENTRY_API_TRACE_RATE")
@@ -2974,8 +3058,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                     ),
                     send_default_pii=False,  # Prevent sending Personal Identifiable Information
                     event_scrubber=EventScrubber(
-                        denylist=SENTRY_DENYLIST,
-                        pii_denylist=SENTRY_PII_DENYLIST
+                        denylist=SENTRY_DENYLIST, pii_denylist=SENTRY_PII_DENYLIST
                     ),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
@@ -3033,6 +3116,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 s3Logger = S3Logger()
             elif callback == "wandb":
                 from litellm.integrations.weights_biases import WeightsBiasesLogger
+
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "logfire":
                 logfireLogger = LogfireLogger()
@@ -3046,6 +3130,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 customLogger = CustomLogger()
     except Exception as e:
         raise e
+    return None
 
 
 def _init_custom_logger_compatible_class(  # noqa: PLR0915
@@ -3087,6 +3172,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             return _openmeter_logger  # type: ignore
         elif logging_integration == "braintrust":
             from litellm.integrations.braintrust_logging import BraintrustLogger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, BraintrustLogger):
                     return callback  # type: ignore
@@ -3389,13 +3475,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             anthropic_cache_control_hook = AnthropicCacheControlHook()
             _in_memory_loggers.append(anthropic_cache_control_hook)
             return anthropic_cache_control_hook  # type: ignore
-        elif logging_integration == "bedrock_vector_store":
+        elif logging_integration == "vector_store_pre_call_hook":
+            from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+                VectorStorePreCallHook,
+            )
+            
             for callback in _in_memory_loggers:
-                if isinstance(callback, BedrockVectorStore):
+                if isinstance(callback, VectorStorePreCallHook):
                     return callback
-            bedrock_vector_store = BedrockVectorStore()
-            _in_memory_loggers.append(bedrock_vector_store)
-            return bedrock_vector_store  # type: ignore
+            vector_store_pre_call_hook = VectorStorePreCallHook()
+            _in_memory_loggers.append(vector_store_pre_call_hook)
+            return vector_store_pre_call_hook  # type: ignore
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
@@ -3453,6 +3543,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                     return callback
         elif logging_integration == "braintrust":
             from litellm.integrations.braintrust_logging import BraintrustLogger
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, BraintrustLogger):
                     return callback
@@ -3575,9 +3666,13 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
                     return callback
-        elif logging_integration == "bedrock_vector_store":
+        elif logging_integration == "vector_store_pre_call_hook":
+            from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+                VectorStorePreCallHook,
+            )
+            
             for callback in _in_memory_loggers:
-                if isinstance(callback, BedrockVectorStore):
+                if isinstance(callback, VectorStorePreCallHook):
                     return callback
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:

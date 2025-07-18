@@ -31,6 +31,7 @@ class LLMMetrics(TypedDict, total=False):
     total_tokens: float
     time_to_first_token: float
     time_per_output_token: float
+    total_cost: float
 
 
 class LLMObsPayload(TypedDict):

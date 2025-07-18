@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.73.6-stable"
+title: "v1.73.6-stable"
 slug: "v1-73-6-stable"
 date: 2025-06-28T10:00:00
 authors:
@@ -20,19 +20,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-:::warning
-
-## Known Issues
-
-The `non-root` docker image has a known issue around the UI not loading. If you use the `non-root` docker image we recommend waiting before upgrading to this version. We will post a patch fix for this.
-
-Update: this will be fixed in v1.73.7.rc.2
-
-:::
-
 ## Deploy this version
-
-This release is not out yet. The pre-release will be live on Sunday and the stable release will be live on Wednesday.
 
 <Tabs>
 <TabItem value="docker" label="Docker">
@@ -41,13 +29,15 @@ This release is not out yet. The pre-release will be live on Sunday and the stab
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.73.6.rc.1
+ghcr.io/berriai/litellm:v1.73.6-stable.patch.1
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
-The pip package is not yet available.
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.73.6.post1
+```
 
 </TabItem>
 </Tabs>

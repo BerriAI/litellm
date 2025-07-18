@@ -1276,16 +1276,20 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         tools = [
             {
                 "type": "url",
-                "url": "https://mcp.deepwiki.com/mcp",
-                "name": "deepwiki-mcp",
+                "url": "https://mcp.zapier.com/api/mcp/mcp",
+                "name": "zapier-mcp",
+                "authorization_token": os.getenv("ZAPIER_CI_CD_MCP_TOKEN"),
             }
         ]
     elif spec == "openai":
         tools = [
             {
                 "type": "mcp",
-                "server_label": "deepwiki",
-                "server_url": "https://mcp.deepwiki.com/mcp",
+                "server_label": "zapier",
+                "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+                "headers": {
+                    "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+                },
                 "require_approval": "never",
             },
         ]
@@ -1298,10 +1302,9 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 
     try:
         response = litellm.completion(**params)
+        assert response is not None
     except litellm.InternalServerError as e:
-        print(e)
-
-    assert response is not None
+        pytest.skip(f"Skipping test due to internal server error: {e}")
 
 
 @pytest.mark.parametrize(
@@ -1310,12 +1313,16 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
 
+    litellm._turn_on_debug()
     tools = [
         {
             "type": "mcp",
-            "server_label": "deepwiki",
-            "server_url": "https://mcp.deepwiki.com/mcp",
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
             "require_approval": "never",
+            "headers": {
+                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+            },
         },
     ]
 

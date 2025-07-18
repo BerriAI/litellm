@@ -7,6 +7,9 @@ import { modelAvailableCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import EditLoggingSettings from "./team/EditLoggingSettings";
+import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
+import { fetchMCPAccessGroups } from "./networking";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -52,6 +55,20 @@ export function KeyEditView({
   const [userModels, setUserModels] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+
+  const fetchMcpAccessGroups = async () => {
+    if (!accessToken) return;
+    if (mcpAccessGroupsLoaded) return;
+    try {
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+      setMcpAccessGroupsLoaded(true);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
 
   useEffect(() => {
     const fetchModels = async () => {
@@ -97,10 +114,14 @@ export function KeyEditView({
   const initialValues = {
     ...keyData,
     budget_duration: getBudgetDuration(keyData.budget_duration),
-    metadata: keyData.metadata ? JSON.stringify(keyData.metadata, null, 2) : "",
+    metadata: formatMetadataForDisplay(keyData.metadata),
     guardrails: keyData.metadata?.guardrails || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
-    mcp_servers: keyData.object_permission?.mcp_servers || []
+    mcp_servers_and_groups: {
+      servers: keyData.object_permission?.mcp_servers || [],
+      accessGroups: keyData.object_permission?.mcp_access_groups || []
+    },
+    logging_settings: extractLoggingSettings(keyData.metadata)
   };
 
   return (
@@ -182,17 +203,13 @@ export function KeyEditView({
         />
       </Form.Item>
 
-      <Form.Item label="MCP Servers" name="mcp_servers">
+      <Form.Item label="MCP Servers / Access Groups" name="mcp_servers_and_groups">
         <MCPServerSelector
-          onChange={(values) => form.setFieldValue('mcp_servers', values)}
-          value={form.getFieldValue('mcp_servers')}
-          accessToken={accessToken || ""}
-          placeholder="Select MCP servers"
+          onChange={val => form.setFieldValue('mcp_servers_and_groups', val)}
+          value={form.getFieldValue('mcp_servers_and_groups')}
+          accessToken={accessToken || ''}
+          placeholder="Select MCP servers or access groups (optional)"
         />
-      </Form.Item>
-
-      <Form.Item label="Metadata" name="metadata">
-        <Input.TextArea rows={10} />
       </Form.Item>
 
       <Form.Item label="Team ID" name="team_id">
@@ -208,6 +225,18 @@ export function KeyEditView({
           ))}
         </Select>
       </Form.Item>
+      <Form.Item label="Logging Settings" name="logging_settings">
+        <EditLoggingSettings
+          value={form.getFieldValue('logging_settings')}
+          onChange={(values) => form.setFieldValue('logging_settings', values)}
+        />
+      </Form.Item>
+
+
+      <Form.Item label="Metadata" name="metadata">
+        <Input.TextArea rows={10} />
+      </Form.Item>
+
 
       {/* Hidden form field for token */}
       <Form.Item name="token" hidden>

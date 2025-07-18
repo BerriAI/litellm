@@ -141,7 +141,7 @@ class LLMCachingHandler:
                     verbose_logger.debug("Cache Hit!")
                     cache_hit = True
                     end_time = datetime.datetime.now()
-                    model, _, _, _ = litellm.get_llm_provider(
+                    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                         model=model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         api_base=kwargs.get("api_base", None),
@@ -153,6 +153,7 @@ class LLMCachingHandler:
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=True,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
                     call_type = original_function.__name__
@@ -882,6 +883,7 @@ class LLMCachingHandler:
         cached_result: Any,
         is_async: bool,
         is_embedding: bool = False,
+        custom_llm_provider: Optional[str] = None,
     ):
         """
         Helper function to update the LiteLLMLoggingObj environment variables.
@@ -893,6 +895,7 @@ class LLMCachingHandler:
             cached_result (Any): The cached result to log.
             is_async (bool): Whether the call is asynchronous or not.
             is_embedding (bool): Whether the call is for embeddings or not.
+            custom_llm_provider (Optional[str]): The custom llm provider being used.
 
         Returns:
             None
@@ -905,6 +908,7 @@ class LLMCachingHandler:
             "model_info": kwargs.get("model_info", {}),
             "proxy_server_request": kwargs.get("proxy_server_request", None),
             "stream_response": kwargs.get("stream_response", {}),
+            "custom_llm_provider": custom_llm_provider,
         }
 
         if litellm.cache is not None:
@@ -928,6 +932,7 @@ class LLMCachingHandler:
             original_response=str(cached_result),
             additional_args=None,
             stream=kwargs.get("stream", False),
+            custom_llm_provider=custom_llm_provider,
         )
 
 

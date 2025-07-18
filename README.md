@@ -72,7 +72,7 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 response = completion(model="openai/gpt-4o", messages=messages)
 
 # anthropic call
-response = completion(model="anthropic/claude-3-sonnet-20240229", messages=messages)
+response = completion(model="anthropic/claude-sonnet-4-20250514", messages=messages)
 print(response)
 ```
 
@@ -80,9 +80,9 @@ print(response)
 
 ```json
 {
-    "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
-    "created": 1734366691,
-    "model": "claude-3-sonnet-20240229",
+    "id": "chatcmpl-1214900a-6cdd-4148-b663-b5e2f642b4de",
+    "created": 1751494488,
+    "model": "claude-sonnet-4-20250514",
     "object": "chat.completion",
     "system_fingerprint": null,
     "choices": [
@@ -90,7 +90,7 @@ print(response)
             "finish_reason": "stop",
             "index": 0,
             "message": {
-                "content": "Hello! As an AI language model, I don't have feelings, but I'm operating properly and ready to assist you with any questions or tasks you may have. How can I help you today?",
+                "content": "Hello! I'm doing well, thank you for asking. I'm here and ready to help with whatever you'd like to discuss or work on. How are you doing today?",
                 "role": "assistant",
                 "tool_calls": null,
                 "function_call": null
@@ -98,9 +98,9 @@ print(response)
         }
     ],
     "usage": {
-        "completion_tokens": 43,
+        "completion_tokens": 39,
         "prompt_tokens": 13,
-        "total_tokens": 56,
+        "total_tokens": 52,
         "completion_tokens_details": null,
         "prompt_tokens_details": {
             "audio_tokens": null,
@@ -141,8 +141,8 @@ response = completion(model="openai/gpt-4o", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
 
-# claude 2
-response = completion('anthropic/claude-3-sonnet-20240229', messages, stream=True)
+# claude sonnet 4
+response = completion('anthropic/claude-sonnet-4-20250514', messages, stream=True)
 for part in response:
     print(part)
 ```
@@ -151,9 +151,9 @@ for part in response:
 
 ```json
 {
-    "id": "chatcmpl-2be06597-eb60-4c70-9ec5-8cd2ab1b4697",
-    "created": 1734366925,
-    "model": "claude-3-sonnet-20240229",
+    "id": "chatcmpl-fe575c37-5004-4926-ae5e-bfbc31f356ca",
+    "created": 1751494808,
+    "model": "claude-sonnet-4-20250514",
     "object": "chat.completion.chunk",
     "system_fingerprint": null,
     "choices": [
@@ -161,6 +161,7 @@ for part in response:
             "finish_reason": null,
             "index": 0,
             "delta": {
+                "provider_specific_fields": null,
                 "content": "Hello",
                 "role": "assistant",
                 "function_call": null,
@@ -169,7 +170,10 @@ for part in response:
             },
             "logprobs": null
         }
-    ]
+    ],
+    "provider_specific_fields": null,
+    "stream_options": null,
+    "citations": null
 }
 ```
 

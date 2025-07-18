@@ -620,7 +620,6 @@ class CustomStreamWrapper:
 
         args = {
             "model": _model,
-            "stream_options": self.stream_options,
             **chunk_dict,
         }
 
@@ -1204,7 +1203,9 @@ class CustomStreamWrapper:
                 if response_obj is None:
                     return
                 completion_obj["content"] = response_obj["text"]
-                self.intermittent_finish_reason = response_obj.get("finish_reason", None)
+                self.intermittent_finish_reason = response_obj.get(
+                    "finish_reason", None
+                )
                 if response_obj["is_finished"]:
                     if response_obj["finish_reason"] == "error":
                         raise Exception(
@@ -1563,6 +1564,7 @@ class CustomStreamWrapper:
                 complete_streaming_response = litellm.stream_chunk_builder(
                     chunks=self.chunks, messages=self.messages
                 )
+
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
                     setattr(

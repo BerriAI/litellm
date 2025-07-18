@@ -940,6 +940,8 @@ def test_completion_mistral_api_mistral_large_function_call():
             tool_choice="auto",
         )
         print(second_response)
+    except litellm.RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

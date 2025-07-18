@@ -4,8 +4,7 @@ import React, { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { defaultOrg } from "@/components/common_components/default_org";
-import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
+import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
@@ -19,24 +18,28 @@ import GeneralSettings from "@/components/general_settings";
 import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
-import ModelHub from "@/components/model_hub";
+import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
 import Sidebar from "@/components/leftnav";
 import Usage from "@/components/usage";
 import CacheDashboard from "@/components/cache_dashboard";
-import { getUiConfig, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
+import {
+  getUiConfig,
+  proxyBaseUrl,
+  setGlobalLitellmHeaderName,
+} from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
-import { MCPToolsViewer, MCPServers } from "@/components/mcp_tools";
+import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { cx } from '@/lib/cva.config';
+import { cx } from "@/lib/cva.config";
 
 function getCookie(name: string) {
   const cookieValue = document.cookie
@@ -49,8 +52,6 @@ function formatUserRole(userRole: string) {
   if (!userRole) {
     return "Undefined Role";
   }
-  console.log(`Received user role: ${userRole.toLowerCase()}`);
-  console.log(`Received user role length: ${userRole.toLowerCase().length}`);
   switch (userRole.toLowerCase()) {
     case "app_owner":
       return "App Owner";
@@ -66,7 +67,8 @@ function formatUserRole(userRole: string) {
       return "Org Admin";
     case "internal_user":
       return "Internal User";
-    case "internal_viewer":
+    case "internal_user_viewer":
+    case "internal_viewer": // TODO:remove if deprecated
       return "Internal Viewer";
     case "app_user":
       return "App User";
@@ -88,7 +90,7 @@ function LoadingScreen() {
       <div className="text-lg font-medium py-2 pr-4 border-r border-r-gray-200">
         🚅 LiteLLM
       </div>
-      
+
       <div className="flex items-center justify-center gap-2">
         <UiLoadingSpinner className="size-4" />
         <span className="text-gray-600 text-sm">Loading...</span>
@@ -142,15 +144,16 @@ export default function CreateKeyPage() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
 
   const addKey = (data: any) => {
-    setKeys((prevData) => (prevData ? [...prevData, data] : [data]))
+    setKeys((prevData) => (prevData ? [...prevData, data] : [data]));
     setCreateClicked(() => !createClicked);
-  } 
-  const redirectToLogin = authLoading === false && token === null && invitation_id === null;
+  };
+  const redirectToLogin =
+    authLoading === false && token === null && invitation_id === null;
 
   useEffect(() => {
     const token = getCookie("token");
-    getUiConfig().then((data) => { // get the information for constructing the proxy base url, and then set the token and auth loading
-      console.log("ui config in page.tsx:", data);
+    getUiConfig().then((data) => {
+      // get the information for constructing the proxy base url, and then set the token and auth loading
       setToken(token);
       setAuthLoading(false);
     });
@@ -158,53 +161,41 @@ export default function CreateKeyPage() {
 
   useEffect(() => {
     if (redirectToLogin) {
-      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate"
+      window.location.href = (proxyBaseUrl || "") + "/sso/key/generate";
     }
-  }, [redirectToLogin])
+  }, [redirectToLogin]);
 
   useEffect(() => {
     if (!token) {
       return;
     }
 
- 
     const decoded = jwtDecode(token) as { [key: string]: any };
     if (decoded) {
-      // cast decoded to dictionary
-      console.log("Decoded token:", decoded);
-
-      console.log("Decoded key:", decoded.key);
       // set accessToken
       setAccessToken(decoded.key);
 
       setDisabledPersonalKeyCreation(
-        decoded.disabled_non_admin_personal_key_creation,
+        decoded.disabled_non_admin_personal_key_creation
       );
 
       // check if userRole is defined
       if (decoded.user_role) {
         const formattedUserRole = formatUserRole(decoded.user_role);
-        console.log("Decoded user_role:", formattedUserRole);
         setUserRole(formattedUserRole);
         if (formattedUserRole == "Admin Viewer") {
           setPage("usage");
         }
-      } else {
-        console.log("User role not defined");
       }
 
       if (decoded.user_email) {
         setUserEmail(decoded.user_email);
-      } else {
-        console.log(`User Email is not set ${decoded}`);
       }
 
       if (decoded.login_method) {
         setShowSSOBanner(
-          decoded.login_method == "username_password" ? true : false,
+          decoded.login_method == "username_password" ? true : false
         );
-      } else {
-        console.log(`User Email is not set ${decoded}`);
       }
 
       if (decoded.premium_user) {
@@ -218,13 +209,9 @@ export default function CreateKeyPage() {
       if (decoded.user_id) {
         setUserID(decoded.user_id);
       }
-
     }
-
-    
   }, [token]);
 
-  
   useEffect(() => {
     if (accessToken && userID && userRole) {
       fetchUserModels(userID, userRole, accessToken, setUserModels);
@@ -238,7 +225,7 @@ export default function CreateKeyPage() {
   }, [accessToken, userID, userRole]);
 
   if (authLoading || redirectToLogin) {
-    return <LoadingScreen />
+    return <LoadingScreen />;
   }
 
   return (
@@ -270,6 +257,7 @@ export default function CreateKeyPage() {
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
               accessToken={accessToken}
+              isPublicPage={false}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -369,8 +357,11 @@ export default function CreateKeyPage() {
               ) : page == "budgets" ? (
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
-                <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
-              ): page == "transform-request" ? (
+                <GuardrailsPanel
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              ) : page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
                 <GeneralSettings
@@ -379,11 +370,12 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   modelData={modelData}
                 />
-              ) : page == "model-hub" ? (
-                <ModelHub
+              ) : page == "model-hub-table" ? (
+                <ModelHubTable
                   accessToken={accessToken}
                   publicPage={false}
                   premiumUser={premiumUser}
+                  userRole={userRole}
                 />
               ) : page == "caching" ? (
                 <CacheDashboard
@@ -406,7 +398,7 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   token={token}
                   accessToken={accessToken}
-                  allTeams={teams as Team[] ?? []}
+                  allTeams={(teams as Team[]) ?? []}
                   premiumUser={premiumUser}
                 />
               ) : page == "mcp-servers" ? (

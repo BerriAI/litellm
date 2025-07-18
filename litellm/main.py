@@ -106,6 +106,7 @@ from litellm.utils import (
     mock_completion_streaming_obj,
     pre_process_non_default_params,
     read_config_args,
+    should_run_mock_completion,
     supports_httpx_timeout,
     token_counter,
     validate_and_fix_openai_messages,
@@ -141,6 +142,7 @@ from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
+from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -251,6 +253,7 @@ databricks_embedding = DatabricksEmbeddingHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
 sagemaker_chat_completion = SagemakerChatHandler()
+bytez_transformation = BytezChatConfig()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -437,6 +440,7 @@ async def acompletion(
             prompt_variables=kwargs.get("prompt_variables", None),
             tools=tools,
             prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
         )
         #########################################################
         # if the chat completion logging hook removed all tools,
@@ -506,6 +510,19 @@ async def acompletion(
                 "No response from fallbacks. Got none. Turn on `litellm.set_verbose=True` to see more details."
             )
         return response
+
+    ### APPLY MOCK DELAY ###
+
+    mock_delay = kwargs.get("mock_delay")
+    mock_response = kwargs.get("mock_response")
+    mock_tool_calls = kwargs.get("mock_tool_calls")
+    mock_timeout = kwargs.get("mock_timeout")
+    if mock_delay and should_run_mock_completion(
+        mock_response=mock_response,
+        mock_tool_calls=mock_tool_calls,
+        mock_timeout=mock_timeout,
+    ):
+        await asyncio.sleep(mock_delay)
 
     try:
         # Use a partial function to pass your keyword arguments
@@ -710,6 +727,7 @@ def mock_completion(
         - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
     """
     try:
+        is_acompletion = kwargs.get("acompletion") or False
         if mock_response is None:
             mock_response = "This is a mock request"
 
@@ -741,7 +759,7 @@ def mock_completion(
                 status_code=529,
             )
         time_delay = kwargs.get("mock_delay", None)
-        if time_delay is not None:
+        if time_delay is not None and not is_acompletion:
             time.sleep(time_delay)
 
         if isinstance(mock_response, dict):
@@ -1049,6 +1067,7 @@ def completion(  # type: ignore # noqa: PLR0915
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=kwargs.get("prompt_label", None),
+            prompt_version=kwargs.get("prompt_version", None),
         )
 
     try:
@@ -1749,7 +1768,36 @@ def completion(  # type: ignore # noqa: PLR0915
                     additional_args={"headers": headers},
                 )
                 raise e
-
+        elif custom_llm_provider == "xai":
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
         elif custom_llm_provider == "groq":
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
@@ -1937,7 +1985,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("MISTRAL_API_BASE")
                 or "https://api.mistral.ai/v1"
             )
-            
+
             response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
@@ -2602,13 +2650,7 @@ def completion(  # type: ignore # noqa: PLR0915
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = deepcopy(optional_params)
-            if (
-                model.startswith("meta/")
-                or model.startswith("mistral")
-                or model.startswith("codestral")
-                or model.startswith("jamba")
-                or model.startswith("claude")
-            ):
+            if vertex_partner_models_chat_completion.is_vertex_partner_model(model):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
                     messages=messages,
@@ -2883,6 +2925,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     client=client,
                     api_base=api_base,
+                    api_key=api_key
                 )
             elif bedrock_route == "converse_like":
                 model = model.replace("converse_like/", "")
@@ -3239,6 +3282,35 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
                 raise e
 
+        elif custom_llm_provider == "bytez":
+            api_key = (
+                api_key
+                or litellm.bytez_key
+                or get_secret_str("BYTEZ_API_KEY")
+                or litellm.api_key
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=bytez_transformation
+            )
+
+            pass
+
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -3487,6 +3559,62 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             completion_kwargs=args,
             extra_kwargs=kwargs,
         )
+
+
+# fmt: off
+
+# Overload for when aembedding=True (returns coroutine)
+@overload
+def embedding(
+    model,
+    input=[],
+    # Optional params
+    dimensions: Optional[int] = None,
+    encoding_format: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    # set api_base, api_version, api_key
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_type: Optional[str] = None,
+    caching: bool = False,
+    user: Optional[str] = None,
+    custom_llm_provider=None,
+    litellm_call_id=None,
+    logger_fn=None,
+    *,
+    aembedding: Literal[True],
+    **kwargs,
+) -> Coroutine[Any, Any, EmbeddingResponse]: 
+    ...
+
+
+# Overload for when aembedding=False or not specified (returns EmbeddingResponse)
+@overload
+def embedding(
+    model,
+    input=[],
+    # Optional params
+    dimensions: Optional[int] = None,
+    encoding_format: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    # set api_base, api_version, api_key
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_type: Optional[str] = None,
+    caching: bool = False,
+    user: Optional[str] = None,
+    custom_llm_provider=None,
+    litellm_call_id=None,
+    logger_fn=None,
+    *,
+    aembedding: Literal[False] = False,
+    **kwargs,
+) -> EmbeddingResponse: 
+    ...
+
+# fmt: on
 
 
 @client
@@ -3851,6 +3979,7 @@ def embedding(  # noqa: PLR0915
                 api_base=api_base,
                 print_verbose=print_verbose,
                 extra_headers=extra_headers,
+                api_key=api_key,
             )
         elif custom_llm_provider == "triton":
             if api_base is None:
@@ -5637,6 +5766,19 @@ def stream_chunk_builder(  # noqa: PLR0915
         if len(content_chunks) > 0:
             response["choices"][0]["message"]["content"] = (
                 processor.get_combined_content(content_chunks)
+            )
+
+        thinking_blocks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "thinking_blocks" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
+        ]
+
+        if len(thinking_blocks) > 0:
+            response["choices"][0]["message"]["thinking_blocks"] = (
+                processor.get_combined_thinking_content(thinking_blocks)
             )
 
         reasoning_chunks = [
