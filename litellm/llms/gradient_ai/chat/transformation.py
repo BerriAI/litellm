@@ -7,6 +7,9 @@ from litellm.types.llms.openai import (
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
+# Default GradientAI endpoint
+GRADIENT_AI_SERVERLESS_ENDPOINT = "https://inference.do-ai.run"
+
 
 class GradientAIConfig(OpenAILikeChatConfig):
 
@@ -99,16 +102,26 @@ class GradientAIConfig(OpenAILikeChatConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        complete_url = f"{api_base}/api/v1/chat/completions"
+        gradient_ai_endpoint = get_secret_str("GRADIENT_AI_AGENT_ENDPOINT")
+
+        if not api_base and not gradient_ai_endpoint:
+            complete_url = f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
+        else:
+            base_url = api_base or gradient_ai_endpoint
+            complete_url = f"{base_url}/api/v1/chat/completions"
+
         return complete_url
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = (
-            api_base
-            or get_secret_str("GRADIENT_AI_AGENT_ENDPOINT")
-        )  # type: ignore
+        gradient_ai_endpoint = get_secret_str("GRADIENT_AI_AGENT_ENDPOINT")
+
+        if not api_base and not gradient_ai_endpoint:
+            api_base = GRADIENT_AI_SERVERLESS_ENDPOINT
+        else:
+            api_base = api_base or gradient_ai_endpoint
+
         dynamic_api_key = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         return api_base, dynamic_api_key
 
@@ -120,16 +133,11 @@ class GradientAIConfig(OpenAILikeChatConfig):
         drop_params: bool = False,
         replace_max_completion_tokens_with_max_tokens: bool = False,
     ) -> dict:
-        # Get supported parameters for GradientAI
         supported_openai_params = self.get_supported_openai_params(model=model)
-        
-        # Handle all supported parameters (both standard OpenAI and GradientAI-specific)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
             elif not drop_params:
-                # If drop_params is False and parameter is not supported, raise error
-                # This matches the behavior of other providers
                 from litellm.utils import UnsupportedParamsError
                 raise UnsupportedParamsError(
                     status_code=400,
