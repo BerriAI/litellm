@@ -92,24 +92,20 @@ async def test_v0_completion_call():
 
 
 def test_v0_supported_params():
-    """Test that v0 returns the standard OpenAI parameters"""
+    """Test that v0 returns only the supported parameters"""
     config = V0ChatConfig()
-    supported_params = config.get_supported_openai_params("v0/gpt-4-turbo")
+    supported_params = config.get_supported_openai_params("v0/v0-1.5-md")
     
-    # Check that standard OpenAI params are supported
+    # v0 only supports these specific params
     expected_params = [
-        "temperature",
-        "max_tokens",
-        "top_p",
-        "frequency_penalty",
-        "presence_penalty",
-        "stop",
-        "n",
+        "messages",
+        "model",
         "stream",
+        "tools",
+        "tool_choice",
     ]
     
-    for param in expected_params:
-        assert param in supported_params
+    assert set(supported_params) == set(expected_params)
 
 
 def test_v0_models_configuration():

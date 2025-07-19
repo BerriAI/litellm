@@ -32,6 +32,13 @@ class V0ChatConfig(OpenAILikeChatConfig):
 
     def get_supported_openai_params(self, model: str) -> list:
         """
-        v0 supports standard OpenAI parameters
+        v0 supports a limited subset of OpenAI parameters
+        Reference: https://v0.dev/docs/v0-model-api#request-body
         """
-        return super().get_supported_openai_params(model)
+        return [
+            "messages",     # Required
+            "model",        # Required
+            "stream",       # Optional
+            "tools",        # Optional
+            "tool_choice",  # Optional
+        ]
