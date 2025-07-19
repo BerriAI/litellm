@@ -1,5 +1,6 @@
 ### Hide pydantic namespace conflict warnings globally ###
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
 ### INIT VARIABLES ####################
@@ -707,7 +708,9 @@ petals_models = [
     "petals-team/StableBeluga2",
 ]
 
-ollama_models = ["llama2"]
+# Since Ollama models are local, it is inexpensive to refresh the list at startup.
+# Also, this list can change very quickly.
+ollama_models = []
 
 maritalk_models = ["maritalk"]
 
@@ -795,6 +798,7 @@ models_by_provider: dict = {
     "bedrock": bedrock_models + bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
+    "ollama_chat": ollama_models,
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
