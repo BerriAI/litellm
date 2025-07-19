@@ -220,6 +220,279 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
     ]
 
 
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_disabled_callbacks():
+    """
+    Test that litellm_disabled_callbacks from key metadata is properly added to the request data.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    # Setup mock request
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup user API key with disabled callbacks in metadata
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        metadata={
+            "litellm_disabled_callbacks": ["langfuse", "langsmith", "datadog"]
+        }
+    )
+
+    # Setup request data
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Setup proxy config
+    proxy_config = MagicMock()
+
+    # Call add_litellm_data_to_request
+    result = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config
+    )
+
+    # Verify that litellm_disabled_callbacks was added to the request data
+    assert "litellm_disabled_callbacks" in result
+    assert result["litellm_disabled_callbacks"] == ["langfuse", "langsmith", "datadog"]
+
+    # Verify that other data is still present
+    assert "model" in result
+    assert result["model"] == "gpt-3.5-turbo"
+    assert "messages" in result
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_disabled_callbacks_empty():
+    """
+    Test that litellm_disabled_callbacks is not added when it's empty.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    # Setup mock request
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup user API key with empty disabled callbacks
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        metadata={
+            "litellm_disabled_callbacks": []
+        }
+    )
+
+    # Setup request data
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Setup proxy config
+    proxy_config = MagicMock()
+
+    # Call add_litellm_data_to_request
+    result = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config
+    )
+
+    # Verify that litellm_disabled_callbacks is not added when empty
+    assert "litellm_disabled_callbacks" not in result
+
+    # Verify that other data is still present
+    assert "model" in result
+    assert result["model"] == "gpt-3.5-turbo"
+    assert "messages" in result
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_disabled_callbacks_not_present():
+    """
+    Test that litellm_disabled_callbacks is not added when it's not present in metadata.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    # Setup mock request
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup user API key without disabled callbacks in metadata
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        metadata={}  # No litellm_disabled_callbacks
+    )
+
+    # Setup request data
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Setup proxy config
+    proxy_config = MagicMock()
+
+    # Call add_litellm_data_to_request
+    result = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config
+    )
+
+    # Verify that litellm_disabled_callbacks is not added when not present
+    assert "litellm_disabled_callbacks" not in result
+
+    # Verify that other data is still present
+    assert "model" in result
+    assert result["model"] == "gpt-3.5-turbo"
+    assert "messages" in result
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_disabled_callbacks_invalid_type():
+    """
+    Test that litellm_disabled_callbacks is not added when it's not a list.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    # Setup mock request
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup user API key with invalid disabled callbacks type
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        metadata={
+            "litellm_disabled_callbacks": "not_a_list"  # Should be a list
+        }
+    )
+
+    # Setup request data
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Setup proxy config
+    proxy_config = MagicMock()
+
+    # Call add_litellm_data_to_request
+    result = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config
+    )
+
+    # Verify that litellm_disabled_callbacks is not added when invalid type
+    assert "litellm_disabled_callbacks" not in result
+
+    # Verify that other data is still present
+    assert "model" in result
+    assert result["model"] == "gpt-3.5-turbo"
+    assert "messages" in result
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_disabled_callbacks_with_logging_settings():
+    """
+    Test that litellm_disabled_callbacks works correctly alongside logging settings.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    # Setup mock request
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Setup user API key with both logging settings and disabled callbacks
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        org_id="test_org_id",
+        metadata={
+            "logging": [
+                {"callback_name": "langfuse", "callback_type": "success", "callback_vars": {}}
+            ],
+            "litellm_disabled_callbacks": ["langsmith", "datadog"]
+        }
+    )
+
+    # Setup request data
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+
+    # Setup proxy config
+    proxy_config = MagicMock()
+
+    # Call add_litellm_data_to_request
+    result = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config
+    )
+
+    # Verify that both logging settings and disabled callbacks are handled correctly
+    assert "litellm_disabled_callbacks" in result
+    assert result["litellm_disabled_callbacks"] == ["langsmith", "datadog"]
+
+    # Verify that other data is still present
+    assert "model" in result
+    assert result["model"] == "gpt-3.5-turbo"
+    assert "messages" in result
+
+
 def test_key_dynamic_logging_settings():
     """
     Test KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings method with arize and langfuse callbacks

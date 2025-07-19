@@ -1,7 +1,7 @@
 export enum Callbacks {
   Braintrust = "Braintrust",
   CustomCallbackAPI = "Custom Callback API",
-  Datadog = "Datagog",
+  Datadog = "Datadog",
   Langfuse = "Langfuse",
   LangSmith = "LangSmith",
   Lago = "Lago",
@@ -24,7 +24,7 @@ export const callback_map: Record<string, string> = {
   Arize: "arize",
 }
 
-const asset_logos_folder = '/ui/assets/logos/';
+const asset_logos_folder = '/assets/logos/';
 
 interface CallbackInfo {
   logo: string;
@@ -66,7 +66,7 @@ export const callbackInfo: Record<string, CallbackInfo> = {
     },
     [Callbacks.CustomCallbackAPI]: {
         logo: `${asset_logos_folder}custom.svg`,
-        supports_key_team_logging: false,
+        supports_key_team_logging: true,
         dynamic_params: {}
     },
     [Callbacks.Datadog]: {
