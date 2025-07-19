@@ -150,7 +150,7 @@ This enables developers to easily integrate vector search capabilities into thei
 - **[VertexAI](../../docs/providers/vertex)**
     - Added Vertex AI RAG Engine support (use with OpenAI compatible `/vector_stores` API) - [PR #12752](https://github.com/BerriAI/litellm/pull/12595), **DOC NEEDED**
 - **[vLLM](../../docs/providers/vllm)**
-    - Added support for using Rerank endpoints with vLLM - [PR #12738](https://github.com/BerriAI/litellm/pull/12738), **Doc Needed**
+    - Added support for using Rerank endpoints with vLLM - [PR #12738](https://github.com/BerriAI/litellm/pull/12738), [Get Started](../../docs/providers/vllm#rerank)
 - **[AI21](../../docs/providers/ai21)**
     - Added ai21/jamba-1.7 model family pricing - [PR #12593](https://github.com/BerriAI/litellm/pull/12593), [Get Started](../../docs/providers/ai21)
 - **[Together.ai](../../docs/providers/together_ai)**
