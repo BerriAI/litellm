@@ -6247,8 +6247,22 @@ export const vectorStoreSearchCall = async (
 
     if (!response.ok) {
       const errorData = await response.text();
-      await handleError(errorData);
-      return null;
+      let parsedError;
+      try {
+        parsedError = JSON.parse(errorData);
+      } catch {
+        parsedError = { error: { message: errorData } };
+      }
+      
+      // Create an error object that matches axios-style error structure
+      const error = new Error(`HTTP ${response.status}: ${response.statusText}`);
+      (error as any).response = {
+        status: response.status,
+        statusText: response.statusText,
+        data: parsedError
+      };
+      
+      throw error;
     }
 
     const data = await response.json();

@@ -48,6 +48,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
     query: string;
     response: VectorStoreSearchResponse | null;
     error?: string;
+    fullErrorObject?: any;
     timestamp: number;
   }[]>([]);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
@@ -73,32 +74,48 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
       setQuery("");
     } catch (error: any) {
       console.error("Error searching vector store:", error);
+      console.error("Error response data:", error?.response?.data);
       
       // Extract error message from the response
       let errorMessage = "Failed to search vector store";
       let detailedError = "";
+      let fullErrorObject: any = null;
       
-      if (error?.response?.data?.error?.message) {
+      if (error?.response?.data?.error) {
         // API returned structured error
-        detailedError = error.response.data.error.message;
-        errorMessage = detailedError.split('\n')[0] || detailedError; // First line for toast
+        fullErrorObject = error.response.data.error;
+        detailedError = fullErrorObject.message || JSON.stringify(fullErrorObject, null, 2);
+        errorMessage = fullErrorObject.message?.split('\n')[0] || "API Error";
+      } else if (error?.response?.data) {
+        // API returned data but no structured error
+        fullErrorObject = error.response.data;
+        detailedError = JSON.stringify(error.response.data, null, 2);
+        errorMessage = "API Error - See details below";
       } else if (error?.message) {
         // General error message
         detailedError = error.message;
         errorMessage = error.message;
+        fullErrorObject = { message: error.message, stack: error.stack };
       } else if (typeof error === 'string') {
         detailedError = error;
         errorMessage = error;
+        fullErrorObject = { error: error };
+      } else {
+        // Fallback - show entire error object
+        fullErrorObject = error;
+        detailedError = JSON.stringify(error, null, 2);
+        errorMessage = "Unknown error - See details below";
       }
       
       // Show error in toast
       message.error(errorMessage);
       
-      // Add error to search history
+      // Add error to search history with full debugging info
       const errorHistoryEntry = {
         query,
         response: null,
         error: detailedError,
+        fullErrorObject: fullErrorObject,
         timestamp: Date.now(),
       };
       
@@ -195,8 +212,18 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
                             <div className="flex items-center gap-2 mb-2">
                               <span className="text-red-500 font-medium text-sm">Error</span>
                             </div>
-                            <div className="text-sm text-red-700 bg-red-100 p-3 rounded border max-h-60 overflow-y-auto font-mono whitespace-pre-wrap">
-                              {entry.error}
+                            <div className="space-y-3">
+                              <div className="text-sm text-red-700 bg-red-100 p-3 rounded border max-h-60 overflow-y-auto font-mono whitespace-pre-wrap">
+                                {entry.error}
+                              </div>
+                              {entry.fullErrorObject && (
+                                <div>
+                                  <div className="text-xs text-red-600 font-medium mb-1">Full Error Object (Debug Info):</div>
+                                  <div className="text-xs text-red-700 bg-red-100 p-3 rounded border max-h-60 overflow-y-auto font-mono whitespace-pre-wrap">
+                                    {JSON.stringify(entry.fullErrorObject, null, 2)}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         ) : entry.response && entry.response.data && entry.response.data.length > 0 ? (
