@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { message, Modal } from "antd";
-import { PlusCircleIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline";
+import { PlusCircleIcon, PencilIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { isAdminRole } from "../utils/roles";
 import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "./networking";
 import { 
@@ -34,6 +34,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
   const [newLink, setNewLink] = useState({ url: "", displayName: "" });
   const [editingLink, setEditingLink] = useState<Link | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
 
   // Check if user is admin
   if (!isAdminRole(userRole || "")) {
@@ -204,169 +205,189 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
 
   return (
     <Card className="mb-6">
-      <Title className="mb-4">Admin Link Management</Title>
-      <div className="mb-6">
-        <Text className="text-sm font-medium text-gray-700 mb-2">Add New Link</Text>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">URL</label>
-            <input
-              type="text"
-              value={newLink.url}
-              onChange={(e) =>
-                setNewLink({
-                  ...newLink,
-                  url: e.target.value,
-                })
-              }
-              placeholder="https://example.com"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">
-              Display Name
-            </label>
-            <input
-              type="text"
-              value={newLink.displayName}
-              onChange={(e) =>
-                setNewLink({
-                  ...newLink,
-                  displayName: e.target.value,
-                })
-              }
-              placeholder="Friendly name"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-            />
-          </div>
-          <div className="flex items-end">
-            <button
-              onClick={handleAddLink}
-              disabled={!newLink.url || !newLink.displayName}
-              className={`flex items-center px-4 py-2 rounded-md text-sm ${!newLink.url || !newLink.displayName ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}
-            >
-              <PlusCircleIcon className="w-4 h-4 mr-1" />
-              Add Link
-            </button>
-          </div>
+      <div 
+        className="flex items-center justify-between cursor-pointer"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        <div className="flex flex-col">
+          <Title className="mb-0">Link Management</Title>
+          <p className="text-sm text-gray-500">Manage the links that are displayed under 'Useful Links' on the public model hub.</p>
+        </div>
+        <div className="flex items-center">
+          {isExpanded ? (
+            <ChevronDownIcon className="w-5 h-5 text-gray-500" />
+          ) : (
+            <ChevronRightIcon className="w-5 h-5 text-gray-500" />
+          )}
         </div>
       </div>
-      <Text className="text-sm font-medium text-gray-700 mb-2">
-        Manage Existing Links
-      </Text>
-      <div className="rounded-lg custom-border relative">
-        <div className="overflow-x-auto">
-          <Table className="[&_td]:py-0.5 [&_th]:py-1">
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell className="py-1 h-8">
+      
+      {isExpanded && (
+        <div className="mt-4">
+          <div className="mb-6">
+            <Text className="text-sm font-medium text-gray-700 mb-2">Add New Link</Text>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">URL</label>
+                <input
+                  type="text"
+                  value={newLink.url}
+                  onChange={(e) =>
+                    setNewLink({
+                      ...newLink,
+                      url: e.target.value,
+                    })
+                  }
+                  placeholder="https://example.com"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
                   Display Name
-                </TableHeaderCell>
-                <TableHeaderCell className="py-1 h-8">
-                  URL
-                </TableHeaderCell>
-                <TableHeaderCell className="py-1 h-8">
-                  Actions
-                </TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-                          {links.map((link) => (
-                <TableRow key={link.id} className="h-8">
-                  {editingLink && editingLink.id === link.id ? (
-                    <>
-                      <TableCell className="py-0.5">
-                        <input
-                          type="text"
-                          value={editingLink.displayName}
-                          onChange={(e) =>
-                            setEditingLink({
-                              ...editingLink,
-                              displayName: e.target.value,
-                            })
-                          }
-                          className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
-                        />
+                </label>
+                <input
+                  type="text"
+                  value={newLink.displayName}
+                  onChange={(e) =>
+                    setNewLink({
+                      ...newLink,
+                      displayName: e.target.value,
+                    })
+                  }
+                  placeholder="Friendly name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  onClick={handleAddLink}
+                  disabled={!newLink.url || !newLink.displayName}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm ${!newLink.url || !newLink.displayName ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}
+                >
+                  <PlusCircleIcon className="w-4 h-4 mr-1" />
+                  Add Link
+                </button>
+              </div>
+            </div>
+          </div>
+          <Text className="text-sm font-medium text-gray-700 mb-2">
+            Manage Existing Links
+          </Text>
+          <div className="rounded-lg custom-border relative">
+            <div className="overflow-x-auto">
+              <Table className="[&_td]:py-0.5 [&_th]:py-1">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell className="py-1 h-8">
+                      Display Name
+                    </TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">
+                      URL
+                    </TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">
+                      Actions
+                    </TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                              {links.map((link) => (
+                    <TableRow key={link.id} className="h-8">
+                      {editingLink && editingLink.id === link.id ? (
+                        <>
+                          <TableCell className="py-0.5">
+                            <input
+                              type="text"
+                              value={editingLink.displayName}
+                              onChange={(e) =>
+                                setEditingLink({
+                                  ...editingLink,
+                                  displayName: e.target.value,
+                                })
+                              }
+                              className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                            />
+                          </TableCell>
+                          <TableCell className="py-0.5">
+                            <input
+                              type="text"
+                              value={editingLink.url}
+                              onChange={(e) =>
+                                setEditingLink({
+                                  ...editingLink,
+                                  url: e.target.value,
+                                })
+                              }
+                              className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                            />
+                          </TableCell>
+                          <TableCell className="py-0.5 whitespace-nowrap">
+                            <div className="flex space-x-2">
+                              <button
+                                onClick={handleUpdateLink}
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={handleCancelEdit}
+                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </TableCell>
+                        </>
+                      ) : (
+                        <>
+                          <TableCell className="py-0.5 text-sm text-gray-900">
+                            {link.displayName}
+                          </TableCell>
+                          <TableCell className="py-0.5 text-sm text-gray-500">
+                            {link.url}
+                          </TableCell>
+                          <TableCell className="py-0.5 whitespace-nowrap">
+                            <div className="flex space-x-2">
+                              <button
+                                onClick={() => setCurrentLink(link.url)}
+                                className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100"
+                              >
+                                Use
+                              </button>
+                              <button
+                                onClick={() => handleEditLink(link)}
+                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                              >
+                                <PencilIcon className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={() => deleteLink(link.id)}
+                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
+                              >
+                                <TrashIcon className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </TableCell>
+                        </>
+                      )}
+                    </TableRow>
+                  ))}
+                  {links.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={3}
+                        className="py-0.5 text-sm text-gray-500 text-center"
+                      >
+                        No links added yet. Add a new link above.
                       </TableCell>
-                      <TableCell className="py-0.5">
-                        <input
-                          type="text"
-                          value={editingLink.url}
-                          onChange={(e) =>
-                            setEditingLink({
-                              ...editingLink,
-                              url: e.target.value,
-                            })
-                          }
-                          className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
-                        />
-                      </TableCell>
-                      <TableCell className="py-0.5 whitespace-nowrap">
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={handleUpdateLink}
-                            className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={handleCancelEdit}
-                            className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </TableCell>
-                    </>
-                  ) : (
-                    <>
-                      <TableCell className="py-0.5 text-sm text-gray-900">
-                        {link.displayName}
-                      </TableCell>
-                      <TableCell className="py-0.5 text-sm text-gray-500">
-                        {link.url}
-                      </TableCell>
-                      <TableCell className="py-0.5 whitespace-nowrap">
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => setCurrentLink(link.url)}
-                            className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100"
-                          >
-                            Use
-                          </button>
-                          <button
-                            onClick={() => handleEditLink(link)}
-                            className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
-                          >
-                            <PencilIcon className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={() => deleteLink(link.id)}
-                            className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
-                          >
-                            <TrashIcon className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </TableCell>
-                    </>
+                    </TableRow>
                   )}
-                </TableRow>
-              ))}
-              {links.length === 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={3}
-                    className="py-0.5 text-sm text-gray-500 text-center"
-                  >
-                    No links added yet. Add a new link above.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                </TableBody>
+              </Table>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </Card>
   );
 };
