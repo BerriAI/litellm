@@ -95,26 +95,26 @@ This enables developers to easily integrate vector search capabilities into thei
 
 #### Pricing / Context Window Updates
 
-| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Type |
-| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | ---- |
-| Azure AI | `azure_ai/grok-3` | 131k | $3.30 | $16.50 | New |
-| Azure AI | `azure_ai/global/grok-3` | 131k | $3.00 | $15.00 | New |
-| Azure AI | `azure_ai/global/grok-3-mini` | 131k | $0.25 | $1.27 | New |
-| Azure AI | `azure_ai/grok-3-mini` | 131k | $0.275 | $1.38 | New |
-| Azure AI | `azure_ai/jais-30b-chat` | 8k | $3200 | $9710 | New |
-| Groq | `groq/moonshotai-kimi-k2-instruct` | 131k | $1.00 | $3.00 | New |
-| AI21 | `jamba-large-1.7` | 256k | $2.00 | $8.00 | New |
-| AI21 | `jamba-mini-1.7` | 256k | $0.20 | $0.40 | New |
-| Together.ai | `together_ai/moonshotai/Kimi-K2-Instruct` | 131k | $1.00 | $3.00 | New |
-| Together.ai | `together_ai/deepseek-ai/DeepSeek-R1` | Various | $3.00 | $7.00 | New |
-| v0 | `v0/v0-1.0-md` | 128k | $3.00 | $15.00 | New |
-| v0 | `v0/v0-1.5-md` | 128k | $3.00 | $15.00 | New |
-| v0 | `v0/v0-1.5-lg` | 512k | $15.00 | $75.00 | New |
-| Moonshot | `moonshot/kimi-k2-0711-preview` | 131k | $0.60 | $2.50 | New |
-| Moonshot | `moonshot/moonshot-v1-8k` | 8k | - | - | New |
-| Moonshot | `moonshot/moonshot-v1-32k` | 32k | - | - | New |
-| Moonshot | `moonshot/moonshot-v1-128k` | 131k | - | - | New |
-| Moonshot | `moonshot/moonshot-v1-auto` | 131k | - | - | New |
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- |
+| Azure AI | `azure_ai/grok-3` | 131k | $3.30 | $16.50 |
+| Azure AI | `azure_ai/global/grok-3` | 131k | $3.00 | $15.00 |
+| Azure AI | `azure_ai/global/grok-3-mini` | 131k | $0.25 | $1.27 |
+| Azure AI | `azure_ai/grok-3-mini` | 131k | $0.275 | $1.38 |
+| Azure AI | `azure_ai/jais-30b-chat` | 8k | $3200 | $9710 |
+| Groq | `groq/moonshotai-kimi-k2-instruct` | 131k | $1.00 | $3.00 |
+| AI21 | `jamba-large-1.7` | 256k | $2.00 | $8.00 |
+| AI21 | `jamba-mini-1.7` | 256k | $0.20 | $0.40 |
+| Together.ai | `together_ai/moonshotai/Kimi-K2-Instruct` | 131k | $1.00 | $3.00 |
+| Together.ai | `together_ai/deepseek-ai/DeepSeek-R1` | Various | $3.00 | $7.00 |
+| v0 | `v0/v0-1.0-md` | 128k | $3.00 | $15.00 |
+| v0 | `v0/v0-1.5-md` | 128k | $3.00 | $15.00 |
+| v0 | `v0/v0-1.5-lg` | 512k | $15.00 | $75.00 |
+| Moonshot | `moonshot/kimi-k2-0711-preview` | 131k | $0.60 | $2.50 |
+| Moonshot | `moonshot/moonshot-v1-8k` | 8k | - | - |
+| Moonshot | `moonshot/moonshot-v1-32k` | 32k | - | - |
+| Moonshot | `moonshot/moonshot-v1-128k` | 131k | - | - |
+| Moonshot | `moonshot/moonshot-v1-auto` | 131k | - | - |
 
 
 #### Features
