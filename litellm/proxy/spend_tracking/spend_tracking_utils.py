@@ -338,9 +338,10 @@ def get_logging_payload(  # noqa: PLR0915
             ),
         )
 
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
         verbose_proxy_logger.debug(
             "SpendTable: created payload - payload: %s\n\n",
-            json.dumps(payload, indent=4, default=str),
+            safe_dumps(payload),
         )
 
         return payload
