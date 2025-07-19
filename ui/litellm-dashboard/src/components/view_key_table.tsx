@@ -93,7 +93,6 @@ interface ViewKeyTableProps {
   userID: string;
   userRole: string | null;
   accessToken: string;
-  setAccessToken: (token: string) => void;
   selectedTeam: any | null;
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
   data: any[] | null;
@@ -145,7 +144,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   userID,
   userRole,
   accessToken,
-  setAccessToken,
   selectedTeam,
   setSelectedTeam,
   data,
@@ -388,7 +386,6 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         selectedTeam={selectedTeam}
         setSelectedTeam={setSelectedTeam}
         accessToken={accessToken}
-        setAccessToken={setAccessToken}
         userID={userID}
         userRole={userRole}
         organizations={organizations}
