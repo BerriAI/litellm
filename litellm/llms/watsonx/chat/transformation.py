@@ -108,15 +108,3 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             url=url, api_version=optional_params.pop("api_version", None)
         )
         return url
-
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        """
-        Prepare payload for deployment models.
-        Deployment models cannot have 'model_id' or 'model' in the request body.
-        """
-        payload: dict = {}
-        payload["model_id"] = None if model.startswith("deployment/") else model
-        payload["project_id"] = (
-            None if model.startswith("deployment/") else api_params["project_id"]
-        )
-        return payload
