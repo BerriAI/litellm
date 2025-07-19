@@ -10898,6 +10898,17 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "openrouter/switchpoint/router": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 8.5e-07,
+        "output_cost_per_token": 3.4e-06,
+        "litellm_provider": "openrouter",
+        "source": "https://openrouter.ai/switchpoint/router",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "j2-ultra": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
