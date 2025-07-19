@@ -1179,6 +1179,7 @@ from .exceptions import (
     JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
     MockException,
+    MidStreamFallbackError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
