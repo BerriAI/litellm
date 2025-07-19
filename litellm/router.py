@@ -92,6 +92,9 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group,
     run_async_fallback,
 )
+from litellm.router_utils.forward_clientside_headers_by_model_group import (
+    ForwardClientSideHeadersByModelGroup,
+)
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -162,7 +165,6 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-
     Span = Union[_Span, Any]
 else:
     Span = Any
@@ -179,6 +181,7 @@ class Router:
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
+    optional_callbacks: Optional[List[Union[CustomLogger, Callable, str]]] = None
 
     def __init__(  # noqa: PLR0915
         self,
@@ -642,6 +645,13 @@ class Router:
             litellm.callbacks, self
         )
 
+        # Remove ForwardClientSideHeadersByModelGroup if it exists
+        if self.optional_callbacks is not None:
+            for callback in self.optional_callbacks:
+                litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                    litellm.callbacks, callback, require_self=False
+                )
+
     @staticmethod
     def _create_redis_cache(
         cache_config: Dict[str, Any],
@@ -876,7 +886,9 @@ class Router:
                 elif pre_call_check == "forward_client_headers_by_model_group":
                     _callback = ForwardClientSideHeadersByModelGroup()
                 if _callback is not None:
-
+                    if self.optional_callbacks is None:
+                        self.optional_callbacks = []
+                    self.optional_callbacks.append(_callback)
                     litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def print_deployment(self, deployment: dict):
