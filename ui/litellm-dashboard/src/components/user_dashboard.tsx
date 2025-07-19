@@ -369,7 +369,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             userID={userID}
             userRole={userRole}
             accessToken={accessToken}
-            setAccessToken={setAccessToken}
             selectedTeam={selectedTeam ? selectedTeam : null}
             setSelectedTeam={setSelectedTeam}
             selectedKeyAlias={selectedKeyAlias}
