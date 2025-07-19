@@ -233,7 +233,6 @@ This enables developers to easily integrate vector search capabilities into thei
 - **Vector Stores**
     - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
     - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
-
 - **General**
     - Add Copy-on-Click for all IDs (Key, Team, Organization, MCP Server) - [PR #12615](https://github.com/BerriAI/litellm/pull/12615)
 - **[SCIM](../../docs/proxy/scim)**
