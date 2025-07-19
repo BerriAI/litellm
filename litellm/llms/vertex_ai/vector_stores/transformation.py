@@ -4,7 +4,6 @@ import httpx
 
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
