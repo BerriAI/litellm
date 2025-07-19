@@ -446,6 +446,7 @@ const sidebars = {
         "providers/nlp_cloud",
         "providers/replicate",
         "providers/togetherai",
+        "providers/v0",
         "providers/novita",
         "providers/voyage",
         "providers/jina_ai",

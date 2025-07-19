@@ -278,6 +278,7 @@ LITELLM_CHAT_PROVIDERS = [
     "nebius",
     "dashscope",
     "moonshot",
+    "v0",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -406,6 +407,7 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
+    "https://api.v0.dev/v1",
 ]
 
 
@@ -443,6 +445,7 @@ openai_compatible_providers: List = [
     "nebius",
     "dashscope",
     "moonshot",
+    "v0",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
