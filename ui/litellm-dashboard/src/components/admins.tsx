@@ -45,6 +45,7 @@ import SSOModals from "./SSOModals";
 import { ssoProviderConfigs } from './SSOModals';
 import SCIMConfig from "./SCIM";
 import UIAccessControlForm from "./UIAccessControlForm";
+import UsefulLinksManagement from "./useful_links_management";
 
 interface AdminPanelProps {
   searchParams: any;
@@ -54,6 +55,7 @@ interface AdminPanelProps {
   showSSOBanner: boolean;
   premiumUser: boolean;
   proxySettings?: any;
+  userRole?: string | null;
 }
 import { useBaseUrl } from "./constants";
 
@@ -78,6 +80,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   showSSOBanner,
   premiumUser,
   proxySettings,
+  userRole,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -551,6 +554,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <TabList>
           <Tab>Security Settings</Tab>
           <Tab>SCIM</Tab>
+          <Tab>Useful Links</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -703,6 +707,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               accessToken={accessToken} 
               userID={userID}
               proxySettings={proxySettings}
+            />
+          </TabPanel>
+          <TabPanel>
+            <UsefulLinksManagement 
+              accessToken={accessToken}
+              userRole={userRole}
             />
           </TabPanel>
         </TabPanels>

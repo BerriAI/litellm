@@ -7,6 +7,7 @@ import { modelHubColumns } from "./model_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
 import ModelFilters from "./model_filters";
+import UsefulLinksManagement from "./useful_links_management";
 import {
   Card,
   Text,
@@ -236,6 +237,17 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           </div>
           </div>
 
+
+          {/* Useful Links Management Section for Admins */}
+          {isAdminRole(userRole || "") && (
+            <div className="mt-8 mb-2">
+              <UsefulLinksManagement 
+                accessToken={accessToken}
+                userRole={userRole}
+              />
+            </div>
+          )}
+
           {/* Filters */}
           <ModelFilters
             modelHubData={modelHubData || []}
@@ -260,6 +272,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               Showing {filteredData.length} of {modelHubData?.length || 0} models
             </Text>
           </div>
+
+          
         </div>
       ) : (
         <Card className="mx-auto max-w-xl mt-10">
