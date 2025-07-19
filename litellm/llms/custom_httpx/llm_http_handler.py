@@ -2699,7 +2699,16 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
+        )
+        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params.update(vector_store_search_optional_params or {})
+        headers, signed_json_body = vector_store_provider_config.sign_request(
+            headers=headers,
+            optional_params=all_optional_params,
+            request_data=request_body,
+            api_base=url,
         )
 
         logging_obj.pre_call(
@@ -2712,15 +2721,21 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+
         try:
             response = await async_httpx_client.post(
-                url=url, headers=headers, json=request_body, timeout=timeout
+                url=url,
+                headers=headers,
+                data=request_data,
+                timeout=timeout,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     def vector_store_search_handler(
@@ -2780,7 +2795,18 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
             )
+        )
+
+        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params.update(vector_store_search_optional_params or {})
+
+        headers, signed_json_body = vector_store_provider_config.sign_request(
+            headers=headers,
+            optional_params=all_optional_params,
+            request_data=request_body,
+            api_base=url,
         )
 
         logging_obj.pre_call(
@@ -2793,15 +2819,20 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+
         try:
             response = sync_httpx_client.post(
-                url=url, headers=headers, json=request_body
+                url=url,
+                headers=headers,
+                data=request_data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     async def async_vector_store_create_handler(

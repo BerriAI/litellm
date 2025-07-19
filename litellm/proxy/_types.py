@@ -16,7 +16,11 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRequest,
+    OpenAIFileObject,
+)
 from litellm.types.mcp import (
     MCPAuthType,
     MCPSpecVersion,
@@ -495,6 +499,7 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/team/member_add",
         "/team/member_delete",
+        "/team/member_update",
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
@@ -560,41 +565,13 @@ class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
 
 
 ######### Request Class Definition ######
-class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
-    model: str
-    messages: List[Dict[str, str]]
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    n: Optional[int] = None
-    stream: Optional[bool] = None
-    stop: Optional[List[str]] = None
-    max_tokens: Optional[int] = None
-    presence_penalty: Optional[float] = None
-    frequency_penalty: Optional[float] = None
-    logit_bias: Optional[Dict[str, float]] = None
-    user: Optional[str] = None
-    response_format: Optional[Dict[str, str]] = None
-    seed: Optional[int] = None
-    tools: Optional[List[str]] = None
-    tool_choice: Optional[str] = None
-    functions: Optional[List[str]] = None  # soon to be deprecated
-    function_call: Optional[str] = None  # soon to be deprecated
-
+class ProxyChatCompletionRequest(ChatCompletionRequest):
     # Optional LiteLLM params
-    caching: Optional[bool] = None
-    api_base: Optional[str] = None
-    api_version: Optional[str] = None
-    api_key: Optional[str] = None
-    num_retries: Optional[int] = None
-    context_window_fallback_dict: Optional[Dict[str, str]] = None
-    fallbacks: Optional[List[str]] = None
-    metadata: Optional[Dict[str, str]] = {}
-    deployment_id: Optional[str] = None
-    request_timeout: Optional[int] = None
-
-    model_config = ConfigDict(
-        extra="allow"
-    )  # allow params not defined here, these fall in litellm.completion(**kwargs)
+    guardrails: Optional[List[str]]
+    caching: Optional[bool]
+    num_retries: Optional[int]
+    context_window_fallback_dict: Optional[Dict[str, str]]
+    fallbacks: Optional[List[str]]
 
 
 class ModelInfoDelete(LiteLLMPydanticObjectBase):
@@ -847,10 +824,28 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
-    url: str
+    url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    # Stdio-specific fields
+    command: Optional[str] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_transport_fields(cls, values):
+        if isinstance(values, dict):
+            transport = values.get("transport")
+            if transport == MCPTransport.stdio:
+                if not values.get("command"):
+                    raise ValueError("command is required for stdio transport")
+                if not values.get("args"):
+                    raise ValueError("args is required for stdio transport")
+            elif transport in [MCPTransport.http, MCPTransport.sse]:
+                if not values.get("url"):
+                    raise ValueError("url is required for HTTP/SSE transport")
+        return values
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -860,10 +855,28 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
     auth_type: Optional[MCPAuthType] = None
-    url: str
+    url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     mcp_access_groups: List[str] = Field(default_factory=list)
+    # Stdio-specific fields
+    command: Optional[str] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_transport_fields(cls, values):
+        if isinstance(values, dict):
+            transport = values.get("transport")
+            if transport == MCPTransport.stdio:
+                if not values.get("command"):
+                    raise ValueError("command is required for stdio transport")
+                if not values.get("args"):
+                    raise ValueError("args is required for stdio transport")
+            elif transport in [MCPTransport.http, MCPTransport.sse]:
+                if not values.get("url"):
+                    raise ValueError("url is required for HTTP/SSE transport")
+        return values
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -872,7 +885,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     server_id: str
     alias: Optional[str] = None
     description: Optional[str] = None
-    url: str
+    url: Optional[str] = None
     transport: MCPTransportType
     spec_version: MCPSpecVersionType
     auth_type: Optional[MCPAuthType] = None
@@ -883,6 +896,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
+    # Stdio-specific fields
+    command: Optional[str] = None
+    args: List[str] = Field(default_factory=list)
+    env: Dict[str, str] = Field(default_factory=dict)
 
 
 class NewUserRequestTeam(LiteLLMPydanticObjectBase):
@@ -1720,12 +1737,30 @@ class UserAPIKeyAuth(
     @classmethod
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
-            values.update({"token": hash_token(values.get("api_key"))})
-            if isinstance(values.get("api_key"), str) and values.get(
-                "api_key"
-            ).startswith("sk-"):
-                values.update({"api_key": hash_token(values.get("api_key"))})
+            values.update(
+                {"token": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+            )
+            if isinstance(values.get("api_key"), str):
+                values.update(
+                    {"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+                )
         return values
+
+    @classmethod
+    def _safe_hash_litellm_api_key(cls, api_key: str) -> str:
+        """
+        Helper to ensure all logged keys are hashed
+        Covers:
+        1. Regular API keys from LiteLLM DB
+        2. JWT tokens used for connecting to LiteLLM API
+        """
+        if api_key.startswith("sk-"):
+            return hash_token(api_key)
+        from litellm.proxy.auth.handle_jwt import JWTHandler
+
+        if JWTHandler.is_jwt(token=api_key):
+            return f"hashed-jwt-{hash_token(token=api_key)}"
+        return api_key
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):
@@ -2505,7 +2540,10 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [Member(**item) for item in member_data]
+            members = [
+                Member(**item) if isinstance(item, dict) else item
+                for item in member_data
+            ]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):
@@ -2713,6 +2751,7 @@ class SpecialHeaders(enum.Enum):
     custom_litellm_api_key = "x-litellm-api-key"
     mcp_auth = "x-mcp-auth"
     mcp_servers = "x-mcp-servers"
+    mcp_access_groups = "x-mcp-access-groups"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):

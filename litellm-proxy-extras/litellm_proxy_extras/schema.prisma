@@ -155,8 +155,8 @@ model LiteLLM_UserTable {
 model LiteLLM_ObjectPermissionTable {
   object_permission_id  String         @id @default(uuid())
   mcp_servers           String[]       @default([])
-  vector_stores         String[]       @default([])  
   mcp_access_groups     String[]       @default([])
+  vector_stores         String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   verification_tokens   LiteLLM_VerificationToken[]
   organizations         LiteLLM_OrganizationTable[]
@@ -168,7 +168,7 @@ model LiteLLM_MCPServerTable {
   server_id    String         @id @default(uuid())
   alias        String?
   description  String?
-  url          String
+  url          String?
   transport    String         @default("sse")
   spec_version String         @default("2025-03-26")
   auth_type    String?        
@@ -178,6 +178,10 @@ model LiteLLM_MCPServerTable {
   updated_by   String?
   mcp_info     Json?          @default("{}")
   mcp_access_groups String[]
+  // Stdio-specific fields
+  command      String?
+  args         String[]       @default([])
+  env          Json?          @default("{}")
 }
 
 // Generate Tokens for Proxy
@@ -498,6 +502,7 @@ model LiteLLM_ManagedVectorStoresTable {
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
   litellm_credential_name String?
+  litellm_params Json?
 }
 
 // Guardrails table for storing guardrail configurations

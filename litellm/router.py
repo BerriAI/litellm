@@ -784,6 +784,26 @@ class Router:
         )
 
         #########################################################
+        # Vector Store routes
+        #########################################################
+        from litellm.vector_stores.main import acreate, asearch, create, search
+
+        # async routes
+        self.avector_store_search = self.factory_function(
+            asearch, call_type="avector_store_search"
+        )
+        self.avector_store_create = self.factory_function(
+            acreate, call_type="avector_store_create"
+        )
+        # sync routes
+        self.vector_store_search = self.factory_function(
+            search, call_type="vector_store_search"
+        )
+        self.vector_store_create = self.factory_function(
+            create, call_type="vector_store_create"
+        )
+
+        #########################################################
         # Gemini Native routes
         #########################################################
         from litellm.google_genai import (
@@ -2528,7 +2548,6 @@ class Router:
             self.total_calls[model_name] += 1
 
             ### get custom
-
             response = original_generic_function(
                 **{
                     **data,
@@ -2565,6 +2584,7 @@ class Router:
             verbose_router_logger.info(
                 f"ageneric_api_call_with_fallbacks(model={model_name})\033[32m 200 OK\033[0m"
             )
+
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -3290,6 +3310,10 @@ class Router:
             "generate_content",
             "agenerate_content_stream",
             "generate_content_stream",
+            "avector_store_search",
+            "avector_store_create",
+            "vector_store_search",
+            "vector_store_create",
         ] = "assistants",
     ):
         """
@@ -3300,7 +3324,7 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type in ("responses", "generate_content", "generate_content_stream"):
+        if call_type in ("responses", "generate_content", "generate_content_stream", "vector_store_search", "vector_store_create"):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
@@ -3346,6 +3370,8 @@ class Router:
                 "aimage_edit",
                 "agenerate_content",
                 "agenerate_content_stream",
+                "avector_store_search",
+                "avector_store_create",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -5567,7 +5593,9 @@ class Router:
                         additional_headers[header] = value
         return response
 
-    def get_model_ids(self, model_name: Optional[str] = None) -> List[str]:
+    def get_model_ids(
+        self, model_name: Optional[str] = None, exclude_team_models: bool = False
+    ) -> List[str]:
         """
         if 'model_name' is none, returns all.
 
@@ -5577,6 +5605,8 @@ class Router:
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
                 id = model["model_info"]["id"]
+                if exclude_team_models and model["model_info"].get("team_id"):
+                    continue
                 if model_name is not None and model["model_name"] == model_name:
                     ids.append(id)
                 elif model_name is None:
@@ -6235,10 +6265,17 @@ class Router:
         )
 
         if len(healthy_deployments) == 0:
-            raise litellm.BadRequestError(
-                message="You passed in model={}. There is no 'model_name' with this string ".format(
+            if self.get_model_list(model_name=model) is None:
+                message = f"You passed in model={model}. There is no 'model_name' with this string".format(
                     model
-                ),
+                )
+            else:
+                message = f"You passed in model={model}. There are no healthy deployments for this model".format(
+                    model
+                )
+
+            raise litellm.BadRequestError(
+                message=message,
                 model=model,
                 llm_provider="",
             )

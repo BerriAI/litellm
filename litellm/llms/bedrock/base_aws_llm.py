@@ -10,9 +10,9 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Union,
     cast,
     get_args,
-    Union,
 )
 
 import httpx
@@ -178,7 +178,10 @@ class BaseAWSLLM:
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
             )
-        elif aws_role_name is not None and aws_session_name is not None:
+        elif aws_role_name is not None:
+            # If aws_session_name is not provided, generate a default one
+            if aws_session_name is None:
+                aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
             credentials, _cache_ttl = self._auth_with_aws_role(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
@@ -679,12 +682,14 @@ class BaseAWSLLM:
             aws_bearer_token: Optional[str] = api_key
         else:
             aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-            
+
         if aws_bearer_token:
             try:
                 from botocore.awsrequest import AWSRequest
             except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
             request = AWSRequest(
                 method="POST", url=endpoint_url, data=data, headers=headers
@@ -694,7 +699,9 @@ class BaseAWSLLM:
                 from botocore.auth import SigV4Auth
                 from botocore.awsrequest import AWSRequest
             except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
             sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
             request = AWSRequest(
                 method="POST", url=endpoint_url, data=data, headers=headers
@@ -730,7 +737,7 @@ class BaseAWSLLM:
             aws_bearer_token: Optional[str] = api_key
         else:
             aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-            
+
         # If aws bearer token is set, use it directly in the header
         if aws_bearer_token:
             headers = headers or {}

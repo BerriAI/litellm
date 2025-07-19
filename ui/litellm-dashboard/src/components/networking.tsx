@@ -93,6 +93,7 @@ export interface Organization {
   object_permission?: {
     object_permission_id: string;
     mcp_servers: string[];
+    mcp_access_groups?: string[];
     vector_stores: string[];
   };
 }
@@ -105,6 +106,13 @@ export interface CredentialItem {
     description?: string;
     required?: boolean;
   };
+}
+
+export interface PublicModelHubInfo {
+  docs_title: string;
+  custom_docs_description: string | null;
+  litellm_version: string;
+  useful_links: Record<string, string>;
 }
 
 export interface LiteLLMWellKnownUiConfig {
@@ -147,6 +155,21 @@ export function setGlobalLitellmHeaderName(
   globalLitellmHeaderName = headerName;
 }
 
+export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model_groups: modelGroups,
+    }),
+  });
+  return response.json();
+};
+
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
@@ -160,6 +183,15 @@ export const getUiConfig = async () => {
    */
   console.log("jsonData in getUiConfig:", jsonData);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
+};
+
+export const getPublicModelHubInfo = async () => {
+  const url = defaultProxyBaseUrl
+    ? `${defaultProxyBaseUrl}/public/model_hub/info`
+    : `/public/model_hub/info`;
+  const response = await fetch(url);
+  const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
 };
 
@@ -1768,6 +1800,17 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
   }
 };
 
+export const modelHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
 export const modelHubCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
@@ -2358,6 +2401,7 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
+  end_user?: string,
   status_filter?: string,
   model?: string
 ) => {
@@ -2375,6 +2419,7 @@ export const uiSpendLogsCall = async (
     if (page) queryParams.append("page", page.toString());
     if (page_size) queryParams.append("page_size", page_size.toString());
     if (user_id) queryParams.append("user_id", user_id);
+    if (end_user) queryParams.append("end_user", end_user);
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
     // Append query parameters to URL if any exist
@@ -4576,6 +4621,7 @@ export const healthCheckHistoryCall = async (
   }
 };
 
+
 export const latestHealthChecksCall = async (accessToken: String) => {
   /**
    * Get the latest health check status for all models
@@ -4792,7 +4838,7 @@ export const updateInternalUserSettings = async (
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
 
     const data = await response.json();
@@ -5486,6 +5532,36 @@ export const vectorStoreInfoCall = async (
     return await response.json();
   } catch (error) {
     console.error("Error getting vector store info:", error);
+    throw error;
+  }
+};
+
+export const vectorStoreUpdateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/update`
+      : `/vector_store/update`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to update vector store");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating vector store:", error);
     throw error;
   }
 };
