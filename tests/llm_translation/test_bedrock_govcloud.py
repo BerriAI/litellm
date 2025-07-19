@@ -319,59 +319,55 @@ class TestBedrockGovCloudSupport:
         assert abs(large_gov_cost - expected_large_gov_cost) < 1e-10, f"Large gov cost mismatch: got {large_gov_cost}, expected {expected_large_gov_cost}"
         assert abs(large_gov_cost - large_base_cost * 1.2) < 1e-10, f"Large gov cost should be 20% higher than base: got {large_gov_cost}, expected {large_base_cost * 1.2}"
 
-    @patch('litellm.completion')
-    def test_govcloud_completion_with_cost_tracking(self, mock_completion):
+    @patch('litellm.llms.custom_httpx.http_handler.HTTPHandler.post')
+    def test_govcloud_completion_with_cost_tracking(self, mock_post):
         """Test that completion requests with cost tracking use correct pricing for GovCloud models"""
-        from litellm import completion, Choices, Message, ModelResponse
-        from litellm.utils import Usage
+        from litellm import completion
+        from unittest.mock import Mock
+        import json
         
-        # Mock the completion function to return responses
-        base_response = ModelResponse(
-            id="test-base-completion",
-            choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello from base", role="assistant"))],
-            created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            object="chat.completion",
-            system_fingerprint=None,
-            usage=Usage(prompt_tokens=15, completion_tokens=8, total_tokens=23),
-        )
-        base_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-east-1"}
+        # Mock the HTTP client's post method to return responses
+        def mock_post_side_effect(url, headers=None, data=None, **kwargs):
+            # Extract region from the URL to determine which response to return
+            region = "us-east-1"  # default
+            if "us-gov-east-1" in url:
+                region = "us-gov-east-1"
+            elif "us-gov-west-1" in url:
+                region = "us-gov-west-1"
+            
+            # Create mock response based on region
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            
+            # Create a realistic Bedrock converse response structure
+            bedrock_response = {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Hello from {region}"
+                            }
+                        ]
+                    }
+                },
+                "usage": {
+                    "inputTokens": 15,
+                    "outputTokens": 8,
+                    "totalTokens": 23
+                },
+                "stopReason": "end_turn"
+            }
+            
+            mock_response.json.return_value = bedrock_response
+            mock_response.text = json.dumps(bedrock_response)
+            mock_response.raise_for_status = Mock()  # Don't raise exceptions
+            
+            return mock_response
         
-        gov_east_response = ModelResponse(
-            id="test-gov-east-completion",
-            choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello from GovCloud East", role="assistant"))],
-            created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            object="chat.completion",
-            system_fingerprint=None,
-            usage=Usage(prompt_tokens=15, completion_tokens=8, total_tokens=23),
-        )
-        gov_east_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-gov-east-1"}
-        
-        gov_west_response = ModelResponse(
-            id="test-gov-west-completion",
-            choices=[Choices(finish_reason="stop", index=0, message=Message(content="Hello from GovCloud West", role="assistant"))],
-            created=1234567890,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            object="chat.completion",
-            system_fingerprint=None,
-            usage=Usage(prompt_tokens=15, completion_tokens=8, total_tokens=23),
-        )
-        gov_west_response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-gov-west-1"}
-        
-        # Configure mock to return different responses based on region
-        def mock_completion_side_effect(*args, **kwargs):
-            region = kwargs.get('aws_region_name', 'us-east-1')
-            if region == 'us-east-1':
-                return base_response
-            elif region == 'us-gov-east-1':
-                return gov_east_response
-            elif region == 'us-gov-west-1':
-                return gov_west_response
-            else:
-                return base_response
-        
-        mock_completion.side_effect = mock_completion_side_effect
+        mock_post.side_effect = mock_post_side_effect
         
         # Test base model completion
         base_result = completion(
@@ -395,20 +391,56 @@ class TestBedrockGovCloudSupport:
         )
         
         # Verify the mock was called correctly
-        assert mock_completion.call_count == 3
+        assert mock_post.call_count == 3
         
         # Verify usage information is present
         from litellm.types.utils import ModelResponse
+        assert isinstance(base_result, ModelResponse)
+        assert isinstance(gov_east_result, ModelResponse)
+        assert isinstance(gov_west_result, ModelResponse)
+        
         base_result_typed: ModelResponse = base_result
         gov_east_result_typed: ModelResponse = gov_east_result
         gov_west_result_typed: ModelResponse = gov_west_result
         
-        assert base_result_typed.usage.prompt_tokens == 15
-        assert base_result_typed.usage.completion_tokens == 8
-        assert gov_east_result_typed.usage.prompt_tokens == 15
-        assert gov_east_result_typed.usage.completion_tokens == 8
-        assert gov_west_result_typed.usage.prompt_tokens == 15
-        assert gov_west_result_typed.usage.completion_tokens == 8
+        # Verify usage information is present
+        assert hasattr(base_result_typed, 'usage') and base_result_typed.usage.prompt_tokens == 15
+        assert hasattr(base_result_typed, 'usage') and base_result_typed.usage.completion_tokens == 8
+        assert hasattr(gov_east_result_typed, 'usage') and gov_east_result_typed.usage.prompt_tokens == 15
+        assert hasattr(gov_east_result_typed, 'usage') and gov_east_result_typed.usage.completion_tokens == 8
+        assert hasattr(gov_west_result_typed, 'usage') and gov_west_result_typed.usage.prompt_tokens == 15
+        assert hasattr(gov_west_result_typed, 'usage') and gov_west_result_typed.usage.completion_tokens == 8
+        
+        # Verify cost calculation uses correct pricing for each region
+        # Get costs directly from the completion response _hidden_params
+        base_cost = base_result_typed._hidden_params.get("response_cost", 0.0)
+        gov_east_cost = gov_east_result_typed._hidden_params.get("response_cost", 0.0)
+        gov_west_cost = gov_west_result_typed._hidden_params.get("response_cost", 0.0)
+
+        print(f"Base cost: {base_cost}")
+        print(f"Gov East cost: {gov_east_cost}")
+        print(f"Gov West cost: {gov_west_cost}")
+        
+        # Expected costs based on pricing:
+        # Base model: 15 * 3e-06 + 8 * 1.5e-05 = 0.000045 + 0.00012 = 0.000165
+        # Gov models: 15 * 3.6e-06 + 8 * 1.8e-05 = 0.000054 + 0.000144 = 0.000198
+        expected_base_cost = 15 * 3e-06 + 8 * 1.5e-05  # 0.000165
+        expected_gov_cost = 15 * 3.6e-06 + 8 * 1.8e-05  # 0.000198
+        
+        # Verify costs are calculated correctly
+        assert abs(base_cost - expected_base_cost) < 1e-10, f"Base cost mismatch: got {base_cost}, expected {expected_base_cost}"
+        assert abs(gov_east_cost - expected_gov_cost) < 1e-10, f"Gov East cost mismatch: got {gov_east_cost}, expected {expected_gov_cost}"
+        assert abs(gov_west_cost - expected_gov_cost) < 1e-10, f"Gov West cost mismatch: got {gov_west_cost}, expected {expected_gov_cost}"
+        
+        # Verify GovCloud costs are exactly 20% higher than base cost
+        assert abs(gov_east_cost - base_cost * 1.2) < 1e-10, f"Gov East cost should be 20% higher than base: got {gov_east_cost}, expected {base_cost * 1.2}"
+        assert abs(gov_west_cost - base_cost * 1.2) < 1e-10, f"Gov West cost should be 20% higher than base: got {gov_west_cost}, expected {base_cost * 1.2}"
+        
+        # Print cost information for verification
+        print(f"Base model cost: ${base_cost:.6f}")
+        print(f"GovCloud East cost: ${gov_east_cost:.6f}")
+        print(f"GovCloud West cost: ${gov_west_cost:.6f}")
+        print(f"GovCloud cost increase: {((gov_east_cost / base_cost) - 1) * 100:.1f}%")
 
     def test_govcloud_cost_per_token_with_region(self):
         """Test that cost_per_token function correctly uses region-based pricing for GovCloud models"""
