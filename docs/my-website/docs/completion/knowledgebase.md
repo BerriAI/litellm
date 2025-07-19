@@ -178,8 +178,9 @@ Ensure you have a Bedrock Knowledge Base created in your AWS account with the ap
 
 <Image 
   img={require('../../img/kb_2.png')}
-  style={{width: '60%'}}
+  style={{width: '60%', display: 'block'}}
 />
+
 
 ### Vertex AI RAG Engine
 
@@ -188,18 +189,22 @@ Ensure you have a Bedrock Knowledge Base created in your AWS account with the ap
 1. Navigate to your RAG Engine Corpus in the [Google Cloud Console](https://console.cloud.google.com/vertex-ai/rag/corpus)
 2. Select the **RAG Engine** you want to integrate with LiteLLM
 
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
 <Image 
   img={require('../../img/kb_vertex1.png')}
-  style={{width: '60%'}}
+  style={{width: '60%', display: 'block'}}
 />
+</div>
 
 3. Click the **"Details"** button and copy the UUID for the RAG Engine
 4. The ID should look like: `6917529027641081856`
 
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
 <Image 
   img={require('../../img/kb_vertex2.png')}
-  style={{width: '60%'}}
+  style={{width: '60%', display: 'block'}}
 />
+</div>
 
 **2. Add to LiteLLM UI**
 
@@ -207,10 +212,12 @@ Ensure you have a Bedrock Knowledge Base created in your AWS account with the ap
 2. Select **"Vertex AI RAG Engine"** as the provider
 3. Enter your Vertex AI RAG Engine ID in the **"Vector Store ID"** field
 
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
 <Image 
   img={require('../../img/kb_vertex3.png')}
-  style={{width: '60%'}}
+  style={{width: '60%', display: 'block'}}
 />
+</div>
 
 ### PG Vector
 
@@ -249,10 +256,12 @@ Once your litellm-pg-vector-store is deployed:
 3. Enter your **API Base URL** and **API Key** for your `litellm-pg-vector-store` container
    - The API Key field corresponds to the `SERVER_API_KEY` from your .env configuration
 
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
 <Image 
   img={require('../../img/kb_pg1.png')}
-  style={{width: '60%'}}
+  style={{width: '60%', display: 'block'}}
 />
+</div>
 
 ### OpenAI Vector Stores
 
@@ -268,10 +277,12 @@ Once your litellm-pg-vector-store is deployed:
 3. Enter your **Vector Store ID** in the corresponding field
 4. Enter your **OpenAI API Key** in the API Key field
 
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
 <Image 
   img={require('../../img/kb_openai1.png')}
-  style={{width: '60%'}}
+  style={{width: '60%', display: 'block'}}
 />
+</div>
 
 
 
