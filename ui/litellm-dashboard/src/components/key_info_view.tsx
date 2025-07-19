@@ -98,8 +98,15 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
           const parsedMetadata = JSON.parse(formValues.metadata);
           formValues.metadata = {
             ...parsedMetadata,
-            ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-            ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {})
+            ...(formValues.guardrails?.length > 0
+              ? { guardrails: formValues.guardrails }
+              : {}),
+            ...(formValues.logging_settings
+              ? { logging: formValues.logging_settings }
+              : {}),
+            ...(formValues.disabled_callbacks?.length > 0
+              ? { litellm_disabled_callbacks: formValues.disabled_callbacks }
+              : {}),
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
@@ -109,8 +116,15 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
       } else {
         formValues.metadata = {
           ...(formValues.metadata || {}),
-          ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
-          ...(formValues.logging_settings ? { logging: formValues.logging_settings } : {})
+          ...(formValues.guardrails?.length > 0
+            ? { guardrails: formValues.guardrails }
+            : {}),
+          ...(formValues.logging_settings
+            ? { logging: formValues.logging_settings }
+            : {}),
+          ...(formValues.disabled_callbacks?.length > 0
+            ? { litellm_disabled_callbacks: formValues.disabled_callbacks }
+            : {}),
         };
       }
 
@@ -321,7 +335,8 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               </Card>
 
               <LoggingSettingsView
-                loggingConfigs={extractLoggingSettings(keyData.metadata)}
+                loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
+                disabledCallbacks={Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks) ? currentKeyData.metadata.litellm_disabled_callbacks : []}
                 variant="card"
               />
             </Grid>
@@ -442,7 +457,10 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                   />
 
                   <LoggingSettingsView
-                    loggingConfigs={extractLoggingSettings(keyData.metadata)}
+                    loggingConfigs={extractLoggingSettings(
+                      currentKeyData.metadata,
+                    )}
+                    disabledCallbacks={Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks) ? currentKeyData.metadata.litellm_disabled_callbacks : []}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />
