@@ -81,6 +81,8 @@ class CustomStreamWrapper:
         )
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
+
+        self.sent_first_thinking_block_parsed = False
         self.thinking_content = ""
 
         self.system_fingerprint: Optional[str] = None
@@ -471,6 +473,7 @@ class CustomStreamWrapper:
             }
         except Exception as e:
             raise e
+        
 
     def handle_azure_text_completion_chunk(self, chunk):
         try:
@@ -1202,7 +1205,32 @@ class CustomStreamWrapper:
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 if response_obj is None:
                     return
-                completion_obj["content"] = response_obj["text"]
+                
+                # Some LLM providers might send thinking blocks in the content field
+                # we want to put it into the reasoning content field.
+                # If the client wants to get the reasoning_content in the main content field like for OpenWebUI,
+                # they can set the litellm_params["merge_reasoning_content_in_choices"] to True and the reasoning_content should be translated back.
+                
+                # end of thinking block
+                if "</think>" in response_obj["text"]:
+                    self.sent_first_thinking_block_parsed = False
+                    # skip the content. we don't want the </think> in the main content
+                    return
+                # start of thinking block
+                elif "<think>" in response_obj["text"]:
+                    self.sent_first_thinking_block_parsed = True
+                    # skip the content. we don't want the <think> in the main content
+                    return
+                # middle of thinking block
+                elif self.sent_first_thinking_block_parsed:
+                    completion_obj["reasoning_content"] = completion_obj["content"]
+                    model_response.choices[0].delta.reasoning_content = completion_obj["reasoning_content"]
+                    # we don't want to put the reasoning content in the main content
+                    completion_obj["content"] = None
+                # outside of thinking block
+                else:
+                    completion_obj["content"] = response_obj["text"]
+
                 self.intermittent_finish_reason = response_obj.get(
                     "finish_reason", None
                 )
@@ -1284,6 +1312,11 @@ class CustomStreamWrapper:
                         )
                     )
                 if original_chunk.choices and len(original_chunk.choices) > 0:
+                    # for thinking blocks, we'll substitute the reasoning_content with the content
+                    # and make content field empty
+                    if self.sent_first_thinking_block_parsed:
+                        original_chunk.choices[0].delta.reasoning_content = original_chunk.choices[0].delta.content
+                        original_chunk.choices[0].delta.content = None
                     delta = original_chunk.choices[0].delta
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None
@@ -1407,6 +1440,7 @@ class CustomStreamWrapper:
                 custom_llm_provider=self.custom_llm_provider,
                 original_exception=e,
             )
+
 
     def set_logging_event_loop(self, loop):
         """
