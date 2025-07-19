@@ -99,3 +99,16 @@ class TestBedrockVectorStore(BaseVectorStoreTest):
         # Test with None
         attributes = config._get_attributes_from_metadata(None)
         assert attributes == {} 
+
+
+@pytest.mark.asyncio
+async def test_bedrock_search_with_router():
+    from litellm.router import Router
+    # init router
+    _router = Router(model_list=[])
+    search_response = await _router.avector_store_search(
+        query="what happens after we add a model",
+        vector_store_id="T37J8R4WTM",
+        custom_llm_provider="bedrock",
+    )
+    print(search_response)
