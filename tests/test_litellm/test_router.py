@@ -999,3 +999,39 @@ async def test_router_forward_client_headers_by_model_group():
 
         mock_completion.assert_called_once()
         print(mock_completion.call_args.kwargs["headers"])
+
+
+def test_router_apply_default_settings():
+    """
+    Test that Router.apply_default_settings() adds the expected default pre-call checks
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    # Apply default settings
+    result = router.apply_default_settings()
+
+    # Verify the method returns None
+    assert result is None
+
+    # Verify that the forward_client_headers_by_model_group pre-call check was added
+    # Check if any callback is of the ForwardClientHeadersByModelGroupCheck type
+    has_forward_headers_check = False
+    for callback in litellm.callbacks:
+        print(callback)
+        print(f"callback.__class__: {callback.__class__}")
+        if hasattr(
+            callback, "__class__"
+        ) and "ForwardClientSideHeadersByModelGroup" in str(callback.__class__):
+            has_forward_headers_check = True
+            break
+
+    assert (
+        has_forward_headers_check
+    ), "Expected ForwardClientSideHeadersByModelGroup to be added to callbacks"
