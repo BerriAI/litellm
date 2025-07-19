@@ -10,7 +10,7 @@ LiteLLM supports all models on VLLM.
 | Description | vLLM is a fast and easy-to-use library for LLM inference and serving. [Docs](https://docs.vllm.ai/en/latest/index.html) |
 | Provider Route on LiteLLM | `hosted_vllm/` (for OpenAI compatible server), `vllm/` (for vLLM sdk usage) |
 | Provider Doc | [vLLM ↗](https://docs.vllm.ai/en/latest/index.html) |
-| Supported Endpoints | `/chat/completions`, `/embeddings`, `/completions` |
+| Supported Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/rerank` |
 
 
 # Quick Start
@@ -153,6 +153,110 @@ curl -L -X POST 'http://0.0.0.0:4000/embeddings' \
 ```
 
 [See OpenAI SDK/Langchain/etc. examples](../proxy/user_keys.md#embeddings)
+
+</TabItem>
+</Tabs>
+
+## Rerank
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import rerank
+import os
+
+os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000"
+os.environ["HOSTED_VLLM_API_KEY"] = ""  # [optional], if your VLLM server requires an API key
+
+query = "What is the capital of the United States?"
+documents = [
+    "Carson City is the capital city of the American state of Nevada.",
+    "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+    "Washington, D.C. is the capital of the United States.",
+    "Capital punishment has existed in the United States since before it was a country.",
+]
+
+response = rerank(
+    model="hosted_vllm/your-rerank-model",
+    query=query,
+    documents=documents,
+    top_n=3,
+)
+print(response)
+```
+
+### Async Usage
+
+```python
+from litellm import arerank
+import os, asyncio
+
+os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000"
+os.environ["HOSTED_VLLM_API_KEY"] = ""  # [optional], if your VLLM server requires an API key
+
+async def test_async_rerank(): 
+    query = "What is the capital of the United States?"
+    documents = [
+        "Carson City is the capital city of the American state of Nevada.",
+        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+        "Washington, D.C. is the capital of the United States.",
+        "Capital punishment has existed in the United States since before it was a country.",
+    ]
+
+    response = await arerank(
+        model="hosted_vllm/your-rerank-model",
+        query=query,
+        documents=documents,
+        top_n=3,
+    )
+    print(response)
+
+asyncio.run(test_async_rerank())
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: my-rerank-model
+      litellm_params:
+        model: hosted_vllm/your-rerank-model  # add hosted_vllm/ prefix to route as VLLM provider
+        api_base: http://localhost:8000      # add api base for your VLLM server
+        # api_key: your-api-key             # [optional] if your VLLM server requires authentication
+```
+
+2. Start the proxy 
+
+```bash
+$ litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/rerank' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'Content-Type: application/json' \
+-d '{
+    "model": "my-rerank-model",
+    "query": "What is the capital of the United States?",
+    "documents": [
+        "Carson City is the capital city of the American state of Nevada.",
+        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+        "Washington, D.C. is the capital of the United States.",
+        "Capital punishment has existed in the United States since before it was a country."
+    ],
+    "top_n": 3
+}'
+```
+
+[See OpenAI SDK/Langchain/etc. examples](../rerank.md#litellm-proxy-usage)
 
 </TabItem>
 </Tabs>
