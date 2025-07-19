@@ -133,6 +133,62 @@ class TestBedrockGovCloudSupport:
         assert govcloud_model["litellm_provider"] == "bedrock"
         assert govcloud_model["mode"] == "chat"
 
+    def test_govcloud_model_pricing_verification(self):
+        """Test that GovCloud models have correct pricing that differs from base models"""
+        from litellm import model_cost
+        
+        # Test Claude 3.5 Sonnet pricing
+        base_model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+        gov_east_model = "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0"
+        gov_west_model = "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0"
+        
+        # Verify base model pricing
+        base_pricing = model_cost[base_model]
+        assert base_pricing["input_cost_per_token"] == 3e-06  # 0.000003
+        assert base_pricing["output_cost_per_token"] == 1.5e-05  # 0.000015
+        
+        # Verify GovCloud models have different (higher) pricing
+        gov_east_pricing = model_cost[gov_east_model]
+        gov_west_pricing = model_cost[gov_west_model]
+        
+        # GovCloud models should have 20% higher pricing than base models
+        assert gov_east_pricing["input_cost_per_token"] == 3.6e-06  # 0.0000036 (20% higher)
+        assert gov_east_pricing["output_cost_per_token"] == 1.8e-05  # 0.000018 (20% higher)
+        assert gov_west_pricing["input_cost_per_token"] == 3.6e-06  # 0.0000036 (20% higher)
+        assert gov_west_pricing["output_cost_per_token"] == 1.8e-05  # 0.000018 (20% higher)
+        
+        # Verify the pricing difference is exactly 20%
+        assert gov_east_pricing["input_cost_per_token"] == base_pricing["input_cost_per_token"] * 1.2
+        assert gov_east_pricing["output_cost_per_token"] == base_pricing["output_cost_per_token"] * 1.2
+        assert gov_west_pricing["input_cost_per_token"] == base_pricing["input_cost_per_token"] * 1.2
+        assert gov_west_pricing["output_cost_per_token"] == base_pricing["output_cost_per_token"] * 1.2
+        
+        # Test Claude 3 Haiku pricing
+        base_haiku_model = "anthropic.claude-3-haiku-20240307-v1:0"
+        gov_east_haiku_model = "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0"
+        gov_west_haiku_model = "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0"
+        
+        # Verify base Haiku model pricing
+        base_haiku_pricing = model_cost[base_haiku_model]
+        assert base_haiku_pricing["input_cost_per_token"] == 2.5e-07  # 0.00000025
+        assert base_haiku_pricing["output_cost_per_token"] == 1.25e-06  # 0.00000125
+        
+        # Verify GovCloud Haiku models have different (higher) pricing
+        gov_east_haiku_pricing = model_cost[gov_east_haiku_model]
+        gov_west_haiku_pricing = model_cost[gov_west_haiku_model]
+        
+        # GovCloud Haiku models should have 20% higher pricing than base models
+        assert gov_east_haiku_pricing["input_cost_per_token"] == 3e-07  # 0.0000003 (20% higher)
+        assert gov_east_haiku_pricing["output_cost_per_token"] == 1.5e-06  # 0.0000015 (20% higher)
+        assert gov_west_haiku_pricing["input_cost_per_token"] == 3e-07  # 0.0000003 (20% higher)
+        assert gov_west_haiku_pricing["output_cost_per_token"] == 1.5e-06  # 0.0000015 (20% higher)
+        
+        # Verify the pricing difference is exactly 20%
+        assert gov_east_haiku_pricing["input_cost_per_token"] == base_haiku_pricing["input_cost_per_token"] * 1.2
+        assert gov_east_haiku_pricing["output_cost_per_token"] == base_haiku_pricing["output_cost_per_token"] * 1.2
+        assert gov_west_haiku_pricing["input_cost_per_token"] == base_haiku_pricing["input_cost_per_token"] * 1.2
+        assert gov_west_haiku_pricing["output_cost_per_token"] == base_haiku_pricing["output_cost_per_token"] * 1.2
+
     @pytest.mark.parametrize("model_name", [
         "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0",
         "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0",
