@@ -163,9 +163,9 @@ Router provides 4 strategies for routing your calls across multiple deployments:
 
 **Filters out deployment if tpm/rpm limit exceeded** - If you pass in the deployment's tpm/rpm limits.
 
-Routes to **deployment with lowest TPM usage** for that minute. 
+Routes to **deployment with lowest TPM usage** for that minute. If two deployments have the same usage, it chooses randomly. This does not automatically favor a higher-limit deployment up front—but if usage spikes, the smaller-limit deployment may hit its cap and get excluded, so the bigger-limit one will remain in the pool longer.
 
-In production, we use Redis to track usage (TPM/RPM) across multiple deployments. This implementation uses **async redis calls** (redis.incr and redis.mget).
+In production, we use Redis to track usage (TPM/RPM) across multiple deployments. This implementation uses **async redis calls** (`redis.incr` and `redis.mget`).
 
 For Azure, [you get 6 RPM per 1000 TPM](https://stackoverflow.com/questions/77368844/what-is-the-request-per-minute-rate-limit-for-azure-openai-models-for-gpt-3-5-tu)
 
