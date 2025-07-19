@@ -57,6 +57,7 @@ interface AllKeysTableProps {
   selectedKeyAlias: string | null;
   setSelectedKeyAlias: Setter<string | null>;
   accessToken: string | null;
+  setAccessToken: (token: string) => void;
   userID: string | null;
   userRole: string | null;
   organizations: Organization[] | null;
@@ -135,6 +136,7 @@ export function AllKeysTable({
   selectedKeyAlias,
   setSelectedKeyAlias,
   accessToken,
+  setAccessToken,
   userID,
   userRole,
   organizations,
@@ -621,6 +623,7 @@ export function AllKeysTable({
             if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
           }}
           accessToken={accessToken}
+          setAccessToken={setAccessToken}
           userID={userID}
           userRole={userRole}
           teams={allTeams}
