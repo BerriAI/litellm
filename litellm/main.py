@@ -346,6 +346,7 @@ async def acompletion(
     user: Optional[str] = None,
     # openai v1.0+ new params
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
+    json_schema: Optional[dict] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
     tool_choice: Optional[Union[str, dict]] = None,
@@ -478,6 +479,7 @@ async def acompletion(
         "logit_bias": logit_bias,
         "user": user,
         "response_format": response_format,
+        "json_schema": json_schema,
         "seed": seed,
         "tools": tools,
         "tool_choice": tool_choice,
@@ -894,6 +896,7 @@ def completion(  # type: ignore # noqa: PLR0915
     # openai v1.0+ new params
     reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
+    json_schema: Optional[dict] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
     tool_choice: Optional[Union[str, dict]] = None,
@@ -1225,6 +1228,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "model": model,
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
+            "json_schema": json_schema,
             "seed": seed,
             "tools": tools,
             "tool_choice": tool_choice,
