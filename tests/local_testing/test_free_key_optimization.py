@@ -685,9 +685,12 @@ class TestCostLookupHelpers:
         )
 
         assert result["cost_source"] == "cost_calculation"
-        assert result["cost_metric"] == 0.15  # (50 * 0.001) + (50 * 0.002) = 0.15
+        assert (
+            abs(result["cost_metric"] - 0.15) < 1e-10
+        )  # (50 * 0.001) + (50 * 0.002) = 0.15
         assert result["estimated_output_tokens"] == 50
-        assert result["estimated_total_cost"] == 0.15
+        # use abs for floating point comparison of small
+        assert abs(result["estimated_total_cost"] - 0.15) < 1e-10
 
     def test_calculate_cost_metric_zero_cost(self, free_key_handler):
         """Test _calculate_cost_metric with zero cost (free model)"""
