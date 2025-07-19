@@ -15,6 +15,11 @@ model LiteLLM_BudgetTable {
   max_parallel_requests Int?
   tpm_limit     BigInt?
   rpm_limit     BigInt?
+  // New rate limit fields for hour and day windows
+  tph_limit     BigInt?  // Tokens per hour limit
+  tpd_limit     BigInt?  // Tokens per day limit
+  rph_limit     BigInt?  // Requests per hour limit
+  rpd_limit     BigInt?  // Requests per day limit
   model_max_budget Json?
   budget_duration String? 
   budget_reset_at DateTime?
@@ -135,6 +140,11 @@ model LiteLLM_UserTable {
     max_parallel_requests Int?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    // New rate limit fields for hour and day windows
+    tph_limit     BigInt?  // Tokens per hour limit
+    tpd_limit     BigInt?  // Tokens per day limit
+    rph_limit     BigInt?  // Requests per hour limit
+    rpd_limit     BigInt?  // Requests per day limit
     budget_duration String? 
     budget_reset_at DateTime?
     allowed_cache_controls String[] @default([])
@@ -203,6 +213,11 @@ model LiteLLM_VerificationToken {
     blocked Boolean?
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    // New rate limit fields for hour and day windows
+    tph_limit     BigInt?  // Tokens per hour limit
+    tpd_limit     BigInt?  // Tokens per day limit
+    rph_limit     BigInt?  // Requests per hour limit
+    rpd_limit     BigInt?  // Requests per day limit
     max_budget Float?    
     budget_duration String? 
     budget_reset_at DateTime?

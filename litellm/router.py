@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_strategy.free_key_optimization import FreeKeyOptimizationHandler
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
@@ -248,6 +249,7 @@ class Router:
             "latency-based-routing",
             "cost-based-routing",
             "usage-based-routing-v2",
+            "free-key-optimization",
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
         routing_strategy_args: dict = {},  # just for latency-based
@@ -717,6 +719,17 @@ class Router:
             )
             if isinstance(litellm.callbacks, list):
                 litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
+        elif (
+            routing_strategy == RoutingStrategy.FREE_KEY_OPTIMIZATION.value
+            or routing_strategy == RoutingStrategy.FREE_KEY_OPTIMIZATION
+        ):
+            self.free_key_optimization_logger = FreeKeyOptimizationHandler(
+                router_cache=self.cache,
+                model_list=self.model_list,
+                routing_args=routing_strategy_args,
+            )
+            if isinstance(litellm.callbacks, list):
+                litellm.logging_callback_manager.add_litellm_callback(self.free_key_optimization_logger)  # type: ignore
         else:
             pass
 
@@ -6410,6 +6423,7 @@ class Router:
             and self.routing_strategy != "cost-based-routing"
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
+            and self.routing_strategy != "free-key-optimization"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -6483,6 +6497,18 @@ class Router:
                     await self.leastbusy_logger.async_get_available_deployments(
                         model_group=model,
                         healthy_deployments=healthy_deployments,  # type: ignore
+                    )
+                )
+            elif (
+                self.routing_strategy == "free-key-optimization"
+                and self.free_key_optimization_logger is not None
+            ):
+                deployment = (
+                    await self.free_key_optimization_logger.async_get_available_deployments(
+                        model_group=model,
+                        healthy_deployments=healthy_deployments,  # type: ignore
+                        messages=messages,
+                        input=input,
                     )
                 )
             else:
@@ -6625,6 +6651,16 @@ class Router:
             and self.lowesttpm_logger_v2 is not None
         ):
             deployment = self.lowesttpm_logger_v2.get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,  # type: ignore
+                messages=messages,
+                input=input,
+            )
+        elif (
+            self.routing_strategy == "free-key-optimization"
+            and self.free_key_optimization_logger is not None
+        ):
+            deployment = self.free_key_optimization_logger.get_available_deployments(
                 model_group=model,
                 healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,

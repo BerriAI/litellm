@@ -38,6 +38,11 @@ class ModelConfig(BaseModel):
     litellm_params: Union[CompletionRequest, EmbeddingRequest]
     tpm: int
     rpm: int
+    # New rate limit fields for hour and day windows
+    tph: Optional[int] = None  # Tokens per hour
+    tpd: Optional[int] = None  # Tokens per day
+    rph: Optional[int] = None  # Requests per hour
+    rpd: Optional[int] = None  # Requests per day
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -97,18 +102,16 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = (
-        False  # used for proxy - to separate models which are stored in the db vs. config.
-    )
+    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
     created_at: Optional[datetime.datetime] = None
     created_by: Optional[str] = None
 
-    base_model: Optional[str] = (
-        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
-    )
+    base_model: Optional[
+        str
+    ] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
     tier: Optional[Literal["free", "paid"]] = None
 
     """
@@ -183,12 +186,17 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
-    timeout: Optional[Union[float, str, httpx.Timeout]] = (
-        None  # if str, pass in as os.environ/
-    )
-    stream_timeout: Optional[Union[float, str]] = (
-        None  # timeout when making stream=True calls, if str, pass in as os.environ/
-    )
+    # New rate limit fields for hour and day windows
+    tph: Optional[int] = None  # Tokens per hour
+    tpd: Optional[int] = None  # Tokens per day
+    rph: Optional[int] = None  # Requests per hour
+    rpd: Optional[int] = None  # Requests per day
+    timeout: Optional[
+        Union[float, str, httpx.Timeout]
+    ] = None  # if str, pass in as os.environ/
+    stream_timeout: Optional[
+        Union[float, str]
+    ] = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -263,9 +271,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
         # We need to keep max_retries in args since it's a parameter of GenericLiteLLMParams
-        args["max_retries"] = (
-            max_retries  # Put max_retries back in args after popping it
-        )
+        args[
+            "max_retries"
+        ] = max_retries  # Put max_retries back in args after popping it
         super().__init__(**args, **params)
 
     def __contains__(self, key):
@@ -368,6 +376,11 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     custom_llm_provider: Optional[str]
     tpm: Optional[int]
     rpm: Optional[int]
+    # New rate limit fields for hour and day windows
+    tph: Optional[int]  # Tokens per hour
+    tpd: Optional[int]  # Tokens per day
+    rph: Optional[int]  # Requests per hour
+    rpd: Optional[int]  # Requests per day
     order: Optional[int]
     weight: Optional[int]
     max_parallel_requests: Optional[int]
@@ -571,6 +584,11 @@ class ModelGroupInfo(BaseModel):
     ] = Field(default="chat")
     tpm: Optional[int] = None
     rpm: Optional[int] = None
+    # New rate limit fields for hour and day windows
+    tph: Optional[int] = None  # Tokens per hour
+    tpd: Optional[int] = None  # Tokens per day
+    rph: Optional[int] = None  # Requests per hour
+    rpd: Optional[int] = None  # Requests per day
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
@@ -704,6 +722,7 @@ class RoutingStrategy(enum.Enum):
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"
+    FREE_KEY_OPTIMIZATION = "free-key-optimization"
 
 
 class RouterCacheEnum(enum.Enum):
