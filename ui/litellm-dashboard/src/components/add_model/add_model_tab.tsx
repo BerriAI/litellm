@@ -31,6 +31,7 @@ interface AddModelTabProps {
   credentials: CredentialItem[];
   accessToken: string;
   userRole: string;
+  premiumUser: boolean;
 }
 
 const { Title, Link } = Typography;
@@ -50,6 +51,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   credentials,
   accessToken,
   userRole,
+  premiumUser
 }) => {
   // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
@@ -238,45 +240,69 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
               <div className="flex-grow border-t border-gray-200"></div>
             </div>
-            <Form.Item
-              label="Team"
-              name="team_id"
-              className="mb-4"
-              tooltip="Only keys for this team, will be able to call this model."
-              rules={[
+            { premiumUser ? (
+              <>
+                <Form.Item
+                  label="Team"
+                  name="team_id"
+                  className="mb-4"
+                  tooltip="Only keys for this team, will be able to call this model."
+                  rules={[
+                    {
+                      required: !isAdmin, // Required if not admin
+                      message: 'Please select a team.'
+                    }
+                  ]}
+                >
+                  <TeamDropdown teams={teams} />
+                </Form.Item>
                 {
-                  required: !isAdmin, // Required if not admin
-                  message: 'Please select a team.'
+                  isAdmin && (
+                    <>
+                      <Form.Item
+                        label="Model Access Group"
+                        name="model_access_group"
+                        className="mb-4"
+                        tooltip="Use model access groups to give users access to select models, and add new ones to the group over time."
+                      >
+                        <AntdSelect
+                          mode="tags"
+                          showSearch
+                          placeholder="Select existing groups or type to create new ones"
+                          optionFilterProp="children"
+                          tokenSeparators={[',']}
+                          options={modelAccessGroups.map((group) => ({
+                            value: group,
+                            label: group
+                          }))}
+                          maxTagCount="responsive"
+                          allowClear
+                        />
+                      </Form.Item>
+                    </>
+                  )
                 }
-              ]}
-            >
-              <TeamDropdown teams={teams} />
-            </Form.Item>
-            {
-              isAdmin && (
-                <>
-                  <Form.Item
-                    label="Model Access Group"
-                    name="model_access_group"
-                    className="mb-4"
-                    tooltip="Use model access groups to give users access to select models, and add new ones to the group over time."
-                  >
-                    <AntdSelect
-                      mode="tags"
-                      showSearch
-                      placeholder="Select existing groups or type to create new ones"
-                      optionFilterProp="children"
-                      tokenSeparators={[',']}
-                      options={modelAccessGroups.map((group) => ({
-                        value: group,
-                        label: group
-                      }))}
-                      maxTagCount="responsive"
-                      allowClear
-                    />
-                  </Form.Item>
-                </>
-              )
+              </>
+            ): 
+              <div className="flex flex-col items-center justify-center space-y-2 text-center">
+                <Text className="font-medium">✨ Enterprise Feature</Text>
+                <Text>
+                  Assigning models to Teams and Access Groups is an Enterprise feature.{" "}
+                  <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    Get a trial key to use this.
+                  </a>
+                </Text>
+                <Text>
+                  Learn more:{" "}
+                  <a href="https://docs.litellm.ai/docs/proxy/team_model_add" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    Team Models
+                  </a>
+                  <span className="mx-1">|</span>
+                  <a href="https://docs.litellm.ai/docs/proxy/model_access" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    Model Access
+                  </a>
+                </Text>
+              </div>
             }
             <AdvancedSettings 
               showAdvancedSettings={showAdvancedSettings}
@@ -337,5 +363,4 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     </>
   );
 };
-
 export default AddModelTab; 
