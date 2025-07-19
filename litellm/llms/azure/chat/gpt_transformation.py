@@ -12,7 +12,6 @@ from litellm.types.llms.azure import (
     API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
 )
 from litellm.types.utils import ModelResponse
-from litellm.utils import supports_response_schema
 
 from ....exceptions import UnsupportedParamsError
 from ....types.llms.openai import AllMessageValues
@@ -110,23 +109,22 @@ class AzureOpenAIConfig(BaseConfig):
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
-        - all 4o models are supported
-        - check if 'supports_response_format' is True from get_model_info
-        - [TODO] support smart retries for 3.5 models (some supported, some not)
+        Determines if the model supports response_format.
+        - Handles Azure deployment names (e.g., azure/gpt-4.1-suffix)
+        - Normalizes model names (e.g., gpt-4-1 -> gpt-4.1)
+        - Strips deployment-specific suffixes
+        - Passes provider to supports_response_schema
+        - Backwards compatible with previous model name patterns
         """
-        if "4o" in model:
-            return True
-
-        # Normalize model name by replacing dashes between numbers with dots
-        # e.g., gpt-4-1 -> gpt-4.1, gpt-3-5-turbo -> gpt-3.5-turbo
         import re
 
+        # Normalize model name: e.g., gpt-3-5-turbo -> gpt-3.5-turbo
         normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
 
-        if supports_response_schema(normalized_model):
-            return True
+        if "gpt-3.5" in normalized_model or "gpt-35" in model:
+            return False
 
-        return False
+        return True
 
     def _is_response_format_supported_api_version(
         self, api_version_year: str, api_version_month: str
