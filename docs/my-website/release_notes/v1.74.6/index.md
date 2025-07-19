@@ -128,12 +128,14 @@ This enables developers to easily integrate vector search capabilities into thei
 
 
 #### Features
+
 - **[🆕 Moonshot API (Kimi)](../../docs/providers/moonshot)**
     - New LLM API integration for accessing Kimi models - [PR #12592](https://github.com/BerriAI/litellm/pull/12592), [Get Started](../../docs/providers/moonshot)
 - **[🆕 v0 Provider](../../docs/providers/v0)**
     - New provider integration for v0.dev - [PR #12751](https://github.com/BerriAI/litellm/pull/12751), [Get Started](../../docs/providers/v0)
 - **[OpenAI](../../docs/providers/openai)**
     - Use OpenAI DeepResearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
+    - Add `input_fidelity` parameter for OpenAI image generation - [PR #12662](https://github.com/BerriAI/litellm/pull/12662), [Get Started](../../docs/image_generation)
 - **[Azure OpenAI](../../docs/providers/azure_openai)**
     - Use Azure OpenAI DeepResearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
 - **[Anthropic](../../docs/providers/anthropic)**
@@ -146,6 +148,8 @@ This enables developers to easily integrate vector search capabilities into thei
     - Fix implicit caching cost calculation for Gemini 2.x models - [PR #12585](https://github.com/BerriAI/litellm/pull/12585)
 - **[VertexAI](../../docs/providers/vertex)**
     - Added Vertex AI RAG Engine support (use with OpenAI compatible `/vector_stores` API) - [PR #12752](https://github.com/BerriAI/litellm/pull/12595), **DOC NEEDED**
+- **[vLLM](../../docs/providers/vllm)**
+    - Added support for using Rerank endpoints with vLLM - [PR #12738](https://github.com/BerriAI/litellm/pull/12738), **Doc Needed**
 - **[AI21](../../docs/providers/ai21)**
     - Added ai21/jamba-1.7 model family pricing - [PR #12593](https://github.com/BerriAI/litellm/pull/12593), [Get Started](../../docs/providers/ai21)
 - **[Together.ai](../../docs/providers/together_ai)**
@@ -173,11 +177,10 @@ This enables developers to easily integrate vector search capabilities into thei
 #### Features
 - **[/chat/completions](../../docs/completion/input)** 
     - Include tool calls in output of trim_messages - [PR #11517](https://github.com/BerriAI/litellm/pull/11517)
-- **[/images/generations](../../docs/image_generation)**
-    - Add input_fidelity parameter for OpenAI image generation - [PR #12662](https://github.com/BerriAI/litellm/pull/12662)
 - **[/v1/vector_stores](../../docs/proxy/vector_stores)**
     - New OpenAI-compatible vector store endpoints - [PR #12699](https://github.com/BerriAI/litellm/pull/12699)
     - Vector store search endpoint - [PR #12749](https://github.com/BerriAI/litellm/pull/12749)
+    - Support for using PG Vector as a vector store - [PR #12667](https://github.com/BerriAI/litellm/pull/12667)
 - **[/streamGenerateContent](../../docs/image_generation#streamgeneratecontent)**
     - Non-gemini model support - [PR #12647](https://github.com/BerriAI/litellm/pull/12647)
 
@@ -191,7 +194,7 @@ This enables developers to easily integrate vector search capabilities into thei
 
 #### Features
 - **[Access Groups](../../docs/mcp#grouping-mcps-access-groups)**
-    - Allow MCP access groups to be added via config - [PR #12654](https://github.com/BerriAI/litellm/pull/12654)
+    - Allow MCP access groups to be added via litellm proxy config.yaml - [PR #12654](https://github.com/BerriAI/litellm/pull/12654)
     - List tools from access list for keys - [PR #12657](https://github.com/BerriAI/litellm/pull/12657)
 - **[Namespacing](../../docs/mcp#mcp-namespacing)**
     - URL-based namespacing for better segregation - [PR #12658](https://github.com/BerriAI/litellm/pull/12658)
@@ -214,18 +217,23 @@ This enables developers to easily integrate vector search capabilities into thei
 - **Vector Stores**
     - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
     - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
-- **User Interface**
+- **Logs Page**
+    - Add `end_user` filter on UI Logs Page - [PR #12663](https://github.com/BerriAI/litellm/pull/12663)
+- **MCP Servers**
     - Copy MCP Server name functionality - [PR #12760](https://github.com/BerriAI/litellm/pull/12760)
-    - Add `end_user` filter on UI - [PR #12663](https://github.com/BerriAI/litellm/pull/12663)
+- **Usage Page**
     - Fix Y-axis labels overlap on Spend per Tag chart - [PR #12754](https://github.com/BerriAI/litellm/pull/12754)
 - **Teams**
     - Allow setting custom key duration + show key creation stats - [PR #12722](https://github.com/BerriAI/litellm/pull/12722)
-    - New `/user/bulk_update` endpoint - [PR #12720](https://github.com/BerriAI/litellm/pull/12720)
     - Enable team admins to update member roles - [PR #12629](https://github.com/BerriAI/litellm/pull/12629)
+- **Users**
+    - New `/user/bulk_update` endpoint - [PR #12720](https://github.com/BerriAI/litellm/pull/12720)
 - **Keys**
     - Regenerate Key State Management improvements - [PR #12729](https://github.com/BerriAI/litellm/pull/12729)
 - **General**
     - Add Copy-on-Click for all IDs (Key, Team, Organization, MCP Server) - [PR #12615](https://github.com/BerriAI/litellm/pull/12615)
+- **[SCIM](../../docs/proxy/scim)**
+    - Add GET /ServiceProviderConfig endpoint - [PR #12664](https://github.com/BerriAI/litellm/pull/12664)
 
 #### Bugs
 - **Teams**
@@ -243,14 +251,15 @@ This enables developers to easily integrate vector search capabilities into thei
     - Allow disabling exception on 'BLOCKED' action - [PR #12693](https://github.com/BerriAI/litellm/pull/12693)
 - **[Guardrails AI](../../docs/proxy/guardrails/guardrails_ai)**
     - Support `llmOutput` based guardrails as pre-call hooks - [PR #12674](https://github.com/BerriAI/litellm/pull/12674)
+- **[DataDog LLM Observability](../../docs/proxy/logging#datadog)**
+    - Add support for tracking the correct span type based on LLM Endpoint used - [PR #12652](https://github.com/BerriAI/litellm/pull/12652)
 - **[Custom Logging](../../docs/proxy/logging)**
-    - Allow reading custom logger python scripts from S3 - [PR #12623](https://github.com/BerriAI/litellm/pull/12623)
-- **[SCIM](../../docs/proxy/scim)**
-    - Add GET /ServiceProviderConfig endpoint - [PR #12664](https://github.com/BerriAI/litellm/pull/12664)
+    - Allow reading custom logger python scripts from S3 or GCS Bucket - [PR #12623](https://github.com/BerriAI/litellm/pull/12623)
 
 #### Bugs
-- **[Standard Logging](../../docs/proxy/logging)**
-    - StandardLoggingPayload on cache_hits should track custom llm provider + DD LLM Obs span type - [PR #12652](https://github.com/BerriAI/litellm/pull/12652)
+- **[General Logging](../../docs/proxy/logging)**
+    - StandardLoggingPayload on cache_hits should track custom llm provider - [PR #12652](https://github.com/BerriAI/litellm/pull/12652)
+- **[S3 Buckets](../../docs/proxy/logging#s3-buckets)**
     - S3 v2 log uploader crashes when using with guardrails - [PR #12733](https://github.com/BerriAI/litellm/pull/12733)
 
 ---
