@@ -214,16 +214,11 @@ This enables developers to easily integrate vector search capabilities into thei
 ## Management Endpoints / UI
 
 #### Features
+- **Keys**
+    - Regenerate Key State Management improvements - [PR #12729](https://github.com/BerriAI/litellm/pull/12729)
 - **Models**
     - Wildcard model filter support - [PR #12597](https://github.com/BerriAI/litellm/pull/12597)
     - Fixes for handling team only models on UI - [PR #12632](https://github.com/BerriAI/litellm/pull/12632)
-- **Vector Stores**
-    - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
-    - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
-- **Logs Page**
-    - Add `end_user` filter on UI Logs Page - [PR #12663](https://github.com/BerriAI/litellm/pull/12663)
-- **MCP Servers**
-    - Copy MCP Server name functionality - [PR #12760](https://github.com/BerriAI/litellm/pull/12760)
 - **Usage Page**
     - Fix Y-axis labels overlap on Spend per Tag chart - [PR #12754](https://github.com/BerriAI/litellm/pull/12754)
 - **Teams**
@@ -231,8 +226,14 @@ This enables developers to easily integrate vector search capabilities into thei
     - Enable team admins to update member roles - [PR #12629](https://github.com/BerriAI/litellm/pull/12629)
 - **Users**
     - New `/user/bulk_update` endpoint - [PR #12720](https://github.com/BerriAI/litellm/pull/12720)
-- **Keys**
-    - Regenerate Key State Management improvements - [PR #12729](https://github.com/BerriAI/litellm/pull/12729)
+- **Logs Page**
+    - Add `end_user` filter on UI Logs Page - [PR #12663](https://github.com/BerriAI/litellm/pull/12663)
+- **MCP Servers**
+    - Copy MCP Server name functionality - [PR #12760](https://github.com/BerriAI/litellm/pull/12760)
+- **Vector Stores**
+    - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
+    - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
+
 - **General**
     - Add Copy-on-Click for all IDs (Key, Team, Organization, MCP Server) - [PR #12615](https://github.com/BerriAI/litellm/pull/12615)
 - **[SCIM](../../docs/proxy/scim)**
