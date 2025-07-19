@@ -3262,6 +3262,7 @@ class Router:
     async def _pass_through_moderation_endpoint_factory(
         self,
         original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
         **kwargs,
     ):
         # update kwargs with model_group
@@ -3328,7 +3329,7 @@ class Router:
 
             def sync_wrapper(
                 custom_llm_provider: Optional[
-                    Literal["openai", "azure", "anthropic"]
+                    str
                 ] = None,
                 client: Optional[Any] = None,
                 **kwargs,
@@ -3342,7 +3343,7 @@ class Router:
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: Optional[
-                Literal["openai", "azure", "anthropic"]
+                str
             ] = None,
             client: Optional[Any] = None,
             **kwargs,
@@ -3370,8 +3371,6 @@ class Router:
                 "aimage_edit",
                 "agenerate_content",
                 "agenerate_content_stream",
-                "avector_store_search",
-                "avector_store_create",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -3392,6 +3391,15 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+            elif call_type in (
+                "avector_store_search",
+                "avector_store_create",
+            ):
+                return await self._init_vector_store_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
             elif call_type in ("afile_delete", "afile_content"):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -3401,6 +3409,19 @@ class Router:
                 )
 
         return async_wrapper
+    
+    async def _init_vector_store_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Vector Store API endpoints on the router.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
+        return await original_function(**kwargs)
 
     async def _init_responses_api_endpoints(
         self,
@@ -3427,7 +3448,7 @@ class Router:
     async def _pass_through_assistants_endpoint_factory(
         self,
         original_function: Callable,
-        custom_llm_provider: Optional[Literal["openai", "azure", "anthropic"]] = None,
+        custom_llm_provider: Optional[str] = None,
         client: Optional[AsyncOpenAI] = None,
         **kwargs,
     ):

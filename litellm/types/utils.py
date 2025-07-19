@@ -2086,6 +2086,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
+    litellm_disabled_callbacks: Optional[List[str]]
 
 
 all_litellm_params = [
@@ -2273,6 +2274,7 @@ class LlmProviders(str, Enum):
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
     MOONSHOT = "moonshot"
+    V0 = "v0"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"

@@ -31,6 +31,7 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
     ) -> Tuple[str, Dict]:
         pass
 
