@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Literal, Optional, Union, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -14,6 +14,8 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import _add_path_to_api_base
 
 azure_ad_cache = DualCache()
 
@@ -162,6 +164,7 @@ def get_azure_ad_token_from_oidc(
     azure_ad_token: str,
     azure_client_id: Optional[str],
     azure_tenant_id: Optional[str],
+    scope: Optional[str] = None,
 ) -> str:
     """
     Get Azure AD token from OIDC token
@@ -170,10 +173,13 @@ def get_azure_ad_token_from_oidc(
         azure_ad_token: str
         azure_client_id: Optional[str]
         azure_tenant_id: Optional[str]
+        scope: str
 
     Returns:
         `azure_ad_token_access_token` - str
     """
+    if scope is None:
+        scope = "https://cognitiveservices.azure.com/.default"
     azure_authority_host = os.getenv(
         "AZURE_AUTHORITY_HOST", "https://login.microsoftonline.com"
     )
@@ -207,12 +213,13 @@ def get_azure_ad_token_from_oidc(
         return azure_ad_token_access_token
 
     client = litellm.module_level_client
+
     req_token = client.post(
         f"{azure_authority_host}/{azure_tenant_id}/oauth2/v2.0/token",
         data={
             "client_id": azure_client_id,
             "grant_type": "client_credentials",
-            "scope": "https://cognitiveservices.azure.com/.default",
+            "scope": scope,
             "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
             "client_assertion": oidc_token,
         },
@@ -257,6 +264,126 @@ def select_azure_base_url_or_endpoint(azure_client_params: dict):
             azure_client_params.pop("azure_endpoint")
 
     return azure_client_params
+
+
+def get_azure_ad_token(
+    litellm_params: GenericLiteLLMParams,
+) -> Optional[str]:
+    """
+    Get Azure AD token from various authentication methods.
+
+    This function tries different methods to obtain an Azure AD token:
+    1. From an existing token provider
+    2. From Entra ID using tenant_id, client_id, and client_secret
+    3. From username and password
+    4. From OIDC token
+    5. From a service principal with secret workflow
+
+    Args:
+        litellm_params: Dictionary containing authentication parameters
+            - azure_ad_token_provider: Optional callable that returns a token
+            - azure_ad_token: Optional existing token
+            - tenant_id: Optional Azure tenant ID
+            - client_id: Optional Azure client ID
+            - client_secret: Optional Azure client secret
+            - azure_username: Optional Azure username
+            - azure_password: Optional Azure password
+
+    Returns:
+        Azure AD token as string if successful, None otherwise
+    """
+    # Extract parameters
+    azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
+    azure_ad_token = litellm_params.get("azure_ad_token", None) or get_secret_str(
+        "AZURE_AD_TOKEN"
+    )
+    tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
+    client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
+    client_secret = litellm_params.get(
+        "client_secret", os.getenv("AZURE_CLIENT_SECRET")
+    )
+    azure_username = litellm_params.get("azure_username", os.getenv("AZURE_USERNAME"))
+    azure_password = litellm_params.get("azure_password", os.getenv("AZURE_PASSWORD"))
+    scope = litellm_params.get(
+        "azure_scope",
+        os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
+    )
+    if scope is None:
+        scope = "https://cognitiveservices.azure.com/.default"
+
+    # Try to get token provider from Entra ID
+    if azure_ad_token_provider is None and tenant_id and client_id and client_secret:
+        verbose_logger.debug(
+            "Using Azure AD Token Provider from Entra ID for Azure Auth"
+        )
+        azure_ad_token_provider = get_azure_ad_token_from_entra_id(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            scope=scope,
+        )
+
+    # Try to get token provider from username and password
+    if (
+        azure_ad_token_provider is None
+        and azure_username
+        and azure_password
+        and client_id
+    ):
+        verbose_logger.debug("Using Azure Username and Password for Azure Auth")
+        azure_ad_token_provider = get_azure_ad_token_from_username_password(
+            azure_username=azure_username,
+            azure_password=azure_password,
+            client_id=client_id,
+            scope=scope,
+        )
+
+    # Try to get token from OIDC
+    if (
+        client_id
+        and tenant_id
+        and azure_ad_token
+        and azure_ad_token.startswith("oidc/")
+    ):
+        verbose_logger.debug("Using Azure OIDC Token for Azure Auth")
+        azure_ad_token = get_azure_ad_token_from_oidc(
+            azure_ad_token=azure_ad_token,
+            azure_client_id=client_id,
+            azure_tenant_id=tenant_id,
+            scope=scope,
+        )
+    # Try to get token provider from service principal
+    elif (
+        azure_ad_token_provider is None
+        and litellm.enable_azure_ad_token_refresh is True
+    ):
+        verbose_logger.debug(
+            "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+        )
+        try:
+            azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
+        except ValueError:
+            verbose_logger.debug("Azure AD Token Provider could not be used.")
+
+    # Execute the token provider to get the token if available
+    if azure_ad_token_provider and callable(azure_ad_token_provider):
+        try:
+            token = azure_ad_token_provider()
+            if not isinstance(token, str):
+                verbose_logger.error(
+                    f"Azure AD token provider returned non-string value: {type(token)}"
+                )
+                raise TypeError(f"Azure AD token must be a string, got {type(token)}")
+            else:
+                azure_ad_token = token
+        except TypeError:
+            # Re-raise TypeError directly
+            raise
+        except Exception as e:
+            verbose_logger.error(f"Error calling Azure AD token provider: {str(e)}")
+            raise RuntimeError(f"Failed to get Azure AD token: {str(e)}") from e
+
+    return azure_ad_token
 
 
 class BaseAzureLLM(BaseOpenAILLM):
@@ -335,12 +462,20 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_password = litellm_params.get(
             "azure_password", os.getenv("AZURE_PASSWORD")
         )
+        scope = litellm_params.get(
+            "azure_scope",
+            os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
+        )
+        if scope is None:
+            scope = "https://cognitiveservices.azure.com/.default"
         max_retries = litellm_params.get("max_retries")
         timeout = litellm_params.get("timeout")
         if (
             not api_key
             and azure_ad_token_provider is None
-            and tenant_id and client_id and client_secret
+            and tenant_id
+            and client_id
+            and client_secret
         ):
             verbose_logger.debug(
                 "Using Azure AD Token Provider from Entra ID for Azure Auth"
@@ -349,13 +484,20 @@ class BaseAzureLLM(BaseOpenAILLM):
                 tenant_id=tenant_id,
                 client_id=client_id,
                 client_secret=client_secret,
+                scope=scope,
             )
-        if azure_ad_token_provider is None and azure_username and azure_password and client_id:
+        if (
+            azure_ad_token_provider is None
+            and azure_username
+            and azure_password
+            and client_id
+        ):
             verbose_logger.debug("Using Azure Username and Password for Azure Auth")
             azure_ad_token_provider = get_azure_ad_token_from_username_password(
                 azure_username=azure_username,
                 azure_password=azure_password,
                 client_id=client_id,
+                scope=scope,
             )
 
         if azure_ad_token is not None and azure_ad_token.startswith("oidc/"):
@@ -364,6 +506,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_ad_token=azure_ad_token,
                 azure_client_id=client_id,
                 azure_tenant_id=tenant_id,
+                scope=scope,
             )
         elif (
             not api_key
@@ -374,7 +517,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider()
+                azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
@@ -435,6 +578,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         ## build base url - assume api base includes resource name
         tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
         client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
+        scope = litellm_params.get(
+            "azure_scope",
+            os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
+        )
         if client is None:
             if not api_base.endswith("/"):
                 api_base += "/"
@@ -455,6 +602,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                         azure_ad_token=azure_ad_token,
                         azure_client_id=client_id,
                         azure_tenant_id=tenant_id,
+                        scope=scope,
                     )
 
                 azure_client_params["azure_ad_token"] = azure_ad_token
@@ -466,3 +614,78 @@ class BaseAzureLLM(BaseOpenAILLM):
             else:
                 client = AzureOpenAI(**azure_client_params)  # type: ignore
         return client
+    
+    @staticmethod
+    def _base_validate_azure_environment(
+        headers: dict,  litellm_params: Optional[GenericLiteLLMParams]
+    ) -> dict:
+        litellm_params = litellm_params or GenericLiteLLMParams()
+        api_key = (
+            litellm_params.api_key
+            or litellm.api_key
+            or litellm.azure_key
+            or get_secret_str("AZURE_OPENAI_API_KEY")
+            or get_secret_str("AZURE_API_KEY")
+        )
+
+        if api_key:
+            headers["api-key"] = api_key
+            return headers
+
+        ### Fallback to Azure AD token-based authentication if no API key is available
+        ### Retrieves Azure AD token and adds it to the Authorization header
+        azure_ad_token = get_azure_ad_token(litellm_params)
+        if azure_ad_token:
+            headers["Authorization"] = f"Bearer {azure_ad_token}"
+
+        return headers
+    
+    @staticmethod
+    def _get_base_azure_url(
+        api_base: Optional[str],
+        litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
+        route: Literal["/openai/responses", "/openai/vector_stores"]
+    ) -> str:
+        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        if api_base is None:
+            raise ValueError(
+                f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
+            )
+        original_url = httpx.URL(api_base)
+
+        # Extract api_version or use default
+        litellm_params = litellm_params or {}
+        api_version = cast(Optional[str], litellm_params.get("api_version"))
+
+        # Create a new dictionary with existing params
+        query_params = dict(original_url.params)
+
+        # Add api_version if needed
+        if "api-version" not in query_params and api_version:
+            query_params["api-version"] = api_version
+        
+        # Add the path to the base URL
+        if route not in api_base:
+            new_url = _add_path_to_api_base(
+                api_base=api_base, ending_path=route
+            )
+        else:
+            new_url = api_base
+        
+        if BaseAzureLLM._is_azure_v1_api_version(api_version):
+            # ensure the request go to /openai/v1 and not just /openai
+            if "/openai/v1" not in new_url:
+                parsed_url = httpx.URL(new_url)
+                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
+
+
+        # Use the new query_params dictionary
+        final_url = httpx.URL(new_url).copy_with(params=query_params)
+
+        return str(final_url)
+    
+    @staticmethod
+    def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
+        if api_version is None:
+            return False
+        return api_version == "preview" or api_version == "latest"

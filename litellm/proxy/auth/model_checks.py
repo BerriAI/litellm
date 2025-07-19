@@ -37,10 +37,6 @@ def get_provider_models(
         provider_models = get_valid_models(
             custom_llm_provider=provider, litellm_params=litellm_params
         )
-        # provider_models = copy.deepcopy(litellm.models_by_provider[provider])
-        for idx, _model in enumerate(provider_models):
-            if provider not in _model:
-                provider_models[idx] = f"{provider}/{_model}"
         return provider_models
     return None
 
@@ -67,11 +63,41 @@ def _get_models_from_access_groups(
     return all_models
 
 
+async def get_mcp_server_ids(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[str]:
+    """
+    Returns the list of MCP server ids for a given key by querying the object_permission table
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return []
+
+
+    if user_api_key_dict.object_permission_id is None:
+        return []
+
+
+    # Make a direct SQL query to get just the mcp_servers
+    try:
+
+        result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": user_api_key_dict.object_permission_id},
+        )
+        if result and result.mcp_servers:
+            return result.mcp_servers
+        return []
+    except Exception:
+        return []
+
+
 def get_key_models(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_model_list: List[str],
     model_access_groups: Dict[str, List[str]],
     include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """
     Returns:
@@ -138,6 +164,7 @@ def get_complete_model_list(
     llm_router: Optional[Router] = None,
     model_access_groups: Dict[str, List[str]] = {},
     include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
 ) -> List[str]:
     """Logic for returning complete model list for a given key + team pair"""
 
@@ -147,6 +174,7 @@ def get_complete_model_list(
 
     If list contains wildcard -> return known provider models
     """
+
     unique_models: Set[str] = set()
     if key_models:
         unique_models.update(key_models)
@@ -164,6 +192,13 @@ def get_complete_model_list(
             valid_models = get_valid_models()
             unique_models.update(valid_models)
 
+    if only_model_access_groups:
+        model_access_groups_to_return: List[str] = []
+        for model in unique_models:
+            if model in model_access_groups:
+                model_access_groups_to_return.append(model)
+        return model_access_groups_to_return
+
     all_wildcard_models = _get_wildcard_models(
         unique_models=unique_models,
         return_wildcard_routes=return_wildcard_routes,
@@ -179,26 +214,39 @@ def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
     try:
-        provider, model = wildcard_model.split("/", 1)
+        wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
     except ValueError:  # safely fail
         return []
+
+    if litellm_params is None:  # need litellm params to extract litellm model name
+        return []
+
+    try:
+        provider = litellm_params.model.split("/", 1)[0]
+    except ValueError:
+        provider = wildcard_provider_prefix
+
     # get all known provider models
     wildcard_models = get_provider_models(
         provider=provider, litellm_params=litellm_params
     )
     if wildcard_models is None:
         return []
-    if model == "*":
-        return wildcard_models or []
-    else:
-        model_prefix = model.replace("*", "")
+    if wildcard_suffix != "*":
+        model_prefix = wildcard_suffix.replace("*", "")
         filtered_wildcard_models = [
             wc_model
             for wc_model in wildcard_models
-            if wc_model.split("/")[1].startswith(model_prefix)
+            if wc_model.startswith(model_prefix)
         ]
+        wildcard_models = filtered_wildcard_models
 
-        return filtered_wildcard_models
+    suffix_appended_wildcard_models = []
+    for model in wildcard_models:
+        if not model.startswith(wildcard_provider_prefix):
+            model = f"{wildcard_provider_prefix}/{model}"
+        suffix_appended_wildcard_models.append(model)
+    return suffix_appended_wildcard_models or []
 
 
 def _get_wildcard_models(

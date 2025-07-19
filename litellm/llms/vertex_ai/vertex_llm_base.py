@@ -8,9 +8,11 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
 from .common_utils import (
@@ -79,7 +81,17 @@ class VertexBase:
 
             # Check if the JSON object contains Workload Identity Federation configuration
             if "type" in json_obj and json_obj["type"] == "external_account":
-                creds = self._credentials_from_identity_pool(json_obj)
+                # If environment_id key contains "aws" value it corresponds to an AWS config file
+                credential_source = json_obj.get("credential_source", {})
+                environment_id = (
+                    credential_source.get("environment_id", "")
+                    if isinstance(credential_source, dict)
+                    else ""
+                )
+                if isinstance(environment_id, str) and "aws" in environment_id:
+                    creds = self._credentials_from_identity_pool_with_aws(json_obj)
+                else:
+                    creds = self._credentials_from_identity_pool(json_obj)
             # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
             elif "type" in json_obj and json_obj["type"] == "authorized_user":
                 creds = self._credentials_from_authorized_user(
@@ -122,6 +134,11 @@ class VertexBase:
         from google.auth import identity_pool
 
         return identity_pool.Credentials.from_info(json_obj)
+
+    def _credentials_from_identity_pool_with_aws(self, json_obj):
+        from google.auth import aws
+
+        return aws.Credentials.from_info(json_obj)
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
         import google.oauth2.credentials
@@ -170,7 +187,7 @@ class VertexBase:
 
         api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
         if partner == VertexPartnerProvider.llama:
-            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
+            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
         elif partner == VertexPartnerProvider.mistralai:
             if stream:
                 return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
@@ -388,10 +405,20 @@ class VertexBase:
             verbose_logger.debug(
                 f"Cached credentials found for project_id: {project_id}."
             )
-            _credentials = self._credentials_project_mapping[credential_cache_key]
-            verbose_logger.debug("Using cached credentials")
-            credential_project_id = _credentials.quota_project_id or getattr(
-                _credentials, "project_id", None
+            # Retrieve both credentials and cached project_id
+            cached_entry = self._credentials_project_mapping[credential_cache_key]
+            verbose_logger.debug("cached_entry: %s", cached_entry)
+            if isinstance(cached_entry, tuple):
+                _credentials, credential_project_id = cached_entry
+            else:
+                # Backward compatibility with old cache format
+                _credentials = cached_entry
+                credential_project_id = _credentials.quota_project_id or getattr(
+                    _credentials, "project_id", None
+                )
+            verbose_logger.debug(
+                "Using cached credentials for project_id: %s",
+                credential_project_id,
             )
 
         else:
@@ -415,8 +442,11 @@ class VertexBase:
                         project_id
                     )
                 )
-
-            self._credentials_project_mapping[credential_cache_key] = _credentials
+            # Cache the project_id and credentials from load_auth result (resolved project_id)
+            self._credentials_project_mapping[credential_cache_key] = (
+                _credentials,
+                credential_project_id,
+            )
 
         ## VALIDATE CREDENTIALS
         verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
@@ -426,9 +456,23 @@ class VertexBase:
             and isinstance(credential_project_id, str)
         ):
             project_id = credential_project_id
+            # Update cache with resolved project_id for future lookups
+            resolved_cache_key = (cache_credentials, project_id)
+            if resolved_cache_key not in self._credentials_project_mapping:
+                self._credentials_project_mapping[resolved_cache_key] = (
+                    _credentials,
+                    credential_project_id,
+                )
 
         if _credentials.expired:
+            verbose_logger.debug(
+                f"Credentials expired, refreshing for project_id: {project_id}"
+            )
             self.refresh_auth(_credentials)
+            self._credentials_project_mapping[credential_cache_key] = (
+                _credentials,
+                credential_project_id,
+            )
 
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):
@@ -477,3 +521,30 @@ class VertexBase:
             headers.update(extra_headers)
 
         return headers
+
+    @staticmethod
+    def get_vertex_ai_project(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_project", None)
+            or litellm_params.pop("vertex_ai_project", None)
+            or litellm.vertex_project
+            or get_secret_str("VERTEXAI_PROJECT")
+        )
+
+    @staticmethod
+    def get_vertex_ai_credentials(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_credentials", None)
+            or litellm_params.pop("vertex_ai_credentials", None)
+            or get_secret_str("VERTEXAI_CREDENTIALS")
+        )
+
+    @staticmethod
+    def get_vertex_ai_location(litellm_params: dict) -> Optional[str]:
+        return (
+            litellm_params.pop("vertex_location", None)
+            or litellm_params.pop("vertex_ai_location", None)
+            or litellm.vertex_location
+            or get_secret_str("VERTEXAI_LOCATION")
+            or get_secret_str("VERTEX_LOCATION")
+        )

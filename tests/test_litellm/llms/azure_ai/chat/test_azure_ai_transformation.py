@@ -31,3 +31,15 @@ async def test_get_openai_compatible_provider_info():
     )
 
     assert custom_llm_provider == "azure"
+
+
+def test_azure_ai_validate_environment():
+    config = AzureAIStudioConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="azure_ai/gpt-4o-mini",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+    )
+    assert headers["Content-Type"] == "application/json"

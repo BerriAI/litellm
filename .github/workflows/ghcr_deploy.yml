@@ -6,7 +6,7 @@ on:
       tag:
         description: "The tag version you want to build"
       release_type:
-        description: "The release type you want to build. Can be 'latest', 'stable', 'dev'"
+        description: "The release type you want to build. Can be 'latest', 'stable', 'dev', 'rc'"
         type: string
         default: "latest"
       commit_hash:
@@ -73,7 +73,14 @@ jobs:
           push: true
           file: ./litellm-js/spend-logs/Dockerfile
           tags: litellm/litellm-spend_logs:${{ github.event.inputs.tag || 'latest' }}
-      
+      -
+        name: Build and push litellm-non_root image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          file: ./docker/Dockerfile.non_root
+          tags: litellm/litellm-non_root:${{ github.event.inputs.tag || 'latest' }}
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
@@ -114,9 +121,9 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
             ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.release_type }}
-            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:main-stable', env.REGISTRY) || '' }},
-            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm:{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm:{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
           labels: ${{ steps.meta.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
   
@@ -158,7 +165,7 @@ jobs:
           tags: |
             ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
             ${{ steps.meta-ee.outputs.tags }}-${{ github.event.inputs.release_type }}
-            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-ee:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-ee:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-ee:main-stable', env.REGISTRY) || '' }}
           labels: ${{ steps.meta-ee.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
@@ -201,7 +208,7 @@ jobs:
           tags: |
             ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
             ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.release_type }}
-            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-database:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-database:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-database:main-stable', env.REGISTRY) || '' }}
           labels: ${{ steps.meta-database.outputs.labels }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
@@ -244,7 +251,7 @@ jobs:
           tags: |
             ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
             ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }}
-            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-non_root:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-non_root:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-non_root:main-stable', env.REGISTRY) || '' }}
           labels: ${{ steps.meta-non_root.outputs.labels }} 
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
@@ -287,7 +294,7 @@ jobs:
           tags: |
             ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
             ${{ steps.meta-spend-logs.outputs.tags }}-${{ github.event.inputs.release_type }}
-            ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
+            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-spend_logs:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/berriai/litellm-spend_logs:main-stable', env.REGISTRY) || '' }}
           platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
 

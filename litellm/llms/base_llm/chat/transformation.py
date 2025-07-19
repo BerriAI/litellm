@@ -97,6 +97,7 @@ class BaseConfig(ABC):
                     types.BuiltinFunctionType,
                     classmethod,
                     staticmethod,
+                    property,
                 ),
             )
             and v is not None
@@ -287,6 +288,7 @@ class BaseConfig(ABC):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,

@@ -7,7 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -30,6 +30,7 @@ jobs:
         poetry install --with dev,proxy-dev --extras proxy
         poetry run pip install "pytest-retry==1.6.3"
         poetry run pip install pytest-xdist
+        poetry run pip install "google-genai==1.22.0"
     - name: Setup litellm-enterprise as local package
       run: |
         cd enterprise

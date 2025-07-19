@@ -138,6 +138,7 @@ class AmazonConverseConfig(BaseConfig):
             or base_model.startswith("meta.llama3-1")
             or base_model.startswith("meta.llama3-2")
             or base_model.startswith("meta.llama3-3")
+            or base_model.startswith("meta.llama4")
             or base_model.startswith("amazon.nova")
             or supports_function_calling(
                 model=model, custom_llm_provider=self.custom_llm_provider
@@ -147,6 +148,8 @@ class AmazonConverseConfig(BaseConfig):
 
         if litellm.utils.supports_tool_choice(
             model=model, custom_llm_provider=self.custom_llm_provider
+        ) or litellm.utils.supports_tool_choice(
+            model=base_model, custom_llm_provider=self.custom_llm_provider
         ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
@@ -155,9 +158,13 @@ class AmazonConverseConfig(BaseConfig):
             "claude-3-7" in model
             or "claude-sonnet-4" in model
             or "claude-opus-4" in model
+            or "deepseek.r1" in model
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
+            )
+            or supports_reasoning(
+                model=base_model, custom_llm_provider=self.custom_llm_provider
             )
         ):
             supported_params.append("thinking")
@@ -312,12 +319,14 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
+
                 if (
                     litellm.utils.supports_tool_choice(
                         model=model, custom_llm_provider=self.custom_llm_provider
                     )
                     and not is_thinking_enabled
                 ):
+
                     optional_params["tool_choice"] = ToolChoiceValuesBlock(
                         tool=SpecificToolChoiceBlock(
                             name=schema_name if schema_name != "" else "json_tool_call"
@@ -800,9 +809,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(
-        self, content_blocks: List[ContentBlock]
-    ) -> Tuple[
+    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -817,9 +824,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -940,9 +947,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
 
         if message is not None:
             (
@@ -955,12 +962,12 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["provider_specific_fields"] = {
                 "reasoningContentBlocks": reasoningContentBlocks,
             }
-            chat_completion_message[
-                "reasoning_content"
-            ] = self._transform_reasoning_content(reasoningContentBlocks)
-            chat_completion_message[
-                "thinking_blocks"
-            ] = self._transform_thinking_blocks(reasoningContentBlocks)
+            chat_completion_message["reasoning_content"] = (
+                self._transform_reasoning_content(reasoningContentBlocks)
+            )
+            chat_completion_message["thinking_blocks"] = (
+                self._transform_thinking_blocks(reasoningContentBlocks)
+            )
         chat_completion_message["content"] = content_str
         if json_mode is True and tools is not None and len(tools) == 1:
             # to support 'json_schema' logic on bedrock models

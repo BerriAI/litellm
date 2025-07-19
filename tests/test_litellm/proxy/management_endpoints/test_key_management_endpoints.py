@@ -459,3 +459,36 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
 
     # Verify upsert was called to create new record
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+def test_get_new_token_with_valid_key():
+    """Test get_new_token function when provided with a valid key that starts with 'sk-'"""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    # Test with valid new_key
+    data = RegenerateKeyRequest(new_key="sk-test123456789")
+    result = get_new_token(data)
+
+    assert result == "sk-test123456789"
+
+
+def test_get_new_token_with_invalid_key():
+    """Test get_new_token function when provided with an invalid key that doesn't start with 'sk-'"""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        get_new_token,
+    )
+
+    # Test with invalid new_key (doesn't start with 'sk-')
+    data = RegenerateKeyRequest(new_key="invalid-key-123")
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_new_token(data)
+
+    assert exc_info.value.status_code == 400
+    assert "New key must start with 'sk-'" in str(exc_info.value.detail)

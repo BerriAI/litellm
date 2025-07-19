@@ -45,6 +45,7 @@ from litellm.proxy._types import (
     SpecialProxyStrings,
     TeamAddMemberResponse,
     TeamInfoResponseObject,
+    TeamInfoResponseObjectTeamTable,
     TeamListResponseObject,
     TeamMemberAddRequest,
     TeamMemberDeleteRequest,
@@ -65,8 +66,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
-    _user_has_admin_view,
     _upsert_budget_and_membership,
+    _user_has_admin_view,
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -112,9 +113,7 @@ async def get_all_team_memberships(
 ) -> List[LiteLLM_TeamMembership]:
     """Get all team memberships for a given user"""
     ## GET ALL MEMBERSHIPS ##
-    where_obj: Dict[str, Dict[str, List[str]]] = {
-        "team_id": {"in": team_ids}
-    }
+    where_obj: Dict[str, Dict[str, List[str]]] = {"team_id": {"in": team_ids}}
     if user_id is not None:
         where_obj["user_id"] = {"in": [user_id]}
     # if user_id is None:
@@ -132,6 +131,93 @@ async def get_all_team_memberships(
         returned_tm.append(LiteLLM_TeamMembership(**tm.model_dump()))
 
     return returned_tm
+
+
+async def _create_team_member_budget_table(
+    data: Union[NewTeamRequest, LiteLLM_TeamTable],
+    new_team_data_json: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_member_budget: float,
+) -> dict:
+    """Allows admin to create 1 budget, that applies to all team members"""
+    from litellm.proxy._types import BudgetNewRequest
+    from litellm.proxy.management_endpoints.budget_management_endpoints import (
+        new_budget,
+    )
+
+    if data.team_alias is not None:
+        budget_id = (
+            f"team-{data.team_alias.replace(' ', '-')}-budget-{uuid.uuid4().hex}"
+        )
+    else:
+        budget_id = f"team-budget-{uuid.uuid4().hex}"
+
+    team_member_budget_table = await new_budget(
+        budget_obj=BudgetNewRequest(
+            max_budget=team_member_budget,
+            budget_duration=data.budget_duration,
+            budget_id=budget_id,
+        ),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Add team_member_budget_id as metadata field to team table
+    if new_team_data_json.get("metadata") is None:
+        new_team_data_json["metadata"] = {}
+    new_team_data_json["metadata"][
+        "team_member_budget_id"
+    ] = team_member_budget_table.budget_id
+    new_team_data_json.pop(
+        "team_member_budget", None
+    )  # remove team_member_budget from new_team_data_json
+
+    return new_team_data_json
+
+
+async def _upsert_team_member_budget_table(
+    team_table: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+    team_member_budget: float,
+    updated_kv: dict,
+) -> dict:
+    """
+    Add budget if none exists
+
+    If budget exists, update it
+    """
+    from litellm.proxy._types import BudgetNewRequest
+    from litellm.proxy.management_endpoints.budget_management_endpoints import (
+        update_budget,
+    )
+
+    if team_table.metadata is None:
+        team_table.metadata = {}
+
+    team_member_budget_id = team_table.metadata.get("team_member_budget_id")
+    if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
+        # Budget exists
+        budget_row = await update_budget(
+            budget_obj=BudgetNewRequest(
+                budget_id=team_member_budget_id,
+                max_budget=team_member_budget,
+            ),
+            user_api_key_dict=user_api_key_dict,
+        )
+        verbose_proxy_logger.info(
+            f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}"
+        )
+        if updated_kv.get("metadata") is None:
+            updated_kv["metadata"] = {}
+        updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
+        updated_kv.pop("team_member_budget", None)
+    else:  # budget does not exist
+        updated_kv = await _create_team_member_budget_table(
+            data=team_table,
+            new_team_data_json=updated_kv,
+            user_api_key_dict=user_api_key_dict,
+            team_member_budget=team_member_budget,
+        )
+    return updated_kv
 
 
 #### TEAM MANAGEMENT ####
@@ -175,6 +261,8 @@ async def new_team(  # noqa: PLR0915
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -209,6 +297,7 @@ async def new_team(  # noqa: PLR0915
     """
     try:
         from litellm.proxy.proxy_server import (
+            _license_check,
             create_audit_log_for_update,
             litellm_proxy_admin_name,
             prisma_client,
@@ -216,6 +305,16 @@ async def new_team(  # noqa: PLR0915
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+        # Check if license is over limit
+        total_teams = await prisma_client.db.litellm_teamtable.count()
+        if total_teams and _license_check.is_team_count_over_limit(
+            team_count=total_teams
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+            )
 
         if data.team_id is None:
             data.team_id = str(uuid.uuid4())
@@ -313,9 +412,19 @@ async def new_team(  # noqa: PLR0915
             prisma_client=prisma_client,
         )
 
+        ## Create Team Member Budget Table
+        data_json = data.json()
+        if data.team_member_budget is not None:
+            data_json = await _create_team_member_budget_table(
+                data=data,
+                new_team_data_json=data_json,
+                user_api_key_dict=user_api_key_dict,
+                team_member_budget=data.team_member_budget,
+            )
+
         ## ADD TO TEAM TABLE
         complete_team_data = LiteLLM_TeamTable(
-            **data.json(),
+            **data_json,
             model_id=_model_id,
             object_permission_id=object_permission_id,
         )
@@ -337,27 +446,34 @@ async def new_team(  # noqa: PLR0915
                 budget_duration=complete_team_data.budget_duration,
             )
 
+        ## Add Team Member Budget Table
+        members_with_roles: List[Member] = []
+        if complete_team_data.members_with_roles is not None:
+            members_with_roles = complete_team_data.members_with_roles
+            complete_team_data.members_with_roles = []
+
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
         complete_team_data_dict = prisma_client.jsonify_team_object(
             db_data=complete_team_data_dict
         )
+
         team_row: LiteLLM_TeamTable = await prisma_client.db.litellm_teamtable.create(
             data=complete_team_data_dict,
             include={"litellm_model_table": True},  # type: ignore
         )
 
         ## ADD TEAM ID TO USER TABLE ##
-        for user in complete_team_data.members_with_roles:
-            ## add team id to user row ##
-            await prisma_client.update_data(
-                user_id=user.user_id,
-                data={"user_id": user.user_id, "teams": [team_row.team_id]},
-                update_key_values_custom_query={
-                    "teams": {
-                        "push ": [team_row.team_id],
-                    }
-                },
-            )
+        team_member_add_request = TeamMemberAddRequest(
+            team_id=data.team_id,
+            member=members_with_roles,
+        )
+        await _add_team_members_to_team(
+            data=team_member_add_request,
+            complete_team_data=team_row,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
 
         # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
         if litellm.store_audit_logs is True:
@@ -579,6 +695,8 @@ async def update_team(
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     Example - update team TPM Limit
 
     ```
@@ -670,6 +788,14 @@ async def update_team(
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
+    if data.team_member_budget is not None:
+        updated_kv = await _upsert_team_member_budget_table(
+            team_table=existing_team_row,
+            updated_kv=updated_kv,
+            team_member_budget=data.team_member_budget,
+            user_api_key_dict=user_api_key_dict,
+        )
+
     # Check object permission
     if data.object_permission is not None:
         updated_kv = await handle_update_object_permission(
@@ -699,12 +825,12 @@ async def update_team(
             updated_kv["model_id"] = _model_id
 
     updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-    team_row: Optional[
-        LiteLLM_TeamTable
-    ] = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id},
-        data=updated_kv,
-        include={"litellm_model_table": True},  # type: ignore
+    team_row: Optional[LiteLLM_TeamTable] = (
+        await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data=updated_kv,
+            include={"litellm_model_table": True},  # type: ignore
+        )
     )
 
     if team_row is None or team_row.team_id is None:
@@ -823,20 +949,226 @@ def team_member_add_duplication_check(
     data: TeamMemberAddRequest,
     existing_team_row: LiteLLM_TeamTable,
 ):
+    """
+    Check if a member already exists in the team.
+    This check is done BEFORE we create/fetch the user, so it only prevents
+    obvious duplicates where both user_id and user_email match exactly.
+    """
+
     def _check_member_duplication(member: Member):
-        if member.user_id in [m.user_id for m in existing_team_row.members_with_roles]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"User={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}"
-                },
-            )
+        # Check by user_id if provided
+        if member.user_id is not None:
+            for existing_member in existing_team_row.members_with_roles:
+                if existing_member.user_id == member.user_id:
+                    raise ProxyException(
+                        message=f"User with user_id={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}",
+                        type=ProxyErrorTypes.team_member_already_in_team,
+                        param="user_id",
+                        code="400",
+                    )
+
+        # Check by user_email if provided
+        if member.user_email is not None:
+            for existing_member in existing_team_row.members_with_roles:
+                if existing_member.user_email == member.user_email:
+                    raise ProxyException(
+                        message=f"User with user_email={member.user_email} already in team. Existing members={existing_team_row.members_with_roles}",
+                        type=ProxyErrorTypes.team_member_already_in_team,
+                        param="user_email",
+                        code="400",
+                    )
 
     if isinstance(data.member, Member):
         _check_member_duplication(data.member)
     elif isinstance(data.member, List):
         for m in data.member:
             _check_member_duplication(m)
+
+
+async def _validate_team_member_add_permissions(
+    user_api_key_dict: UserAPIKeyAuth,
+    complete_team_data: LiteLLM_TeamTable,
+) -> None:
+    """Validate if user has permission to add members to the team."""
+    if (
+        hasattr(user_api_key_dict, "user_role")
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
+        )
+        and not _is_available_team(
+            team_id=complete_team_data.team_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_add",
+                    complete_team_data.team_id,
+                )
+            },
+        )
+
+
+async def _process_team_members(
+    data: TeamMemberAddRequest,
+    complete_team_data: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> Tuple[List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
+    """Process and add new team members."""
+    updated_users: List[LiteLLM_UserTable] = []
+    updated_team_memberships: List[LiteLLM_TeamMembership] = []
+
+    default_team_budget_id = (
+        complete_team_data.metadata.get("team_member_budget_id")
+        if complete_team_data.metadata is not None
+        else None
+    )
+
+    if isinstance(data.member, Member):
+        try:
+            updated_user, updated_tm = await add_new_member(
+                new_member=data.member,
+                max_budget_in_team=data.max_budget_in_team,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                team_id=data.team_id,
+                default_team_budget_id=default_team_budget_id,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
+                        data.member, data.team_id, str(e)
+                    )
+                },
+            )
+        updated_users.append(updated_user)
+        if updated_tm is not None:
+            updated_team_memberships.append(updated_tm)
+    elif isinstance(data.member, List):
+        for m in data.member:
+            try:
+                updated_user, updated_tm = await add_new_member(
+                    new_member=m,
+                    max_budget_in_team=data.max_budget_in_team,
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    team_id=data.team_id,
+                    default_team_budget_id=default_team_budget_id,
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
+                            m, data.team_id, str(e)
+                        )
+                    },
+                )
+            updated_users.append(updated_user)
+            if updated_tm is not None:
+                updated_team_memberships.append(updated_tm)
+
+    return updated_users, updated_team_memberships
+
+
+async def _update_team_members_list(
+    data: TeamMemberAddRequest,
+    complete_team_data: LiteLLM_TeamTable,
+    updated_users: List[LiteLLM_UserTable],
+) -> None:
+    """Update the team's members_with_roles list."""
+    if isinstance(data.member, Member):
+        new_member = data.member.model_copy()
+
+        # get user id
+        if new_member.user_id is None and new_member.user_email is not None:
+            for user in updated_users:
+                if (
+                    user.user_email is not None
+                    and user.user_email == new_member.user_email
+                ):
+                    new_member.user_id = user.user_id
+
+        # Check if member already exists in team before adding
+        member_already_exists = False
+        for existing_member in complete_team_data.members_with_roles:
+            if (
+                new_member.user_id is not None
+                and existing_member.user_id == new_member.user_id
+            ) or (
+                new_member.user_email is not None
+                and existing_member.user_email == new_member.user_email
+            ):
+                member_already_exists = True
+                break
+
+        if not member_already_exists:
+            complete_team_data.members_with_roles.append(new_member)
+
+    elif isinstance(data.member, List):
+        for nm in data.member:
+            if nm.user_id is None and nm.user_email is not None:
+                for user in updated_users:
+                    if user.user_email is not None and user.user_email == nm.user_email:
+                        nm.user_id = user.user_id
+
+            # Check if member already exists in team before adding
+            member_already_exists = False
+            for existing_member in complete_team_data.members_with_roles:
+                if (
+                    nm.user_id is not None and existing_member.user_id == nm.user_id
+                ) or (
+                    nm.user_email is not None
+                    and existing_member.user_email == nm.user_email
+                ):
+                    member_already_exists = True
+                    break
+
+            if not member_already_exists:
+                complete_team_data.members_with_roles.append(nm)
+
+
+async def _add_team_members_to_team(
+    data: TeamMemberAddRequest,
+    complete_team_data: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> Tuple[LiteLLM_TeamTable, List[LiteLLM_UserTable], List[LiteLLM_TeamMembership]]:
+    """Add team members to the team."""
+    # Process and add new members
+    updated_users, updated_team_memberships = await _process_team_members(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+
+    # Update team members list
+    await _update_team_members_list(
+        data=data,
+        complete_team_data=complete_team_data,
+        updated_users=updated_users,
+    )
+
+    # ADD MEMBER TO TEAM
+    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
+    updated_team = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
+    )
+
+    return updated_team, updated_users, updated_team_memberships
 
 
 @router.post(
@@ -851,8 +1183,6 @@ async def team_member_add(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [BETA]
-
     Add new members (either via user_email or user_id) to a team
 
     If user doesn't exist, new user row will also be added to User Table
@@ -910,116 +1240,20 @@ async def team_member_add(
         existing_team_row=complete_team_data,
     )
 
-    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN
+    # Validate permissions
+    await _validate_team_member_add_permissions(
+        user_api_key_dict=user_api_key_dict,
+        complete_team_data=complete_team_data,
+    )
 
-    if (
-        hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=complete_team_data
-        )
-        and not _is_available_team(
-            team_id=complete_team_data.team_id,
+    updated_team, updated_users, updated_team_memberships = (
+        await _add_team_members_to_team(
+            data=data,
+            complete_team_data=complete_team_data,
+            prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_add",
-                    complete_team_data.team_id,
-                )
-            },
-        )
-
-    updated_users: List[LiteLLM_UserTable] = []
-    updated_team_memberships: List[LiteLLM_TeamMembership] = []
-
-    ## VALIDATE IF NEW MEMBER ##
-    if isinstance(data.member, Member):
-        try:
-            updated_user, updated_tm = await add_new_member(
-                new_member=data.member,
-                max_budget_in_team=data.max_budget_in_team,
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-                litellm_proxy_admin_name=litellm_proxy_admin_name,
-                team_id=data.team_id,
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
-                        data.member, data.team_id, str(e)
-                    )
-                },
-            )
-
-        updated_users.append(updated_user)
-        if updated_tm is not None:
-            updated_team_memberships.append(updated_tm)
-    elif isinstance(data.member, List):
-        tasks: List = []
-        for m in data.member:
-            try:
-                updated_user, updated_tm = await add_new_member(
-                    new_member=m,
-                    max_budget_in_team=data.max_budget_in_team,
-                    prisma_client=prisma_client,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    team_id=data.team_id,
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "Unable to add user - {}, to team - {}, for reason - {}".format(
-                            data.member, data.team_id, str(e)
-                        )
-                    },
-                )
-            updated_users.append(updated_user)
-            if updated_tm is not None:
-                updated_team_memberships.append(updated_tm)
-
-        await asyncio.gather(*tasks)
-
-    ## ADD TO TEAM ##
-    if isinstance(data.member, Member):
-        # add to team db
-        new_member = data.member
-
-        # get user id
-        if new_member.user_id is None and new_member.user_email is not None:
-            for user in updated_users:
-                if (
-                    user.user_email is not None
-                    and user.user_email == new_member.user_email
-                ):
-                    new_member.user_id = user.user_id
-
-        complete_team_data.members_with_roles.append(new_member)
-
-    elif isinstance(data.member, List):
-        # add to team db
-        new_members = data.member
-
-        for nm in new_members:
-            if nm.user_id is None and nm.user_email is not None:
-                for user in updated_users:
-                    if user.user_email is not None and user.user_email == nm.user_email:
-                        nm.user_id = user.user_id
-
-        complete_team_data.members_with_roles.extend(new_members)
-
-    # ADD MEMBER TO TEAM
-    _db_team_members = [m.model_dump() for m in complete_team_data.members_with_roles]
-    updated_team = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id},
-        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
     )
 
     # Check if updated_team is None
@@ -1351,10 +1585,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row_base: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             if team_row_base is None:
                 raise Exception
@@ -1473,6 +1707,24 @@ def _unfurl_all_proxy_models(
     return team_info
 
 
+async def _add_team_member_budget_table(
+    team_member_budget_id: str,
+    prisma_client: PrismaClient,
+    team_info_response_object: TeamInfoResponseObjectTeamTable,
+) -> TeamInfoResponseObjectTeamTable:
+    try:
+        team_budget = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": team_member_budget_id}
+        )
+        team_info_response_object.team_member_budget_table = team_budget
+    except Exception:
+        verbose_proxy_logger.info(
+            f"Team member budget table not found, passed team_member_budget_id={team_member_budget_id}"
+        )
+
+    return team_info_response_object
+
+
 @router.get(
     "/team/info", tags=["team management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1495,6 +1747,7 @@ async def team_info(
     --header 'Authorization: Bearer your_api_key_here'
     ```
     """
+    from litellm.proxy._types import TeamInfoResponseObjectTeamTable
     from litellm.proxy.proxy_server import prisma_client
 
     try:
@@ -1512,11 +1765,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id},
-                include={"object_permission": True},
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id},
+                    include={"object_permission": True},
+                )
             )
             if team_info is None:
                 raise Exception
@@ -1563,11 +1816,24 @@ async def team_info(
         )
 
         if isinstance(team_info, dict):
-            _team_info = LiteLLM_TeamTable(**team_info)
+            _team_info = TeamInfoResponseObjectTeamTable(**team_info)
         elif isinstance(team_info, BaseModel):
-            _team_info = LiteLLM_TeamTable(**team_info.model_dump())
+            _team_info = TeamInfoResponseObjectTeamTable(**team_info.model_dump())
         else:
-            _team_info = LiteLLM_TeamTable()
+            _team_info = TeamInfoResponseObjectTeamTable()
+
+        ## GET TEAM BUDGET (if exists) ##
+        team_member_budget_id = (
+            _team_info.metadata.get("team_member_budget_id")
+            if _team_info.metadata is not None
+            else None
+        )
+        if team_member_budget_id is not None:
+            _team_info = await _add_team_member_budget_table(
+                team_member_budget_id=team_member_budget_id,
+                prisma_client=prisma_client,
+                team_info_response_object=_team_info,
+            )
 
         # ## UNFURL 'all-proxy-models' into the team_info.models list ##
         # if llm_router is not None:
@@ -1945,6 +2211,7 @@ async def list_team(
 
     filtered_response = []
     if user_id:
+        # Get user object to access their teams array
         for team in response:
             if team.members_with_roles:
                 for member in team.members_with_roles:
@@ -1954,7 +2221,6 @@ async def list_team(
                         and member["user_id"] == user_id
                     ):
                         filtered_response.append(team)
-
     else:
         filtered_response = response
 
@@ -2141,6 +2407,23 @@ async def ui_view_teams(
         raise HTTPException(status_code=500, detail=f"Error searching teams: {str(e)}")
 
 
+def add_new_models_to_team(
+    team_obj: LiteLLM_TeamTable, new_models: List[str]
+) -> List[str]:
+    """
+    Add new models to a team's allowed model list.
+    """
+    current_models = team_obj.models
+    if (
+        current_models is not None and len(current_models) == 0
+    ):  # implies all model access
+        current_models = [SpecialModelNames.all_proxy_models.value]
+    else:
+        current_models = team_obj.models
+    updated_models = list(set(current_models + new_models))
+    return updated_models
+
+
 @router.post(
     "/team/model/add",
     tags=["team management"],
@@ -2200,12 +2483,7 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
-    # Get current models list
-    current_models = team_obj.models or []
-
-    # Add new models (avoid duplicates)
-    updated_models = list(set(current_models + data.models))
-
+    updated_models = add_new_models_to_team(team_obj=team_obj, new_models=data.models)
     # Update team
     updated_team = await prisma_client.db.litellm_teamtable.update(
         where={"team_id": data.team_id}, data={"models": updated_models}

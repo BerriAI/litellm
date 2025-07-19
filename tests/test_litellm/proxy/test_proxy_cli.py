@@ -3,12 +3,16 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+import fastapi
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+from litellm.proxy.health_endpoints.health_app_factory import build_health_app
+import builtins
+import types
 
 
 class TestProxyInitializationHelpers:
@@ -121,7 +125,7 @@ class TestProxyInitializationHelpers:
 
         # Execute
         ProxyInitializationHelpers._init_hypercorn_server(
-            mock_app, "localhost", 8000, None, None
+            mock_app, "localhost", 8000, None, None, None
         )
 
         # Assert
@@ -129,7 +133,7 @@ class TestProxyInitializationHelpers:
 
         # Test with SSL
         ProxyInitializationHelpers._init_hypercorn_server(
-            mock_app, "localhost", 8000, "cert.pem", "key.pem"
+            mock_app, "localhost", 8000, "cert.pem", "key.pem", "ECDHE"
         )
 
     @patch("subprocess.Popen")
@@ -308,3 +312,57 @@ class TestProxyInitializationHelpers:
             # Check that the uvicorn.run was called with the timeout_keep_alive parameter
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["timeout_keep_alive"] == 30
+
+
+class TestHealthAppFactory:
+    """Test cases for the health app factory module"""
+    
+    def test_build_health_app(self):
+        """Test that build_health_app creates a FastAPI app with the correct title and includes the health router"""
+        # Execute
+        health_app = build_health_app()
+        
+        # Assert
+        assert health_app.title == "LiteLLM Health Endpoints"
+        assert isinstance(health_app, fastapi.FastAPI)
+        
+        # Verify that the app has the expected health endpoints by checking route paths
+        # When a router is included, its routes are flattened into the main app's routes
+        route_paths = []
+        for route in health_app.routes:
+            if hasattr(route, 'path'):
+                route_paths.append(route.path)
+        
+        # Check for some expected health endpoints
+        expected_paths = [
+            "/test",
+            "/health/services", 
+            "/health",
+            "/health/history",
+            "/health/latest",
+            "/settings",
+            "/active/callbacks",
+            "/health/readiness",
+            "/health/liveliness",
+            "/health/liveness",
+            "/health/test_connection"
+        ]
+        
+        # At least some of the expected health endpoints should be present
+        found_paths = [path for path in expected_paths if path in route_paths]
+        assert len(found_paths) > 0, f"Expected to find health endpoints, but found: {route_paths}"
+        
+        # Verify that the app has routes (indicating the router was included)
+        assert len(health_app.routes) > 0, "Health app should have routes from the included router"
+        
+    def test_build_health_app_returns_different_instances(self):
+        """Test that build_health_app returns different FastAPI instances on each call"""
+        # Execute
+        health_app_1 = build_health_app()
+        health_app_2 = build_health_app()
+        
+        # Assert
+        assert health_app_1 is not health_app_2
+        assert health_app_1.title == health_app_2.title
+        assert isinstance(health_app_1, fastapi.FastAPI)
+        assert isinstance(health_app_2, fastapi.FastAPI)

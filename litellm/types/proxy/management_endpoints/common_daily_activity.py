@@ -31,10 +31,6 @@ class MetricBase(BaseModel):
     metrics: SpendMetrics
 
 
-class MetricWithMetadata(MetricBase):
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
 class KeyMetadata(BaseModel):
     """Metadata for a key"""
 
@@ -48,9 +44,20 @@ class KeyMetricWithMetadata(MetricBase):
     metadata: KeyMetadata = Field(default_factory=KeyMetadata)
 
 
+class MetricWithMetadata(MetricBase):
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    # API key breakdown for this metric (e.g., which API keys are using this MCP server)
+    api_key_breakdown: Dict[str, KeyMetricWithMetadata] = Field(
+        default_factory=dict
+    )  # api_key -> {metrics, metadata}
+
+
 class BreakdownMetrics(BaseModel):
     """Breakdown of spend by different dimensions"""
 
+    mcp_servers: Dict[str, MetricWithMetadata] = Field(
+        default_factory=dict
+    )  # mcp_server -> {metrics, metadata}
     models: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
     )  # model -> {metrics, metadata}
@@ -96,7 +103,8 @@ class LiteLLM_DailyUserSpend(BaseModel):
     user_id: str
     date: str
     api_key: str
-    model: str
+    mcp_server_id: Optional[str] = None
+    model: Optional[str] = None
     model_group: Optional[str] = None
     custom_llm_provider: Optional[str] = None
     prompt_tokens: int = 0
