@@ -5,6 +5,9 @@ model_list:
   - model_name: openai/*
     litellm_params:
       model: openai/*
+  - model_name: azure/*
+    litellm_params:
+      model: azure/*
 
 
 guardrails:
