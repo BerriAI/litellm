@@ -159,7 +159,7 @@ export const columns: ColumnDef<LogEntry>[] = [
     header: "Cost",
     accessorKey: "spend",
     cell: (info: any) => (
-      <span>${formatNumberWithCommas(info.getValue() || 0, 4)}</span>
+      <span>${formatNumberWithCommas(info.getValue() || 0, 6)}</span>
     ),
   },
   {
