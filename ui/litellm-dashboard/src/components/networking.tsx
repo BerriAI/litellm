@@ -3674,6 +3674,64 @@ export const teamMemberAddCall = async (
   }
 };
 
+export const teamBulkMemberAddCall = async (
+  accessToken: string,
+  teamId: string,
+  members: Member[],
+  maxBudgetInTeam?: number
+) => {
+  try {
+    console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/bulk_member_add`
+      : `/team/bulk_member_add`;
+
+    const requestBody: any = {
+      team_id: teamId,
+      members: members,
+    };
+
+    if (maxBudgetInTeam !== undefined && maxBudgetInTeam !== null) {
+      requestBody.max_budget_in_team = maxBudgetInTeam;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage =
+        parsedError?.detail?.error || "Failed to bulk add team members";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
+    }
+
+    const data = await response.json();
+    console.log("Bulk team member add API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to bulk add team members:", error);
+    throw error;
+  }
+};
+
 export const teamMemberUpdateCall = async (
   accessToken: string,
   teamId: string,
@@ -3910,6 +3968,57 @@ export const userUpdateUserCall = async (
         "Content-Type": "application/json",
       },
       body: response_body,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = (await response.json()) as {
+      user_id: string;
+      data: UserInfo;
+    };
+    console.log("API Response:", data);
+    //message.success("User role updated");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const userBulkUpdateUserCall = async (
+  accessToken: string,
+  formValues: any, // Assuming formValues is an object
+  userIds: string[]
+) => {
+  try {
+    console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/bulk_update`
+      : `/user/bulk_update`;
+    let request_body = [] 
+    for (const user_id of userIds) {
+      request_body.push({
+        user_id: user_id,
+        ...formValues,
+      });
+    }
+    let request_body_json = JSON.stringify({
+      users: request_body,
+    });
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: request_body_json,
     });
 
     if (!response.ok) {

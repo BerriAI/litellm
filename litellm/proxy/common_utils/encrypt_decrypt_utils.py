@@ -58,7 +58,7 @@ def decrypt_value_helper(
             verbose_proxy_logger.debug(error_message)
             return None
 
-        verbose_proxy_logger.error(error_message)
+        verbose_proxy_logger.exception(error_message)
         # [Non-Blocking Exception. - this should not block decrypting other values]
         return None
 
@@ -98,7 +98,12 @@ def decrypt_value(value: bytes, signing_key: str) -> str:
     box = nacl.secret.SecretBox(hash_bytes)
 
     # Convert the bytes object to a string
-    plaintext = box.decrypt(value)
+    try:
+        if len(value) == 0:
+            return ""
 
-    plaintext = plaintext.decode("utf-8")  # type: ignore
-    return plaintext  # type: ignore
+        plaintext = box.decrypt(value)
+        plaintext = plaintext.decode("utf-8")  # type: ignore
+        return plaintext  # type: ignore
+    except Exception as e:
+        raise e

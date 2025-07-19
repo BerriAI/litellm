@@ -17,8 +17,9 @@ import CreateUser from "./create_user_button"
 import EditUserModal from "./edit_user"
 import OnboardingModal from "./onboarding_link"
 import { InvitationLink } from "./onboarding_link"
+import BulkEditUserModal from "./bulk_edit_user"
 
-import { userDeleteCall } from "./networking"
+import { userDeleteCall, modelAvailableCall } from "./networking"
 import { columns } from "./view_users/columns"
 import { UserDataTable } from "./view_users/table"
 import { UserInfo } from "./view_users/types"
@@ -80,6 +81,10 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false)
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null)
   const [baseUrl, setBaseUrl] = useState<string | null>(null)
+  const [selectedUsers, setSelectedUsers] = useState<UserInfo[]>([])
+  const [isBulkEditModalVisible, setIsBulkEditModalVisible] = useState(false)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [userModels, setUserModels] = useState<string[]>([])
 
   const handleDelete = (userId: string) => {
     setUserToDelete(userId)
@@ -95,6 +100,28 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   useEffect(() => {
     setBaseUrl(getProxyBaseUrl())
   }, [])
+
+  // Fetch available models for bulk edit
+  useEffect(() => {
+    const fetchUserModels = async () => {
+      try {
+        if (!userID || !userRole || !accessToken) {
+          return
+        }
+
+        const model_available = await modelAvailableCall(accessToken, userID, userRole)
+        let available_model_names = model_available["data"].map(
+          (element: { id: string }) => element.id
+        )
+        console.log("available_model_names:", available_model_names)
+        setUserModels(available_model_names)
+      } catch (error) {
+        console.error("Error fetching user models:", error)
+      }
+    }
+
+    fetchUserModels()
+  }, [accessToken, userID, userRole])
 
   const updateFilters = (update: Partial<FilterState>) => {
     setFilters((previousFilters) => {
@@ -189,6 +216,30 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     setCurrentPage(newPage)
   }
 
+  const handleToggleSelectionMode = () => {
+    setSelectionMode(!selectionMode)
+    setSelectedUsers([])
+  }
+
+  const handleSelectionChange = (users: UserInfo[]) => {
+    setSelectedUsers(users)
+  }
+
+  const handleBulkEdit = () => {
+    if (selectedUsers.length === 0) {
+      message.error("Please select users to edit")
+      return
+    }
+    setIsBulkEditModalVisible(true)
+  }
+
+  const handleBulkEditSuccess = () => {
+    // Refresh the user list
+    queryClient.invalidateQueries({ queryKey: ["userList"] })
+    setSelectedUsers([])
+    setSelectionMode(false)
+  }
+
   const userListQuery = useQuery({
     queryKey: ["userList", { debouncedFilter: debouncedFilters, currentPage }],
     queryFn: async () => {
@@ -247,6 +298,24 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       <div className="flex items-center justify-between mb-4">
         <div className="flex space-x-3">
           <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+          
+          <Button
+            onClick={handleToggleSelectionMode}
+            variant={selectionMode ? "primary" : "secondary"}
+            className="flex items-center"
+          >
+            {selectionMode ? "Cancel Selection" : "Select Users"}
+          </Button>
+          
+          {selectionMode && (
+            <Button
+              onClick={handleBulkEdit}
+              disabled={selectedUsers.length === 0}
+              className="flex items-center"
+            >
+              Bulk Edit ({selectedUsers.length} selected)
+            </Button>
+          )}
         </div>
       </div>
 
@@ -454,6 +523,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
                 }}
                 handleDelete={handleDelete}
                 handleResetPassword={handleResetPassword}
+                enableSelection={selectionMode}
+                selectedUsers={selectedUsers}
+                onSelectionChange={handleSelectionChange}
               />
             </div>
           </TabPanel>
@@ -521,6 +593,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         baseUrl={baseUrl || ""}
         invitationLinkData={invitationLinkData}
         modalType="resetPassword"
+      />
+
+      <BulkEditUserModal
+        visible={isBulkEditModalVisible}
+        onCancel={() => setIsBulkEditModalVisible(false)}
+        selectedUsers={selectedUsers}
+        possibleUIRoles={possibleUIRoles}
+        accessToken={accessToken}
+        onSuccess={handleBulkEditSuccess}
+        teams={teams}
+        userRole={userRole}
+        userModels={userModels}
       />
     </div>
   )
