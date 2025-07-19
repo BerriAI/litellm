@@ -661,7 +661,6 @@ def test_arouter_responses_api_bridge():
         assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
 
 
-
 @pytest.mark.asyncio
 async def test_router_v1_messages_fallbacks():
     """
@@ -699,17 +698,17 @@ async def test_router_v1_messages_fallbacks():
     print(result)
     assert result["content"][0]["text"] == "Hello, world I am a fallback!"
 
-    
+
 def test_add_invalid_provider_to_router():
     """
     Test that router.add_deployment raises an error if the provider is invalid
     """
     from litellm.types.router import Deployment
-    
+
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",     
+                "model_name": "gpt-3.5-turbo",
                 "litellm_params": {"model": "gpt-3.5-turbo"},
             }
         ],
@@ -727,6 +726,7 @@ def test_add_invalid_provider_to_router():
         )
 
     assert router.pattern_router.patterns == {}
+
 
 @pytest.mark.asyncio
 async def test_router_ageneric_api_call_with_fallbacks_helper():
@@ -893,3 +893,145 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                     assert "Mock failure" in str(exc_info.value)
                     # Check that fail_calls was incremented
                     assert router.fail_calls["gpt-3.5-turbo"] == initial_fail_count + 1
+
+
+@pytest.mark.asyncio
+async def test_router_forward_client_headers_by_model_group():
+    """
+    Test that router.forward_client_headers_by_model_group returns the correct response
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.types.router import ModelGroupSettings
+
+    litellm.model_group_settings = ModelGroupSettings(
+        forward_client_headers_to_llm_api=[
+            "gpt-3.5-turbo-allow",
+            "openai/*",
+            "gpt-3.5-turbo-custom",
+        ]
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo-allow",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo-disallow",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                },
+            },
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                },
+            },
+        ],
+        model_group_alias={
+            "gpt-3.5-turbo-custom": "gpt-3.5-turbo-disallow",
+        },
+    )
+
+    ## Scenario 1: Direct model name
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="gpt-3.5-turbo-allow",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])
+
+    ## Scenario 2: Wildcard model name
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="openai/gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])
+
+    ## Scenario 3: Not in model_group_settings
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs.get("headers") is None
+
+    ## Scenario 4: Model group alias
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="gpt-3.5-turbo-custom",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])
+
+
+def test_router_apply_default_settings():
+    """
+    Test that Router.apply_default_settings() adds the expected default pre-call checks
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    # Apply default settings
+    result = router.apply_default_settings()
+
+    # Verify the method returns None
+    assert result is None
+
+    # Verify that the forward_client_headers_by_model_group pre-call check was added
+    # Check if any callback is of the ForwardClientHeadersByModelGroupCheck type
+    has_forward_headers_check = False
+    for callback in litellm.callbacks:
+        print(callback)
+        print(f"callback.__class__: {callback.__class__}")
+        if hasattr(
+            callback, "__class__"
+        ) and "ForwardClientSideHeadersByModelGroup" in str(callback.__class__):
+            has_forward_headers_check = True
+            break
+
+    assert (
+        has_forward_headers_check
+    ), "Expected ForwardClientSideHeadersByModelGroup to be added to callbacks"
