@@ -260,6 +260,7 @@ def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
             input=[[2046, 13269, 158208]],
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
