@@ -133,9 +133,9 @@ This enables developers to easily integrate vector search capabilities into thei
 - **[🆕 v0 Provider](../../docs/providers/v0)**
     - New provider integration for v0.dev - [PR #12751](https://github.com/BerriAI/litellm/pull/12751), [Get Started](../../docs/providers/v0)
 - **[OpenAI](../../docs/providers/openai)**
-    - Use OpenAI DeepResesearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
+    - Use OpenAI DeepResearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
 - **[Azure OpenAI](../../docs/providers/azure_openai)**
-    - Use Azure OpenAI DeepResesearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
+    - Use Azure OpenAI DeepResearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
 - **[Anthropic](../../docs/providers/anthropic)**
     - Tool cache control support - [PR #12668](https://github.com/BerriAI/litellm/pull/12668)
 - **[Bedrock](../../docs/providers/bedrock)**
