@@ -583,8 +583,9 @@ async def latest_health_checks_endpoint(
         latest_checks = await prisma_client.get_all_latest_health_checks()
         
         # Convert to dict format for JSON response using helper function
+        # Always use model_name as the key for consistency with UI expectations
         checks_data = {
-            (check.model_id if check.model_id else check.model_name): _convert_health_check_to_dict(check)
+            check.model_name: _convert_health_check_to_dict(check)
             for check in latest_checks
         }
         
