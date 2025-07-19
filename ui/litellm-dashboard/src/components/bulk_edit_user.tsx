@@ -312,7 +312,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
               </div>
               
               <Text type="secondary" style={{ fontSize: '12px' }}>
-                Users will be added with "user" role by default. All users will be added to each selected team.
+                Users will be added with &quot;user&quot; role by default. All users will be added to each selected team.
               </Text>
             </>
           )}
