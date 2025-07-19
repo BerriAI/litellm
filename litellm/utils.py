@@ -5622,7 +5622,7 @@ def _calculate_retry_after(
 
     # Apply some jitter, plus-or-minus half a second.
     jitter = JITTER * random.random()
-    timeout = sleep_seconds * jitter
+    timeout = sleep_seconds + jitter
     return timeout if timeout >= min_timeout else min_timeout
 
 
