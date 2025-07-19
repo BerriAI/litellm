@@ -370,10 +370,16 @@ class TestClearCache:
     @pytest.mark.asyncio
     async def test_clear_cache_success(self):
         """
-        Test that clear_cache successfully clears router model caches and reloads models.
+        Test that clear_cache successfully removes db_model=True models from cache and reloads models.
         """
         mock_router = MagicMock()
-        mock_router.model_list = ["openai/gpt-4o", "openai/gpt-4o-mini"]
+        mock_router.model_list = [
+            {"model_id": "openai/gpt-4o", "model_info": {"db_model": True}},
+            {"model_id": "openai/gpt-4o-mini", "model_info": {"db_model": False}},
+            {"model_id": "anthropic/claude-3", "model_info": {"db_model": True}},
+            {"model_id": "openai/gpt-image-1"},
+            {"model_id": "openai/o3", "model_info": {"other_property": "other_value"}},
+        ]
 
         mock_config = MagicMock()
         mock_config.add_deployment = AsyncMock(return_value=True)
@@ -390,7 +396,7 @@ class TestClearCache:
         ):
             await clear_cache()
 
-            assert len(mock_router.model_list) == 0
+            assert [model["model_id"] for model in mock_router.model_list] == ["openai/gpt-4o-mini", "openai/gpt-image-1", "openai/o3"]
 
             mock_config.add_deployment.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
