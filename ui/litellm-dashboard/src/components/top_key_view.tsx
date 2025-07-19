@@ -206,6 +206,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({
                 userRole={userRole}
                 teams={teams}
                 premiumUser={premiumUser}
+                setAccessToken={() => {}} // No-op function since this component doesn't manage access tokens
               />
             </div>
           </div>
