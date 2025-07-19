@@ -1,0 +1,163 @@
+# Cursor Rules for LiteLLM Repository
+
+## Repository Management
+
+### Upstream Synchronization
+- ALWAYS keep the repository up to date with upstream changes from https://github.com/BerriAI/litellm.git
+- Before making significant changes, pull from upstream using: `git pull --rebase upstream main`
+- After pulling from upstream, push changes to origin: `git push --force-with-lease origin main`
+- Maintain clean git history by squashing related commits before pushing
+- Use `git log --oneline -10` to check recent commits and ensure proper synchronization
+
+### Git Workflow
+- Use descriptive commit messages following conventional commits format
+- Squash related commits into logical units before pushing
+- Always test changes before committing
+- Keep commits atomic and focused on single features/fixes
+- Use `git status` to check repository state before operations
+
+## Code Quality and Standards
+
+### Python Development
+- Follow PEP 8 style guidelines for Python code
+- Use type hints for all function parameters and return values
+- Write docstrings for all functions, classes, and modules
+- Use descriptive variable names (e.g., `learning_rate`, `weights`, `gradients`)
+- Prefer vectorized operations over explicit loops for performance
+- Use functional programming patterns; avoid unnecessary use of classes
+
+### JAX Best Practices (when applicable)
+- Leverage JAX's functional API for numerical computations
+- Use `jax.numpy` instead of standard NumPy to ensure compatibility
+- Utilize automatic differentiation with `jax.grad` and `jax.value_and_grad`
+- Apply `jax.jit` for just-in-time compilation to optimize performance
+- Use `jax.vmap` for vectorizing functions over batch dimensions
+- Avoid in-place mutations; JAX arrays are immutable
+- Use pure functions without side effects to ensure compatibility with JAX transformations
+
+### Error Handling and Validation
+- Validate input shapes and data types before computations
+- Use assertions or raise exceptions for invalid inputs
+- Provide informative error messages for invalid inputs or computational errors
+- Handle exceptions gracefully to prevent crashes during execution
+
+### Testing and Debugging
+- Write unit tests for functions using testing frameworks like `pytest`
+- Use `jax.debug.print` for debugging JIT-compiled functions
+- Be cautious with side effects and stateful operations; JAX expects pure functions for transformations
+
+## Documentation
+
+### Code Documentation
+- Include docstrings for functions and modules following PEP 257 conventions
+- Provide clear descriptions of function purposes, arguments, return values, and examples
+- Comment on complex or non-obvious code sections to improve readability and maintainability
+
+### Project Documentation
+- Keep README files up to date with latest features and usage examples
+- Update implementation plans when features are completed or scope changes
+- Document any breaking changes or deprecations clearly
+
+## File Organization
+
+### Naming Conventions
+- Use `snake_case` for variable and function names
+- Use `UPPERCASE` for constants
+- Use descriptive names that clearly indicate purpose
+
+### Function Design
+- Keep functions small and focused on a single task
+- Avoid global variables; pass parameters explicitly
+- Organize code into modules and packages logically
+- Separate utility functions, core algorithms, and application code
+
+## Performance and Optimization
+
+### Code Optimization
+- Write code that is compatible with JIT compilation; avoid Python constructs that JIT cannot compile
+- Minimize the use of Python loops and dynamic control flow; use JAX's control flow operations
+- Optimize memory usage by leveraging efficient data structures and avoiding unnecessary copies
+- Use appropriate data types (e.g., `float32`) to optimize performance and memory usage
+- Profile code to identify bottlenecks and optimize accordingly
+
+### Benchmarking
+- Use tools like `timeit` and JAX's built-in benchmarking utilities
+- Be mindful of unnecessary data transfers between CPU and GPU
+- Watch out for compiling overhead; reuse JIT-compiled functions when possible
+
+## Best Practices
+
+### Immutability
+- Embrace functional programming principles; avoid mutable states
+- Manage random seeds carefully for reproducible results
+- Keep track of library versions to ensure compatibility
+
+### Version Control
+- Keep track of library versions (`jax`, `jaxlib`, etc.) to ensure compatibility
+- Use semantic versioning for releases
+- Tag releases appropriately in git
+
+## Specific to This Project
+
+### Vertex AI Integration
+- Follow the established patterns in `litellm/llms/vertex_ai/` for new integrations
+- Use Pydantic models for data validation and serialization
+- Implement proper error handling for API calls
+- Follow the transformation pattern: types → transformation → handler
+- Test all new functionality before committing
+
+### Fine-tuning Features
+- Validate hyperparameters according to Vertex AI specifications
+- Implement proper dataset format validation
+- Provide comprehensive examples and documentation
+- Follow the established cost estimation patterns
+
+### Online Prediction
+- Implement proper endpoint configuration parsing
+- Handle authentication and credentials properly
+- Provide clear error messages for invalid configurations
+- Test with real Vertex AI endpoints when possible
+
+## Maintenance Tasks
+
+### Regular Maintenance
+- Weekly: Pull from upstream and resolve any conflicts
+- Monthly: Review and update dependencies
+- Quarterly: Review and update documentation
+- Before releases: Run full test suite and update version numbers
+
+### Code Review Checklist
+- [ ] Code follows style guidelines
+- [ ] All functions have proper type hints and docstrings
+- [ ] Error handling is implemented appropriately
+- [ ] Tests are written and passing
+- [ ] Documentation is updated
+- [ ] No sensitive information is committed
+- [ ] Git history is clean and logical
+
+## Security and Privacy
+
+### Data Handling
+- Never commit sensitive information like API keys or credentials
+- Use environment variables for configuration
+- Follow the principle of least privilege for API access
+- Validate all user inputs to prevent injection attacks
+
+### Authentication
+- Use Google Cloud service account authentication when possible
+- Avoid creating and saving service account keys in .env files
+- Use gcloud for authentication instead of hardcoded credentials
+
+## Troubleshooting
+
+### Common Issues
+- If git pull fails with divergent branches, use `git pull --rebase upstream main`
+- If there are merge conflicts, resolve them manually and test thoroughly
+- If JIT compilation fails, check for side effects or unsupported operations
+- If tests fail, check for version compatibility issues
+
+### Getting Help
+- Check the official JAX documentation for JAX-specific issues
+- Review the LiteLLM documentation for integration questions
+- Use the project's issue tracker for bug reports
+- Follow the contributing guidelines for pull requests 
