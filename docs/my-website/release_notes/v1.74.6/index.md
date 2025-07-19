@@ -106,15 +106,29 @@ This enables developers to easily integrate vector search capabilities into thei
 | AI21 | `jamba-large-1.7` | 256k | $2.00 | $8.00 |
 | AI21 | `jamba-mini-1.7` | 256k | $0.20 | $0.40 |
 | Together.ai | `together_ai/moonshotai/Kimi-K2-Instruct` | 131k | $1.00 | $3.00 |
+| Together.ai | `together_ai/deepseek-ai/DeepSeek-V3` | Various | $1.25 | $1.25 |
 | Together.ai | `together_ai/deepseek-ai/DeepSeek-R1` | Various | $3.00 | $7.00 |
+| Together.ai | `together_ai/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | Various | $0.27 | $0.85 |
+| Together.ai | `together_ai/meta-llama/Llama-4-Scout-17B-16E-Instruct` | Various | $0.18 | $0.59 |
 | v0 | `v0/v0-1.0-md` | 128k | $3.00 | $15.00 |
 | v0 | `v0/v0-1.5-md` | 128k | $3.00 | $15.00 |
 | v0 | `v0/v0-1.5-lg` | 512k | $15.00 | $75.00 |
+| Moonshot | `moonshot/moonshot-v1-8k` | 8k | $0.20 | $2.00 |
+| Moonshot | `moonshot/moonshot-v1-32k` | 32k | $1.00 | $3.00 |
+| Moonshot | `moonshot/moonshot-v1-128k` | 131k | $2.00 | $5.00 |
+| Moonshot | `moonshot/moonshot-v1-auto` | 131k | $2.00 | $5.00 |
 | Moonshot | `moonshot/kimi-k2-0711-preview` | 131k | $0.60 | $2.50 |
-| Moonshot | `moonshot/moonshot-v1-8k` | 8k | - | - |
-| Moonshot | `moonshot/moonshot-v1-32k` | 32k | - | - |
-| Moonshot | `moonshot/moonshot-v1-128k` | 131k | - | - |
-| Moonshot | `moonshot/moonshot-v1-auto` | 131k | - | - |
+| Moonshot | `moonshot/moonshot-v1-32k-0430` | 32k | $1.00 | $3.00 |
+| Moonshot | `moonshot/moonshot-v1-128k-0430` | 131k | $2.00 | $5.00 |
+| Moonshot | `moonshot/moonshot-v1-8k-0430` | 8k | $0.20 | $2.00 |
+| Moonshot | `moonshot/kimi-latest` | 131k | $2.00 | $5.00 |
+| Moonshot | `moonshot/kimi-latest-8k` | 8k | $0.20 | $2.00 |
+| Moonshot | `moonshot/kimi-latest-32k` | 32k | $1.00 | $3.00 |
+| Moonshot | `moonshot/kimi-latest-128k` | 131k | $2.00 | $5.00 |
+| Moonshot | `moonshot/kimi-thinking-preview` | 131k | $30.00 | $30.00 |
+| Moonshot | `moonshot/moonshot-v1-8k-vision-preview` | 8k | $0.20 | $2.00 |
+| Moonshot | `moonshot/moonshot-v1-32k-vision-preview` | 32k | $1.00 | $3.00 |
+| Moonshot | `moonshot/moonshot-v1-128k-vision-preview` | 131k | $2.00 | $5.00 |
 
 
 #### Features
