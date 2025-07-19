@@ -162,7 +162,6 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.types.router import ModelGroupSettings
 
     Span = Union[_Span, Any]
 else:
