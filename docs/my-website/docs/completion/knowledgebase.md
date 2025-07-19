@@ -178,13 +178,18 @@ Select "Bedrock" as the provider and enter your Bedrock Knowledge Base ID in  th
 
 ### Vertex AI RAG Engine
 
-**Get your Vertex AI RAG Engine ID**
+**1. Get your Vertex AI RAG Engine ID**
+
+On VertexAI, navigate to your RAG Engine Corpus [here](https://console.cloud.google.com/vertex-ai/rag/corpus)
+
+Select the "Rag Engine" you want to onboard onto LiteLLM.
 
 <Image 
   img={require('../../img/kb_vertex1.png')}
   style={{width: '50%'}}
 />
 
+For the selected "Rag Engine", click on the "Details" button and just copy the UUID for the "Rag Engine". It should look like this "6917529027641081856" 
 
 <Image 
   img={require('../../img/kb_vertex2.png')}
@@ -192,20 +197,78 @@ Select "Bedrock" as the provider and enter your Bedrock Knowledge Base ID in  th
 />
 
 
-**Add your vertex rag engine on LiteLLM UI**
+**2. Add your vertex rag engine on LiteLLM UI**
+
+On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
+
+Select "Vertex AI RAG Engine" as the provider and enter your Vertex AI RAG Engine ID in  the "Vector Store ID" field.
 
 <Image 
   img={require('../../img/kb_vertex3.png')}
   style={{width: '50%'}}
 />
 
+### PG Vector
+
+**1. Deploy the litellm-pg-vector-store** connector 
+
+LiteLLM Provides a server that exposes OpenAI compatible `vector_store` endpoints for PG Vector. The LiteLLM Proxy server will then connect to your deployed service and use it as a vector store when querying.
+
+You can find instructions on how to deploy the litellm-pg-vector-store connector [here](https://github.com/BerriAI/litellm-pgvector)
+
+
+For a detailed guide on confgiruations options you can navigate [here](https://github.com/BerriAI/litellm-pgvector?tab=readme-ov-file#configuration)
+
+Here's an example .env configuration for deploy litellm-pg-vector-store:
+```
+DATABASE_URL="postgresql://neondb_owner:xxxx"
+SERVER_API_KEY="sk-1234"
+HOST="0.0.0.0"
+PORT=8001
+EMBEDDING__MODEL="text-embedding-ada-002"
+EMBEDDING__BASE_URL="http://localhost:4000"
+EMBEDDING__API_KEY="sk-1234"
+EMBEDDING__DIMENSIONS=1536
+DB_FIELDS__ID_FIELD="id"
+DB_FIELDS__CONTENT_FIELD="content"
+DB_FIELDS__METADATA_FIELD="metadata"
+DB_FIELDS__EMBEDDING_FIELD="embedding"
+DB_FIELDS__VECTOR_STORE_ID_FIELD="vector_store_id"
+DB_FIELDS__CREATED_AT_FIELD="created_at"
+
+```
+
+Once your litellm-pg-vector-store is deployed, you can navigate to the LiteLLM UI and add your vector store.
+
+**2. Add your vector store on LiteLLM UI**
 
 On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
 
-### PG Vector
+Select "PG Vector" as the provider and enter your API BASE URL and API KEY for your `litellm-pg-vector-store` docker container. The API Key field is the `SERVER_API_KEY` field you set in step 1.
+
+<Image 
+  img={require('../../img/kb_pg1.png')}
+  style={{width: '50%'}}
+/>
+
+
 
 ### OpenAI Vector Stores
 
+Get your Vector Store from OpenAI platform [here](https://platform.openai.com/storage/vector_stores)
+
+On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
+
+Select "OpenAI" as the provider and enter your Vector Store ID in  the "Vector Store ID" field.
+
+The Vector Store ID field is the ID of the vector store you created on OpenAI platform. It should look like "vs_687ae3b2439881918b433cb99d10662e"
+
+The API Key field is your OpenAI API Key.
+
+<Image 
+  img={require('../../img/kb_openai1.png')}
+  style={{width: '50%'}}
+/>
 
 
 
