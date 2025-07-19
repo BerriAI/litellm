@@ -335,8 +335,8 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               </Card>
 
               <LoggingSettingsView
-                loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
-                disabledCallbacks={Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks) ? currentKeyData.metadata.litellm_disabled_callbacks : []}
+                loggingConfigs={extractLoggingSettings(keyData.metadata)}
+                disabledCallbacks={Array.isArray(keyData.metadata?.litellm_disabled_callbacks) ? keyData.metadata.litellm_disabled_callbacks : []}
                 variant="card"
               />
             </Grid>
@@ -458,9 +458,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
                   <LoggingSettingsView
                     loggingConfigs={extractLoggingSettings(
-                      currentKeyData.metadata,
+                      keyData.metadata,
                     )}
-                    disabledCallbacks={Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks) ? currentKeyData.metadata.litellm_disabled_callbacks : []}
+                    disabledCallbacks={Array.isArray(keyData.metadata?.litellm_disabled_callbacks) ? keyData.metadata.litellm_disabled_callbacks : []}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />
