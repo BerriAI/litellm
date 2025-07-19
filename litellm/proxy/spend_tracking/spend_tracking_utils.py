@@ -295,6 +295,8 @@ def get_logging_payload(  # noqa: PLR0915
         )
 
     try:
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
             call_type=call_type or "",

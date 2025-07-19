@@ -15,7 +15,6 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import datetime
-import json
 import os
 import traceback
 import uuid
@@ -318,7 +317,6 @@ class DataDogLogger(
         """
 
         import gzip
-        import json
 
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
         compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
@@ -422,7 +420,6 @@ class DataDogLogger(
 
         (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
         """
-        import json
 
         litellm_params = kwargs.get("litellm_params", {})
         metadata = (
