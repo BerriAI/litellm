@@ -514,8 +514,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       <Col numColSpan={1}>
                         <BarChart
                           className="mt-4 h-52"
-                          data={getEntityBreakdown()}
-                          index="metadata.alias"
+                          data={getProcessedEntityBreakdownForChart()}
+                          index="metadata.alias_display"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
                           valueFormatter={valueFormatterSpend}
@@ -633,7 +633,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   <BarChart
                     className="mt-4 h-40"
                     data={getTopModels()}
-                    index="key"
+                    index="display_key"
                     categories={["spend"]}
                     colors={["cyan"]}
                     valueFormatter={(value) =>
