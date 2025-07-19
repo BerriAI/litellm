@@ -160,6 +160,52 @@ print(response.choices[0].message.content)
 </TabItem>
 </Tabs>
 
+## Provider Specific Guides
+
+This sections covers how to add your vector stores to LiteLLM. If you want a new provider please file an issue [here](https://github.com/BerriAI/litellm/issues)
+
+### Bedrock Knowledge Bases
+
+On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
+
+Select "Bedrock" as the provider and enter your Bedrock Knowledge Base ID in  the "Vector Store ID" field.
+
+<Image 
+  img={require('../../img/kb_2.png')}
+  style={{width: '50%'}}
+/>
+
+
+### Vertex AI RAG Engine
+
+**Get your Vertex AI RAG Engine ID**
+
+<Image 
+  img={require('../../img/kb_vertex1.png')}
+  style={{width: '50%'}}
+/>
+
+
+<Image 
+  img={require('../../img/kb_vertex2.png')}
+  style={{width: '50%'}}
+/>
+
+
+**Add your vertex rag engine on LiteLLM UI**
+
+<Image 
+  img={require('../../img/kb_vertex3.png')}
+  style={{width: '50%'}}
+/>
+
+
+On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
+
+### PG Vector
+
+### OpenAI Vector Stores
+
 
 
 
