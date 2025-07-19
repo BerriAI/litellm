@@ -929,7 +929,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cost:</span>
-              <span>${formatNumberWithCommas(row.original.spend || 0, 4)}</span>
+              <span>${formatNumberWithCommas(row.original.spend || 0, 6)}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cache Hit:</span>
