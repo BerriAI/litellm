@@ -542,7 +542,7 @@ export default function SpendLogsTable({
               </h1>
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
-              <KeyInfoView keyId={selectedKeyIdInfoView} keyData={selectedKeyInfo} accessToken={accessToken} userID={userID} userRole={userRole} teams={allTeams} onClose={() => setSelectedKeyIdInfoView(null)} premiumUser={premiumUser}/>
+              <KeyInfoView keyId={selectedKeyIdInfoView} keyData={selectedKeyInfo} accessToken={accessToken} userID={userID} userRole={userRole} teams={allTeams} onClose={() => setSelectedKeyIdInfoView(null)} premiumUser={premiumUser} setAccessToken={() => {}} />
             ) : selectedSessionId ? (
               <div className="bg-white rounded-lg shadow">
                 <DataTable
