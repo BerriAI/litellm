@@ -132,9 +132,12 @@ This enables developers to easily integrate vector search capabilities into thei
     - New LLM API integration for accessing Kimi models - [PR #12592](https://github.com/BerriAI/litellm/pull/12592), [Get Started](../../docs/providers/moonshot)
 - **[🆕 v0 Provider](../../docs/providers/v0)**
     - New provider integration for v0.dev - [PR #12751](https://github.com/BerriAI/litellm/pull/12751), [Get Started](../../docs/providers/v0)
+- **[OpenAI](../../docs/providers/openai)**
+    - Use OpenAI DeepResesearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
+- **[Azure OpenAI](../../docs/providers/azure_openai)**
+    - Use Azure OpenAI DeepResesearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
 - **[Anthropic](../../docs/providers/anthropic)**
     - Tool cache control support - [PR #12668](https://github.com/BerriAI/litellm/pull/12668)
-    - Fix streaming + response_format + tools bug - [PR #12463](https://github.com/BerriAI/litellm/pull/12463)
 - **[Bedrock](../../docs/providers/bedrock)**
     - Claude 4 /invoke route support - [PR #12599](https://github.com/BerriAI/litellm/pull/12599), [Get Started](../../docs/providers/bedrock)
     - Application inference profile tool choice support - [PR #12599](https://github.com/BerriAI/litellm/pull/12599)
@@ -148,6 +151,8 @@ This enables developers to easily integrate vector search capabilities into thei
 
 
 #### Bugs
+- **[Anthropic](../../docs/providers/anthropic)**
+    - Fix streaming + response_format + tools bug - [PR #12463](https://github.com/BerriAI/litellm/pull/12463)
 - **[XAI](../../docs/providers/xai)**
     - grok-4 does not support the `stop` param - [PR #12646](https://github.com/BerriAI/litellm/pull/12646)
 - **[AWS](../../docs/providers/bedrock)**
@@ -162,7 +167,6 @@ This enables developers to easily integrate vector search capabilities into thei
 #### Features
 - **[/chat/completions](../../docs/completion/input)** 
     - Include tool calls in output of trim_messages - [PR #11517](https://github.com/BerriAI/litellm/pull/11517)
-    - Handle circular references in spend tracking metadata JSON serialization - [PR #12643](https://github.com/BerriAI/litellm/pull/12643)
 - **[/images/generations](../../docs/image_generation)**
     - Add input_fidelity parameter for OpenAI image generation - [PR #12662](https://github.com/BerriAI/litellm/pull/12662)
 - **[/v1/vector_stores](../../docs/proxy/vector_stores)**
@@ -170,6 +174,10 @@ This enables developers to easily integrate vector search capabilities into thei
     - Vector store search endpoint - [PR #12749](https://github.com/BerriAI/litellm/pull/12749)
 - **[/streamGenerateContent](../../docs/image_generation#streamgeneratecontent)**
     - Non-gemini model support - [PR #12647](https://github.com/BerriAI/litellm/pull/12647)
+
+#### Bugs
+- **[/vector_stores](../../docs/proxy/vector_stores)**
+    - Knowledge Base Call returning error when passing as `tools` - [PR #12628](https://github.com/BerriAI/litellm/pull/12628)
 
 ---
 
@@ -183,11 +191,11 @@ This enables developers to easily integrate vector search capabilities into thei
     - URL-based namespacing for better segregation - [PR #12658](https://github.com/BerriAI/litellm/pull/12658)
     - Make MCP_TOOL_PREFIX_SEPARATOR configurable from env - [PR #12603](https://github.com/BerriAI/litellm/pull/12603)
 - **[Gateway Features](../../docs/mcp#mcp-gateway-features)**
-    - Allow using MCPs with all LLM APIs when using /responses - [PR #12546](https://github.com/BerriAI/litellm/pull/12546)
+    - Allow using MCPs with all LLM APIs (VertexAI, Gemini, Groq, etc.) when using /responses - [PR #12546](https://github.com/BerriAI/litellm/pull/12546)
 
 #### Bugs
-- **[Permissions](../../docs/mcp#auth)**
     - Fix to update object permission on update/delete key/team - [PR #12701](https://github.com/BerriAI/litellm/pull/12701)
+    - Include /mcp in list of available routes on proxy - [PR #12612](https://github.com/BerriAI/litellm/pull/12612)
 
 ---
 
@@ -196,11 +204,11 @@ This enables developers to easily integrate vector search capabilities into thei
 #### Features
 - **Models**
     - Wildcard model filter support - [PR #12597](https://github.com/BerriAI/litellm/pull/12597)
+    - Fixes for handling team only models on UI - [PR #12632](https://github.com/BerriAI/litellm/pull/12632)
 - **Vector Stores**
     - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
     - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
 - **User Interface**
-    - Add Copy-on-Click for IDs - [PR #12615](https://github.com/BerriAI/litellm/pull/12615)
     - Copy MCP Server name functionality - [PR #12760](https://github.com/BerriAI/litellm/pull/12760)
     - Add `end_user` filter on UI - [PR #12663](https://github.com/BerriAI/litellm/pull/12663)
     - Fix Y-axis labels overlap on Spend per Tag chart - [PR #12754](https://github.com/BerriAI/litellm/pull/12754)
@@ -210,7 +218,8 @@ This enables developers to easily integrate vector search capabilities into thei
     - Enable team admins to update member roles - [PR #12629](https://github.com/BerriAI/litellm/pull/12629)
 - **Keys**
     - Regenerate Key State Management improvements - [PR #12729](https://github.com/BerriAI/litellm/pull/12729)
-    - Add "keys import" command to CLI - [PR #12620](https://github.com/BerriAI/litellm/pull/12620)
+- **General**
+    - Add Copy-on-Click for all IDs (Key, Team, Organization, MCP Server) - [PR #12615](https://github.com/BerriAI/litellm/pull/12615)
 
 #### Bugs
 - **Teams**
@@ -268,7 +277,8 @@ This enables developers to easily integrate vector search capabilities into thei
 #### Features
 - **Control Plane + Data Plane Architecture**
     - Control Plane + Data Plane support - [PR #12601](https://github.com/BerriAI/litellm/pull/12601)
-
+- **Proxy CLI**
+    - Add "keys import" command to CLI - [PR #12620](https://github.com/BerriAI/litellm/pull/12620)
 - **Swagger Documentation**
     - Add swagger docs for LiteLLM /chat/completions, /embeddings, /responses - [PR #12618](https://github.com/BerriAI/litellm/pull/12618)
 - **Dependencies**
@@ -276,14 +286,11 @@ This enables developers to easily integrate vector search capabilities into thei
 
 
 #### Bugs
-- **Verbose Logging**
-    - Verbose log is enabled by default fix - [PR #12596](https://github.com/BerriAI/litellm/pull/12596)
-- **Knowledge Base**
-    - Knowledge Base Call returning error fix - [PR #12628](https://github.com/BerriAI/litellm/pull/12628)
-- **MCP Routes**
-    - Include /mcp in list of available routes on proxy - [PR #12612](https://github.com/BerriAI/litellm/pull/12612)
-- **Backend Features**
-    - Add support for disabling callbacks in request body - [PR #12762](https://github.com/BerriAI/litellm/pull/12762)
+
+- Verbose log is enabled by default fix - [PR #12596](https://github.com/BerriAI/litellm/pull/12596)
+
+- Add support for disabling callbacks in request body - [PR #12762](https://github.com/BerriAI/litellm/pull/12762)
+- Handle circular references in spend tracking metadata JSON serialization - [PR #12643](https://github.com/BerriAI/litellm/pull/12643)
 
 ---
 
