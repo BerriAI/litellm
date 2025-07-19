@@ -13509,6 +13509,9 @@
     "together_ai/deepseek-ai/DeepSeek-V3": {
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1.25e-06,
+        "max_tokens": 8192,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -13518,6 +13521,9 @@
     "together_ai/deepseek-ai/DeepSeek-R1": {
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 7e-06,
+        "max_tokens": 20480,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 20480,
         "litellm_provider": "together_ai",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
