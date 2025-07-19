@@ -6,9 +6,15 @@ import {
   Divider,
   message,
   Table,
+  Select,
+  Form,
+  InputNumber,
+  Card,
+  Space,
+  Checkbox,
 } from "antd";
 import { Button } from '@tremor/react';
-import { userBulkUpdateUserCall } from "./networking";
+import { userBulkUpdateUserCall, teamBulkMemberAddCall } from "./networking";
 import { UserEditView } from "./user_edit_view";
 
 const { Text, Title } = Typography;
@@ -37,8 +43,15 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   userModels,
 }) => {
   const [loading, setLoading] = useState(false);
+  const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
+  const [teamBudget, setTeamBudget] = useState<number | null>(null);
+  const [addToTeams, setAddToTeams] = useState(false);
 
   const handleCancel = () => {
+    // Reset team management state
+    setSelectedTeams([]);
+    setTeamBudget(null);
+    setAddToTeams(false);
     onCancel();
   };
 
@@ -89,20 +102,87 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         updatePayload.metadata = formValues.metadata;
       }
 
-      // Check if any fields were actually updated
-      if (Object.keys(updatePayload).length === 0) {
-        message.error("Please modify at least one field to update");
+      // Check if any operations were requested
+      const hasUserUpdates = Object.keys(updatePayload).length > 0;
+      const hasTeamAdditions = addToTeams && selectedTeams.length > 0;
+
+      if (!hasUserUpdates && !hasTeamAdditions) {
+        message.error("Please modify at least one field or select teams to add users to");
         return;
       }
 
-      await userBulkUpdateUserCall(accessToken, updatePayload, userIds);
+      let successMessages: string[] = [];
+
+      // Handle user property updates
+      if (hasUserUpdates) {
+        await userBulkUpdateUserCall(accessToken, updatePayload, userIds);
+        successMessages.push(`Updated ${userIds.length} user(s)`);
+      }
+
+      // Handle team additions
+      if (hasTeamAdditions) {
+        const teamResults: any[] = [];
+        
+        for (const teamId of selectedTeams) {
+          try {
+            // Create member objects for bulk add
+            const members = selectedUsers.map(user => ({
+              user_id: user.user_id,
+              role: "user" as const, // Default role for bulk add
+              user_email: user.user_email || null,
+            }));
+
+            const result = await teamBulkMemberAddCall(
+              accessToken,
+              teamId,
+              members,
+              teamBudget || undefined
+            );
+            
+            teamResults.push({
+              teamId,
+              success: true,
+              successfulAdditions: result.successful_additions,
+              failedAdditions: result.failed_additions,
+            });
+          } catch (error) {
+            console.error(`Failed to add users to team ${teamId}:`, error);
+            teamResults.push({
+              teamId,
+              success: false,
+              error: error,
+            });
+          }
+        }
+
+        // Generate team success message
+        const successfulTeams = teamResults.filter(r => r.success);
+        const failedTeams = teamResults.filter(r => !r.success);
+        
+        if (successfulTeams.length > 0) {
+          const totalAdditions = successfulTeams.reduce((sum, r) => sum + r.successfulAdditions, 0);
+          successMessages.push(`Added users to ${successfulTeams.length} team(s) (${totalAdditions} total additions)`);
+        }
+        
+        if (failedTeams.length > 0) {
+          message.warning(`Failed to add users to ${failedTeams.length} team(s)`);
+        }
+      }
       
-      message.success(`Successfully updated ${userIds.length} user(s)`);
+      if (successMessages.length > 0) {
+        message.success(successMessages.join('. '));
+      }
+      
+      // Reset team management state
+      setSelectedTeams([]);
+      setTeamBudget(null);
+      setAddToTeams(false);
+      
       onSuccess();
       onCancel();
     } catch (error) {
-      console.error("Bulk update failed:", error);
-      message.error("Failed to update users");
+      console.error("Bulk operation failed:", error);
+      message.error("Failed to perform bulk operations");
     } finally {
       setLoading(false);
     }
@@ -179,9 +259,65 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       <div className="mb-4">
         <Text>
           <strong>Instructions:</strong> Fill in the fields below with the values you want to apply to all selected users. 
-          You can bulk edit: role, budget, models, and metadata. Leave fields empty if you don't want to change them.
+          You can bulk edit: role, budget, models, and metadata. You can also add users to teams.
         </Text>
       </div>
+
+      {/* Team Management Section */}
+      <Card 
+        title="Team Management" 
+        size="small" 
+        className="mb-4"
+        style={{ backgroundColor: '#fafafa' }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Checkbox
+            checked={addToTeams}
+            onChange={(e) => setAddToTeams(e.target.checked)}
+          >
+            Add selected users to teams
+          </Checkbox>
+          
+          {addToTeams && (
+            <>
+              <div>
+                <Text strong>Select Teams:</Text>
+                <Select
+                  mode="multiple"
+                  placeholder="Select teams to add users to"
+                  value={selectedTeams}
+                  onChange={setSelectedTeams}
+                  style={{ width: '100%', marginTop: 8 }}
+                  options={teams?.map(team => ({
+                    label: team.team_alias || team.team_id,
+                    value: team.team_id,
+                  })) || []}
+                />
+              </div>
+              
+              <div>
+                <Text strong>Team Budget (Optional):</Text>
+                <InputNumber
+                  placeholder="Max budget per user in team"
+                  value={teamBudget}
+                  onChange={(value) => setTeamBudget(value)}
+                  style={{ width: '100%', marginTop: 8 }}
+                  min={0}
+                  step={0.01}
+                  precision={2}
+                />
+                <Text type="secondary" style={{ fontSize: '12px' }}>
+                  Leave empty for unlimited budget within team limits
+                </Text>
+              </div>
+              
+              <Text type="secondary" style={{ fontSize: '12px' }}>
+                Users will be added with "user" role by default. All users will be added to each selected team.
+              </Text>
+            </>
+          )}
+        </Space>
+      </Card>
 
       <UserEditView
         userData={mockUserData}

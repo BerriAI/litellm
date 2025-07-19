@@ -3674,6 +3674,64 @@ export const teamMemberAddCall = async (
   }
 };
 
+export const teamBulkMemberAddCall = async (
+  accessToken: string,
+  teamId: string,
+  members: Member[],
+  maxBudgetInTeam?: number
+) => {
+  try {
+    console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/bulk_member_add`
+      : `/team/bulk_member_add`;
+
+    const requestBody: any = {
+      team_id: teamId,
+      members: members,
+    };
+
+    if (maxBudgetInTeam !== undefined && maxBudgetInTeam !== null) {
+      requestBody.max_budget_in_team = maxBudgetInTeam;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage =
+        parsedError?.detail?.error || "Failed to bulk add team members";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
+    }
+
+    const data = await response.json();
+    console.log("Bulk team member add API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to bulk add team members:", error);
+    throw error;
+  }
+};
+
 export const teamMemberUpdateCall = async (
   accessToken: string,
   teamId: string,
