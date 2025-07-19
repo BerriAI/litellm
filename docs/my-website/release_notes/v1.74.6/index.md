@@ -138,6 +138,7 @@ This enables developers to easily integrate vector search capabilities into thei
     - Add `input_fidelity` parameter for OpenAI image generation - [PR #12662](https://github.com/BerriAI/litellm/pull/12662), [Get Started](../../docs/image_generation)
 - **[Azure OpenAI](../../docs/providers/azure_openai)**
     - Use Azure OpenAI DeepResearch models with `litellm.completion` (`/chat/completions`) - [PR #12627](https://github.com/BerriAI/litellm/pull/12627) **DOC NEEDED**
+    - Added `response_format` support for openai gpt-4.1 models - [PR #12745](https://github.com/BerriAI/litellm/pull/12745)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Tool cache control support - [PR #12668](https://github.com/BerriAI/litellm/pull/12668)
 - **[Bedrock](../../docs/providers/bedrock)**
@@ -156,6 +157,8 @@ This enables developers to easily integrate vector search capabilities into thei
     - [New Model] add together_ai/moonshotai/Kimi-K2-Instruct - [PR #12645](https://github.com/BerriAI/litellm/pull/12645), [Get Started](../../docs/providers/together_ai)
 - **[Groq](../../docs/providers/groq)**
     - Add groq/moonshotai-kimi-k2-instruct model configuration - [PR #12648](https://github.com/BerriAI/litellm/pull/12648), [Get Started](../../docs/providers/groq)
+- **[Github Copilot](../../docs/providers/github_copilot)**
+    - Change System prompts to assistant prompts for GH Copilot - [PR #12742](https://github.com/BerriAI/litellm/pull/12742), [Get Started](../../docs/providers/github_copilot)
 
 
 #### Bugs
@@ -279,6 +282,8 @@ This enables developers to easily integrate vector search capabilities into thei
 - **Database**
     - Use upsert for managed object table to avoid UniqueViolationError - [PR #11795](https://github.com/BerriAI/litellm/pull/11795)
     - Refactor to support use_prisma_migrate for helm hook - [PR #12600](https://github.com/BerriAI/litellm/pull/12600)
+- **Cache**
+    - Fix: redis caching for embedding response models - [PR #12750](https://github.com/BerriAI/litellm/pull/12750)
 
 ---
 
