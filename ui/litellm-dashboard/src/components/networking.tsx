@@ -2104,6 +2104,29 @@ export const modelExceptionsCall = async (
   }
 };
 
+export const updateUsefulLinksCall = async (accessToken: String, useful_links: Record<string, string>) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ useful_links: useful_links }),
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const modelAvailableCall = async (
   accessToken: String,
   userID: String,
@@ -6367,3 +6390,5 @@ export const vectorStoreSearchCall = async (
     throw error;
   }
 };
+
+
