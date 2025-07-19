@@ -181,11 +181,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   const handleCancel = () => {
@@ -194,6 +196,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setSelectedCreateKeyTeam(null);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   useEffect(() => {
@@ -303,6 +306,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         metadata = {
           ...metadata,
           logging: loggingSettings.filter(config => config.callback_name)
+        };
+      }
+      
+      // Add disabled callbacks to the metadata
+      if (disabledCallbacks.length > 0) {
+        metadata = {
+          ...metadata,
+          litellm_disabled_callbacks: disabledCallbacks
         };
       }
       
@@ -866,6 +877,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           value={loggingSettings}
                           onChange={setLoggingSettings}
                           premiumUser={premiumUser}
+                          disabledCallbacks={disabledCallbacks}
+                          onDisabledCallbacksChange={setDisabledCallbacks}
                         />
                       </div>
                     </AccordionBody>
