@@ -5430,7 +5430,7 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
-    "groq/moonshotai-kimi-k2-instruct": {
+    "groq/moonshotai/kimi-k2-instruct": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
