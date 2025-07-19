@@ -36,11 +36,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
   const [loading, setLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
 
-  // Check if user is admin
-  if (!isAdminRole(userRole || "")) {
-    return null;
-  }
-
   const fetchUsefulLinks = async () => {
     if (!accessToken) return;
     
@@ -73,6 +68,11 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
   useEffect(() => {
     fetchUsefulLinks();
   }, [accessToken]);
+
+  // Check if user is admin
+  if (!isAdminRole(userRole || "")) {
+    return null;
+  }
 
   const saveLinksToBackend = async (updatedLinks: Link[]) => {
     if (!accessToken) return false;
@@ -211,7 +211,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
       >
         <div className="flex flex-col">
           <Title className="mb-0">Link Management</Title>
-          <p className="text-sm text-gray-500">Manage the links that are displayed under 'Useful Links' on the public model hub.</p>
+          <p className="text-sm text-gray-500">Manage the links that are displayed under &apos;Useful Links&apos; on the public model hub.</p>
         </div>
         <div className="flex items-center">
           {isExpanded ? (
