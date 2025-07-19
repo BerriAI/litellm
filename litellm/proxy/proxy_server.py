@@ -466,10 +466,13 @@ else:
     )
 
 ui_link = f"{server_root_path}/ui/"
+model_hub_link = f"{server_root_path}/ui/model_hub_table"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
+
+ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/model_hub)"
 
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
@@ -1858,8 +1861,12 @@ class ProxyConfig:
                                     PrometheusLogger = None
 
                                 if PrometheusLogger is not None:
-                                    verbose_proxy_logger.debug("mounting metrics endpoint")
-                                    PrometheusLogger._mount_metrics_endpoint(premium_user)
+                                    verbose_proxy_logger.debug(
+                                        "mounting metrics endpoint"
+                                    )
+                                    PrometheusLogger._mount_metrics_endpoint(
+                                        premium_user
+                                    )
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -3513,6 +3520,7 @@ class ProxyStartupEvent:
         if litellm.prometheus_initialize_budget_metrics is True:
             try:
                 from litellm_enterprise.integrations.prometheus import PrometheusLogger
+
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
