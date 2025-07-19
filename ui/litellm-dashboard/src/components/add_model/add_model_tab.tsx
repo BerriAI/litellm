@@ -12,7 +12,7 @@ import { CredentialItem, modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
-import { Text, TextInput } from "@tremor/react";
+import { Text, TextInput, Switch } from "@tremor/react";
 import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
 
@@ -31,6 +31,7 @@ interface AddModelTabProps {
   credentials: CredentialItem[];
   accessToken: string;
   userRole: string;
+  premiumUser: boolean;
 }
 
 const { Title, Link } = Typography;
@@ -50,6 +51,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   credentials,
   accessToken,
   userRole,
+  premiumUser,
 }) => {
   // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
@@ -67,6 +69,9 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     // Show the modal with the fresh test
     setIsResultModalVisible(true);
   };
+
+  // State for team-only switch
+  const [isTeamOnly, setIsTeamOnly] = useState<boolean>(false);
 
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
 
@@ -238,20 +243,46 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
               <div className="flex-grow border-t border-gray-200"></div>
             </div>
+            {/* Team-only Model Switch */}
             <Form.Item
-              label="Team"
-              name="team_id"
+              label="Team-BYOK Model"
+              tooltip="Only use this model + credential combination for this team. Useful when teams want to onboard their own OpenAI keys."
               className="mb-4"
-              tooltip="Only keys for this team, will be able to call this model."
-              rules={[
-                {
-                  required: !isAdmin, // Required if not admin
-                  message: 'Please select a team.'
-                }
-              ]}
             >
-              <TeamDropdown teams={teams} />
+              <Tooltip 
+                title={!premiumUser ? "This is an enterprise-only feature. Upgrade to premium to restrict model+credential combinations to a specific team." : ""}
+                placement="top"
+              >
+                <Switch 
+                  checked={isTeamOnly}
+                  onChange={(checked) => {
+                    setIsTeamOnly(checked);
+                    if (!checked) {
+                      form.setFieldValue('team_id', undefined);
+                    }
+                  }}
+                  disabled={!premiumUser}
+                />
+              </Tooltip>
             </Form.Item>
+
+            {/* Conditional Team Selection */}
+            {isTeamOnly && (
+              <Form.Item
+                label="Select Team"
+                name="team_id"
+                className="mb-4"
+                tooltip="Only keys for this team will be able to call this model."
+                rules={[
+                  {
+                    required: isTeamOnly && !isAdmin,
+                    message: 'Please select a team.'
+                  }
+                ]}
+              >
+                <TeamDropdown teams={teams} disabled={!premiumUser} />
+              </Form.Item>
+            )}
             {
               isAdmin && (
                 <>
