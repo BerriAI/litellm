@@ -1397,6 +1397,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 credentials={credentialsList}
                 accessToken={accessToken}
                 userRole={userRole}
+                premiumUser={premiumUser}
               />
             </TabPanel>
             <TabPanel>
