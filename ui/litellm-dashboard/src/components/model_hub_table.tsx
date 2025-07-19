@@ -248,24 +248,27 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             </div>
           )}
 
-          {/* Filters */}
-          <ModelFilters
-            modelHubData={modelHubData || []}
-            onFilteredDataChange={handleFilteredDataChange}
-          />
+          {/* Model Filters and Table */}
+          <Card>
+            {/* Filters */}
+            <ModelFilters
+              modelHubData={modelHubData || []}
+              onFilteredDataChange={handleFilteredDataChange}
+            />
 
-          {/* Model Table */}
-          <ModelDataTable
-            columns={modelHubColumns(
-              showModal,
-              copyToClipboard,
-              publicPage,
-            )}
-            data={filteredData}
-            isLoading={loading}
-            table={tableRef}
-            defaultSorting={[{ id: "model_group", desc: false }]}
-          />
+            {/* Model Table */}
+            <ModelDataTable
+              columns={modelHubColumns(
+                showModal,
+                copyToClipboard,
+                publicPage,
+              )}
+              data={filteredData}
+              isLoading={loading}
+              table={tableRef}
+              defaultSorting={[{ id: "model_group", desc: false }]}
+            />
+          </Card>
 
           <div className="mt-4 text-center space-y-2">
             <Text className="text-sm text-gray-600">

@@ -3,6 +3,17 @@ import { message, Modal } from "antd";
 import { PlusCircleIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline";
 import { isAdminRole } from "../utils/roles";
 import { getPublicModelHubInfo, updateUsefulLinksCall, getProxyBaseUrl } from "./networking";
+import { 
+  Card, 
+  Title, 
+  Text, 
+  Table, 
+  TableHead, 
+  TableHeaderCell, 
+  TableBody, 
+  TableRow, 
+  TableCell 
+} from "@tremor/react";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;
@@ -192,10 +203,10 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
   };
 
   return (
-    <div className="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
-      <h2 className="text-lg font-medium mb-4">Admin Link Management</h2>
+    <Card className="mb-6">
+      <Title className="mb-4">Admin Link Management</Title>
       <div className="mb-6">
-        <h3 className="text-sm font-medium text-gray-700 mb-2">Add New Link</h3>
+        <Text className="text-sm font-medium text-gray-700 mb-2">Add New Link</Text>
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-xs text-gray-500 mb-1">URL</label>
@@ -241,120 +252,122 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
           </div>
         </div>
       </div>
-      <h3 className="text-sm font-medium text-gray-700 mb-2">
+      <Text className="text-sm font-medium text-gray-700 mb-2">
         Manage Existing Links
-      </h3>
-      <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Display Name
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                URL
-              </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {links.map((link) => (
-              <tr key={link.id}>
-                {editingLink && editingLink.id === link.id ? (
-                  <>
-                    <td className="px-4 py-2">
-                      <input
-                        type="text"
-                        value={editingLink.displayName}
-                        onChange={(e) =>
-                          setEditingLink({
-                            ...editingLink,
-                            displayName: e.target.value,
-                          })
-                        }
-                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <input
-                        type="text"
-                        value={editingLink.url}
-                        onChange={(e) =>
-                          setEditingLink({
-                            ...editingLink,
-                            url: e.target.value,
-                          })
-                        }
-                        className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
-                      />
-                    </td>
-                    <td className="px-4 py-2 whitespace-nowrap">
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={handleUpdateLink}
-                          className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
-                        >
-                          Save
-                        </button>
-                        <button
-                          onClick={handleCancelEdit}
-                          className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </td>
-                  </>
-                ) : (
-                  <>
-                    <td className="px-4 py-3 text-sm text-gray-900">
-                      {link.displayName}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">
-                      {link.url}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => setCurrentLink(link.url)}
-                          className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100"
-                        >
-                          Use
-                        </button>
-                        <button
-                          onClick={() => handleEditLink(link)}
-                          className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
-                        >
-                          <PencilIcon className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() => deleteLink(link.id)}
-                          className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
-                        >
-                          <TrashIcon className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </td>
-                  </>
-                )}
-              </tr>
-            ))}
-            {links.length === 0 && (
-              <tr>
-                <td
-                  colSpan={3}
-                  className="px-4 py-3 text-sm text-gray-500 text-center"
-                >
-                  No links added yet. Add a new link above.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      </Text>
+      <div className="rounded-lg custom-border relative">
+        <div className="overflow-x-auto">
+          <Table className="[&_td]:py-0.5 [&_th]:py-1">
+            <TableHead>
+              <TableRow>
+                <TableHeaderCell className="py-1 h-8">
+                  Display Name
+                </TableHeaderCell>
+                <TableHeaderCell className="py-1 h-8">
+                  URL
+                </TableHeaderCell>
+                <TableHeaderCell className="py-1 h-8">
+                  Actions
+                </TableHeaderCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+                          {links.map((link) => (
+                <TableRow key={link.id} className="h-8">
+                  {editingLink && editingLink.id === link.id ? (
+                    <>
+                      <TableCell className="py-0.5">
+                        <input
+                          type="text"
+                          value={editingLink.displayName}
+                          onChange={(e) =>
+                            setEditingLink({
+                              ...editingLink,
+                              displayName: e.target.value,
+                            })
+                          }
+                          className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                        />
+                      </TableCell>
+                      <TableCell className="py-0.5">
+                        <input
+                          type="text"
+                          value={editingLink.url}
+                          onChange={(e) =>
+                            setEditingLink({
+                              ...editingLink,
+                              url: e.target.value,
+                            })
+                          }
+                          className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                        />
+                      </TableCell>
+                      <TableCell className="py-0.5 whitespace-nowrap">
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={handleUpdateLink}
+                            className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={handleCancelEdit}
+                            className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </TableCell>
+                    </>
+                  ) : (
+                    <>
+                      <TableCell className="py-0.5 text-sm text-gray-900">
+                        {link.displayName}
+                      </TableCell>
+                      <TableCell className="py-0.5 text-sm text-gray-500">
+                        {link.url}
+                      </TableCell>
+                      <TableCell className="py-0.5 whitespace-nowrap">
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => setCurrentLink(link.url)}
+                            className="text-xs bg-green-50 text-green-600 px-2 py-1 rounded hover:bg-green-100"
+                          >
+                            Use
+                          </button>
+                          <button
+                            onClick={() => handleEditLink(link)}
+                            className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                          >
+                            <PencilIcon className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => deleteLink(link.id)}
+                            className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded hover:bg-red-100"
+                          >
+                            <TrashIcon className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </TableCell>
+                    </>
+                  )}
+                </TableRow>
+              ))}
+              {links.length === 0 && (
+                <TableRow>
+                  <TableCell
+                    colSpan={3}
+                    className="py-0.5 text-sm text-gray-500 text-center"
+                  >
+                    No links added yet. Add a new link above.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
-    </div>
+    </Card>
   );
 };
 
