@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
@@ -294,8 +295,6 @@ def get_logging_payload(  # noqa: PLR0915
         )
 
     try:
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-        
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
             call_type=call_type or "",
@@ -339,10 +338,9 @@ def get_logging_payload(  # noqa: PLR0915
             ),
         )
 
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
         verbose_proxy_logger.debug(
             "SpendTable: created payload - payload: %s\n\n",
-            safe_dumps(payload),
+            json.dumps(payload, indent=4, default=str),
         )
 
         return payload
