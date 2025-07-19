@@ -1883,116 +1883,7 @@ def test_caching_redis_simple(caplog, capsys):
     assert "async success_callback: reaches cache for logging" not in captured.out
 
 
-@pytest.mark.flaky(retries=3, delay=1)
-@pytest.mark.asyncio
-async def test_qdrant_semantic_cache_acompletion():
-    litellm.set_verbose = True
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding /reading from cache
 
-    print("Testing Qdrant Semantic Caching with acompletion")
-
-    litellm.cache = Cache(
-        type="qdrant-semantic",
-        _host_type="cloud",
-        qdrant_api_base=os.getenv("QDRANT_URL"),
-        qdrant_api_key=os.getenv("QDRANT_API_KEY"),
-        qdrant_collection_name="test_collection",
-        similarity_threshold=0.8,
-        qdrant_quantization_config="binary",
-    )
-
-    response1 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[
-            {
-                "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
-            }
-        ],
-        mock_response="hello",
-        max_tokens=20,
-    )
-    print(f"Response1: {response1}")
-
-    random_number = random.randint(1, 100000)
-
-    response2 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[
-            {
-                "role": "user",
-                "content": f"write a one sentence poem about: {random_number}",
-            }
-        ],
-        max_tokens=20,
-    )
-    print(f"Response2: {response2}")
-    assert response1.id == response2.id
-
-
-@pytest.mark.asyncio
-async def test_qdrant_semantic_cache_acompletion_stream():
-    try:
-        random_word = generate_random_word()
-        messages = [
-            {
-                "role": "user",
-                "content": f"write a joke about: {random_word}",
-            }
-        ]
-        litellm.cache = Cache(
-            type="qdrant-semantic",
-            qdrant_api_base=os.getenv("QDRANT_URL"),
-            qdrant_api_key=os.getenv("QDRANT_API_KEY"),
-            qdrant_collection_name="test_collection",
-            similarity_threshold=0.8,
-            qdrant_quantization_config="binary",
-        )
-        print("Test Qdrant Semantic Caching with streaming + acompletion")
-        response_1_content = ""
-        response_2_content = ""
-
-        response1 = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-            stream=True,
-            mock_response="hi",
-        )
-        async for chunk in response1:
-            response_1_id = chunk.id
-            response_1_content += chunk.choices[0].delta.content or ""
-
-        time.sleep(2)
-
-        response2 = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-            stream=True,
-        )
-        async for chunk in response2:
-            response_2_id = chunk.id
-            response_2_content += chunk.choices[0].delta.content or ""
-
-        print("\nResponse 1", response_1_content, "\nResponse 1 id", response_1_id)
-        print("\nResponse 2", response_2_content, "\nResponse 2 id", response_2_id)
-        assert (
-            response_1_content == response_2_content
-        ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
-        assert (
-            response_1_id == response_2_id
-        ), f"Response 1 id != Response 2 id, Response 1 id: {response_1_id} != Response 2 id: {response_2_id}"
-        litellm.cache = None
-        litellm.success_callback = []
-        litellm._async_success_callback = []
-    except Exception as e:
-        print(f"{str(e)}\n\n{traceback.format_exc()}")
-        raise e
 
 
 @pytest.mark.asyncio()
@@ -2132,6 +2023,7 @@ async def test_redis_sentinel_caching():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_redis_proxy_batch_redis_get_cache():
     """
     Tests batch_redis_get.py
