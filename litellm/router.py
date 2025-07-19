@@ -866,9 +866,6 @@ class Router:
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
-        from litellm.router_utils.forward_clientside_headers_by_model_group import (
-            ForwardClientSideHeadersByModelGroup,
-        )
 
         if optional_pre_call_checks is not None:
             for pre_call_check in optional_pre_call_checks:
