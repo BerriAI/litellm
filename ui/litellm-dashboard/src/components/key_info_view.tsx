@@ -27,6 +27,7 @@ import LoggingSettingsView from "./logging_settings_view";
 import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
 import { CopyIcon, CheckIcon } from "lucide-react";
+import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "./callback_info_helpers";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -105,7 +106,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
               ? { logging: formValues.logging_settings }
               : {}),
             ...(formValues.disabled_callbacks?.length > 0
-              ? { litellm_disabled_callbacks: formValues.disabled_callbacks }
+              ? { 
+                  litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks)
+                }
               : {}),
           };
         } catch (error) {
@@ -123,7 +126,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
             ? { logging: formValues.logging_settings }
             : {}),
           ...(formValues.disabled_callbacks?.length > 0
-            ? { litellm_disabled_callbacks: formValues.disabled_callbacks }
+            ? { 
+                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks)
+              }
             : {}),
         };
       }
@@ -336,7 +341,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
 
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(keyData.metadata)}
-                disabledCallbacks={Array.isArray(keyData.metadata?.litellm_disabled_callbacks) ? keyData.metadata.litellm_disabled_callbacks : []}
+                disabledCallbacks={Array.isArray(keyData.metadata?.litellm_disabled_callbacks) 
+                  ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks) 
+                  : []}
                 variant="card"
               />
             </Grid>
@@ -460,7 +467,9 @@ export default function KeyInfoView({ keyId, onClose, keyData, accessToken, user
                     loggingConfigs={extractLoggingSettings(
                       keyData.metadata,
                     )}
-                    disabledCallbacks={Array.isArray(keyData.metadata?.litellm_disabled_callbacks) ? keyData.metadata.litellm_disabled_callbacks : []}
+                    disabledCallbacks={Array.isArray(keyData.metadata?.litellm_disabled_callbacks) 
+                      ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks) 
+                      : []}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />

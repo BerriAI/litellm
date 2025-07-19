@@ -48,7 +48,7 @@ import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-
+import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
 
 
 const { Option } = Select;
@@ -311,9 +311,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       
       // Add disabled callbacks to the metadata
       if (disabledCallbacks.length > 0) {
+        // Map display names to internal callback values
+        const mappedDisabledCallbacks = mapDisplayToInternalNames(disabledCallbacks);
         metadata = {
           ...metadata,
-          litellm_disabled_callbacks: disabledCallbacks
+          litellm_disabled_callbacks: mappedDisabledCallbacks
         };
       }
       

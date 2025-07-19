@@ -5,7 +5,7 @@ import { Form, Select, Space, Tooltip, Divider } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Button, Card, TextInput } from '@tremor/react';
 import { PlusIcon, TrashIcon, CogIcon, BanIcon } from '@heroicons/react/outline';
-import { callbackInfo, Callbacks, callback_map } from '../callback_info_helpers';
+import { callbackInfo, Callbacks, callback_map, mapDisplayToInternalNames } from '../callback_info_helpers';
 
 const { Option } = Select;
 
@@ -41,7 +41,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
   };
 
   const handleDisabledCallbacksChange = (newDisabledCallbacks: string[]) => {
-    onDisabledCallbacksChange?.(newDisabledCallbacks);
+    // Map display names to internal callback values
+    const mappedDisabledCallbacks = mapDisplayToInternalNames(newDisabledCallbacks);
+    onDisabledCallbacksChange?.(mappedDisabledCallbacks);
   };
 
   const addLoggingConfig = () => {
