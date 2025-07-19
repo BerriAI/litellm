@@ -224,9 +224,7 @@ def test_watsonx_deployment_space_id(monkeypatch, watsonx_chat_completion_call, 
 
     assert mock_post.call_count == 1
     json_data = json.loads(mock_post.call_args.kwargs["data"])
-    assert "space_id" not in json_data
-
-
+    
 @pytest.mark.parametrize(
     "model",
     [

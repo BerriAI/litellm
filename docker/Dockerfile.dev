@@ -1,0 +1,87 @@
+# Base image for building
+ARG LITELLM_BUILD_IMAGE=python:3.11-slim
+
+# Runtime image
+ARG LITELLM_RUNTIME_IMAGE=python:3.11-slim
+
+# Builder stage
+FROM $LITELLM_BUILD_IMAGE AS builder
+
+# Set the working directory to /app
+WORKDIR /app
+
+USER root
+
+# Install build dependencies in one layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --upgrade pip build
+
+# Copy requirements first for better layer caching
+COPY requirements.txt .
+
+# Install Python dependencies with cache mount for faster rebuilds
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+
+# Fix JWT dependency conflicts early
+RUN pip uninstall jwt -y || true && \
+    pip uninstall PyJWT -y || true && \
+    pip install PyJWT==2.9.0 --no-cache-dir
+
+# Copy only necessary files for build
+COPY pyproject.toml README.md schema.prisma poetry.lock ./
+COPY litellm/ ./litellm/
+COPY enterprise/ ./enterprise/
+COPY docker/ ./docker/
+
+# Build Admin UI once
+RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+
+# Build the package
+RUN rm -rf dist/* && python -m build
+
+# Install the built package
+RUN pip install dist/*.whl
+
+# Runtime stage
+FROM $LITELLM_RUNTIME_IMAGE AS runtime
+
+# Ensure runtime stage runs as root
+USER root
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy only necessary runtime files
+COPY docker/entrypoint.sh docker/prod_entrypoint.sh ./docker/
+COPY litellm/ ./litellm/
+COPY pyproject.toml README.md schema.prisma poetry.lock ./
+
+# Copy pre-built wheels and install everything at once
+COPY --from=builder /wheels/ /wheels/
+COPY --from=builder /app/dist/*.whl .
+
+# Install all dependencies in one step with no-cache for smaller image
+RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ && \
+    rm -f *.whl && \
+    rm -rf /wheels
+
+# Generate prisma client and set permissions
+RUN prisma generate && \
+    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh
+
+EXPOSE 4000/tcp
+
+ENTRYPOINT ["docker/prod_entrypoint.sh"]
+
+# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
+CMD ["--port", "4000"]

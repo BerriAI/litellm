@@ -2,6 +2,7 @@ import openai from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { message } from "antd";
 import { TokenUsage } from "../ResponseMetrics";
+import { getProxyBaseUrl } from "@/components/networking";
 
 export async function makeOpenAIChatCompletionRequest(
     chatHistory: { role: string; content: string }[],
@@ -12,7 +13,11 @@ export async function makeOpenAIChatCompletionRequest(
     signal?: AbortSignal,
     onReasoningContent?: (content: string) => void,
     onTimingData?: (timeToFirstToken: number) => void,
-    onUsageData?: (usage: TokenUsage) => void
+    onUsageData?: (usage: TokenUsage) => void,
+    traceId?: string,
+    vector_store_ids?: string[],
+    guardrails?: string[],
+    selectedMCPTool?: string
   ) {
     // base url should be the current base_url
     const isLocal = process.env.NODE_ENV === "development";
@@ -20,14 +25,18 @@ export async function makeOpenAIChatCompletionRequest(
       console.log = function () {};
     }
     console.log("isLocal:", isLocal);
-    const proxyBaseUrl = isLocal
-      ? "http://localhost:4000"
-      : window.location.origin;
+    const proxyBaseUrl = getProxyBaseUrl()
+    // Prepare headers with tags and trace ID
+    const headers: Record<string, string> = {};
+    if (tags && tags.length > 0) {
+      headers['x-litellm-tags'] = tags.join(',');
+    }
+    
     const client = new openai.OpenAI({
       apiKey: accessToken,
       baseURL: proxyBaseUrl,
       dangerouslyAllowBrowser: true,
-      defaultHeaders: tags && tags.length > 0 ? { 'x-litellm-tags': tags.join(',') } : undefined,
+      defaultHeaders: headers,
     });
   
     try {
@@ -39,13 +48,29 @@ export async function makeOpenAIChatCompletionRequest(
       let fullResponseContent = "";
       let fullReasoningContent = "";
 
+      // Format MCP tool if selected
+      const tools = selectedMCPTool ? [{
+        type: "mcp",
+        server_label: "litellm",
+        server_url: `${proxyBaseUrl}/mcp`,
+        require_approval: "never",
+        headers: {
+          "x-litellm-api-key": `Bearer ${accessToken}`
+        }
+      }] : undefined;
+      
+      // @ts-ignore
       const response = await client.chat.completions.create({
         model: selectedModel,
         stream: true,
         stream_options: {
           include_usage: true,
         },
+        litellm_trace_id: traceId, 
         messages: chatHistory as ChatCompletionMessageParam[],
+        ...(vector_store_ids ? { vector_store_ids } : {}),
+        ...(guardrails ? { guardrails } : {}),
+        ...(tools ? { tools, tool_choice: "auto" } : {}),
       }, { signal });
   
       for await (const chunk of response) {
@@ -108,8 +133,6 @@ export async function makeOpenAIChatCompletionRequest(
     } catch (error) {
       if (signal?.aborted) {
         console.log("Chat completion request was cancelled");
-      } else {
-        message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
       }
       throw error; // Re-throw to allow the caller to handle the error
     }

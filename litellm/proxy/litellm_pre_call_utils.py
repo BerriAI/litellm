@@ -9,6 +9,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -67,7 +68,9 @@ def _get_metadata_variable_name(request: Request) -> str:
         "batches",
         "/v1/messages",
         "responses",
+        "files",
     ]
+
     if any(
         [
             litellm_metadata_route in request.url.path
@@ -139,19 +142,61 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+class KeyAndTeamLoggingSettings:
+    """
+    Helper class to get the dynamic logging settings for the key and team
+    """
+
+    @staticmethod
+    def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+        if (
+            user_api_key_dict.metadata is not None
+            and "logging" in user_api_key_dict.metadata
+        ):
+            return user_api_key_dict.metadata["logging"]
+        return None
+
+    @staticmethod
+    def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+        if (
+            user_api_key_dict.team_metadata is not None
+            and "logging" in user_api_key_dict.team_metadata
+        ):
+            return user_api_key_dict.team_metadata["logging"]
+        return None
+
+
 def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    if (
-        user_api_key_dict.metadata is not None
-        and "logging" in user_api_key_dict.metadata
-    ):
-        for item in user_api_key_dict.metadata["logging"]:
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
+    #########################################################################################
+    # Key-based callbacks
+    #########################################################################################
+    if key_dynamic_logging_settings is not None:
+        for item in key_dynamic_logging_settings:
             callback_settings_obj = convert_key_logging_metadata_to_callback(
                 data=AddTeamCallback(**item),
                 team_callback_settings_obj=callback_settings_obj,
             )
+    #########################################################################################
+    # Team-based callbacks
+    #########################################################################################
+    elif team_dynamic_logging_settings is not None:
+        for item in team_dynamic_logging_settings:
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+    #########################################################################################
+    # Deprecated format - maintained for backwards compatibility
+    #########################################################################################
     elif (
         user_api_key_dict.team_metadata is not None
         and "callback_settings" in user_api_key_dict.team_metadata
@@ -171,6 +216,9 @@ def _get_dynamic_logging_metadata(
         verbose_proxy_logger.debug(
             "Team callback settings activated: %s", callback_settings_obj
         )
+    #########################################################################################
+    # Enter here when configured on the config.yaml file.
+    #########################################################################################
     elif user_api_key_dict.team_id is not None:
         callback_settings_obj = (
             LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
@@ -232,6 +280,8 @@ class LiteLLMProxyRequestSetup:
         Get the headers that should be forwarded to the LLM Provider.
 
         Looks for any `x-` headers and sends them to the LLM Provider.
+
+        [07/09/2025] - Support 'anthropic-beta' header as well.
         """
         forwarded_headers = {}
         for header, value in headers.items():
@@ -239,8 +289,47 @@ class LiteLLMProxyRequestSetup:
                 "x-stainless"
             ):  # causes openai sdk to fail
                 forwarded_headers[header] = value
+            elif header.lower().startswith("anthropic-beta"):
+                forwarded_headers[header] = value
 
         return forwarded_headers
+
+    @staticmethod
+    def _get_case_insensitive_header(headers: dict, key: str) -> Optional[str]:
+        """
+        Get a case-insensitive header from the headers dictionary.
+        """
+        for header, value in headers.items():
+            if header.lower() == key.lower():
+                return value
+        return None
+
+    @staticmethod
+    def get_user_from_headers(
+        headers: dict, general_settings: Optional[Dict] = None
+    ) -> Optional[str]:
+        """
+        Get the user from the specified header if `general_settings.user_header_name` is set.
+        """
+        if general_settings is None:
+            return None
+
+        header_name = general_settings.get("user_header_name")
+        if header_name is None or header_name == "":
+            return None
+
+        if not isinstance(header_name, str):
+            raise TypeError(
+                f"Expected user_header_name to be a str but got {type(header_name)}"
+            )
+
+        user = LiteLLMProxyRequestSetup._get_case_insensitive_header(
+            headers, header_name
+        )
+        if user is not None:
+            verbose_logger.info(f'found user "{user}" in header "{header_name}"')
+
+        return user
 
     @staticmethod
     def get_openai_org_id_from_headers(
@@ -293,10 +382,12 @@ class LiteLLMProxyRequestSetup:
         general_settings: Optional[Dict[str, Any]] = None,
     ) -> LitellmDataForBackendLLMCall:
         """
+        - Adds user from headers
         - Adds forwardable headers
         - Adds org id
         """
         data = LitellmDataForBackendLLMCall()
+
         if (
             general_settings
             and general_settings.get("forward_client_headers_to_llm_api") is True
@@ -331,6 +422,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
+            user_api_key_request_route=user_api_key_dict.request_route,
         )
         return user_api_key_logged_metadata
 
@@ -347,11 +439,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name][
-                "tags"
-            ] = LiteLLMProxyRequestSetup._merge_tags(
-                request_tags=data[_metadata_variable_name].get("tags"),
-                tags_to_add=key_metadata["tags"],
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
             )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
@@ -433,14 +525,13 @@ class LiteLLMProxyRequestSetup:
     ) -> Optional[List[str]]:
         tags = None
 
-        if llm_router and llm_router.enable_tag_filtering is True:
-            # Check request headers for tags
-            if "x-litellm-tags" in headers:
-                if isinstance(headers["x-litellm-tags"], str):
-                    _tags = headers["x-litellm-tags"].split(",")
-                    tags = [tag.strip() for tag in _tags]
-                elif isinstance(headers["x-litellm-tags"], list):
-                    tags = headers["x-litellm-tags"]
+        # Check request headers for tags
+        if "x-litellm-tags" in headers:
+            if isinstance(headers["x-litellm-tags"], str):
+                _tags = headers["x-litellm-tags"].split(",")
+                tags = [tag.strip() for tag in _tags]
+            elif isinstance(headers["x-litellm-tags"], list):
+                tags = headers["x-litellm-tags"]
         # Check request body for tags
         if "tags" in data and isinstance(data["tags"], list):
             tags = data["tags"]
@@ -492,6 +583,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
 
+    # Parse user info from headers
+    user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
+    if user is not None:
+        if user_api_key_dict.end_user_id is None:
+            user_api_key_dict.end_user_id = user
+        if "user" not in data:
+            data["user"] = user
+
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
@@ -532,8 +631,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
-    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
+    # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
+        if isinstance(data["metadata"], str):
+            data["metadata"] = safe_json_loads(data["metadata"])
+            if not isinstance(data["metadata"], dict):
+                verbose_proxy_logger.warning(
+                    f"Failed to parse 'metadata' as JSON dict. Received value: {data['metadata']}"
+                )
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
             data["metadata"]
         )
@@ -557,9 +662,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name][
-            "global_max_parallel_requests"
-        ] = general_settings.get("global_max_parallel_requests", None)
+        data[_metadata_variable_name]["global_max_parallel_requests"] = (
+            general_settings.get("global_max_parallel_requests", None)
+        )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
@@ -598,6 +703,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_team_spend"
     ] = user_api_key_dict.team_spend
+    data[_metadata_variable_name][
+        "user_api_key_request_route"
+    ] = user_api_key_dict.request_route
 
     # API Key spend, budget - used by prometheus.py
     data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend

@@ -39,6 +39,7 @@ class PartType(TypedDict, total=False):
     file_data: FileDataType
     function_call: FunctionCall
     function_response: FunctionResponse
+    thought: bool
 
 
 class HttpxFunctionCall(TypedDict):
@@ -69,6 +70,7 @@ class HttpxPartType(TypedDict, total=False):
     functionResponse: FunctionResponse
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
+    thought: bool
 
 
 class HttpxContentType(TypedDict, total=False):
@@ -87,7 +89,7 @@ class SystemInstructions(TypedDict):
 
 class Schema(TypedDict, total=False):
     type: Literal["STRING", "INTEGER", "BOOLEAN", "NUMBER", "ARRAY", "OBJECT"]
-    format: str
+    format: Literal["enum", "date-time"]
     title: str
     description: str
     nullable: bool
@@ -166,6 +168,26 @@ class SafetSettingsConfig(TypedDict, total=False):
     method: HarmBlockMethod
 
 
+class GeminiThinkingConfig(TypedDict, total=False):
+    includeThoughts: bool
+    thinkingBudget: int
+
+
+GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
+
+
+class PrebuiltVoiceConfig(TypedDict):
+    voiceName: str
+
+
+class VoiceConfig(TypedDict):
+    prebuiltVoiceConfig: PrebuiltVoiceConfig
+
+
+class SpeechConfig(TypedDict, total=False):
+    voiceConfig: VoiceConfig
+
+
 class GenerationConfig(TypedDict, total=False):
     temperature: float
     top_p: float
@@ -180,7 +202,8 @@ class GenerationConfig(TypedDict, total=False):
     seed: int
     responseLogprobs: bool
     logprobs: int
-    responseModalities: List[Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]]
+    responseModalities: List[GeminiResponseModalities]
+    thinkingConfig: GeminiThinkingConfig
 
 
 class Tools(TypedDict, total=False):
@@ -188,6 +211,7 @@ class Tools(TypedDict, total=False):
     googleSearch: dict
     googleSearchRetrieval: dict
     enterpriseWebSearch: dict
+    url_context: dict
     code_execution: dict
     retrieval: Retrieval
 
@@ -210,8 +234,11 @@ class UsageMetadata(TypedDict, total=False):
     promptTokenCount: int
     totalTokenCount: int
     candidatesTokenCount: int
+    responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    thoughtsTokenCount: int
+    responseTokensDetails: List[PromptTokensDetails]
 
 
 class CachedContent(TypedDict, total=False):
@@ -238,6 +265,7 @@ class RequestBody(TypedDict, total=False):
     safetySettings: List[SafetSettingsConfig]
     generationConfig: GenerationConfig
     cachedContent: str
+    speechConfig: SpeechConfig
 
 
 class CachedContentRequestBody(TypedDict, total=False):
@@ -308,6 +336,15 @@ class LogprobsResult(TypedDict, total=False):
     chosenCandidates: List[LogprobsCandidate]
 
 
+class UrlMetadata(TypedDict, total=False):
+    retrievedUrl: str
+    urlRetrievalStatus: str
+
+
+class UrlContextMetadata(TypedDict, total=False):
+    urlMetadata: List[UrlMetadata]
+
+
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
@@ -327,6 +364,7 @@ class Candidates(TypedDict, total=False):
     groundingMetadata: GroundingMetadata
     finishMessage: str
     logprobsResult: LogprobsResult
+    urlContextMetadata: UrlContextMetadata
 
 
 class PromptFeedback(TypedDict):
@@ -339,6 +377,7 @@ class GenerateContentResponseBody(TypedDict, total=False):
     candidates: List[Candidates]
     promptFeedback: PromptFeedback
     usageMetadata: Required[UsageMetadata]
+    responseId: str
 
 
 class FineTuneHyperparameters(TypedDict, total=False):
@@ -563,3 +602,10 @@ class VertexBatchPredictionResponse(TypedDict, total=False):
 
 
 VERTEX_CREDENTIALS_TYPES = Union[str, Dict[str, str]]
+
+
+class VertexPartnerProvider(str, Enum):
+    mistralai = "mistralai"
+    llama = "llama"
+    ai21 = "ai21"
+    claude = "claude"

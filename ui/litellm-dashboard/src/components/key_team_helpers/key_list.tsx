@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { keyListCall, Organization } from '../networking';
+import { keyListCall, Member, Organization } from '../networking';
 import { Setter } from '@/types';
 
 export interface Team {
@@ -12,6 +12,8 @@ export interface Team {
     rpm_limit: number | null;
     organization_id: string;
     created_at: string;
+    keys: KeyResponse[];
+    members_with_roles: Member[];
 }
 
 export interface KeyResponse {
@@ -73,6 +75,12 @@ export interface KeyResponse {
     user_tpm_limit: number;
     user_rpm_limit: number;
     user_email: string;
+    object_permission?: {
+        object_permission_id: string;
+        mcp_servers: string[];
+        mcp_access_groups?: string[];
+        vector_stores: string[];
+    };
 }
 
 interface KeyListResponse {
@@ -85,8 +93,9 @@ total_pages: number;
 interface UseKeyListProps {
 selectedTeam?: Team;
 currentOrg: Organization | null;
+selectedKeyAlias: string | null;
 accessToken: string;
-currentPage?: number;
+createClicked: boolean;
 }
 
 interface PaginationData {
@@ -108,9 +117,9 @@ setKeys: Setter<KeyResponse[]>;
 const useKeyList = ({
     selectedTeam,
     currentOrg,
+    selectedKeyAlias,
     accessToken,
-    currentPage = 1,
-
+    createClicked,
 }: UseKeyListProps): UseKeyListReturn => {
     const [keyData, setKeyData] = useState<KeyListResponse>({ 
         keys: [], 
@@ -130,12 +139,18 @@ const useKeyList = ({
             }
             setIsLoading(true);
 
+            const page = typeof params.page === 'number' ? params.page : 1;
+            const pageSize = typeof params.pageSize === 'number' ? params.pageSize : 100;
+
             const data = await keyListCall(
                 accessToken,
-                currentOrg?.organization_id || null,
-                selectedTeam?.team_id || "",
-                params.page as number || 1,
-                50
+                null,
+                null,
+                null,
+                null,
+                null,
+                page,
+                pageSize,
             );
             console.log("data", data);
             setKeyData(data);
@@ -149,8 +164,17 @@ const useKeyList = ({
 
     useEffect(() => {
         fetchKeys();
-        console.log("selectedTeam", selectedTeam, "currentOrg", currentOrg, "accessToken", accessToken);
-    }, [selectedTeam, currentOrg, accessToken]);
+        console.log(
+          'selectedTeam',
+          selectedTeam,
+          'currentOrg',
+          currentOrg,
+          'accessToken',
+          accessToken,
+          'selectedKeyAlias',
+          selectedKeyAlias
+        );
+    }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
     const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {
         setKeyData(prevData => {

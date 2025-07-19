@@ -137,7 +137,7 @@ def test_azure_extra_headers(input, call_type, header_value):
                 func = image_generation
 
             data = {
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
                 "api_version": "2023-07-01-preview",
                 "api_key": "my-azure-api-key",
@@ -339,7 +339,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
 
     with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
         response = litellm.completion(
-            model="azure/gpt-4o",
+            model="azure/gpt-4o-new-test",
             messages=[
                 {
                     "role": "system",
@@ -474,7 +474,7 @@ def test_azure_max_retries_0(
 
     try:
         completion(
-            model="azure/gpt-4o",
+            model="azure/gpt-4o-new-test",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -502,7 +502,7 @@ async def test_async_azure_max_retries_0(
 
     try:
         await acompletion(
-            model="azure/gpt-4o",
+            model="azure/gpt-4o-new-test",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -589,3 +589,44 @@ async def test_azure_embedding_max_retries_0(
         ]
         == max_retries
     )
+
+
+def test_azure_safety_result():
+    """Bubble up safety result from Azure OpenAI"""
+    from litellm import completion
+
+    litellm._turn_on_debug()
+
+    response = completion(
+        model="azure/gpt-4o-new-test",
+        messages=[{"role": "user", "content": "Hello world"}],
+    )
+    print(f"response: {response}")
+    assert response.choices[0].message.content is not None
+    assert response.choices[0].provider_specific_fields is not None
+
+
+def test_azure_openai_responses_bridge():
+    from litellm import completion
+    import litellm
+
+    litellm._turn_on_debug()
+
+    with patch.object(litellm, "responses") as mock_responses:
+        try:
+            response = completion(
+                model="azure/responses/test-azure-computer-use-preview",
+                messages=[{"role": "user", "content": "Hello world"}],
+                api_base=os.getenv("AZURE_COMPUTER_USE_API_BASE"),
+                api_version="2025-04-01-preview",
+                api_key=os.getenv("AZURE_COMPUTER_USE_API_KEY"),
+            )
+        except Exception as e:
+            print(e)
+
+        mock_responses.assert_called_once()
+        assert (
+            mock_responses.call_args.kwargs["model"]
+            == "test-azure-computer-use-preview"
+        )
+        assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"

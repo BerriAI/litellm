@@ -1,11 +1,11 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Optional, Tuple, cast
+from typing import Literal, Optional, Tuple, cast
 
 import litellm
-from litellm import verbose_logger
-from litellm.types.utils import ModelInfo, Usage
+from litellm._logging import verbose_logger
+from litellm.types.utils import CallTypes, ModelInfo, PassthroughCallTypes, Usage
 from litellm.utils import get_model_info
 
 
@@ -13,6 +13,23 @@ def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
         return True
     return False
+
+
+def select_cost_metric_for_model(
+    model_info: ModelInfo,
+) -> Literal["cost_per_character", "cost_per_token"]:
+    """
+    Select 'cost_per_character' if model_info has 'input_cost_per_character'
+    Select 'cost_per_token' if model_info has 'input_cost_per_token'
+    """
+    if model_info.get("input_cost_per_character"):
+        return "cost_per_character"
+    elif model_info.get("input_cost_per_token"):
+        return "cost_per_token"
+    else:
+        raise ValueError(
+            f"Model {model_info['key']} does not have 'input_cost_per_character' or 'input_cost_per_token'"
+        )
 
 
 def _generic_cost_per_character(
@@ -97,8 +114,8 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
     If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
     then we use the corresponding threshold cost.
     """
-    prompt_base_cost = model_info["input_cost_per_token"]
-    completion_base_cost = model_info["output_cost_per_token"]
+    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, "input_cost_per_token"))
+    completion_base_cost = cast(float, _get_cost_per_unit(model_info, "output_cost_per_token"))
 
     ## CHECK IF ABOVE THRESHOLD
     threshold: Optional[float] = None
@@ -111,17 +128,13 @@ def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, fl
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-                    prompt_base_cost = cast(
-                        float,
-                        model_info.get(key, prompt_base_cost),
-                    )
-                    completion_base_cost = cast(
-                        float,
-                        model_info.get(
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
-                            completion_base_cost,
-                        ),
-                    )
+
+                    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, key, prompt_base_cost))
+                    completion_base_cost = cast(float, _get_cost_per_unit(
+                        model_info,
+                        f"output_cost_per_token_above_{threshold_str}_tokens",
+                        completion_base_cost,
+                    ))
                     break
             except (IndexError, ValueError):
                 continue
@@ -145,7 +158,7 @@ def calculate_cost_component(
     Returns:
         float: The calculated cost
     """
-    cost_per_unit = model_info.get(cost_key)
+    cost_per_unit = _get_cost_per_unit(model_info, cost_key)
     if (
         cost_per_unit is not None
         and isinstance(cost_per_unit, float)
@@ -154,6 +167,24 @@ def calculate_cost_component(
     ):
         return float(usage_value) * cost_per_unit
     return 0.0
+
+
+def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Optional[float] = 0.0) -> Optional[float]:
+    # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
+    cost_per_unit = model_info.get(cost_key)
+    if isinstance(cost_per_unit, float):
+        return cost_per_unit
+    if isinstance(cost_per_unit, int):
+        return float(cost_per_unit)
+    if isinstance(cost_per_unit, str):
+        try:
+            return float(cost_per_unit)
+        except ValueError:
+            verbose_logger.exception(
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occured - {cost_per_unit}\nDefaulting to 0.0"
+            )
+    return default_value
+    
 
 
 def generic_cost_per_token(
@@ -265,8 +296,10 @@ def generic_cost_per_token(
     )
 
     ## CALCULATE OUTPUT COST
-    text_tokens = usage.completion_tokens
+    text_tokens = 0
     audio_tokens = 0
+    reasoning_tokens = 0
+    is_text_tokens_total = False
     if usage.completion_tokens_details is not None:
         audio_tokens = (
             cast(
@@ -280,22 +313,67 @@ def generic_cost_per_token(
                 Optional[int],
                 getattr(usage.completion_tokens_details, "text_tokens", None),
             )
-            or usage.completion_tokens  # default to completion tokens, if this field is not set
+            or 0  # default to completion tokens, if this field is not set
+        )
+        reasoning_tokens = (
+            cast(
+                Optional[int],
+                getattr(usage.completion_tokens_details, "reasoning_tokens", 0),
+            )
+            or 0
         )
 
+    if text_tokens == 0:
+        text_tokens = usage.completion_tokens
+    if text_tokens == usage.completion_tokens:
+        is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
-    _output_cost_per_audio_token: Optional[float] = model_info.get(
-        "output_cost_per_audio_token"
-    )
+    _output_cost_per_audio_token = _get_cost_per_unit(model_info, "output_cost_per_audio_token", None)
+    _output_cost_per_reasoning_token = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
 
     ## AUDIO COST
-    if (
-        _output_cost_per_audio_token is not None
-        and audio_tokens is not None
-        and audio_tokens > 0
-    ):
+    if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
+        _output_cost_per_audio_token = (
+            _output_cost_per_audio_token
+            if _output_cost_per_audio_token is not None
+            else completion_base_cost
+        )
         completion_cost += float(audio_tokens) * _output_cost_per_audio_token
 
+    ## REASONING COST
+    if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
+        _output_cost_per_reasoning_token = (
+            _output_cost_per_reasoning_token
+            if _output_cost_per_reasoning_token is not None
+            else completion_base_cost
+        )
+        completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
+
     return prompt_cost, completion_cost
+
+
+class CostCalculatorUtils:
+    @staticmethod
+    def _call_type_has_image_response(call_type: str) -> bool:
+        """
+        Returns True if the call type has an image response
+
+        eg calls that have image response:
+        - Image Generation
+        - Image Edit
+        - Passthrough Image Generation
+        """
+        if call_type in [
+            # image generation
+            CallTypes.image_generation.value,
+            CallTypes.aimage_generation.value,
+            # passthrough image generation
+            PassthroughCallTypes.passthrough_image_generation.value,
+            # image edit
+            CallTypes.image_edit.value,
+            CallTypes.aimage_edit.value,
+        ]:
+            return True
+        return False

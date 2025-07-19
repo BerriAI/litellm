@@ -217,7 +217,7 @@ def test_openai_optional_params_embeddings():
 def test_azure_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         encoding_format=None,
         custom_llm_provider="azure",
@@ -396,7 +396,7 @@ def test_azure_tool_choice(api_version):
     """
     litellm.drop_params = True
     optional_params = litellm.utils.get_optional_params(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,
@@ -459,6 +459,26 @@ def test_dynamic_drop_params_e2e():
         mock_response.assert_called_once()
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
+
+def test_dynamic_pass_additional_params():
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
+        try:
+            response = litellm.completion(
+                model="command-r",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                custom_param="test",
+                api_key="my-custom-key",
+            )
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            pass
+
+        mock_response.assert_called_once()
+        print(mock_response.call_args.kwargs["data"])
+        assert "custom_param" in mock_response.call_args.kwargs["data"]
+        assert "api_key" not in mock_response.call_args.kwargs["data"]
 
 
 @pytest.mark.parametrize(
@@ -559,6 +579,7 @@ def test_dynamic_drop_additional_params_e2e():
                 additional_drop_params=["response_format"],
             )
         except Exception as e:
+            print(f"Error occurred: {e}")
             pass
 
         mock_response.assert_called_once()
@@ -597,7 +618,7 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+    with patch("litellm.main.get_optional_params", new=MagicMock(return_value={"max_retries": 0})) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -1459,3 +1480,33 @@ def test_azure_response_format(monkeypatch):
         response_format={"type": "json_object"},
     )
     assert optional_params["response_format"] == {"type": "json_object"}
+
+def test_cohere_embed_dimensions_param():
+    optional_params = get_optional_params_embeddings(
+        model="embed-multilingual-v3.0",
+        custom_llm_provider="cohere",
+        encoding_format="float",
+    )
+    assert optional_params["embedding_types"] == ["float"]
+
+def test_optional_params_with_additional_drop_params():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        additional_drop_params=["red"],
+        drop_params=True,
+        red="blue"
+    )
+    print(f"optional_params: {optional_params}")
+    assert "red" not in optional_params
+    assert "red" not in optional_params["extra_body"]
+
+def test_azure_ai_cohere_embed_input_type_param():
+    optional_params = get_optional_params_embeddings(
+        model="embed-v-4-0",
+        custom_llm_provider="azure_ai",
+        input_type="text",
+        dimensions=1536
+    )
+    assert optional_params["dimensions"] == 1536
+    assert optional_params["extra_body"]["input_type"] == "text"

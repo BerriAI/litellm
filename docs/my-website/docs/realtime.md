@@ -19,6 +19,8 @@ model_list:
     litellm_params:
       model: openai/gpt-4o-realtime-preview-2024-10-01
       api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: realtime
 ```
 </TabItem>
 <TabItem value="openai+azure" label="OpenAI + Azure">

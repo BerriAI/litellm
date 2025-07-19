@@ -224,28 +224,51 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     {
       key: "aws_access_key_id",
       label: "AWS Access Key ID",
-      required: true,
+      type: "password",
+      required: false,
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
     },
     {
       key: "aws_secret_access_key",
       label: "AWS Secret Access Key",
-      required: true,
+      type: "password",
+      required: false,
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
     },
     {
       key: "aws_region_name",
       label: "AWS Region Name",
       placeholder: "us-east-1",
-      required: true,
+      required: false,
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
     }
   ],
-  [Providers.Ollama]: [], // No specific fields needed
+  [Providers.Ollama]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "http://localhost:11434",
+      defaultValue: "http://localhost:11434",
+      required: false,
+      tooltip: "The base URL for your Ollama server. Defaults to http://localhost:11434 if not specified."
+    }
+  ],
   [Providers.Anthropic]: [{
     key: "api_key",
     label: "API Key",
     placeholder: "sk-",
+    type: "password",
+    required: true
+  }],
+  [Providers.Deepgram]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
+  [Providers.ElevenLabs]: [{
+    key: "api_key",
+    label: "API Key",
     type: "password",
     required: true
   }],
@@ -327,7 +350,20 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
-  }]
+  }],
+  [Providers.Triton]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: false
+  },
+  {
+    key: "api_base",
+    label: "API Base",
+    placeholder: "http://localhost:8000/generate",
+    required: false
+  }
+]
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
@@ -335,11 +371,41 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   uploadProps
 }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
-  
+  const form = Form.useFormInstance(); // Get form instance from context
+
   // Simply use the fields as defined in PROVIDER_CREDENTIAL_FIELDS
   const allFields = React.useMemo(() => {
     return PROVIDER_CREDENTIAL_FIELDS[selectedProviderEnum] || [];
   }, [selectedProviderEnum]);
+
+  const handleUpload = {
+    name: "file",
+    accept: ".json",
+    beforeUpload: (file: any) => {
+      if (file.type === "application/json") {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          if (e.target) {
+            const jsonStr = e.target.result as string;
+            console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
+            form.setFieldsValue({ vertex_credentials: jsonStr });
+            console.log("Form values after setting:", form.getFieldsValue());
+          }
+        };
+        reader.readAsText(file);
+      }
+      // Prevent upload
+      return false;
+    },
+    onChange(info: any) {
+      console.log("Upload onChange triggered in ProviderSpecificFields");
+      console.log("Current form values:", form.getFieldsValue());
+      
+      if (info.file.status !== "uploading") {
+        console.log(info.file, info.fileList);
+      }
+    }
+  };
 
   return (
     <>
@@ -364,7 +430,21 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 ))}
               </Select>
             ) : field.type === "upload" ? (
-              <Upload {...uploadProps}>
+              <Upload 
+                {...handleUpload}
+                onChange={(info) => {
+                  // First call the original onChange
+                  if (uploadProps?.onChange) {
+                    uploadProps.onChange(info);
+                  }
+                  
+                  // Check the field value after a short delay
+                  setTimeout(() => {
+                    const value = form.getFieldValue(field.key);
+                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
+                  }, 500);
+                }}
+              >
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
             ) : (
@@ -378,11 +458,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
             <Row>
-              <Col span={10}></Col>
-              <Col span={10}>
+              <Col>
                 <Text className="mb-3 mt-1">
-                  Give litellm a gcp service account(.json file), so it
-                  can make the relevant calls
+                  Give a gcp service account(.json file)
                 </Text>
               </Col>
             </Row>

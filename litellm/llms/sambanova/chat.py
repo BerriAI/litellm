@@ -4,7 +4,7 @@ Sambanova Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from typing import Optional
+from typing import Optional, Union
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -17,26 +17,28 @@ class SambanovaConfig(OpenAIGPTConfig):
     """
 
     max_tokens: Optional[int] = None
-    response_format: Optional[dict] = None
-    seed: Optional[int] = None
-    stream: Optional[bool] = None
+    temperature: Optional[int] = None
     top_p: Optional[int] = None
+    top_k: Optional[int] = None
+    stop: Optional[Union[str, list]] = None
+    stream: Optional[bool] = None
+    stream_options: Optional[dict] = None
     tool_choice: Optional[str] = None
+    response_format: Optional[dict] = None
     tools: Optional[list] = None
-    user: Optional[str] = None
 
     def __init__(
         self,
         max_tokens: Optional[int] = None,
         response_format: Optional[dict] = None,
-        seed: Optional[int] = None,
         stop: Optional[str] = None,
         stream: Optional[bool] = None,
+        stream_options: Optional[dict] = None,
         temperature: Optional[float] = None,
-        top_p: Optional[int] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
         tool_choice: Optional[str] = None,
         tools: Optional[list] = None,
-        user: Optional[str] = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -52,16 +54,41 @@ class SambanovaConfig(OpenAIGPTConfig):
         Get the supported OpenAI params for the given model
 
         """
+        from litellm.utils import supports_function_calling
 
-        return [
+        params = [
+            "max_completion_tokens",
             "max_tokens",
             "response_format",
-            "seed",
             "stop",
             "stream",
+            "stream_options",
             "temperature",
             "top_p",
-            "tool_choice",
-            "tools",
-            "user",
+            "top_k",
         ]
+
+        if supports_function_calling(model, custom_llm_provider="sambanova"):
+            params.append("tools")
+            params.append("tool_choice")
+            params.append("parallel_tool_calls")
+
+        return params
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        """
+        map max_completion_tokens param to max_tokens
+        """
+        supported_openai_params = self.get_supported_openai_params(model=model)
+        for param, value in non_default_params.items():
+            if param == "max_completion_tokens":
+                optional_params["max_tokens"] = value
+            elif param in supported_openai_params:
+                optional_params[param] = value
+        return optional_params

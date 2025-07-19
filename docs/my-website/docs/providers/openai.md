@@ -156,13 +156,19 @@ print(response)
 ```python
 import os 
 os.environ["OPENAI_ORGANIZATION"] = "your-org-id"       # OPTIONAL
-os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
+os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 ```
 
 ### OpenAI Chat Completion Models
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
+| gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
+| gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
+| o4-mini | `response = completion(model="o4-mini", messages=messages)` |
+| o3-mini | `response = completion(model="o3-mini", messages=messages)` |
+| o3 | `response = completion(model="o3", messages=messages)` |
 | o1-mini | `response = completion(model="o1-mini", messages=messages)` |
 | o1-preview | `response = completion(model="o1-preview", messages=messages)` |
 | gpt-4o-mini  | `response = completion(model="gpt-4o-mini", messages=messages)` |
@@ -188,7 +194,7 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 | gpt-4-32k-0613        | `response = completion(model="gpt-4-32k-0613", messages=messages)` |
 
 
-These also support the `OPENAI_API_BASE` environment variable, which can be used to specify a custom API endpoint.
+These also support the `OPENAI_BASE_URL` environment variable, which can be used to specify a custom API endpoint.
 
 ## OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
@@ -323,6 +329,70 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | fine tuned `gpt-3.5-turbo-0125` | `response = completion(model="ft:gpt-3.5-turbo-0125", messages=messages)` |
 | fine tuned `gpt-3.5-turbo-1106` | `response = completion(model="ft:gpt-3.5-turbo-1106", messages=messages)` |
 | fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
+
+
+## OpenAI Chat Completion to Responses API Bridge
+
+Call any Responses API model from OpenAI's `/chat/completions` endpoint. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os 
+
+os.environ["OPENAI_API_KEY"] = "sk-1234"
+
+response = litellm.completion(
+    model="o3-deep-research-2025-06-26",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    tools=[
+        {"type": "web_search_preview"},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ],
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: openai-model
+    litellm_params:
+      model: o3-deep-research-2025-06-26
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ 
+    "model": "openai-model",
+    "messages": [
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "tools": [
+        {"type": "web_search_preview"},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ],
+}'
+```
+
+</TabItem>
+</Tabs>
 
 
 ## OpenAI Audio Transcription
@@ -614,8 +684,8 @@ os.environ["OPENAI_API_KEY"] = ""
 
 # set custom api base to your proxy
 # either set .env or litellm.api_base
-# os.environ["OPENAI_API_BASE"] = ""
-litellm.api_base = "your-openai-proxy-url"
+# os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"
+litellm.api_base = "https://your_host/v1"
 
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]

@@ -32,7 +32,7 @@ class TestBedrockInvokeNovaJson(BaseLLMChatTest):
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
-
+    
     @pytest.fixture(autouse=True)
     def skip_non_json_tests(self, request):
         if not "json" in request.function.__name__.lower():

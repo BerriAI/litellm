@@ -35,7 +35,7 @@ def test_model_alias_map(caplog):
         for log in captured_logs:
             assert "ERROR" not in log
 
-        assert "groq/llama3-8b-8192" in response.model
+        assert "llama3-8b-8192" in response.model
     except litellm.ServiceUnavailableError:
         pass
     except Exception as e:

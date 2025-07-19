@@ -18,7 +18,7 @@
 #     {
 #         "model_name": "azure-test",
 #         "litellm_params": {
-#             "model": "azure/chatgpt-v-2",
+#             "model": "azure/chatgpt-v-3",
 #             "api_key": os.getenv("AZURE_API_KEY"),
 #             "api_base": os.getenv("AZURE_API_BASE"),
 #             "api_version": os.getenv("AZURE_API_VERSION"),
@@ -33,7 +33,7 @@
 #     try:
 #         start_time = time.time()
 #         response = await client.chat.completions.create(
-#             model="chatgpt-v-2",
+#             model="chatgpt-v-3",
 #             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
 #             stream=True,
 #         )

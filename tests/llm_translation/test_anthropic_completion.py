@@ -422,7 +422,7 @@ def test_anthropic_tool_helper(cache_control_location):
     else:
         tool["cache_control"] = {"type": "ephemeral"}
 
-    tool = AnthropicConfig()._map_tool_helper(tool=tool)
+    tool, _ = AnthropicConfig()._map_tool_helper(tool=tool)
 
     assert tool["cache_control"] == {"type": "ephemeral"}
 
@@ -465,7 +465,7 @@ from litellm import completion
 
 class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
-        return {"model": "anthropic/claude-3-5-sonnet-20240620"}
+        return {"model": "anthropic/claude-3-5-sonnet-latest"}
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
@@ -481,14 +481,6 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
 
         result = convert_to_anthropic_tool_invoke([tool_call_no_arguments])
         print(result)
-
-    def test_multilingual_requests(self):
-        """
-        Anthropic API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
 
     def test_tool_call_and_json_response_format(self):
         """
@@ -895,31 +887,35 @@ def test_anthropic_citations_api():
     """
     from litellm import completion
 
-    resp = completion(
-        model="claude-3-5-sonnet-20241022",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {
-                            "type": "text",
-                            "media_type": "text/plain",
-                            "data": "The grass is green. The sky is blue.",
+    try:
+        resp = completion(
+            model="claude-3-5-sonnet-20241022",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "text",
+                                "media_type": "text/plain",
+                                "data": "The grass is green. The sky is blue.",
+                            },
+                            "title": "My Document",
+                            "context": "This is a trustworthy document.",
+                            "citations": {"enabled": True},
                         },
-                        "title": "My Document",
-                        "context": "This is a trustworthy document.",
-                        "citations": {"enabled": True},
-                    },
-                    {
-                        "type": "text",
-                        "text": "What color is the grass and sky?",
-                    },
-                ],
-            }
-        ],
-    )
+                        {
+                            "type": "text",
+                            "text": "What color is the grass and sky?",
+                        },
+                    ],
+                }
+            ],
+        )
+
+    except litellm.InternalServerError:
+        pytest.skip("Anthropic overloaded")
 
     citations = resp.choices[0].message.provider_specific_fields["citations"]
 
@@ -966,6 +962,80 @@ def test_anthropic_citations_api_streaming():
             has_citations = True
 
     assert has_citations
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_thinking_output(model):
+    from litellm import completion
+
+    litellm._turn_on_debug()
+
+    resp = completion(
+        model=model,
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+
+    print(resp)
+    assert resp.choices[0].message.reasoning_content is not None
+    assert isinstance(resp.choices[0].message.reasoning_content, str)
+    assert resp.choices[0].message.thinking_blocks is not None
+    assert isinstance(resp.choices[0].message.thinking_blocks, list)
+    assert len(resp.choices[0].message.thinking_blocks) > 0
+
+    assert resp.choices[0].message.thinking_blocks[0]["type"] == "thinking"
+    assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        # "bedrock/invoke/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_thinking_output_stream(model):
+    litellm.set_verbose = True
+    try:
+        # litellm._turn_on_debug()
+        resp = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            stream=True,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            timeout=10,
+        )
+
+        reasoning_content_exists = False
+        signature_block_exists = False
+        for chunk in resp:
+            print(f"chunk 2: {chunk}")
+            if (
+                hasattr(chunk.choices[0].delta, "thinking_blocks")
+                and chunk.choices[0].delta.thinking_blocks is not None
+                and chunk.choices[0].delta.reasoning_content is not None
+                and isinstance(chunk.choices[0].delta.thinking_blocks, list)
+                and len(chunk.choices[0].delta.thinking_blocks) > 0
+                and isinstance(chunk.choices[0].delta.reasoning_content, str)
+            ):
+                reasoning_content_exists = True
+                print(chunk.choices[0].delta.thinking_blocks[0])
+                if chunk.choices[0].delta.thinking_blocks[0].get("signature"):
+                    signature_block_exists = True
+                    assert (
+                        chunk.choices[0].delta.thinking_blocks[0]["type"] == "thinking"
+                    )
+        assert reasoning_content_exists
+        assert signature_block_exists
+    except litellm.Timeout:
+        pytest.skip("Model is timing out")
 
 
 def test_anthropic_custom_headers():
@@ -1044,4 +1114,327 @@ def test_anthropic_thinking_in_assistant_message(model):
     assert response is not None
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic/claude-3-7-sonnet-20250219",
+        # "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    ],
+)
+def test_anthropic_redacted_thinking_in_assistant_message(model):
+    litellm._turn_on_debug()
+    params = {
+        "model": model,
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "redacted_thinking",
+                        "data": "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",
+                    },
+                    {
+                        "type": "text",
+                        "text": "I'm not able to respond to special commands or trigger phrases like the one you've shared. Those types of strings don't activate any special modes or features in my system. Is there something specific I can help you with today? I'm happy to assist with questions, have a conversation, provide information, or help with various tasks within my normal capabilities.",
+                    },
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "Who do you know?"}]},
+        ],
+        "max_tokens": 32768,
+        "thinking": {"type": "enabled", "budget_tokens": 30720},
+    }
 
+    response = litellm.completion(**params)
+
+    assert response is not None
+
+
+def test_just_system_message():
+    litellm._turn_on_debug()
+    litellm.modify_params = True
+    params = {
+        "model": "anthropic/claude-3-7-sonnet-20250219",
+        "messages": [{"role": "system", "content": "You are a helpful assistant."}],
+    }
+
+    response = litellm.completion(**params)
+
+    assert response is not None
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
+)
+@pytest.mark.asyncio()
+async def test_anthropic_api_max_completion_tokens(model: str):
+    """
+    Tests that:
+    - max_completion_tokens is passed as max_tokens to anthropic models
+    """
+    litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    mock_response = {
+        "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+        "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+        "model": "claude-3-5-sonnet-20240620",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "type": "message",
+        "usage": {"input_tokens": 2095, "output_tokens": 503},
+    }
+
+    client = HTTPHandler()
+
+    print("\n\nmock_response: ", mock_response)
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs["json"]
+
+        print("request_body: ", request_body)
+
+        assert request_body == {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
+            ],
+            "max_tokens": 10,
+            "model": model.split("/")[-1],
+        }
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        # {
+        #     "tools": [{
+        #         "type": "web_search_20250305",
+        #         "name": "web_search",
+        #         "max_uses": 5
+        #     }]
+        # },
+        {"web_search_options": {}}
+    ],
+)
+def test_anthropic_websearch(optional_params: dict):
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        **optional_params,
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
+
+    print(f"response: {response}\n")
+    assert response.usage.server_tool_use.web_search_requests == 1
+
+
+def test_anthropic_text_editor():
+    litellm._turn_on_debug()
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [
+            {
+                "role": "user",
+                "content": "There'''s a syntax error in my primes.py file. Can you help me fix it?",
+            }
+        ],
+        "tools": [{"type": "text_editor_20250124", "name": "str_replace_editor"}],
+    }
+
+    try:
+        response = litellm.completion(**params)
+    except litellm.InternalServerError as e:
+        print(e)
+
+    assert response is not None
+
+
+@pytest.mark.parametrize("spec", ["anthropic", "openai"])
+def test_anthropic_mcp_server_tool_use(spec: str):
+    litellm._turn_on_debug()
+
+    if spec == "anthropic":
+        tools = [
+            {
+                "type": "url",
+                "url": "https://mcp.zapier.com/api/mcp/mcp",
+                "name": "zapier-mcp",
+                "authorization_token": os.getenv("ZAPIER_CI_CD_MCP_TOKEN"),
+            }
+        ]
+    elif spec == "openai":
+        tools = [
+            {
+                "type": "mcp",
+                "server_label": "zapier",
+                "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+                "headers": {
+                    "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+                },
+                "require_approval": "never",
+            },
+        ]
+
+    params = {
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+        "tools": tools,
+    }
+
+    try:
+        response = litellm.completion(**params)
+        assert response is not None
+    except litellm.InternalServerError as e:
+        pytest.skip(f"Skipping test due to internal server error: {e}")
+
+
+@pytest.mark.parametrize(
+    "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-20250514"]
+)
+def test_anthropic_mcp_server_responses_api(model: str):
+    from litellm import responses
+
+    litellm._turn_on_debug()
+    tools = [
+        {
+            "type": "mcp",
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+            "require_approval": "never",
+            "headers": {
+                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+            },
+        },
+    ]
+
+    response = litellm.responses(
+        model=model,
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        tools=tools,
+    )
+
+    assert response is not None
+
+
+def test_anthropic_prefix_prompt():
+    params = {
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "messages": [
+            {"role": "user", "content": "Who won the World Cup in 2022?"},
+            {"role": "assistant", "content": "Argentina", "prefix": True},
+        ],
+    }
+
+    response = litellm.completion(**params)
+    print(f"response: {response}")
+    assert response is not None
+    assert response.choices[0].message.content.startswith("Argentina")
+
+
+@pytest.mark.asyncio
+async def test_claude_tool_use_with_anthropic_acreate():
+    response = await litellm.anthropic.messages.acreate(
+        messages=[
+            {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
+        ],
+        model="anthropic/claude-3-5-sonnet-20240620",
+        stream=True,
+        max_tokens=100,
+        tools=[
+            {
+                "name": "get_weather",
+                "description": "Get current weather information for a specific location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            }
+        ],
+    )
+
+    async for chunk in response:
+        print(chunk)
+
+
+def test_anthropic_tool_cache_control():
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+    import json
+
+    tool_content = "Result: 4. " * 1000  # ~10k chars
+    messages = [
+        {"role": "user", "content": "Calculate 2+2"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_proxy_123",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_proxy_123",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "1234567890",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "calc",
+                "description": "Calculator",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    vertex_ai_model = "vertex_ai/claude-sonnet-4@20250514"
+    anthropic_api_model = "claude-sonnet-4-20250514"
+    result = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": anthropic_api_model,
+            "messages": messages + [{"role": "user", "content": "What's 1+1?"}],
+            "tools": tools,
+            "max_tokens": 50,
+        },
+    )
+
+    print(f"result: {result}")
+
+    print(result["raw_request_body"]["messages"][2])
+
+    assert "cache_control" in json.dumps(
+        result["raw_request_body"]["messages"][2]["content"]
+    )

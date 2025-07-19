@@ -80,6 +80,7 @@ async def call_spend_logs_endpoint():
 
     [{'date': '2024-08-30', 'spend': 0.00016600000000000002, 'api_key': 'best-api-key-ever'}]
     """
+    print("json_response", json_response)
 
     todays_date = datetime.datetime.now().strftime("%Y-%m-%d")
     for spend_log in json_response:

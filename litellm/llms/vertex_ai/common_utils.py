@@ -1,5 +1,5 @@
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 import re
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
 import httpx
 
@@ -84,9 +84,15 @@ def _get_vertex_url(
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}?alt=sse"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
         else:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         # if model is only numeric chars then it's a fine tuned gemini model
         # model = 4965075652664360960
@@ -165,9 +171,18 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
     return has_text_param
 
 
-def _build_vertex_schema(parameters: dict):
+def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
+
+    Updates the input parameters, removing extraneous fields, adjusting types, unwinding $defs, and adding propertyOrdering if specified, returning the updated parameters.
+
+    Parameters:
+        parameters: dict - the json schema to build from
+        add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
+          set_schema_property_ordering for more details.
+    Returns:
+        parameters: dict - the input parameters, modified in place
     """
     # Get valid fields from Schema TypedDict
     valid_schema_fields = set(get_type_hints(Schema).keys())
@@ -183,11 +198,96 @@ def _build_vertex_schema(parameters: dict):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    # Handle empty items objects
+    process_items(parameters)
     add_object_type(parameters)
     # Postprocessing
     # Filter out fields that don't exist in Schema
-    filtered_parameters = filter_schema_fields(parameters, valid_schema_fields)
-    return filtered_parameters
+
+    parameters = filter_schema_fields(parameters, valid_schema_fields)
+
+    if add_property_ordering:
+        set_schema_property_ordering(parameters)
+
+    return parameters
+
+
+def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    When anyof is present, only keep the anyof field and its contents - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
+    Filter out other fields in the same dict.
+
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test"} -> {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+    Case 2: If additional metadata is present, try to keep it
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
+    """
+    title = schema_dict.get("title", None)
+    description = schema_dict.get("description", None)
+
+    if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
+        any_of = schema_dict["anyOf"]
+        if (
+            (title or description)
+            and isinstance(any_of, list)
+            and all(isinstance(item, dict) for item in any_of)
+        ):
+            for item in any_of:
+                if title:
+                    item["title"] = title
+                if description:
+                    item["description"] = description
+            return {"anyOf": any_of}
+        else:
+            return schema_dict
+    return schema_dict
+
+
+def process_items(schema, depth=0):
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    if isinstance(schema, dict):
+        if "items" in schema and schema["items"] == {}:
+            schema["items"] = {"type": "object"}
+        for key, value in schema.items():
+            if isinstance(value, dict):
+                process_items(value, depth + 1)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        process_items(item, depth + 1)
+
+
+def set_schema_property_ordering(
+    schema: Dict[str, Any], depth: int = 0
+) -> Dict[str, Any]:
+    """
+    vertex ai and generativeai apis order output of fields alphabetically, unless you specify the order.
+    python dicts retain order, so we just use that. Note that this field only applies to structured outputs, and not tools.
+    Function tools are not afflicted by the same alphabetical ordering issue, (the order of keys returned seems to be arbitrary, up to the model)
+    https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.cachedContents#Schema.FIELDS.property_ordering
+
+    Args:
+        schema: The schema dictionary to process
+        depth: Current recursion depth to prevent infinite loops
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+
+    if "properties" in schema and isinstance(schema["properties"], dict):
+        # retain propertyOrdering as an escape hatch if user already specifies it
+        if "propertyOrdering" not in schema:
+            schema["propertyOrdering"] = [k for k, v in schema["properties"].items()]
+        for k, v in schema["properties"].items():
+            set_schema_property_ordering(v, depth + 1)
+    if "items" in schema:
+        set_schema_property_ordering(schema["items"], depth + 1)
+    return schema
 
 
 def filter_schema_fields(
@@ -209,6 +309,7 @@ def filter_schema_fields(
         return schema_dict
 
     result = {}
+    schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:
             continue
@@ -218,6 +319,11 @@ def filter_schema_fields(
                 k: filter_schema_fields(v, valid_fields, processed)
                 for k, v in value.items()
             }
+        elif key == "format":
+            if value in {"enum", "date-time"}:
+                result[key] = value
+            else:
+                continue
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
@@ -244,6 +350,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
+            elif "type" not in atype and len(atype) == 0:
+                # Handle empty object case
+                atype["type"] = "object"
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -255,6 +364,13 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
+                # Remove items field if type is array and items is empty
+                if (
+                    atype.get("type") == "array"
+                    and "items" in atype
+                    and not atype["items"]
+                ):
+                    atype.pop("items")
                 atype["nullable"] = True
 
     properties = schema.get("properties", None)
@@ -360,6 +476,7 @@ def construct_target_url(
     Constructed Url:
     POST https://LOCATION-aiplatform.googleapis.com/{version}/projects/PROJECT_ID/locations/LOCATION/cachedContents
     """
+
     new_base_url = httpx.URL(base_url)
     if "locations" in requested_route:  # contains the target project id + location
         if vertex_project and vertex_location:
@@ -385,3 +502,23 @@ def construct_target_url(
 
     updated_url = new_base_url.copy_with(path=updated_requested_route)
     return updated_url
+
+
+def is_global_only_vertex_model(model: str) -> bool:
+    """
+    Check if a model is only available in the global region.
+
+    Args:
+        model: The model name to check
+
+    Returns:
+        True if the model is only available in global region, False otherwise
+    """
+    from litellm.utils import get_supported_regions
+
+    supported_regions = get_supported_regions(
+        model=model, custom_llm_provider="vertex_ai"
+    )
+    if supported_regions is None:
+        return False
+    return "global" in supported_regions

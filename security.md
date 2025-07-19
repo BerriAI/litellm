@@ -24,9 +24,6 @@
 
 For security inquiries, please contact us at support@berri.ai
 
-
-For security inquiries, please contact us at support@berri.ai
-
 #### Supported data regions for LiteLLM Cloud
 
 LiteLLM supports the following data regions:

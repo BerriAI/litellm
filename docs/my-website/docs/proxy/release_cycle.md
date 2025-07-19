@@ -18,3 +18,8 @@ Follow our release notes [here](https://github.com/BerriAI/litellm/releases).
 
 Stable releases come out every week (typically Sunday)
 
+### What is considered a 'minor' bump vs. 'patch' bump?
+
+- 'patch' bumps: extremely minor addition that doesn't affect any existing functionality or add any user-facing features. (e.g. a 'created_at' column in a database table)
+- 'minor' bumps: add a new feature or a new database table that is backward compatible.
+- 'major' bumps: break backward compatibility.

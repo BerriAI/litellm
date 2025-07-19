@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 
 import httpx
 
@@ -13,6 +13,28 @@ if TYPE_CHECKING:
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+def safe_divide_seconds(
+    seconds: float, 
+    denominator: float,
+    default: Optional[float] = None
+) -> Optional[float]:
+    """
+    Safely divide seconds by denominator, handling zero division.
+    
+    Args:
+        seconds: Time duration in seconds
+        denominator: The divisor (e.g., number of tokens)
+        default: Value to return if division by zero (defaults to None)
+        
+    Returns:
+        The result of the division as a float (seconds per unit), or default if denominator is zero
+    """
+    if denominator <= 0:
+        return default
+        
+    return float(seconds / denominator)
 
 
 def map_finish_reason(
@@ -70,6 +92,31 @@ def remove_index_from_tool_calls(
     return
 
 
+def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) -> None:
+    """Remove items from a list in-place by index"""
+    if items is None:
+        return
+    for index in sorted(set(indices), reverse=True):
+        if 0 <= index < len(items):
+            items.pop(index)
+
+
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: dict, metadata: dict
+) -> dict:
+    """
+    Helper to get litellm metadata for spend tracking
+
+    PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
+    and user_api_key values are in 'metadata'.
+    """
+    potential_spend_tracking_metadata_substring = "user_api_key"
+    for key, value in metadata.items():
+        if potential_spend_tracking_metadata_substring in key:
+            litellm_metadata[key] = value
+    return litellm_metadata
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
@@ -80,6 +127,10 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
     if litellm_params:
         metadata = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
+        if litellm_metadata and metadata:
+            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(
+                litellm_metadata, metadata
+            )
         if litellm_metadata:
             return litellm_metadata
         elif metadata:

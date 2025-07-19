@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Phoenix OSS
+# Arize Phoenix OSS
 
 Open source tracing and evaluation platform
 
@@ -21,6 +21,9 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 
 You can also use the instrumentor option instead of the callback, which you can find [here](https://docs.arize.com/phoenix/tracing/integrations-tracing/litellm).
 
+```bash
+pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp litellm[proxy]
+```
 ```python
 litellm.callbacks = ["arize_phoenix"]
 ```
@@ -29,14 +32,14 @@ import litellm
 import os
 
 os.environ["PHOENIX_API_KEY"] = "" # Necessary only using Phoenix Cloud
-os.environ["PHOENIX_COLLECTOR_HTTP_ENDPOINT"] = "" # The URL of your Phoenix OSS instance
+os.environ["PHOENIX_COLLECTOR_HTTP_ENDPOINT"] = "" # The URL of your Phoenix OSS instance e.g. http://localhost:6006/v1/traces
 # This defaults to https://app.phoenix.arize.com/v1/traces for Phoenix Cloud
 
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
 
 # set arize as a callback, litellm will send the data to arize
-litellm.callbacks = ["phoenix"]
+litellm.callbacks = ["arize_phoenix"]
  
 # openai call
 response = litellm.completion(

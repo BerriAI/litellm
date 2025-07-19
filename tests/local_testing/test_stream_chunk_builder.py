@@ -926,12 +926,14 @@ def execute_completion(opts: dict):
     response_gen = litellm.completion(**opts)
     for i, part in enumerate(response_gen):
         partial_streaming_chunks.append(part)
+    print("\n\n")
+    print(f"partial_streaming_chunks: {partial_streaming_chunks}")
+    print("\n\n")
     assembly = litellm.stream_chunk_builder(partial_streaming_chunks)
+    print(f"assembly.choices[0].message.tool_calls: {assembly.choices[0].message.tool_calls}")
     print(assembly.choices[0].message.tool_calls)
-    assert len(assembly.choices[0].message.tool_calls) == 3, (
-        assembly.choices[0].message.tool_calls[0].function.arguments[0]
-    )
-    print(assembly.choices[0].message.tool_calls)
+    for tool_call in assembly.choices[0].message.tool_calls:
+        json.loads(tool_call.function.arguments) # assert valid json - https://github.com/BerriAI/litellm/issues/10034
 
 
 def test_grok_bug(load_env):

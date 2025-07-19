@@ -142,7 +142,7 @@ def create_virtual_key():
         json={},
     )
     print(response.json())
-    return response.json()["token"]
+    return response.json()["key"]
 
 
 def add_assembly_ai_model_to_db(

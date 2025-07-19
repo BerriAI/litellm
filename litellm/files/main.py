@@ -15,6 +15,7 @@ import httpx
 
 import litellm
 from litellm import get_secret_str
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -164,6 +165,7 @@ def create_file(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -343,6 +345,7 @@ def file_retrieve(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -496,6 +499,7 @@ def file_delete(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -649,6 +653,7 @@ def file_list(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -739,11 +744,13 @@ async def afile_content(
     try:
         loop = asyncio.get_event_loop()
         kwargs["afile_content"] = True
+        model = kwargs.pop("model", None)
 
         # Use a partial function to pass your keyword arguments
         func = partial(
             file_content,
             file_id,
+            model,
             custom_llm_provider,
             extra_headers,
             extra_body,
@@ -766,7 +773,10 @@ async def afile_content(
 
 def file_content(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    model: Optional[str] = None,
+    custom_llm_provider: Optional[
+        Union[Literal["openai", "azure", "vertex_ai"], str]
+    ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -784,10 +794,18 @@ def file_content(
         client = kwargs.get("client")
         # set timeout for 10 minutes by default
 
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model, custom_llm_provider
+                )
+        except Exception:
+            pass
+
         if (
             timeout is not None
             and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(custom_llm_provider) is False
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
         ):
             read_timeout = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
@@ -809,6 +827,7 @@ def file_content(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )

@@ -5,6 +5,7 @@ import { getProviderLogoAndName } from "../provider_info_helpers";
 import { ModelData } from "./types";
 import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "../delete_model_button";
+import { useState } from "react";
 
 export const columns = (
   userRole: string,
@@ -16,6 +17,8 @@ export const columns = (
   handleEditClick: (model: any) => void,
   handleRefreshClick: () => void,
   setEditModel: (edit: boolean) => void,
+  expandedRows: Set<string>,
+  setExpandedRows: (expandedRows: Set<string>) => void,
 ): ColumnDef<ModelData>[] => [
   {
     header: "Model ID",
@@ -23,18 +26,14 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       return (
-        <div className="overflow-hidden">
-          <Tooltip title={model.model_info.id}>
-            <Button 
-              size="xs"
-              variant="light"
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-              onClick={() => setSelectedModelId(model.model_info.id)}
-            >
-              {model.model_info.id.slice(0, 7)}...
-            </Button>
-          </Tooltip>
-        </div>
+        <Tooltip title={model.model_info.id}>
+          <div 
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
+            onClick={() => setSelectedModelId(model.model_info.id)}
+          >
+            {model.model_info.id}
+          </div>
+        </Tooltip>
       );
     },
   },
@@ -45,9 +44,9 @@ export const columns = (
       const displayName = getDisplayModelName(row.original) || "-";
       return (
         <Tooltip title={displayName}>
-          <p className="text-xs">
-            {displayName.length > 20 ? displayName.slice(0, 20) + "..." : displayName}
-          </p>
+          <div className="text-xs truncate whitespace-nowrap">
+            {displayName}
+          </div>
         </Tooltip>
       );
     },
@@ -88,11 +87,9 @@ export const columns = (
       const model = row.original;
       return (
         <Tooltip title={model.litellm_model_name}>
-          <pre className="text-xs">
-            {model.litellm_model_name
-              ? model.litellm_model_name.slice(0, 20) + (model.litellm_model_name.length > 20 ? "..." : "")
-              : "-"}
-          </pre>
+          <div className="text-xs truncate whitespace-nowrap">
+            {model.litellm_model_name || "-"}
+          </div>
         </Tooltip>
       );
     },
@@ -187,6 +184,70 @@ export const columns = (
         </div>
       ) : (
         "-"
+      );
+    },
+  },
+  {
+    header: "Model Access Group",
+    accessorKey: "model_info.model_access_group",
+    enableSorting: false,
+    cell: ({ row }) => {
+      const model = row.original;
+      const accessGroups = model.model_info.access_groups;
+      
+      if (!accessGroups || accessGroups.length === 0) {
+        return "-";
+      }
+      
+      const modelId = model.model_info.id;
+      const isExpanded = expandedRows.has(modelId);
+      const shouldShowExpandButton = accessGroups.length > 1;
+      
+      const toggleExpanded = () => {
+        const newExpanded = new Set(expandedRows);
+        if (isExpanded) {
+          newExpanded.delete(modelId);
+        } else {
+          newExpanded.add(modelId);
+        }
+        setExpandedRows(newExpanded);
+      };
+      
+      return (
+        <div className="flex items-center gap-1 overflow-hidden">
+          <Badge
+            size="xs"
+            color="blue"
+            className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
+          >
+            {accessGroups[0]}
+          </Badge>
+          
+          {(isExpanded || (!shouldShowExpandButton && accessGroups.length === 2)) && 
+            accessGroups.slice(1).map((group: string, index: number) => (
+              <Badge
+                key={index + 1}
+                size="xs"
+                color="blue"
+                className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
+              >
+                {group}
+              </Badge>
+            ))
+          }
+          
+          {shouldShowExpandButton && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleExpanded();
+              }}
+              className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded hover:bg-blue-50 h-5 leading-tight flex-shrink-0 whitespace-nowrap"
+            >
+              {isExpanded ? '−' : `+${accessGroups.length - 1}`}
+            </button>
+          )}
+        </div>
       );
     },
   },

@@ -36,6 +36,14 @@ class ImageBlock(TypedDict):
     source: SourceBlock
 
 
+BedrockVideoTypes = Literal["mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"]
+
+
+class VideoBlock(TypedDict):
+    format: Union[BedrockVideoTypes, str]
+    source: SourceBlock
+
+
 BedrockDocumentTypes = Literal[
     "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
 ]
@@ -85,6 +93,7 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
+    video: VideoBlock
     document: DocumentBlock
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
@@ -125,8 +134,14 @@ class ConverseResponseBlock(TypedDict):
     usage: ConverseTokenUsageBlock
 
 
+class ToolJsonSchemaBlock(TypedDict, total=False):
+    type: Literal["object"]
+    properties: dict
+    required: List[str]
+
+
 class ToolInputSchemaBlock(TypedDict):
-    json: Optional[dict]
+    json: Optional[ToolJsonSchemaBlock]
 
 
 class ToolSpecBlock(TypedDict, total=False):
@@ -135,8 +150,9 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
-class ToolBlock(TypedDict):
+class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    cachePoint: Optional[CachePointBlock]
 
 
 class SpecificToolChoiceBlock(TypedDict):
@@ -179,6 +195,7 @@ class ToolUseBlockStartEvent(TypedDict):
 
 class ContentBlockStartEvent(TypedDict, total=False):
     toolUse: Optional[ToolUseBlockStartEvent]
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
 class ContentBlockDeltaEvent(TypedDict, total=False):

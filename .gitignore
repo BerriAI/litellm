@@ -86,3 +86,11 @@ litellm/proxy/db/migrations/0_init/migration.sql
 litellm/proxy/db/migrations/*
 litellm/proxy/migrations/*config.yaml
 litellm/proxy/migrations/*
+config.yaml
+tests/litellm/litellm_core_utils/llm_cost_calc/log.txt
+tests/test_custom_dir/*
+test.py
+
+litellm_config.yaml
+.cursor
+.vscode/launch.json

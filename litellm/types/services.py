@@ -33,7 +33,8 @@ class ServiceTypes(str, enum.Enum):
     # daily spend update queue - actual transaction events
     IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE = "in_memory_daily_spend_update_queue"
     REDIS_DAILY_SPEND_UPDATE_QUEUE = "redis_daily_spend_update_queue"
-
+    REDIS_DAILY_TEAM_SPEND_UPDATE_QUEUE = "redis_daily_team_spend_update_queue"
+    REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE = "redis_daily_tag_spend_update_queue"
     # spend update queue - current spend of key, user, team
     IN_MEMORY_SPEND_UPDATE_QUEUE = "in_memory_spend_update_queue"
     REDIS_SPEND_UPDATE_QUEUE = "redis_spend_update_queue"

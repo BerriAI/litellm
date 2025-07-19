@@ -5,6 +5,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
@@ -170,6 +171,8 @@ class CustomPricingLiteLLMParams(BaseModel):
     output_cost_per_token: Optional[float] = None
     input_cost_per_second: Optional[float] = None
     output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -200,9 +203,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
+    use_litellm_proxy: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
+    mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
 
     def __init__(
         self,
@@ -242,9 +247,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         budget_duration: Optional[str] = None,
         # Pass through params
         use_in_pass_through: Optional[bool] = False,
+        # Dynamic param to force using litellm proxy
+        use_litellm_proxy: Optional[bool] = False,
         # This will merge the reasoning content in the choices
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
+        mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None,
         **params,
     ):
         args = locals()
@@ -312,6 +320,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         max_file_size_mb: Optional[float] = None,
         # will use deployment on pass-through endpoints if True
         use_in_pass_through: Optional[bool] = False,
+        use_litellm_proxy: Optional[bool] = False,
         **params,
     ):
         args = locals()
@@ -545,6 +554,7 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
     mode: Optional[
         Union[
             str,
@@ -564,6 +574,7 @@ class ModelGroupInfo(BaseModel):
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
+    supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
@@ -709,7 +720,11 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]
+OptionalPreCallChecks = List[
+    Literal[
+        "prompt_caching", "router_budget_limiting", "responses_api_deployment_check"
+    ]
+]
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):
@@ -719,3 +734,28 @@ class LiteLLM_RouterFileObject(TypedDict, total=False):
 
     litellm_params_sensitive_credential_hash: str
     file_object: OpenAIFileObject
+
+
+@dataclass
+class MockRouterTestingParams:
+    mock_testing_fallbacks: Optional[bool] = None
+    mock_testing_context_fallbacks: Optional[bool] = None
+    mock_testing_content_policy_fallbacks: Optional[bool] = None
+
+    @classmethod
+    def from_kwargs(cls, kwargs: dict) -> "MockRouterTestingParams":
+        from litellm.secret_managers.main import str_to_bool
+
+        def extract_bool_param(name: str) -> Optional[bool]:
+            value = kwargs.pop(name, None)
+            return str_to_bool(value) if isinstance(value, str) else value
+
+        return cls(
+            mock_testing_fallbacks=extract_bool_param("mock_testing_fallbacks"),
+            mock_testing_context_fallbacks=extract_bool_param(
+                "mock_testing_context_fallbacks"
+            ),
+            mock_testing_content_policy_fallbacks=extract_bool_param(
+                "mock_testing_content_policy_fallbacks"
+            ),
+        )

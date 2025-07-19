@@ -4,19 +4,23 @@ import secrets
 from datetime import datetime
 from datetime import datetime as dt
 from datetime import timezone
-from typing import Any, List, Optional, cast
+from typing import Any, List, Literal, Optional, cast
 
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingVectorStoreRequest,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
@@ -43,6 +47,10 @@ def _get_spend_logs_metadata(
     applied_guardrails: Optional[List[str]] = None,
     batch_models: Optional[List[str]] = None,
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall] = None,
+    vector_store_request_metadata: Optional[
+        List[StandardLoggingVectorStoreRequest]
+    ] = None,
+    guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
 ) -> SpendLogsMetadata:
@@ -63,8 +71,10 @@ def _get_spend_logs_metadata(
             proxy_server_request=None,
             batch_models=None,
             mcp_tool_call_metadata=None,
+            vector_store_request_metadata=None,
             model_map_information=None,
             usage_object=None,
+            guardrail_information=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -82,6 +92,10 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
+    clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     return clean_metadata
@@ -137,9 +151,6 @@ def get_logging_payload(  # noqa: PLR0915
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = get_litellm_metadata_from_kwargs(kwargs)
-    metadata = _add_proxy_server_request_to_metadata(
-        metadata=metadata, litellm_params=litellm_params
-    )
     completion_start_time = kwargs.get("completion_start_time", end_time)
     call_type = kwargs.get("call_type")
     cache_hit = kwargs.get("cache_hit", False)
@@ -203,6 +214,11 @@ def get_logging_payload(  # noqa: PLR0915
         else "[]"
     )
     if (
+        standard_logging_payload is not None
+        and standard_logging_payload.get("request_tags") is not None
+    ):  # use 'tags' from standard logging payload instead
+        request_tags = json.dumps(standard_logging_payload["request_tags"])
+    if (
         _is_master_key(api_key=api_key, _master_key=master_key)
         and general_settings.get("disable_adding_master_key_hash_to_db") is True
     ):
@@ -229,6 +245,13 @@ def get_logging_payload(  # noqa: PLR0915
             if standard_logging_payload is not None
             else None
         ),
+        vector_store_request_metadata=(
+            standard_logging_payload["metadata"].get(
+                "vector_store_request_metadata", None
+            )
+            if standard_logging_payload is not None
+            else None
+        ),
         usage_object=(
             standard_logging_payload["metadata"].get("usage_object", None)
             if standard_logging_payload is not None
@@ -236,6 +259,11 @@ def get_logging_payload(  # noqa: PLR0915
         ),
         model_map_information=(
             standard_logging_payload["model_map_information"]
+            if standard_logging_payload is not None
+            else None
+        ),
+        guardrail_information=(
+            standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
             else None
         ),
@@ -259,6 +287,13 @@ def get_logging_payload(  # noqa: PLR0915
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
+    mcp_namespaced_tool_name = None
+    mcp_tool_call_metadata = clean_metadata.get("mcp_tool_call_metadata", {})
+    if mcp_tool_call_metadata is not None:
+        mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
+            "namespaced_tool_name", None
+        )
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -271,7 +306,7 @@ def get_logging_payload(  # noqa: PLR0915
             model=kwargs.get("model", "") or "",
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
-            metadata=json.dumps(clean_metadata),
+            metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
@@ -284,12 +319,23 @@ def get_logging_payload(  # noqa: PLR0915
             api_base=litellm_params.get("api_base", ""),
             model_group=_model_group,
             model_id=_model_id,
+            mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
             response=_get_response_for_spend_logs_payload(standard_logging_payload),
+            proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
+                metadata=metadata, litellm_params=litellm_params
+            ),
+            session_id=_get_session_id_for_spend_log(
+                kwargs=kwargs,
+                standard_logging_payload=standard_logging_payload,
+            ),
+            status=_get_status_for_spend_log(
+                metadata=metadata,
+            ),
         )
 
         verbose_proxy_logger.debug(
@@ -303,6 +349,32 @@ def get_logging_payload(  # noqa: PLR0915
             "Error creating spendlogs object - {}".format(str(e))
         )
         raise e
+
+
+def _get_session_id_for_spend_log(
+    kwargs: dict,
+    standard_logging_payload: Optional[StandardLoggingPayload],
+) -> str:
+    """
+    Get the session id for the spend log.
+
+    This ensures each spend log is associated with a unique session id.
+
+    """
+    import uuid
+
+    if (
+        standard_logging_payload is not None
+        and standard_logging_payload.get("trace_id") is not None
+    ):
+        return str(standard_logging_payload.get("trace_id"))
+
+    # Users can dynamically set the trace_id for each request by passing `litellm_trace_id` in kwargs
+    if kwargs.get("litellm_trace_id") is not None:
+        return str(kwargs.get("litellm_trace_id"))
+
+    # Ensure we always have a session id, if none is provided
+    return str(uuid.uuid4())
 
 
 def _ensure_datetime_utc(timestamp: datetime) -> datetime:
@@ -427,10 +499,10 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
-def _add_proxy_server_request_to_metadata(
+def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
-) -> dict:
+) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
     """
@@ -442,8 +514,32 @@ def _add_proxy_server_request_to_metadata(
             _request_body = _proxy_server_request.get("body", {}) or {}
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
-            metadata["proxy_server_request"] = _request_body_json_str
-    return metadata
+            return _request_body_json_str
+    return "{}"
+
+
+def _get_vector_store_request_for_spend_logs_payload(
+    vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]],
+) -> Optional[List[StandardLoggingVectorStoreRequest]]:
+    """
+    If user does not want to store prompts and responses, then remove the content from the vector store request metadata
+    """
+    if _should_store_prompts_and_responses_in_spend_logs():
+        return vector_store_request_metadata
+
+    # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
+    if vector_store_request_metadata is None:
+        return None
+    for vector_store_request in vector_store_request_metadata:
+        vector_store_search_response = (
+            vector_store_request.get("vector_store_search_response", {}) or {}
+        )
+        response_data = vector_store_search_response.get("data", []) or []
+        for response_item in response_data:
+            for content_item in response_item.get("content", []) or []:
+                if "text" in content_item:
+                    content_item["text"] = REDACTED_BY_LITELM_STRING
+    return vector_store_request_metadata
 
 
 def _get_response_for_spend_logs_payload(
@@ -458,5 +554,23 @@ def _get_response_for_spend_logs_payload(
 
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
+    from litellm.secret_managers.main import get_secret_bool
 
-    return general_settings.get("store_prompts_in_spend_logs") is True
+    return (
+        general_settings.get("store_prompts_in_spend_logs") is True
+        or get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+    )
+
+
+def _get_status_for_spend_log(
+    metadata: dict,
+) -> Literal["success", "failure"]:
+    """
+    Get the status for the spend log.
+
+    It's only a failure if metadata.get("status") is "failure"
+    """
+    _status: Optional[str] = metadata.get("status", None)
+    if _status == "failure":
+        return "failure"
+    return "success"

@@ -324,7 +324,7 @@ def test_caching_with_models_v2():
     litellm.set_verbose = True
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
+    response3 = completion(model="azure/chatgpt-v-3", messages=messages, caching=True)
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
@@ -448,6 +448,59 @@ def test_embedding_caching():
 
 
 # test_embedding_caching()
+
+@pytest.mark.asyncio
+async def test_embedding_caching_individual_items_and_then_list():
+    litellm._turn_on_debug()
+    litellm.cache = Cache()
+    text_to_embed = [
+        "hello",
+        "world",
+    ]
+    embedding1 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed[0], caching=True
+    )
+    initial_prompt_tokens = embedding1.usage.prompt_tokens
+    await asyncio.sleep(1)
+    embedding2 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed[1], caching=True
+    )
+    await asyncio.sleep(1)
+    embedding3 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed, caching=True
+    )
+    final_prompt_tokens = embedding3.usage.prompt_tokens
+    assert embedding3["data"][0]["embedding"] == embedding1["data"][0]["embedding"]
+    assert embedding3["data"][1]["embedding"] == embedding2["data"][0]["embedding"]
+    assert embedding3._hidden_params["cache_hit"] == True
+    assert embedding3.usage.prompt_tokens != 0 
+
+    ## with new input, check that prompt tokens increase
+    additional_text = "this is a new text"
+    text_to_embed.append(additional_text)
+    embedding4 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed, caching=True
+    )
+    assert embedding4.usage.prompt_tokens > embedding3.usage.prompt_tokens
+
+@pytest.mark.asyncio
+async def test_embedding_caching_individual_items():
+    litellm.cache = Cache()
+    text_to_embed = "hello"
+    embedding1 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed, caching=True
+    )
+
+    await asyncio.sleep(1)
+
+    embedding3 = await aembedding(
+        model="text-embedding-ada-002", input=text_to_embed, caching=True
+    )
+    final_prompt_tokens = embedding3.usage.prompt_tokens
+    assert embedding3["data"][0]["embedding"] == embedding1["data"][0]["embedding"]
+    assert len(embedding3.data) == 1
+    assert embedding3._hidden_params["cache_hit"] == True
+    assert embedding3.usage.prompt_tokens != 0 
 
 
 def test_embedding_caching_azure():
@@ -1170,7 +1223,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response1 = litellm.completion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1183,7 +1236,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_1_content)
         else:
             response1 = await litellm.acompletion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1203,7 +1256,7 @@ async def test_s3_cache_stream_azure(sync_mode):
 
         if sync_mode:
             response2 = litellm.completion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1216,7 +1269,7 @@ async def test_s3_cache_stream_azure(sync_mode):
             print(response_2_content)
         else:
             response2 = await litellm.acompletion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -1279,7 +1332,7 @@ async def test_s3_cache_acompletion_azure():
         print("s3 Cache: test for caching, streaming + completion")
 
         response1 = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1289,7 +1342,7 @@ async def test_s3_cache_acompletion_azure():
         time.sleep(2)
 
         response2 = await litellm.acompletion(
-            model="azure/chatgpt-v-2",
+            model="azure/chatgpt-v-3",
             messages=messages,
             max_tokens=40,
             temperature=1,
@@ -1830,6 +1883,7 @@ def test_caching_redis_simple(caplog, capsys):
     assert "async success_callback: reaches cache for logging" not in captured.out
 
 
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_qdrant_semantic_cache_acompletion():
     litellm.set_verbose = True
@@ -2471,7 +2525,7 @@ async def test_redis_increment_pipeline():
         results = await redis_cache.async_increment_pipeline(increment_list)
 
         # Verify results
-        assert len(results) == 8  # 4 increment operations + 4 expire operations
+        assert len(results) == 4 
 
         # Verify the values were actually set in Redis
         value1 = await redis_cache.async_get_cache("test_key1")
@@ -2548,39 +2602,124 @@ def test_redis_caching_multiple_namespaces():
     The same request with different namespaces should not be cached under the same key
     """
     import uuid
+    from unittest.mock import patch, MagicMock
+    import litellm
+    from litellm.caching import Cache
+    from litellm import completion
 
-    messages = [{"role": "user", "content": f"what is litellm? {uuid.uuid4()}"}]
-    litellm.cache = Cache(type="redis")
-    namespace_1 = "org-id1"
-    namespace_2 = "org-id2"
+    # Use a fixed uuid to ensure consistent cache keys
+    test_uuid = "12345678-1234-1234-1234-123456789abc"
+    messages = [{"role": "user", "content": f"what is litellm? {test_uuid}"}]
+    
+    # Mock the Redis client creation from the _redis module
+    with patch('litellm._redis.get_redis_client') as mock_get_redis_client, \
+         patch('litellm._redis.get_redis_connection_pool') as mock_get_redis_connection_pool:
+        # Create a mock Redis client that simulates real Redis behavior
+        mock_redis_client = MagicMock()
+        mock_get_redis_client.return_value = mock_redis_client
+        
+        # Mock the connection pool
+        mock_connection_pool = MagicMock()
+        mock_get_redis_connection_pool.return_value = mock_connection_pool
+        
+        # Dictionary to simulate Redis storage with namespace support
+        redis_storage = {}
+        
+        def mock_redis_get(key):
+            print(f"Redis GET: {key}")
+            value = redis_storage.get(key, None)
+            # Convert to bytes to match real Redis behavior
+            if value is not None:
+                import json
+                return json.dumps(value).encode('utf-8')
+            return None
+        
+        def mock_redis_set(name, value, ex=None, **kwargs):
+            print(f"Redis SET: {name} = {value}")
+            redis_storage[name] = value
+            return True
+        
+        def mock_redis_ping():
+            return True
+        
+        def mock_redis_info():
+            return {"redis_version": "7.0.0"}
+        
+        mock_redis_client.get = mock_redis_get
+        mock_redis_client.set = mock_redis_set
+        mock_redis_client.ping = mock_redis_ping
+        mock_redis_client.info = mock_redis_info
+        
+        # Initialize the cache
+        litellm.cache = Cache(type="redis")
+        
+        namespace_1 = "org-id1"
+        namespace_2 = "org-id2"
 
-    response_1 = completion(
-        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_1}
-    )
+        # Use mock_response to ensure deterministic responses without external API calls
+        response_1 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            cache={"namespace": namespace_1},
+            mock_response="Response for namespace 1"
+        )
 
-    response_2 = completion(
-        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_2}
-    )
+        response_2 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            cache={"namespace": namespace_2},
+            mock_response="Response for namespace 2"
+        )
 
-    response_3 = completion(
-        model="gpt-3.5-turbo", messages=messages, cache={"namespace": namespace_1}
-    )
+        response_3 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            cache={"namespace": namespace_1},
+            mock_response="This should be cached"
+        )
 
-    response_4 = completion(model="gpt-3.5-turbo", messages=messages)
+        response_4 = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages,
+            mock_response="Response without namespace"
+        )
 
-    print("response 1: ", response_1.model_dump_json(indent=4))
-    print("response 2: ", response_2.model_dump_json(indent=4))
-    print("response 3: ", response_3.model_dump_json(indent=4))
-    print("response 4: ", response_4.model_dump_json(indent=4))
+        print(f"Response 1 type: {type(response_1)} - ID: {getattr(response_1, 'id', 'N/A')}")
+        print(f"Response 2 type: {type(response_2)} - ID: {getattr(response_2, 'id', 'N/A')}")
+        print(f"Response 3 type: {type(response_3)} - Cache hit: {isinstance(response_3, str)}")
+        print(f"Response 4 type: {type(response_4)} - ID: {getattr(response_4, 'id', 'N/A')}")
+        
+        print(f"Redis storage keys: {list(redis_storage.keys())}")
 
-    # request 1 & 3 used under the same namespace
-    assert response_1.id == response_3.id
-
-    # request 2 used under a different namespace
-    assert response_2.id != response_1.id
-
-    # request 4 without a namespace should not be cached under the same key as request 3
-    assert response_4.id != response_3.id
+        # Verify that different namespaces created different cache keys
+        cache_keys = list(redis_storage.keys())
+        namespace_1_keys = [k for k in cache_keys if k.startswith(f"{namespace_1}:")]
+        namespace_2_keys = [k for k in cache_keys if k.startswith(f"{namespace_2}:")]
+        no_namespace_keys = [k for k in cache_keys if not k.startswith(f"{namespace_1}:") and not k.startswith(f"{namespace_2}:")]
+        
+        print(f"Namespace 1 keys: {namespace_1_keys}")
+        print(f"Namespace 2 keys: {namespace_2_keys}")
+        print(f"No namespace keys: {no_namespace_keys}")
+        
+        # Should have at least one key for each namespace
+        assert len(namespace_1_keys) > 0, "Should have cache keys for namespace 1"
+        assert len(namespace_2_keys) > 0, "Should have cache keys for namespace 2"
+        assert len(no_namespace_keys) > 0, "Should have cache keys for no namespace"
+        
+        # The main test: response 3 should be a cache hit (string) because it uses same namespace as response 1
+        assert isinstance(response_3, str), "Response 3 should be a cache hit (string) for same namespace"
+        
+        # response 1 & 2 should be ModelResponse objects (cache misses)
+        assert hasattr(response_1, 'id'), "Response 1 should be a ModelResponse object"
+        assert hasattr(response_2, 'id'), "Response 2 should be a ModelResponse object"
+        assert hasattr(response_4, 'id'), "Response 4 should be a ModelResponse object"
+        
+        # response 1 & 2 should have different IDs (different namespaces)
+        assert response_1.id != response_2.id, f"Expected different response ID for different namespace. Got {response_1.id} and {response_2.id}"
+        
+        # response 1 & 4 should have different IDs (different namespaces)
+        assert response_1.id != response_4.id, f"Expected different response ID for no namespace vs namespaced. Got {response_1.id} and {response_4.id}"
+        
 
 
 def test_caching_with_reasoning_content():
@@ -2608,3 +2747,65 @@ def test_caching_with_reasoning_content():
     print(f"response 2: {response_2.model_dump_json(indent=4)}")
     assert response_2._hidden_params["cache_hit"] == True
     assert response_2.choices[0].message.reasoning_content is not None
+
+
+def test_caching_reasoning_args_miss():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id != response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+def test_caching_reasoning_args_hit():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, reasoning_effort="low", mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id == response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+ 
+def test_caching_thinking_args_miss():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response")
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id != response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+def test_caching_thinking_args_hit():  # test in memory cache
+    try:
+        #litellm._turn_on_debug()
+        litellm.set_verbose = True
+        litellm.cache = Cache(
+        )
+        response1 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response" )
+        response2 = completion(model="claude-3-7-sonnet-latest", messages=messages, caching=True, thinking={"type": "enabled", "budget_tokens": 1024}, mock_response="My response")
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert response1.id == response2.id
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+

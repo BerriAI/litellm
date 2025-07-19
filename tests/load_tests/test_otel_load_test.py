@@ -86,7 +86,7 @@ def create_async_task(**completion_kwargs):
     By default a standard set of arguments are used for the litellm.acompletion function.
     """
     completion_args = {
-        "model": "openai/chatgpt-v-2",
+        "model": "openai/chatgpt-v-3",
         "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test" * 100}],
         "max_tokens": 5,

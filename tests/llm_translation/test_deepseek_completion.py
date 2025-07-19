@@ -14,14 +14,6 @@ class TestDeepSeekChatCompletion(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        DeepSeek API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
-        pass
-
 
 @pytest.mark.parametrize("stream", [True, False])
 def test_deepseek_mock_completion(stream):

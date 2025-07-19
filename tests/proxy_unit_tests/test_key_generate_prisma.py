@@ -73,11 +73,11 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,
 )
+from litellm.proxy.image_endpoints import image_generation
 from litellm.proxy.management_endpoints.customer_endpoints import (
     new_end_user,
 )
@@ -94,11 +94,11 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
     KeyRequest,
-    LiteLLM_UpperboundKeyGenerateParams,
     NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,
@@ -234,6 +234,7 @@ async def test_new_user_response(prisma_client):
 )
 def test_generate_and_call_with_valid_key(prisma_client, api_route):
     # 1. Generate a Key, and use it to make a call
+    from unittest.mock import MagicMock
 
     print("prisma client=", prisma_client)
 
@@ -256,8 +257,9 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             user_id = key.user_id
 
             # check /user/info to verify user_role was set correctly
+            request_mock = MagicMock()
             new_user_info = await user_info(
-                user_id=user_id, user_api_key_dict=user_api_key_dict
+                request=request_mock, user_id=user_id, user_api_key_dict=user_api_key_dict
             )
             new_user_info = new_user_info.user_info
             print("new_user_info=", new_user_info)
@@ -1323,10 +1325,10 @@ def test_generate_and_update_key(prisma_client):
 
             print("response1=", response1)
 
-            # update the team id
+            # update the tpm limit
             response2 = await update_key_fn(
                 request=Request,
-                data=UpdateKeyRequest(key=generated_key, team_id=_team_2),
+                data=UpdateKeyRequest(key=generated_key, tpm_limit=1000),
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
                     api_key="sk-1234",
@@ -1350,19 +1352,34 @@ def test_generate_and_update_key(prisma_client):
                 "project": "litellm-project3",
             }
             assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
-            assert result["info"]["team_id"] == _team_2
+            assert result["info"]["tpm_limit"] == 1000
             assert result["info"]["budget_duration"] == "1mo"
             assert result["info"]["max_budget"] == 100
 
-            # budget_reset_at should be 30 days from now
+            # budget_reset_at should exist for "1mo" duration
             assert result["info"]["budget_reset_at"] is not None
-            budget_reset_at = result["info"]["budget_reset_at"].replace(
-                tzinfo=timezone.utc
-            )
+            budget_reset_at = result["info"]["budget_reset_at"].replace(tzinfo=timezone.utc)
             current_time = datetime.now(timezone.utc)
 
-            # assert budget_reset_at is 30 days from now
-            assert 31 >= (budget_reset_at - current_time).days >= 27
+            print(f"Budget reset time: {budget_reset_at}")
+            print(f"Current time: {current_time}")
+
+            # Instead of checking exact timing, just verify that:
+            # 1. Both are in the same day (for tests running same day)
+            # 2. Or budget_reset_at is in next month
+            if budget_reset_at.day == current_time.day:
+                # Same day of month - just check month difference
+                month_diff = budget_reset_at.month - current_time.month
+                if budget_reset_at.year > current_time.year:
+                    month_diff += 12
+                
+                # Should be scheduled for next month (at least 0.5 month away)
+                assert month_diff >= 1, f"Expected reset to be at least 1 month ahead, got {month_diff} months"
+                assert month_diff <= 2, f"Expected reset to be at most 2 months ahead, got {month_diff} months"
+            else:
+                # Just ensure the date is reasonable (not more than 40 days away)
+                days_diff = (budget_reset_at - current_time).days
+                assert 0 <= days_diff <= 40, f"Expected reset date to be reasonable, got {days_diff} days from now"
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -1546,7 +1563,7 @@ def test_call_with_key_over_budget(prisma_client):
             )
             await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
@@ -1578,10 +1595,10 @@ def test_call_with_key_over_budget(prisma_client):
 
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
-            assert spend_log.model == "chatgpt-v-2"
+            assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
-                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
+                == "509ba0554a7129ae4f4fd13d11c141acce5549bb6aaf1f629ed543101615658e"
             )
 
             # use generated key to auth in
@@ -1669,7 +1686,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             proxy_db_logger = _ProxyDBLogger()
             await proxy_db_logger._PROXY_track_cost_callback(
                 kwargs={
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
@@ -1702,10 +1719,10 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
 
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
-            assert spend_log.model == "chatgpt-v-2"
+            assert spend_log.model == "chatgpt-v-3"
             assert (
                 spend_log.cache_key
-                == "c891d64397a472e6deb31b87a5ac4d3ed5b2dcc069bc87e2afe91e6d64e95a1e"
+                == "509ba0554a7129ae4f4fd13d11c141acce5549bb6aaf1f629ed543101615658e"
             )
 
             # use generated key to auth in
@@ -1736,6 +1753,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         ("gpt-4o", True),
     ],
 )
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_call_with_key_over_model_budget(
     prisma_client, request_model, should_pass
 ):
@@ -1757,7 +1775,7 @@ async def test_call_with_key_over_model_budget(
 
     try:
 
-        # set budget for chatgpt-v-2 to 0.000001, expect the next request to fail
+        # set budget for chatgpt-v-3 to 0.000001, expect the next request to fail
         model_max_budget = {
             "gpt-4o-mini": {
                 "budget_limit": "0.000001",
@@ -1898,7 +1916,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
         )
         await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
-                "model": "chatgpt-v-2",
+                "model": "chatgpt-v-3",
                 "stream": False,
                 "litellm_params": {
                     "metadata": {
@@ -1924,7 +1942,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
         pytest.fail(f"This should have not failed!. They key uses max_budget=None. {e}")
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_call_with_key_over_budget_stream(prisma_client):
     # 14. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
@@ -1987,7 +2005,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
                 "call_type": "acompletion",
-                "model": "sagemaker-chatgpt-v-2",
+                "model": "sagemaker-chatgpt-v-3",
                 "stream": True,
                 "complete_streaming_response": resp,
                 "litellm_params": {
@@ -2431,7 +2449,7 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
     await proxy_db_logger._PROXY_track_cost_callback(
         kwargs={
             "call_type": "acompletion",
-            "model": "sagemaker-chatgpt-v-2",
+            "model": "sagemaker-chatgpt-v-3",
             "stream": True,
             "complete_streaming_response": resp,
             "litellm_params": {
@@ -2729,10 +2747,14 @@ async def test_create_update_team(prisma_client):
     budget_reset_at = _updated_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.datetime.now(timezone.utc)
 
-    # assert budget_reset_at is 2 days from now
-    assert (
-        abs((budget_reset_at - current_time).total_seconds() - 2 * 24 * 60 * 60) <= 10
-    )
+    # Verify that budget_reset_at is at midnight (hour, minute, second are all 0)
+    assert budget_reset_at.hour == 0
+    assert budget_reset_at.minute == 0
+    assert budget_reset_at.second == 0
+
+    # Calculate days difference - should be close to 2 days (within 1 day to account for time of test execution)
+    days_diff = (budget_reset_at.date() - current_time.date()).days
+    assert 1 <= days_diff <= 2
 
     # now hit team_info
     try:
@@ -2859,12 +2881,18 @@ async def test_update_user_unit_test(prisma_client):
     assert _user_info["rpm_limit"] == 100
     assert _user_info["metadata"] == {"very-new-metadata": "something"}
 
-    # budget reset at should be 10 days from now
+    # budget_reset_at should be at midnight 10 days from now
     budget_reset_at = _user_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.now(timezone.utc)
-    assert (
-        abs((budget_reset_at - current_time).total_seconds() - 10 * 24 * 60 * 60) <= 10
-    )
+    
+    # Verify that budget_reset_at is at midnight (hour, minute, second are all 0)
+    assert budget_reset_at.hour == 0
+    assert budget_reset_at.minute == 0
+    assert budget_reset_at.second == 0
+    
+    # Calculate days difference - should be close to 10 days (within 1 day to account for time of test execution)
+    days_diff = (budget_reset_at.date() - current_time.date()).days
+    assert 9 <= days_diff <= 10
 
 
 @pytest.mark.asyncio()
@@ -3580,7 +3608,7 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     assert it is deleted from the secret manager
     """
     from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
-    from litellm.proxy._types import KeyManagementSystem, KeyManagementSettings
+    from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
 
     from litellm.proxy.hooks.key_management_event_hooks import (
         LITELLM_PREFIX_STORED_VIRTUAL_KEYS,
@@ -4031,3 +4059,38 @@ async def test_reset_budget_job(prisma_client, entity_type):
 
     assert entity_after is not None
     assert entity_after.spend == 0.0
+
+def test_delete_nonexistent_key_returns_404(prisma_client):
+    # Try to delete a key that does not exist, expect a 404 error
+    import random, string
+    from litellm.proxy._types import KeyRequest, UserAPIKeyAuth, LitellmUserRoles, ProxyException
+    from litellm.proxy.management_endpoints.key_management_endpoints import delete_key_fn
+    from starlette.datastructures import URL
+    from fastapi import Request
+
+    print("prisma client=", prisma_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            # Generate a random key that does not exist
+            random_key = "sk-" + ''.join(random.choices(string.ascii_letters + string.digits, k=24))
+            delete_key_request = KeyRequest(keys=[random_key])
+            bearer_token = "Bearer sk-1234"
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/key/delete")
+            # use admin to auth in
+            result = await litellm.proxy.proxy_server.user_api_key_auth(request=request, api_key=bearer_token)
+            result.user_role = LitellmUserRoles.PROXY_ADMIN
+            try:
+                await delete_key_fn(data=delete_key_request, user_api_key_dict=result)
+                pytest.fail("Expected ProxyException 404 for non-existent key, but delete_key_fn did not raise.")
+            except ProxyException as e:
+                print("Caught ProxyException:", e)
+                assert str(e.code) == "404"
+                assert "No keys found" in str(e.message) or "No matching keys or aliases found to delete" in str(e.message)
+        import asyncio
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")

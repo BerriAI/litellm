@@ -194,7 +194,7 @@ Expected Response
 
 ## Explicitly specify image type 
 
-If you have images without a mime-type, or if litellm is incorrectly inferring the mime type of your image (e.g. calling `gs://` url's with vertex ai), you can set this explicity via the `format` param. 
+If you have images without a mime-type, or if litellm is incorrectly inferring the mime type of your image (e.g. calling `gs://` url's with vertex ai), you can set this explicitly via the `format` param. 
 
 ```python
 "image_url": {

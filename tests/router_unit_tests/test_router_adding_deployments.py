@@ -92,7 +92,7 @@ def test_initialize_deployment_for_pass_through_missing_params():
     # Test that initialization raises ValueError
     with pytest.raises(
         ValueError,
-        match="vertex_project, vertex_location, and vertex_credentials must be set",
+        match="vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints",
     ):
         router._initialize_deployment_for_pass_through(
             deployment=deployment,

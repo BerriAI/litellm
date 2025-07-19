@@ -34,7 +34,9 @@ class AWSEventStreamDecoder:
     def _chunk_parser_messages_api(
         self, chunk_data: dict
     ) -> StreamingChatCompletionChunk:
-        openai_chunk = StreamingChatCompletionChunk(**chunk_data)
+        openai_chunk = StreamingChatCompletionChunk(
+            **{"model": self.model, **chunk_data}
+        )
 
         return openai_chunk
 

@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Using Audio Models
 
-How to send / receieve audio to a `/chat/completions` endpoint
+How to send / receive audio to a `/chat/completions` endpoint
 
 
 ## Audio Output from a model

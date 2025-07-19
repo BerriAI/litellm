@@ -150,6 +150,7 @@ async def test_basic_rerank_together_ai(sync_mode):
 
 @pytest.mark.asyncio()
 @pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.skip(reason="Skipping test due to Cohere RBAC issues")
 async def test_basic_rerank_azure_ai(sync_mode):
     import os
 

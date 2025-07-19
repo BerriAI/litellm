@@ -4,12 +4,6 @@ import TabItem from '@theme/TabItem';
 
 # Prompt Management
 
-:::info
-
-This feature is currently in beta, and might change unexpectedly. We expect this to be more stable by next month (February 2025).
- 
-:::
-
 Run experiments or change the specific model (e.g. from gpt-4o to gpt4o-mini finetune) from your prompt management tool (e.g. Langfuse) instead of making changes in the application. 
 
 | Supported Integrations | Link |
@@ -216,6 +210,7 @@ These are the params you can pass to the `litellm.completion` function in SDK an
 ```
 prompt_id: str # required
 prompt_variables: Optional[dict] # optional
+prompt_version: Optional[int] # optional
 langfuse_public_key: Optional[str] # optional
 langfuse_secret: Optional[str] # optional
 langfuse_secret_key: Optional[str] # optional

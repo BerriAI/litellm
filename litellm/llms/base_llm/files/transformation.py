@@ -1,13 +1,15 @@
-from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
+    OpenAIFilesPurpose,
 )
 from litellm.types.utils import LlmProviders, ModelResponse
 
@@ -15,10 +17,16 @@ from ..chat.transformation import BaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router as _Router
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
+    Span = Any
+    Router = _Router
 else:
     LiteLLMLoggingObj = Any
+    Span = Any
+    Router = Any
 
 
 class BaseFilesConfig(BaseConfig):
@@ -99,3 +107,53 @@ class BaseFilesConfig(BaseConfig):
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
         )
+
+
+class BaseFileEndpoints(ABC):
+    @abstractmethod
+    async def acreate_file(
+        self,
+        create_file_request: CreateFileRequest,
+        llm_router: Router,
+        target_model_names_list: List[str],
+        litellm_parent_otel_span: Span,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> OpenAIFileObject:
+        pass
+
+    @abstractmethod
+    async def afile_retrieve(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+    ) -> OpenAIFileObject:
+        pass
+
+    @abstractmethod
+    async def afile_list(
+        self,
+        purpose: Optional[OpenAIFilesPurpose],
+        litellm_parent_otel_span: Optional[Span],
+        **data: Dict,
+    ) -> List[OpenAIFileObject]:
+        pass
+
+    @abstractmethod
+    async def afile_delete(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        **data: Dict,
+    ) -> OpenAIFileObject:
+        pass
+
+    @abstractmethod
+    async def afile_content(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        **data: Dict,
+    ) -> "HttpxBinaryResponseContent":
+        pass

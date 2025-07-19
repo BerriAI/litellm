@@ -16,6 +16,10 @@ Supported Providers:
 - Vertex AI (Anthropic) (`vertexai/`)
 - OpenRouter (`openrouter/`)
 - XAI (`xai/`)
+- Google AI Studio (`google/`)
+- Vertex AI (`vertex_ai/`)
+- Perplexity (`perplexity/`)
+- Mistral AI (Magistral models) (`mistral/`)
 
 LiteLLM will standardize the `reasoning_content` in the response and `thinking_blocks` in the assistant message.
 
@@ -23,7 +27,7 @@ LiteLLM will standardize the `reasoning_content` in the response and `thinking_b
 "message": {
     ...
     "reasoning_content": "The capital of France is Paris.",
-    "thinking_blocks": [
+    "thinking_blocks": [ # only returned for Anthropic models
         {
             "type": "thinking",
             "thinking": "The capital of France is Paris.",
