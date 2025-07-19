@@ -129,18 +129,23 @@ This enables developers to easily integrate vector search capabilities into thei
 
 #### Features
 - **[🆕 Moonshot API (Kimi)](../../docs/providers/moonshot)**
-    - New LLM API integration for accessing Kimi models - [PR #12592](https://github.com/BerriAI/litellm/pull/12592)
+    - New LLM API integration for accessing Kimi models - [PR #12592](https://github.com/BerriAI/litellm/pull/12592), [Get Started](../../docs/providers/moonshot)
 - **[🆕 v0 Provider](../../docs/providers/v0)**
-    - New provider integration for v0.dev - [PR #12751](https://github.com/BerriAI/litellm/pull/12751)
+    - New provider integration for v0.dev - [PR #12751](https://github.com/BerriAI/litellm/pull/12751), [Get Started](../../docs/providers/v0)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Tool cache control support - [PR #12668](https://github.com/BerriAI/litellm/pull/12668)
     - Fix streaming + response_format + tools bug - [PR #12463](https://github.com/BerriAI/litellm/pull/12463)
 - **[Bedrock](../../docs/providers/bedrock)**
-    - Claude 4 /invoke route support + application inference profile tool choice support - [PR #12599](https://github.com/BerriAI/litellm/pull/12599)
+    - Claude 4 /invoke route support - [PR #12599](https://github.com/BerriAI/litellm/pull/12599), [Get Started](../../docs/providers/bedrock)
+    - Application inference profile tool choice support - [PR #12599](https://github.com/BerriAI/litellm/pull/12599)
 - **[Gemini](../../docs/providers/gemini)**
     - Custom TTL support for context caching - [PR #12541](https://github.com/BerriAI/litellm/pull/12541)
     - Fix implicit caching cost calculation for Gemini 2.x models - [PR #12585](https://github.com/BerriAI/litellm/pull/12585)
-    - /streamGenerateContent - non-gemini model support - [PR #12647](https://github.com/BerriAI/litellm/pull/12647)
+- **[VertexAI](../../docs/providers/vertex)**
+    - Added Vertex AI RAG Engine support (use with OpenAI compatible `/vector_stores` API) - [PR #12752](https://github.com/BerriAI/litellm/pull/12595), **DOC NEEDED**
+- **[AI21](../../docs/providers/ai21)**
+    - Added ai21/jamba-1.7 model family pricing - [PR #12593](https://github.com/BerriAI/litellm/pull/12593), [Get Started](../../docs/providers/ai21)
+
 
 #### Bugs
 - **[XAI](../../docs/providers/xai)**
@@ -163,6 +168,8 @@ This enables developers to easily integrate vector search capabilities into thei
 - **[/v1/vector_stores](../../docs/proxy/vector_stores)**
     - New OpenAI-compatible vector store endpoints - [PR #12699](https://github.com/BerriAI/litellm/pull/12699)
     - Vector store search endpoint - [PR #12749](https://github.com/BerriAI/litellm/pull/12749)
+- **[/streamGenerateContent](../../docs/image_generation#streamgeneratecontent)**
+    - Non-gemini model support - [PR #12647](https://github.com/BerriAI/litellm/pull/12647)
 
 ---
 
@@ -187,6 +194,8 @@ This enables developers to easily integrate vector search capabilities into thei
 ## Management Endpoints / UI
 
 #### Features
+- **Models**
+    - Wildcard model filter support - [PR #12597](https://github.com/BerriAI/litellm/pull/12597)
 - **Vector Stores**
     - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
     - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
@@ -252,10 +261,11 @@ This enables developers to easily integrate vector search capabilities into thei
 ## General Proxy Improvements
 
 #### Features
+- **Control Plane + Data Plane Architecture**
+    - Control Plane + Data Plane support - [PR #12601](https://github.com/BerriAI/litellm/pull/12601)
+
 - **Swagger Documentation**
     - Add swagger docs for LiteLLM /chat/completions, /embeddings, /responses - [PR #12618](https://github.com/BerriAI/litellm/pull/12618)
-- **CLI**
-    - Wildcard model filter support - [PR #12597](https://github.com/BerriAI/litellm/pull/12597)
 - **Dependencies**
     - Loosen rich version from ==13.7.1 to >=13.7.1 - [PR #12704](https://github.com/BerriAI/litellm/pull/12704)
 - **Helm**
