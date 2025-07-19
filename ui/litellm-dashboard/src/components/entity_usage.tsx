@@ -312,7 +312,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const getProcessedEntityBreakdownForChart = () => {
     const data = getEntityBreakdown();
     const topEntities = data.slice(0, 5);
-    console.log("topEntities", topEntities);
     return topEntities.map((e) => ({
       ...e,
       metadata: {
