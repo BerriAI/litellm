@@ -36,6 +36,9 @@ interface UserDataTableProps {
   handleEdit: (user: UserInfo) => void;
   handleDelete: (userId: string) => void;
   handleResetPassword: (userId: string) => void;
+  selectedUsers?: UserInfo[];
+  onSelectionChange?: (selectedUsers: UserInfo[]) => void;
+  enableSelection?: boolean;
 }
 
 export function UserDataTable({
@@ -50,6 +53,9 @@ export function UserDataTable({
   handleEdit,
   handleDelete,
   handleResetPassword,
+  selectedUsers = [],
+  onSelectionChange,
+  enableSelection = false,
 }: UserDataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
     { 
@@ -70,6 +76,34 @@ export function UserDataTable({
     setOpenInEditMode(false);
   };
 
+  // Selection handlers
+  const handleSelectUser = (user: UserInfo, isSelected: boolean) => {
+    if (!onSelectionChange) return;
+    
+    if (isSelected) {
+      onSelectionChange([...selectedUsers, user]);
+    } else {
+      onSelectionChange(selectedUsers.filter(u => u.user_id !== user.user_id));
+    }
+  };
+
+  const handleSelectAll = (isSelected: boolean) => {
+    if (!onSelectionChange) return;
+    
+    if (isSelected) {
+      onSelectionChange(data);
+    } else {
+      onSelectionChange([]);
+    }
+  };
+
+  const isUserSelected = (user: UserInfo) => {
+    return selectedUsers.some(u => u.user_id === user.user_id);
+  };
+
+  const isAllSelected = data.length > 0 && selectedUsers.length === data.length;
+  const isIndeterminate = selectedUsers.length > 0 && selectedUsers.length < data.length;
+
   // Create columns with the handleUserClick function
   const columns = React.useMemo(() => {
     if (possibleUIRoles) {
@@ -78,11 +112,19 @@ export function UserDataTable({
         handleEdit,
         handleDelete,
         handleResetPassword,
-        handleUserClick
+        handleUserClick,
+        enableSelection ? {
+          selectedUsers,
+          onSelectUser: handleSelectUser,
+          onSelectAll: handleSelectAll,
+          isUserSelected,
+          isAllSelected,
+          isIndeterminate,
+        } : undefined
       );
     }
     return originalColumns;
-  }, [possibleUIRoles, handleEdit, handleDelete, handleResetPassword, handleUserClick, originalColumns]);
+  }, [possibleUIRoles, handleEdit, handleDelete, handleResetPassword, handleUserClick, originalColumns, enableSelection, selectedUsers, isAllSelected, isIndeterminate]);
 
   const table = useReactTable({
     data,
