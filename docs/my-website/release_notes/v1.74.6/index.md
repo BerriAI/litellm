@@ -258,6 +258,11 @@ This enables developers to easily integrate vector search capabilities into thei
 
 ---
 
+## Helm Chart
+
+- DB Migration Hook: refactor to support use_prisma_migrate - for helm hook [PR](https://github.com/BerriAI/litellm/pull/12600)
+- Add envVars and extraEnvVars support to Helm migrations job - [PR #12591](https://github.com/BerriAI/litellm/pull/12591)
+
 ## General Proxy Improvements
 
 #### Features
@@ -268,8 +273,7 @@ This enables developers to easily integrate vector search capabilities into thei
     - Add swagger docs for LiteLLM /chat/completions, /embeddings, /responses - [PR #12618](https://github.com/BerriAI/litellm/pull/12618)
 - **Dependencies**
     - Loosen rich version from ==13.7.1 to >=13.7.1 - [PR #12704](https://github.com/BerriAI/litellm/pull/12704)
-- **Helm**
-    - Add envVars and extraEnvVars support to Helm migrations job - [PR #12591](https://github.com/BerriAI/litellm/pull/12591)
+
 
 #### Bugs
 - **Verbose Logging**
