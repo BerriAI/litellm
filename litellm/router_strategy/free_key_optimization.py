@@ -15,7 +15,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
-from litellm.utils import get_utc_datetime, print_verbose
+from litellm.utils import get_utc_datetime
 
 from .base_routing_strategy import BaseRoutingStrategy
 
@@ -713,15 +713,15 @@ class FreeKeyOptimizationHandler(BaseRoutingStrategy, CustomLogger):
         )
 
         # Organize usage data by deployment
-        usage_data = {}
+        usage_data: Dict[str, Dict[str, int]] = {}
         if usage_values:
             key_value_map = dict(zip(all_cache_keys, usage_values))
 
             for deployment_id, cache_keys in deployment_key_mapping.items():
                 usage_data[deployment_id] = {}
                 for metric_window, cache_key in cache_keys.items():
-                    usage_data[deployment_id][metric_window] = key_value_map.get(
-                        cache_key, 0
+                    usage_data[deployment_id][metric_window] = (
+                        key_value_map.get(cache_key, 0) or 0
                     )
 
         # Calculate input tokens
@@ -816,15 +816,15 @@ class FreeKeyOptimizationHandler(BaseRoutingStrategy, CustomLogger):
         )
 
         # Organize usage data by deployment
-        usage_data = {}
+        usage_data: Dict[str, Dict[str, int]] = {}
         if usage_values:
             key_value_map = dict(zip(all_cache_keys, usage_values))
 
             for deployment_id, cache_keys in deployment_key_mapping.items():
                 usage_data[deployment_id] = {}
                 for metric_window, cache_key in cache_keys.items():
-                    usage_data[deployment_id][metric_window] = key_value_map.get(
-                        cache_key, 0
+                    usage_data[deployment_id][metric_window] = (
+                        key_value_map.get(cache_key, 0) or 0
                     )
 
         # Calculate input tokens
