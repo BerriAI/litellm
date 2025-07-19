@@ -143,6 +143,9 @@ export default function KeyInfoView({
             ...(formValues.logging_settings
               ? { logging: formValues.logging_settings }
               : {}),
+            ...(formValues.disabled_callbacks?.length > 0
+              ? { litellm_disabled_callbacks: formValues.disabled_callbacks }
+              : {}),
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
@@ -157,6 +160,9 @@ export default function KeyInfoView({
             : {}),
           ...(formValues.logging_settings
             ? { logging: formValues.logging_settings }
+            : {}),
+          ...(formValues.disabled_callbacks?.length > 0
+            ? { litellm_disabled_callbacks: formValues.disabled_callbacks }
             : {}),
         };
       }
@@ -420,6 +426,7 @@ export default function KeyInfoView({
 
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
+                disabledCallbacks={Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks) ? currentKeyData.metadata.litellm_disabled_callbacks : []}
                 variant="card"
               />
             </Grid>
@@ -583,6 +590,7 @@ export default function KeyInfoView({
                     loggingConfigs={extractLoggingSettings(
                       currentKeyData.metadata,
                     )}
+                    disabledCallbacks={Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks) ? currentKeyData.metadata.litellm_disabled_callbacks : []}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />

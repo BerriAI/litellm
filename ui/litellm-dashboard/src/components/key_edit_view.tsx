@@ -57,6 +57,7 @@ export function KeyEditView({
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
 
   const fetchMcpAccessGroups = async () => {
     if (!accessToken) return;
@@ -121,7 +122,8 @@ export function KeyEditView({
       servers: keyData.object_permission?.mcp_servers || [],
       accessGroups: keyData.object_permission?.mcp_access_groups || []
     },
-    logging_settings: extractLoggingSettings(keyData.metadata)
+    logging_settings: extractLoggingSettings(keyData.metadata),
+    disabled_callbacks: keyData.metadata?.litellm_disabled_callbacks || []
   };
 
   return (
@@ -229,6 +231,8 @@ export function KeyEditView({
         <EditLoggingSettings
           value={form.getFieldValue('logging_settings')}
           onChange={(values) => form.setFieldValue('logging_settings', values)}
+          disabledCallbacks={form.getFieldValue('disabled_callbacks')}
+          onDisabledCallbacksChange={(values) => form.setFieldValue('disabled_callbacks', values)}
         />
       </Form.Item>
 
