@@ -154,9 +154,9 @@ class S3Logger:
                 + ".json"
             )
 
-            import json
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-            payload_str = json.dumps(payload)
+            payload_str = safe_dumps(payload)
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload_str}")
 
