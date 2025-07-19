@@ -65,7 +65,7 @@ def test_update_request_data_with_litellm_managed_vector_store_registry():
         "vector_store_id": "test_store_id", 
         "custom_llm_provider": "bedrock",
         "litellm_credential_name": "test_credential",
-        "litellm_params": {"api_key": "test_key", "aws_region": "us-east-1"}
+        "litellm_params": {"api_key": "test_key", "aws_region_name": "us-east-1"}
     }
     
     mock_registry = MagicMock()
@@ -83,7 +83,7 @@ def test_update_request_data_with_litellm_managed_vector_store_registry():
         assert result["custom_llm_provider"] == "bedrock"
         assert result["litellm_credential_name"] == "test_credential"
         assert result["api_key"] == "test_key"
-        assert result["region"] == "us-east-1"
+        assert result["aws_region_name"] == "us-east-1"
         
         # Verify registry was called correctly
         mock_registry.get_litellm_managed_vector_store_from_registry.assert_called_once_with(
