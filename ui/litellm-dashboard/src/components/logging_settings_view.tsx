@@ -1,7 +1,7 @@
 import React from "react";
 import { Text, Badge } from "@tremor/react";
 import { CogIcon, BanIcon } from "@heroicons/react/outline";
-import { callbackInfo, callback_map } from "./callback_info_helpers";
+import { callbackInfo, callback_map, reverse_callback_map } from "./callback_info_helpers";
 
 interface LoggingConfig {
   callback_name: string;
@@ -127,7 +127,9 @@ export function LoggingSettingsView({
         {disabledCallbacks.length > 0 ? (
           <div className="space-y-3">
             {disabledCallbacks.map((callbackName, index) => {
-              const logoUrl = callbackInfo[callbackName]?.logo;
+              // Handle both display names and internal values
+              const displayName = reverse_callback_map[callbackName] || callbackName;
+              const logoUrl = callbackInfo[displayName]?.logo;
               
               return (
                 <div
@@ -138,14 +140,14 @@ export function LoggingSettingsView({
                     {logoUrl ? (
                       <img 
                         src={logoUrl} 
-                        alt={callbackName} 
+                        alt={displayName} 
                         className="w-5 h-5 object-contain" 
                       />
                     ) : (
                       <BanIcon className="h-5 w-5 text-gray-400" />
                     )}
                     <div>
-                      <Text className="font-medium text-red-800">{callbackName}</Text>
+                      <Text className="font-medium text-red-800">{displayName}</Text>
                       <Text className="text-xs text-red-600">
                         Disabled for this key
                       </Text>
