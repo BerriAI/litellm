@@ -162,65 +162,68 @@ print(response.choices[0].message.content)
 
 ## Provider Specific Guides
 
-This sections covers how to add your vector stores to LiteLLM. If you want a new provider please file an issue [here](https://github.com/BerriAI/litellm/issues)
+This section covers how to add your vector stores to LiteLLM. If you want support for a new provider, please file an issue [here](https://github.com/BerriAI/litellm/issues).
 
 ### Bedrock Knowledge Bases
 
-On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
+**1. Set up your Bedrock Knowledge Base**
 
-Select "Bedrock" as the provider and enter your Bedrock Knowledge Base ID in  the "Vector Store ID" field.
+Ensure you have a Bedrock Knowledge Base created in your AWS account with the appropriate permissions configured.
+
+**2. Add to LiteLLM UI**
+
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"Bedrock"** as the provider
+3. Enter your Bedrock Knowledge Base ID in the **"Vector Store ID"** field
 
 <Image 
   img={require('../../img/kb_2.png')}
-  style={{width: '50%'}}
+  style={{width: '60%'}}
 />
-
 
 ### Vertex AI RAG Engine
 
 **1. Get your Vertex AI RAG Engine ID**
 
-On VertexAI, navigate to your RAG Engine Corpus [here](https://console.cloud.google.com/vertex-ai/rag/corpus)
-
-Select the "Rag Engine" you want to onboard onto LiteLLM.
+1. Navigate to your RAG Engine Corpus in the [Google Cloud Console](https://console.cloud.google.com/vertex-ai/rag/corpus)
+2. Select the **RAG Engine** you want to integrate with LiteLLM
 
 <Image 
   img={require('../../img/kb_vertex1.png')}
-  style={{width: '50%'}}
+  style={{width: '60%'}}
 />
 
-For the selected "Rag Engine", click on the "Details" button and just copy the UUID for the "Rag Engine". It should look like this "6917529027641081856" 
+3. Click the **"Details"** button and copy the UUID for the RAG Engine
+4. The ID should look like: `6917529027641081856`
 
 <Image 
   img={require('../../img/kb_vertex2.png')}
-  style={{width: '50%'}}
+  style={{width: '60%'}}
 />
 
+**2. Add to LiteLLM UI**
 
-**2. Add your vertex rag engine on LiteLLM UI**
-
-On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
-
-Select "Vertex AI RAG Engine" as the provider and enter your Vertex AI RAG Engine ID in  the "Vector Store ID" field.
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"Vertex AI RAG Engine"** as the provider
+3. Enter your Vertex AI RAG Engine ID in the **"Vector Store ID"** field
 
 <Image 
   img={require('../../img/kb_vertex3.png')}
-  style={{width: '50%'}}
+  style={{width: '60%'}}
 />
 
 ### PG Vector
 
-**1. Deploy the litellm-pg-vector-store** connector 
+**1. Deploy the litellm-pg-vector-store connector**
 
-LiteLLM Provides a server that exposes OpenAI compatible `vector_store` endpoints for PG Vector. The LiteLLM Proxy server will then connect to your deployed service and use it as a vector store when querying.
+LiteLLM provides a server that exposes OpenAI-compatible `vector_store` endpoints for PG Vector. The LiteLLM Proxy server connects to your deployed service and uses it as a vector store when querying.
 
-You can find instructions on how to deploy the litellm-pg-vector-store connector [here](https://github.com/BerriAI/litellm-pgvector)
+1. Follow the deployment instructions for the litellm-pg-vector-store connector [here](https://github.com/BerriAI/litellm-pgvector)
+2. For detailed configuration options, see the [configuration guide](https://github.com/BerriAI/litellm-pgvector?tab=readme-ov-file#configuration)
 
+**Example .env configuration for deploying litellm-pg-vector-store:**
 
-For a detailed guide on confgiruations options you can navigate [here](https://github.com/BerriAI/litellm-pgvector?tab=readme-ov-file#configuration)
-
-Here's an example .env configuration for deploy litellm-pg-vector-store:
-```
+```env
 DATABASE_URL="postgresql://neondb_owner:xxxx"
 SERVER_API_KEY="sk-1234"
 HOST="0.0.0.0"
@@ -235,39 +238,39 @@ DB_FIELDS__METADATA_FIELD="metadata"
 DB_FIELDS__EMBEDDING_FIELD="embedding"
 DB_FIELDS__VECTOR_STORE_ID_FIELD="vector_store_id"
 DB_FIELDS__CREATED_AT_FIELD="created_at"
-
 ```
 
-Once your litellm-pg-vector-store is deployed, you can navigate to the LiteLLM UI and add your vector store.
+**2. Add to LiteLLM UI**
 
-**2. Add your vector store on LiteLLM UI**
+Once your litellm-pg-vector-store is deployed:
 
-On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
-
-Select "PG Vector" as the provider and enter your API BASE URL and API KEY for your `litellm-pg-vector-store` docker container. The API Key field is the `SERVER_API_KEY` field you set in step 1.
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"PG Vector"** as the provider
+3. Enter your **API Base URL** and **API Key** for your `litellm-pg-vector-store` container
+   - The API Key field corresponds to the `SERVER_API_KEY` from your .env configuration
 
 <Image 
   img={require('../../img/kb_pg1.png')}
-  style={{width: '50%'}}
+  style={{width: '60%'}}
 />
-
-
 
 ### OpenAI Vector Stores
 
-Get your Vector Store from OpenAI platform [here](https://platform.openai.com/storage/vector_stores)
+**1. Set up your OpenAI Vector Store**
 
-On the LiteLLM UI, navigate to Tools > Vector Stores > "Add new vector store"
+1. Create your Vector Store on the [OpenAI platform](https://platform.openai.com/storage/vector_stores)
+2. Note your Vector Store ID (format: `vs_687ae3b2439881918b433cb99d10662e`)
 
-Select "OpenAI" as the provider and enter your Vector Store ID in  the "Vector Store ID" field.
+**2. Add to LiteLLM UI**
 
-The Vector Store ID field is the ID of the vector store you created on OpenAI platform. It should look like "vs_687ae3b2439881918b433cb99d10662e"
-
-The API Key field is your OpenAI API Key.
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"OpenAI"** as the provider
+3. Enter your **Vector Store ID** in the corresponding field
+4. Enter your **OpenAI API Key** in the API Key field
 
 <Image 
   img={require('../../img/kb_openai1.png')}
-  style={{width: '50%'}}
+  style={{width: '60%'}}
 />
 
 
