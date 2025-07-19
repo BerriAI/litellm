@@ -35,6 +35,13 @@ class AzureBatchesAPI(BaseAzureLLM):
         create_batch_data: CreateBatchRequest,
         azure_client: AsyncAzureOpenAI,
     ) -> LiteLLMBatch:
+        metadata = create_batch_data.get("metadata", {})
+        if metadata:
+            if "model_info" in metadata:
+                del metadata["model_info"]
+            if "caching_groups" in metadata:
+                del metadata["caching_groups"]
+
         response = await azure_client.batches.create(**create_batch_data)
         return LiteLLMBatch(**response.model_dump())
 
