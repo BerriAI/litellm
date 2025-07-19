@@ -1,0 +1,276 @@
+---
+title: "v1.74.6"
+slug: "v1-74-6"
+date: 2025-07-19T10:00:00
+authors:
+  - name: Krrish Dholakia
+    title: CEO, LiteLLM
+    url: https://www.linkedin.com/in/krish-d/
+    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - name: Ishaan Jaffer
+    title: CTO, LiteLLM
+    url: https://www.linkedin.com/in/reffajnaahsi/
+    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+
+hide_table_of_contents: false
+---
+
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+## Deploy this version
+
+<Tabs>
+<TabItem value="docker" label="Docker">
+
+``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:v1.74.6
+```
+</TabItem>
+
+<TabItem value="pip" label="Pip">
+
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.74.6
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+## Key Highlights 
+
+- **MCP Gateway: Enhanced Namespacing** - Improved URL-based namespacing for better MCP server segregation.
+- **Vector Stores** - New OpenAI-compatible vector store endpoints with support for Vertex RAG Engine and PG Vector.
+- **Control Plane + Data Plane Architecture** - Enhanced proxy architecture for better scalability and separation of concerns.
+- **New LLM Providers** - Added Moonshot API (Kimi) and v0 provider support.
+- **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
+
+---
+
+## MCP Gateway: Enhanced Namespacing
+
+v1.74.6 introduces improved URL-based namespacing for MCP servers, enabling better segregation and organization of MCP tools across different environments and teams.
+
+Key features include:
+- **URL-based namespacing**: Better isolation between different MCP server instances
+- **Access group improvements**: Enhanced management of MCP server access through configuration
+- **Tool permission management**: Improved object permissions when updating/deleting keys and teams
+
+Read more [here](https://docs.litellm.ai/docs/mcp#grouping-mcps-access-groups)
+
+---
+
+## Vector Stores API
+
+v1.74.6 introduces OpenAI-compatible vector store endpoints, bringing powerful vector search capabilities to the LiteLLM proxy.
+
+**New Endpoints:**
+- `/v1/vector_stores` - Create and manage vector stores
+- `/v1/vector_stores/{vector_store_id}/search` - Perform vector searches
+
+**Supported Providers:**
+- **Vertex RAG Engine** - Google's managed RAG solution
+- **PG Vector** - PostgreSQL vector extension support
+- **OpenAI Vector Stores** - Full OpenAI compatibility
+- **Azure AI Search** - Microsoft's vector search service
+
+This enables developers to easily integrate vector search capabilities into their applications while maintaining compatibility with OpenAI's vector store API.
+
+[Get started](../../docs/proxy/vector_stores)
+
+---
+
+## Control Plane + Data Plane Architecture
+
+v1.74.6 introduces enhanced proxy architecture with improved separation between control plane (management operations) and data plane (LLM requests) for better scalability and reliability.
+
+This architectural improvement enables:
+- Better resource allocation between management and inference workloads
+- Improved scalability for high-throughput scenarios
+- Enhanced monitoring and observability capabilities
+
+---
+
+## New Models / Updated Models
+
+#### Pricing / Context Window Updates
+
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Type |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | ---- |
+| Moonshot | `moonshot/kimi-k2-instruct` | 128k | $0.15 | $0.60 | New |
+| Together.ai | `together_ai/moonshotai/Kimi-K2-Instruct` | 128k | $0.15 | $0.60 | New |
+| Groq | `groq/moonshotai-kimi-k2-instruct` | 128k | $0.15 | $0.60 | New |
+| AI21 | `ai21/jamba-1.7` | 256k | $0.20 | $0.80 | New |
+| OpenAI | `openai/o3-deep-research` | 200k | $10 | $40 | New |
+| Azure OpenAI | `azure_ai/grok-3` | 256k | $3.00 | $15.00 | New |
+| Together.ai | Multiple Llama-4 variants | Various | Various | Various | Updated |
+| DeepSeek | Multiple DeepSeek models | Various | Various | Various | Updated |
+
+#### Features
+- **[🆕 Moonshot API (Kimi)](../../docs/providers/moonshot)**
+    - New LLM API integration for accessing Kimi models - [PR #12592](https://github.com/BerriAI/litellm/pull/12592)
+- **[🆕 v0 Provider](../../docs/providers/v0)**
+    - New provider integration for v0.dev - [PR #12751](https://github.com/BerriAI/litellm/pull/12751)
+- **[Anthropic](../../docs/providers/anthropic)**
+    - Tool cache control support - [PR #12668](https://github.com/BerriAI/litellm/pull/12668)
+    - Fix streaming + response_format + tools bug - [PR #12463](https://github.com/BerriAI/litellm/pull/12463)
+- **[Bedrock](../../docs/providers/bedrock)**
+    - Claude 4 /invoke route support + application inference profile tool choice support - [PR #12599](https://github.com/BerriAI/litellm/pull/12599)
+- **[Gemini](../../docs/providers/gemini)**
+    - Custom TTL support for context caching - [PR #12541](https://github.com/BerriAI/litellm/pull/12541)
+    - Fix implicit caching cost calculation for Gemini 2.x models - [PR #12585](https://github.com/BerriAI/litellm/pull/12585)
+    - /streamGenerateContent - non-gemini model support - [PR #12647](https://github.com/BerriAI/litellm/pull/12647)
+
+#### Bugs
+- **[XAI](../../docs/providers/xai)**
+    - grok-4 does not support the `stop` param - [PR #12646](https://github.com/BerriAI/litellm/pull/12646)
+- **[AWS](../../docs/providers/bedrock)**
+    - Role chaining with web authentication for AWS Bedrock - [PR #12607](https://github.com/BerriAI/litellm/pull/12607)
+- **[VertexAI](../../docs/providers/vertex)**
+    - Add project_id to cached credentials - [PR #12661](https://github.com/BerriAI/litellm/pull/12661)
+
+---
+
+## LLM API Endpoints
+
+#### Features
+- **[/chat/completions](../../docs/completion/input)** 
+    - Include tool calls in output of trim_messages - [PR #11517](https://github.com/BerriAI/litellm/pull/11517)
+    - Handle circular references in spend tracking metadata JSON serialization - [PR #12643](https://github.com/BerriAI/litellm/pull/12643)
+- **[/images/generations](../../docs/image_generation)**
+    - Add input_fidelity parameter for OpenAI image generation - [PR #12662](https://github.com/BerriAI/litellm/pull/12662)
+- **[/v1/vector_stores](../../docs/proxy/vector_stores)**
+    - New OpenAI-compatible vector store endpoints - [PR #12699](https://github.com/BerriAI/litellm/pull/12699)
+    - Vector store search endpoint - [PR #12749](https://github.com/BerriAI/litellm/pull/12749)
+
+---
+
+## [MCP Gateway](../../docs/mcp)
+
+#### Features
+- **[Access Groups](../../docs/mcp#grouping-mcps-access-groups)**
+    - Allow MCP access groups to be added via config - [PR #12654](https://github.com/BerriAI/litellm/pull/12654)
+    - List tools from access list for keys - [PR #12657](https://github.com/BerriAI/litellm/pull/12657)
+- **[Namespacing](../../docs/mcp#mcp-namespacing)**
+    - URL-based namespacing for better segregation - [PR #12658](https://github.com/BerriAI/litellm/pull/12658)
+    - Make MCP_TOOL_PREFIX_SEPARATOR configurable from env - [PR #12603](https://github.com/BerriAI/litellm/pull/12603)
+- **[Gateway Features](../../docs/mcp#mcp-gateway-features)**
+    - Allow using MCPs with all LLM APIs when using /responses - [PR #12546](https://github.com/BerriAI/litellm/pull/12546)
+
+#### Bugs
+- **[Permissions](../../docs/mcp#auth)**
+    - Fix to update object permission on update/delete key/team - [PR #12701](https://github.com/BerriAI/litellm/pull/12701)
+
+---
+
+## Management Endpoints / UI
+
+#### Features
+- **Vector Stores**
+    - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
+    - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
+- **User Interface**
+    - Add Copy-on-Click for IDs - [PR #12615](https://github.com/BerriAI/litellm/pull/12615)
+    - Copy MCP Server name functionality - [PR #12760](https://github.com/BerriAI/litellm/pull/12760)
+    - Add `end_user` filter on UI - [PR #12663](https://github.com/BerriAI/litellm/pull/12663)
+    - Fix Y-axis labels overlap on Spend per Tag chart - [PR #12754](https://github.com/BerriAI/litellm/pull/12754)
+- **Teams**
+    - Allow setting custom key duration + show key creation stats - [PR #12722](https://github.com/BerriAI/litellm/pull/12722)
+    - New `/user/bulk_update` endpoint - [PR #12720](https://github.com/BerriAI/litellm/pull/12720)
+    - Enable team admins to update member roles - [PR #12629](https://github.com/BerriAI/litellm/pull/12629)
+- **Keys**
+    - Regenerate Key State Management improvements - [PR #12729](https://github.com/BerriAI/litellm/pull/12729)
+    - Add "keys import" command to CLI - [PR #12620](https://github.com/BerriAI/litellm/pull/12620)
+
+#### Bugs
+- **Teams**
+    - Ensure user id correctly added when creating new teams - [PR #12719](https://github.com/BerriAI/litellm/pull/12719)
+    - Fixes for handling team-only models on UI - [PR #12632](https://github.com/BerriAI/litellm/pull/12632)
+
+---
+
+## Logging / Guardrail Integrations
+
+#### Features
+- **[Google Cloud Model Armor](../../docs/proxy/guardrails/google_cloud_model_armor)**
+    - New guardrails integration - [PR #12492](https://github.com/BerriAI/litellm/pull/12492)
+- **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
+    - Allow disabling exception on 'BLOCKED' action - [PR #12693](https://github.com/BerriAI/litellm/pull/12693)
+- **[Guardrails AI](../../docs/proxy/guardrails/guardrails_ai)**
+    - Support `llmOutput` based guardrails as pre-call hooks - [PR #12674](https://github.com/BerriAI/litellm/pull/12674)
+- **[Custom Logging](../../docs/proxy/logging)**
+    - Allow reading custom logger python scripts from S3 - [PR #12623](https://github.com/BerriAI/litellm/pull/12623)
+- **[SCIM](../../docs/proxy/scim)**
+    - Add GET /ServiceProviderConfig endpoint - [PR #12664](https://github.com/BerriAI/litellm/pull/12664)
+
+#### Bugs
+- **[Standard Logging](../../docs/proxy/logging)**
+    - StandardLoggingPayload on cache_hits should track custom llm provider + DD LLM Obs span type - [PR #12652](https://github.com/BerriAI/litellm/pull/12652)
+    - S3 v2 log uploader crashes when using with guardrails - [PR #12733](https://github.com/BerriAI/litellm/pull/12733)
+
+---
+
+## Performance / Loadbalancing / Reliability improvements
+
+#### Features
+- **Health Checks**
+    - Separate health app for liveness probes - [PR #12669](https://github.com/BerriAI/litellm/pull/12669)
+    - Health check app on separate port - [PR #12718](https://github.com/BerriAI/litellm/pull/12718)
+- **Caching**
+    - Add Azure Blob cache support - [PR #12587](https://github.com/BerriAI/litellm/pull/12587)
+- **Router**
+    - Handle ZeroDivisionError with zero completion tokens in lowest_latency strategy - [PR #12734](https://github.com/BerriAI/litellm/pull/12734)
+
+#### Bugs
+- **Database**
+    - Use upsert for managed object table to avoid UniqueViolationError - [PR #11795](https://github.com/BerriAI/litellm/pull/11795)
+    - Refactor to support use_prisma_migrate for helm hook - [PR #12600](https://github.com/BerriAI/litellm/pull/12600)
+
+---
+
+## General Proxy Improvements
+
+#### Features
+- **Swagger Documentation**
+    - Add swagger docs for LiteLLM /chat/completions, /embeddings, /responses - [PR #12618](https://github.com/BerriAI/litellm/pull/12618)
+- **CLI**
+    - Wildcard model filter support - [PR #12597](https://github.com/BerriAI/litellm/pull/12597)
+- **Dependencies**
+    - Loosen rich version from ==13.7.1 to >=13.7.1 - [PR #12704](https://github.com/BerriAI/litellm/pull/12704)
+- **Helm**
+    - Add envVars and extraEnvVars support to Helm migrations job - [PR #12591](https://github.com/BerriAI/litellm/pull/12591)
+
+#### Bugs
+- **Verbose Logging**
+    - Verbose log is enabled by default fix - [PR #12596](https://github.com/BerriAI/litellm/pull/12596)
+- **Knowledge Base**
+    - Knowledge Base Call returning error fix - [PR #12628](https://github.com/BerriAI/litellm/pull/12628)
+- **MCP Routes**
+    - Include /mcp in list of available routes on proxy - [PR #12612](https://github.com/BerriAI/litellm/pull/12612)
+- **Backend Features**
+    - Add support for disabling callbacks in request body - [PR #12762](https://github.com/BerriAI/litellm/pull/12762)
+
+---
+
+## New Contributors
+* @AntonioKL made their first contribution in https://github.com/BerriAI/litellm/pull/12591
+* @marcelodiaz558 made their first contribution in https://github.com/BerriAI/litellm/pull/12541
+* @dmcaulay made their first contribution in https://github.com/BerriAI/litellm/pull/12463
+* @demoray made their first contribution in https://github.com/BerriAI/litellm/pull/12587
+* @staeiou made their first contribution in https://github.com/BerriAI/litellm/pull/12631
+* @stefanc-ai2 made their first contribution in https://github.com/BerriAI/litellm/pull/12622
+* @RichardoC made their first contribution in https://github.com/BerriAI/litellm/pull/12607
+* @yeahyung made their first contribution in https://github.com/BerriAI/litellm/pull/11795
+* @mnguyen96 made their first contribution in https://github.com/BerriAI/litellm/pull/12619
+* @rgambee made their first contribution in https://github.com/BerriAI/litellm/pull/11517
+* @jvanmelckebeke made their first contribution in https://github.com/BerriAI/litellm/pull/12725
+* @jlaurendi made their first contribution in https://github.com/BerriAI/litellm/pull/12704
+* @doublerr made their first contribution in https://github.com/BerriAI/litellm/pull/12661
+
+## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.3-stable...v1.74.6.rc)**
