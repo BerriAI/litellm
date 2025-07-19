@@ -92,6 +92,9 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group,
     run_async_fallback,
 )
+from litellm.router_utils.forward_clientside_headers_by_model_group import (
+    ForwardClientSideHeadersByModelGroup,
+)
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -178,6 +181,7 @@ class Router:
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
     lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
+    optional_callbacks: Optional[List[Union[CustomLogger, Callable, str]]] = None
 
     def __init__(  # noqa: PLR0915
         self,
@@ -601,6 +605,18 @@ class Router:
 
         self.initialize_assistants_endpoint()
         self.initialize_router_endpoints()
+        self.apply_default_settings()
+
+    def apply_default_settings(self):
+        """
+        Apply the default settings to the router.
+        """
+
+        default_pre_call_checks: OptionalPreCallChecks = [
+            "forward_client_headers_by_model_group",
+        ]
+        self.add_optional_pre_call_checks(default_pre_call_checks)
+        return None
 
     def discard(self):
         """
@@ -628,6 +644,13 @@ class Router:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(
             litellm.callbacks, self
         )
+
+        # Remove ForwardClientSideHeadersByModelGroup if it exists
+        if self.optional_callbacks is not None:
+            for callback in self.optional_callbacks:
+                litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                    litellm.callbacks, callback, require_self=False
+                )
 
     @staticmethod
     def _create_redis_cache(
@@ -843,6 +866,7 @@ class Router:
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
+
         if optional_pre_call_checks is not None:
             for pre_call_check in optional_pre_call_checks:
                 _callback: Optional[CustomLogger] = None
@@ -856,7 +880,12 @@ class Router:
                     )
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
+                elif pre_call_check == "forward_client_headers_by_model_group":
+                    _callback = ForwardClientSideHeadersByModelGroup()
                 if _callback is not None:
+                    if self.optional_callbacks is None:
+                        self.optional_callbacks = []
+                    self.optional_callbacks.append(_callback)
                     litellm.logging_callback_manager.add_litellm_callback(_callback)
 
     def print_deployment(self, deployment: dict):
@@ -1194,7 +1223,12 @@ class Router:
         """
         kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
         kwargs.setdefault("litellm_trace_id", str(uuid.uuid4()))
-        kwargs.setdefault(metadata_variable_name, {}).update({"model_group": model})
+        model_group_alias: Optional[str] = None
+        if self._get_model_from_alias(model=model):
+            model_group_alias = model
+        kwargs.setdefault(metadata_variable_name, {}).update(
+            {"model_group": model, "model_group_alias": model_group_alias}
+        )
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
@@ -1258,14 +1292,15 @@ class Router:
         - Adds default litellm params to kwargs, if set.
         """
         model_info = deployment.get("model_info", {}).copy()
-        deployment_model_name = deployment["litellm_params"]["model"]
+        deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
+        deployment_model_name = deployment["model_name"]
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
-            deployment_model_name = deployment_pydantic_obj.litellm_params.model
+            deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
             deployment_api_base = deployment_pydantic_obj.litellm_params.api_base
 
         metadata_variable_name = _get_router_metadata_variable_name(
@@ -1274,9 +1309,10 @@ class Router:
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {
-                "deployment": deployment_model_name,
+                "deployment": deployment_litellm_model_name,
                 "model_info": model_info,
                 "api_base": deployment_api_base,
+                "deployment_model_name": deployment_model_name,
             }
         )
         kwargs["model_info"] = model_info
@@ -3325,7 +3361,13 @@ class Router:
             - An asynchronous function for asynchronous call types
         """
         # Handle synchronous call types
-        if call_type in ("responses", "generate_content", "generate_content_stream", "vector_store_search", "vector_store_create"):
+        if call_type in (
+            "responses",
+            "generate_content",
+            "generate_content_stream",
+            "vector_store_search",
+            "vector_store_create",
+        ):
 
             def sync_wrapper(
                 custom_llm_provider: Optional[

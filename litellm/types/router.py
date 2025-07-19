@@ -722,7 +722,10 @@ class GenericBudgetWindowDetails(BaseModel):
 
 OptionalPreCallChecks = List[
     Literal[
-        "prompt_caching", "router_budget_limiting", "responses_api_deployment_check"
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "forward_client_headers_by_model_group",
     ]
 ]
 
@@ -759,3 +762,7 @@ class MockRouterTestingParams:
                 "mock_testing_content_policy_fallbacks"
             ),
         )
+
+
+class ModelGroupSettings(BaseModel):
+    forward_client_headers_to_llm_api: Optional[List[str]] = None

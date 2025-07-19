@@ -2925,7 +2925,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     client=client,
                     api_base=api_base,
-                    api_key=api_key
+                    api_key=api_key,
                 )
             elif bedrock_route == "converse_like":
                 model = model.replace("converse_like/", "")
@@ -3306,7 +3306,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 encoding=encoding,
                 stream=stream,
-                provider_config=bytez_transformation
+                provider_config=bytez_transformation,
             )
 
             pass

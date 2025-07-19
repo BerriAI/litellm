@@ -2145,6 +2145,7 @@ all_litellm_params = [
     "hf_model_name",
     "model_info",
     "proxy_server_request",
+    "secret_fields",
     "preset_cache_key",
     "caching_groups",
     "ttl",
@@ -2316,6 +2317,7 @@ class LlmProviders(str, Enum):
 
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
+
 
 class LiteLLMLoggingBaseClass:
     """
