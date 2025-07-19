@@ -3085,9 +3085,7 @@ class BedrockConverseMessagesProcessor:
                                 _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
-                                    message_block=cast(
-                                        OpenAIMessageContentListBlock, element
-                                    ),
+                                    message_block=cast(OpenAIMessageContentListBlock, element),
                                     block_type="content_block",
                                 )
                             )
@@ -3138,6 +3136,15 @@ class BedrockConverseMessagesProcessor:
                 tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
 
                 tool_content.append(tool_call_result)
+                
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        message_block=messages[msg_i],
+                        block_type="content_block",
+                    )
+                )
+                if _cache_point_block is not None:
+                    tool_content.append(_cache_point_block)
                 msg_i += 1
             if tool_content:
                 # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3217,6 +3224,15 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url
                                 )
                                 assistants_parts.append(assistants_part)
+
+                            _cache_point_block = (
+                                litellm.AmazonConverseConfig()._get_cache_point_block(
+                                    message_block=cast(OpenAIMessageContentListBlock, element),
+                                    block_type="content_block",
+                                )
+                            )
+                            if _cache_point_block is not None:
+                                assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
                 elif _assistant_content is not None and isinstance(
                     _assistant_content, str
@@ -3224,6 +3240,14 @@ class BedrockConverseMessagesProcessor:
                     assistant_content.append(
                         BedrockContentBlock(text=_assistant_content)
                     )
+                    _cache_point_block = (
+                        litellm.AmazonConverseConfig()._get_cache_point_block(
+                            message_block=assistant_message_block,
+                            block_type="content_block",
+                        )
+                    )
+                    if _cache_point_block is not None:
+                        assistant_content.append(_cache_point_block)
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
                     assistant_content.extend(
@@ -3419,9 +3443,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                             _parts.append(_part)
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
-                                message_block=cast(
-                                    OpenAIMessageContentListBlock, element
-                                ),
+                                message_block=cast(OpenAIMessageContentListBlock, element),
                                 block_type="content_block",
                             )
                         )
@@ -3468,6 +3490,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
 
             tool_content.append(tool_call_result)
+            
+            _cache_point_block = (
+                litellm.AmazonConverseConfig()._get_cache_point_block(
+                    message_block=messages[msg_i],
+                    block_type="content_block",
+                )
+            )
+            if _cache_point_block is not None:
+                tool_content.append(_cache_point_block)
             msg_i += 1
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3539,9 +3570,26 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url=image_url
                             )
                             assistants_parts.append(assistants_part)
+
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                message_block=cast(OpenAIMessageContentListBlock, element),
+                                block_type="content_block",
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        message_block=assistant_message_block,
+                        block_type="content_block",
+                    )
+                )
+                if _cache_point_block is not None:
+                    assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(
