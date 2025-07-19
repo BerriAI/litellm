@@ -18,7 +18,7 @@ import GeneralSettings from "@/components/general_settings";
 import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
-import ModelHub from "@/components/model_hub";
+import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
 import ChatUI from "@/components/chat_ui";
@@ -257,6 +257,7 @@ export default function CreateKeyPage() {
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
               accessToken={accessToken}
+              isPublicPage={false}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -369,11 +370,12 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   modelData={modelData}
                 />
-              ) : page == "model-hub" ? (
-                <ModelHub
+              ) : page == "model-hub-table" ? (
+                <ModelHubTable
                   accessToken={accessToken}
                   publicPage={false}
                   premiumUser={premiumUser}
+                  userRole={userRole}
                 />
               ) : page == "caching" ? (
                 <CacheDashboard
