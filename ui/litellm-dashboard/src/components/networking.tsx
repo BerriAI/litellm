@@ -3933,6 +3933,57 @@ export const userUpdateUserCall = async (
   }
 };
 
+export const userBulkUpdateUserCall = async (
+  accessToken: string,
+  formValues: any, // Assuming formValues is an object
+  userIds: string[]
+) => {
+  try {
+    console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/bulk_update`
+      : `/user/bulk_update`;
+    let request_body = [] 
+    for (const user_id of userIds) {
+      request_body.push({
+        user_id: user_id,
+        ...formValues,
+      });
+    }
+    let request_body_json = JSON.stringify({
+      users: request_body,
+    });
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: request_body_json,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = (await response.json()) as {
+      user_id: string;
+      data: UserInfo;
+    };
+    console.log("API Response:", data);
+    //message.success("User role updated");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const PredictedSpendLogsCall = async (
   accessToken: string,
   requestData: any
