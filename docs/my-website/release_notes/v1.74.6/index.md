@@ -45,11 +45,11 @@ pip install litellm==1.74.6
 
 ## Key Highlights 
 
-- **MCP Gateway: Enhanced Namespacing** - Improved URL-based namespacing for better MCP server segregation.
-- **Vector Stores** - New OpenAI-compatible vector store endpoints with support for Vertex RAG Engine and PG Vector.
-- **Control Plane + Data Plane Architecture** - Enhanced proxy architecture for better scalability and separation of concerns.
-- **New LLM Providers** - Added Moonshot API (Kimi) and v0 provider support.
+
+- **Vector Stores** - Support for Vertex RAG Engine, PG Vector, OpenAI & Azure OpenAI Vector Stores.
 - **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
+- **Control Plane + Data Plane Architecture** - Enhanced proxy architecture for better scalability and separation of concerns.
+- **New LLM Providers** - Added Moonshot API `moonshot` and `v0` provider support.
 
 ---
 
@@ -88,12 +88,6 @@ This enables developers to easily integrate vector search capabilities into thei
 
 ## Control Plane + Data Plane Architecture
 
-v1.74.6 introduces enhanced proxy architecture with improved separation between control plane (management operations) and data plane (LLM requests) for better scalability and reliability.
-
-This architectural improvement enables:
-- Better resource allocation between management and inference workloads
-- Improved scalability for high-throughput scenarios
-- Enhanced monitoring and observability capabilities
 
 ---
 
@@ -103,14 +97,25 @@ This architectural improvement enables:
 
 | Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Type |
 | ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | ---- |
-| Moonshot | `moonshot/kimi-k2-instruct` | 128k | $0.15 | $0.60 | New |
-| Together.ai | `together_ai/moonshotai/Kimi-K2-Instruct` | 128k | $0.15 | $0.60 | New |
-| Groq | `groq/moonshotai-kimi-k2-instruct` | 128k | $0.15 | $0.60 | New |
-| AI21 | `ai21/jamba-1.7` | 256k | $0.20 | $0.80 | New |
-| OpenAI | `openai/o3-deep-research` | 200k | $10 | $40 | New |
-| Azure OpenAI | `azure_ai/grok-3` | 256k | $3.00 | $15.00 | New |
-| Together.ai | Multiple Llama-4 variants | Various | Various | Various | Updated |
-| DeepSeek | Multiple DeepSeek models | Various | Various | Various | Updated |
+| Azure AI | `azure_ai/grok-3` | 131k | $3.30 | $16.50 | New |
+| Azure AI | `azure_ai/global/grok-3` | 131k | $3.00 | $15.00 | New |
+| Azure AI | `azure_ai/global/grok-3-mini` | 131k | $0.25 | $1.27 | New |
+| Azure AI | `azure_ai/grok-3-mini` | 131k | $0.275 | $1.38 | New |
+| Azure AI | `azure_ai/jais-30b-chat` | 8k | $3200 | $9710 | New |
+| Groq | `groq/moonshotai-kimi-k2-instruct` | 131k | $1.00 | $3.00 | New |
+| AI21 | `jamba-large-1.7` | 256k | $2.00 | $8.00 | New |
+| AI21 | `jamba-mini-1.7` | 256k | $0.20 | $0.40 | New |
+| Together.ai | `together_ai/moonshotai/Kimi-K2-Instruct` | 131k | $1.00 | $3.00 | New |
+| Together.ai | `together_ai/deepseek-ai/DeepSeek-R1` | Various | $3.00 | $7.00 | New |
+| v0 | `v0/v0-1.0-md` | 128k | $3.00 | $15.00 | New |
+| v0 | `v0/v0-1.5-md` | 128k | $3.00 | $15.00 | New |
+| v0 | `v0/v0-1.5-lg` | 512k | $15.00 | $75.00 | New |
+| Moonshot | `moonshot/kimi-k2-0711-preview` | 131k | $0.60 | $2.50 | New |
+| Moonshot | `moonshot/moonshot-v1-8k` | 8k | - | - | New |
+| Moonshot | `moonshot/moonshot-v1-32k` | 32k | - | - | New |
+| Moonshot | `moonshot/moonshot-v1-128k` | 131k | - | - | New |
+| Moonshot | `moonshot/moonshot-v1-auto` | 131k | - | - | New |
+
 
 #### Features
 - **[🆕 Moonshot API (Kimi)](../../docs/providers/moonshot)**
