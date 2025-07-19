@@ -751,6 +751,10 @@ class CustomStreamWrapper:
         model_response: ModelResponseStream,
         response_obj: Dict[str, Any],
     ):
+        from litellm.litellm_core_utils.core_helpers import (
+            preserve_upstream_non_openai_attributes,
+        )
+
         print_verbose(
             f"completion_obj: {completion_obj}, model_response.choices[0]: {model_response.choices[0]}, response_obj: {response_obj}"
         )
@@ -795,6 +799,10 @@ class CustomStreamWrapper:
                         model_response,
                         "citations",
                         getattr(original_chunk, "citations", None),
+                    )
+                    preserve_upstream_non_openai_attributes(
+                        model_response=model_response,
+                        original_chunk=original_chunk,
                     )
                     print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
                     if self.sent_first_chunk is False:

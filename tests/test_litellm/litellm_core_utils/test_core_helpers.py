@@ -35,3 +35,25 @@ def test_add_missing_spend_metadata_to_litellm_metadata():
         "test_key": "test_value",
         "user_api_key_hash_value": "1234567890",
     }
+
+
+def test_preserve_upstream_non_openai_attributes():
+    from litellm.litellm_core_utils.core_helpers import (
+        preserve_upstream_non_openai_attributes,
+    )
+    from litellm.types.utils import ModelResponseStream
+
+    model_response = ModelResponseStream(
+        id="123",
+        object="text_completion",
+        created=1715811200,
+        model="gpt-3.5-turbo",
+    )
+
+    setattr(model_response, "test_key", "test_value")
+    preserve_upstream_non_openai_attributes(
+        model_response=ModelResponseStream(),
+        original_chunk=model_response,
+    )
+
+    assert model_response.test_key == "test_value"
