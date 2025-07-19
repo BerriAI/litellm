@@ -10,6 +10,7 @@ import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import EditLoggingSettings from "./team/EditLoggingSettings";
 import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
 import { fetchMCPAccessGroups } from "./networking";
+import { mapInternalToDisplayNames, mapDisplayToInternalNames } from "./callback_info_helpers";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -57,7 +58,11 @@ export function KeyEditView({
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
-  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(Array.isArray(keyData.metadata?.litellm_disabled_callbacks) ? keyData.metadata.litellm_disabled_callbacks : []);
+  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
+    Array.isArray(keyData.metadata?.litellm_disabled_callbacks) 
+      ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
+      : []
+  );
 
   const fetchMcpAccessGroups = async () => {
     if (!accessToken) return;
@@ -128,7 +133,9 @@ export function KeyEditView({
       accessGroups: keyData.object_permission?.mcp_access_groups || []
     },
     logging_settings: extractLoggingSettings(keyData.metadata),
-    disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks) ? keyData.metadata.litellm_disabled_callbacks : []
+    disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks) 
+      ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
+      : []
   };
 
   return (
@@ -237,9 +244,12 @@ export function KeyEditView({
           value={form.getFieldValue('logging_settings')}
           onChange={(values) => form.setFieldValue('logging_settings', values)}
           disabledCallbacks={disabledCallbacks}
-          onDisabledCallbacksChange={(values) => {
-            setDisabledCallbacks(values);
-            form.setFieldValue('disabled_callbacks', values);
+          onDisabledCallbacksChange={(internalValues) => {
+            // Convert internal values back to display names for UI state
+            const displayNames = mapInternalToDisplayNames(internalValues);
+            setDisabledCallbacks(displayNames);
+            // Store internal values in form for submission
+            form.setFieldValue('disabled_callbacks', internalValues);
           }}
         />
       </Form.Item>
