@@ -712,7 +712,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           <TabPanel>
             <UsefulLinksManagement 
               accessToken={accessToken}
-              userRole={userRole}
+              userRole={userRole || null}
             />
           </TabPanel>
         </TabPanels>
