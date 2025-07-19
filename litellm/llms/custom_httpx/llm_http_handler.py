@@ -2700,6 +2700,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
             )
         )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
@@ -2796,6 +2797,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
             )
         )
 
