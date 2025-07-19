@@ -549,6 +549,7 @@ def test_embedding(mock_aembedding, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -576,6 +577,7 @@ def test_bedrock_embedding(mock_aembedding, client_no_auth):
             input=["good morning from litellm"],
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
