@@ -134,7 +134,7 @@ class AmazonNovaCanvasConfig:
             inpainting_params = {"text": text, **inpainting_params}
             try:
                 inpainting_params_typed = AmazonNovaCanvasInpaintingParams(
-                    **inpainting_params
+                    **inpainting_params  # type: ignore
                 )
             except Exception as e:
                 raise ValueError(
