@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger
 from litellm.llms.azure.fine_tuning.handler import AzureOpenAIFineTuningAPI
 from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
 from litellm.llms.vertex_ai.fine_tuning.handler import VertexFineTuningAPI
+from litellm.llms.vertex_ai.model_training.handler import VertexAIFineTuningHandler
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import FineTuningJobCreate, Hyperparameters
 from litellm.types.router import *
@@ -31,6 +32,7 @@ from litellm.utils import client, supports_httpx_timeout
 openai_fine_tuning_apis_instance = OpenAIFineTuningAPI()
 azure_fine_tuning_apis_instance = AzureOpenAIFineTuningAPI()
 vertex_fine_tuning_apis_instance = VertexFineTuningAPI()
+vertex_ai_supervised_fine_tuning_instance = VertexAIFineTuningHandler()
 #################################################
 
 
@@ -246,25 +248,24 @@ def create_fine_tuning_job(
             vertex_credentials = optional_params.vertex_credentials or get_secret_str(
                 "VERTEXAI_CREDENTIALS"
             )
-            create_fine_tuning_job_data = FineTuningJobCreate(
+            
+            # Use our new supervised fine-tuning handler
+            from litellm.llms.vertex_ai.model_training.types import FineTuningJobCreate as VertexAIFineTuningJobCreate
+            
+            job_create = VertexAIFineTuningJobCreate(
                 model=model,
                 training_file=training_file,
-                hyperparameters=_oai_hyperparameters,
-                suffix=suffix,
                 validation_file=validation_file,
-                integrations=integrations,
-                seed=seed,
-            )
-            response = vertex_fine_tuning_apis_instance.create_fine_tuning_job(
-                _is_async=_is_async,
-                create_fine_tuning_job_data=create_fine_tuning_job_data,
-                vertex_credentials=vertex_credentials,
+                hyperparameters=hyperparameters,
+                suffix=suffix,
                 vertex_project=vertex_ai_project,
                 vertex_location=vertex_ai_location,
-                timeout=timeout,
-                api_base=api_base,
-                kwargs=kwargs,
-                original_hyperparameters=hyperparameters,
+            )
+            
+            response = vertex_ai_supervised_fine_tuning_instance.create_fine_tuning_job(
+                job_create=job_create,
+                vertex_credentials=vertex_credentials,
+                acompletion=_is_async,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -425,6 +426,32 @@ def cancel_fine_tuning_job(
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
                 organization=optional_params.organization,
+            )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+            response = vertex_ai_supervised_fine_tuning_instance.cancel_fine_tuning_job(
+                _is_async=_is_async,
+                fine_tuning_job_id=fine_tuning_job_id,
+                vertex_credentials=vertex_credentials,
+                vertex_project=vertex_ai_project,
+                vertex_location=vertex_ai_location,
+                timeout=timeout,
+                api_base=api_base,
+                kwargs=kwargs,
+                original_hyperparameters=hyperparameters,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -590,6 +617,28 @@ def list_fine_tuning_jobs(
                 _is_async=_is_async,
                 organization=optional_params.organization,
             )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+            
+            response = vertex_ai_supervised_fine_tuning_instance.list_fine_tuning_jobs(
+                after=after,
+                limit=limit,
+                vertex_credentials=vertex_credentials,
+                acompletion=_is_async,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
@@ -743,6 +792,27 @@ def retrieve_fine_tuning_job(
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
                 organization=optional_params.organization,
+            )
+        elif custom_llm_provider == "vertex_ai":
+            api_base = optional_params.api_base or ""
+            vertex_ai_project = (
+                optional_params.vertex_project
+                or litellm.vertex_project
+                or get_secret_str("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.vertex_location
+                or litellm.vertex_location
+                or get_secret_str("VERTEXAI_LOCATION")
+            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
+                "VERTEXAI_CREDENTIALS"
+            )
+            
+            response = vertex_ai_supervised_fine_tuning_instance.retrieve_fine_tuning_job(
+                fine_tuning_job_id=fine_tuning_job_id,
+                vertex_credentials=vertex_credentials,
+                acompletion=_is_async,
             )
         else:
             raise litellm.exceptions.BadRequestError(

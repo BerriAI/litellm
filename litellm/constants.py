@@ -903,3 +903,117 @@ SENTRY_PII_DENYLIST = [
     "SMTP_SENDER_EMAIL",
     "TEST_EMAIL_ADDRESS",
 ]
+
+########################### Vertex AI Supervised Fine-Tuning Constants ###########################
+# Supported base models for supervised fine-tuning
+VERTEX_AI_FINE_TUNING_MODELS = {
+    # Gemini Models
+    "gemini-1.0-pro": {
+        "model_name": "gemini-1.0-pro",
+        "supports_fine_tuning": True,
+        "max_tokens": 32768,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    "gemini-2.0-flash": {
+        "model_name": "gemini-2.0-flash",
+        "supports_fine_tuning": True,
+        "max_tokens": 131072,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    "gemini-2.5-pro": {
+        "model_name": "gemini-2.5-pro",
+        "supports_fine_tuning": True,
+        "max_tokens": 1048576,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    # Claude Models
+    "claude-3-opus": {
+        "model_name": "claude-3-opus",
+        "supports_fine_tuning": True,
+        "max_tokens": 200000,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    "claude-3-sonnet": {
+        "model_name": "claude-3-sonnet",
+        "supports_fine_tuning": True,
+        "max_tokens": 200000,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    "claude-3-haiku": {
+        "model_name": "claude-3-haiku",
+        "supports_fine_tuning": True,
+        "max_tokens": 200000,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    # Llama Models
+    "meta-llama/Llama-2-7b-chat": {
+        "model_name": "meta-llama/Llama-2-7b-chat",
+        "supports_fine_tuning": True,
+        "max_tokens": 4096,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    "meta-llama/Llama-2-13b-chat": {
+        "model_name": "meta-llama/Llama-2-13b-chat",
+        "supports_fine_tuning": True,
+        "max_tokens": 4096,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    # Mistral Models
+    "mistral-7b-instruct": {
+        "model_name": "mistral-7b-instruct",
+        "supports_fine_tuning": True,
+        "max_tokens": 8192,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+    "mistral-large": {
+        "model_name": "mistral-large",
+        "supports_fine_tuning": True,
+        "max_tokens": 32768,
+        "adapter_sizes": ["small", "medium", "large"],
+    },
+}
+
+# Fine-tuning job states
+VERTEX_AI_FINE_TUNING_JOB_STATES = {
+    "JOB_STATE_QUEUED": "Job is queued for execution",
+    "JOB_STATE_PENDING": "Job is pending execution",
+    "JOB_STATE_RUNNING": "Job is currently running",
+    "JOB_STATE_SUCCEEDED": "Job completed successfully",
+    "JOB_STATE_FAILED": "Job failed",
+    "JOB_STATE_CANCELLING": "Job is being cancelled",
+    "JOB_STATE_CANCELLED": "Job was cancelled",
+    "JOB_STATE_ERROR": "Job encountered an error",
+}
+
+# Default hyperparameters for fine-tuning
+VERTEX_AI_DEFAULT_HYPERPARAMETERS = {
+    "epoch_count": 3,
+    "learning_rate_multiplier": 1.0,
+    "adapter_size": "medium",
+    "warmup_steps": 0,
+    "weight_decay": 0.01,
+}
+
+# Hyperparameter constraints
+VERTEX_AI_HYPERPARAMETER_CONSTRAINTS = {
+    "epoch_count": {"min": 1, "max": 10},
+    "learning_rate_multiplier": {"min": 0.1, "max": 10.0},
+    "adapter_size": {"values": ["small", "medium", "large"]},
+    "warmup_steps": {"min": 0, "max": 1000},
+    "weight_decay": {"min": 0.0, "max": 0.1},
+}
+
+# Supported dataset formats
+VERTEX_AI_SUPPORTED_DATASET_FORMATS = ["jsonl", "csv", "json"]
+
+# Default Vertex AI locations
+VERTEX_AI_DEFAULT_LOCATIONS = [
+    "us-central1",
+    "us-east1",
+    "us-west1",
+    "us-west4",
+    "europe-west1",
+    "europe-west4",
+    "asia-northeast1",
+    "asia-southeast1",
+]
