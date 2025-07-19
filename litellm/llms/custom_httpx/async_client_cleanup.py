@@ -64,11 +64,8 @@ def register_async_client_cleanup():
     def cleanup_wrapper():
         try:
             loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Schedule the cleanup coroutine
-                loop.create_task(close_litellm_async_clients())
-            else:
-                # Run the cleanup coroutine
+            if not loop.is_running():
+                # Run the cleanup coroutine only if loop is not running
                 loop.run_until_complete(close_litellm_async_clients())
         except Exception:
             # If we can't get an event loop or it's already closed, try creating a new one
