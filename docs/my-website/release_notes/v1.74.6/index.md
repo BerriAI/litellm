@@ -148,6 +148,10 @@ This enables developers to easily integrate vector search capabilities into thei
     - Added Vertex AI RAG Engine support (use with OpenAI compatible `/vector_stores` API) - [PR #12752](https://github.com/BerriAI/litellm/pull/12595), **DOC NEEDED**
 - **[AI21](../../docs/providers/ai21)**
     - Added ai21/jamba-1.7 model family pricing - [PR #12593](https://github.com/BerriAI/litellm/pull/12593), [Get Started](../../docs/providers/ai21)
+- **[Together.ai](../../docs/providers/together_ai)**
+    - [New Model] add together_ai/moonshotai/Kimi-K2-Instruct - [PR #12645](https://github.com/BerriAI/litellm/pull/12645), [Get Started](../../docs/providers/together_ai)
+- **[Groq](../../docs/providers/groq)**
+    - Add groq/moonshotai-kimi-k2-instruct model configuration - [PR #12648](https://github.com/BerriAI/litellm/pull/12648), [Get Started](../../docs/providers/groq)
 
 
 #### Bugs
@@ -159,6 +163,8 @@ This enables developers to easily integrate vector search capabilities into thei
     - Role chaining with web authentication for AWS Bedrock - [PR #12607](https://github.com/BerriAI/litellm/pull/12607)
 - **[VertexAI](../../docs/providers/vertex)**
     - Add project_id to cached credentials - [PR #12661](https://github.com/BerriAI/litellm/pull/12661)
+- **[Bedrock](../../docs/providers/bedrock)**
+    - Fix bedrock nova micro and nova lite context window info in [PR #12619](https://github.com/BerriAI/litellm/pull/12619)
 
 ---
 
