@@ -44,7 +44,6 @@ def test_cost_calculator_with_usage():
     from litellm import get_model_info
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
         prompt_tokens=100,
@@ -65,7 +64,7 @@ def test_cost_calculator_with_usage():
         base_model=None,
     )
 
-    model_info = litellm.model_cost["gemini-2.0-flash-001"]
+    model_info = litellm.model_cost()["gemini-2.0-flash-001"]
 
     expected_cost = (
         usage.prompt_tokens_details.audio_tokens
@@ -217,7 +216,6 @@ def test_azure_realtime_cost_calculator():
     from litellm import get_model_info
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     cost = handle_realtime_stream_cost_calculation(
         results=[

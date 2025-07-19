@@ -337,7 +337,6 @@ def test_all_model_configs():
 
 def test_anthropic_web_search_in_model_info():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     supported_models = [
         "anthropic/claude-3-7-sonnet-20250219",
@@ -549,9 +548,8 @@ def test_get_model_info_gemini():
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    model_map = litellm.model_cost
+    model_map = litellm.model_cost()
     for model, info in model_map.items():
         if (
             model.startswith("gemini/")
@@ -564,9 +562,8 @@ def test_get_model_info_gemini():
 
 def test_openai_models_in_model_info():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    model_map = litellm.model_cost
+    model_map = litellm.model_cost()
     violated_models = []
     for model, info in model_map.items():
         if (
@@ -697,7 +694,7 @@ async def test_supports_tool_choice():
     path = "./model_prices_and_context_window.json"
     with open(path, "r") as f:
         model_prices = json.load(f)
-    litellm.model_cost = model_prices
+    litellm._model_cost = model_prices
     config_manager = ProviderConfigManager()
 
     for model_name, model_info in model_prices.items():
@@ -757,12 +754,11 @@ def test_supports_computer_use_utility():
 
     # Ensure LITELLM_LOCAL_MODEL_COST_MAP is set for consistent test behavior,
     # as supports_computer_use relies on get_model_info.
-    # This also requires litellm.model_cost to be populated.
+    # This also requires litellm.model_cost() to be populated.
     original_env_var = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP")
     original_model_cost = getattr(litellm, "model_cost", None)
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")  # Load with local/backup
 
     try:
         # Test a model known to support computer_use from backup JSON
@@ -782,7 +778,7 @@ def test_supports_computer_use_utility():
             os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
 
         if original_model_cost is not None:
-            litellm.model_cost = original_model_cost
+            litellm._model_cost = original_model_cost
         elif hasattr(litellm, "model_cost"):
             delattr(litellm, "model_cost")
 
@@ -794,9 +790,8 @@ def test_get_model_info_shows_supports_computer_use():
     in the backup JSON to have supports_computer_use: True.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    # Ensure litellm.model_cost is loaded, relying on the backup mechanism if primary fails
+    # Ensure litellm.model_cost() is loaded, relying on the backup mechanism if primary fails
     # as per previous debugging.
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # This model should have 'supports_computer_use': True in the backup JSON
     model_known_to_support_computer_use = "claude-3-7-sonnet-20250219"
@@ -2072,7 +2067,7 @@ def test_register_model_with_scientific_notation():
 
     litellm.register_model(model_cost_dict)
 
-    registered_model = litellm.model_cost["my-custom-model"]
+    registered_model = litellm.model_cost()["my-custom-model"]
     print(registered_model)
     assert registered_model["input_cost_per_token"] == 3e-07
     assert registered_model["output_cost_per_token"] == 6e-07
