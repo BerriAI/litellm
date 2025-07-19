@@ -816,3 +816,81 @@ def mock_open(read_data=''):
     
     mock_file = MagicMock(return_value=file_object)
     return mock_file 
+
+
+def test_model_armor_initialization_preserves_project_id():
+    """Test that ModelArmorGuardrail initialization preserves the project_id correctly"""
+    # This tests the fix for issue #12757 where project_id was being overwritten to None
+    # due to incorrect initialization order with VertexBase parent class
+    
+    test_project_id = "cloud-xxxxx-yyyyy"
+    test_template_id = "global-armor"
+    test_location = "eu"
+    
+    guardrail = ModelArmorGuardrail(
+        template_id=test_template_id,
+        project_id=test_project_id,
+        location=test_location,
+        guardrail_name="model-armor-test",
+    )
+    
+    # Assert that project_id is preserved after initialization
+    assert guardrail.project_id == test_project_id
+    assert guardrail.template_id == test_template_id
+    assert guardrail.location == test_location
+    
+    # Also check that the VertexBase initialization didn't reset project_id to None
+    assert hasattr(guardrail, 'project_id')
+    assert guardrail.project_id is not None
+
+
+@pytest.mark.asyncio
+async def test_model_armor_with_default_credentials():
+    """Test Model Armor with default credentials and explicit project_id"""
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+    
+    # Initialize with explicit project_id but no credentials (simulating default auth)
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="cloud-test-project",
+        location="eu",
+        guardrail_name="model-armor-test",
+        credentials=None,  # Explicitly set to None to test default auth
+    )
+    
+    # Mock the Model Armor API response
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitized_text": "Test content",
+        "action": "SANITIZE"
+    })
+    
+    # Mock the access token method to simulate successful auth
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "cloud-test-project"))
+    
+    # Mock the async handler
+    guardrail.async_handler = AsyncMock()
+    guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+    
+    request_data = {
+        "model": "gpt-4",
+        "messages": [
+            {"role": "user", "content": "Test content"}
+        ],
+        "metadata": {"guardrails": ["model-armor-test"]}
+    }
+    
+    # This should not raise ValueError about project_id
+    result = await guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key_dict,
+        cache=mock_cache,
+        data=request_data,
+        call_type="completion"
+    )
+    
+    # Verify the project_id was used correctly in the API call
+    guardrail.async_handler.post.assert_called_once()
+    call_args = guardrail.async_handler.post.call_args
+    assert "cloud-test-project" in call_args[1]["url"]
