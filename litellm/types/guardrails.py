@@ -404,7 +404,6 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
-    PillarGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
