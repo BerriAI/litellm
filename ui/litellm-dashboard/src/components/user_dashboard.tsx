@@ -60,6 +60,7 @@ interface UserDashboardProps {
   organizations: Organization[] | null
   addKey: (data: any) => void
   createClicked: boolean
+  setAccessToken: (token: string) => void
 }
 
 type TeamInterface = {
@@ -82,6 +83,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   organizations,
   addKey,
   createClicked,
+  setAccessToken,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null)
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null)
@@ -93,7 +95,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
   const invitation_id = searchParams.get("invitation_id")
 
-  const [accessToken, setAccessToken] = useState<string | null>(null)
+  const [accessToken, setAccessTokenState] = useState<string | null>(null)
   const [teamSpend, setTeamSpend] = useState<number | null>(null)
   const [userModels, setUserModels] = useState<string[]>([])
   const [proxySettings, setProxySettings] = useState<ProxySettings | null>(null)
@@ -150,7 +152,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
         console.log("Decoded key:", decoded.key)
         // set accessToken
-        setAccessToken(decoded.key)
+        setAccessTokenState(decoded.key)
 
         // check if userRole is defined
         if (decoded.user_role) {
@@ -381,6 +383,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
             createClicked={createClicked}
+            setAccessToken={setAccessTokenState}
           />
         </Col>
       </Grid>
