@@ -53,20 +53,23 @@ pip install litellm==1.74.6
 
 ---
 
-## MCP Gateway: Enhanced Namespacing
-
-v1.74.6 introduces improved URL-based namespacing for MCP servers, enabling better segregation and organization of MCP tools across different environments and teams.
-
-Key features include:
-- **URL-based namespacing**: Better isolation between different MCP server instances
-- **Access group improvements**: Enhanced management of MCP server access through configuration
-- **Tool permission management**: Improved object permissions when updating/deleting keys and teams
-
-Read more [here](https://docs.litellm.ai/docs/mcp#grouping-mcps-access-groups)
-
----
-
 ## Vector Stores API
+
+This release introduces support for using VertexAI RAG Engine, PG Vector, Bedrock Knowledge Bases, and OpenAI Vector Stores with LiteLLM.
+
+This is ideal for use cases requiring external knowledge sources with LLMs.
+
+This brings the following benefits:
+
+
+**Proxy Admin Benefits:**
+- Fine-grained access control: determine which Keys and Teams can access specific Vector Stores
+- Complete usage tracking and monitoring across all vector store operations
+
+**Developer Benefits:**
+- Simple, unified interface for querying vector stores and using them with LLM API requests
+- Consistent API experience across all supported vector store providers 
+
 
 
 [Get started](../../docs/completion/knowledgebase)
