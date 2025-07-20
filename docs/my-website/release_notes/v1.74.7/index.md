@@ -1,6 +1,6 @@
 ---
-title: "v1.74.6"
-slug: "v1-74-6"
+title: "[Pre Release] v1.74.7"
+slug: "v1-74-7"
 date: 2025-07-19T10:00:00
 authors:
   - name: Krrish Dholakia
@@ -28,14 +28,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.6
+ghcr.io/berriai/litellm:v1.74.7
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.74.6
+pip install litellm==1.74.7
 ```
 
 </TabItem>
