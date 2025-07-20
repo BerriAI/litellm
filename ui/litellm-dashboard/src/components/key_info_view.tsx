@@ -233,7 +233,7 @@ export default function KeyInfoView({
         ...prevData,
         ...updatedKeyData, // This should include the new token (key-id)
         // Update the created_at to show when it was regenerated
-        created_at: new Date().toISOString(),
+        created_at: new Date().toLocaleString(),
       }
       console.log("Updated currentKeyData with new token:", newData) // Debug log
       return newData
@@ -246,7 +246,7 @@ export default function KeyInfoView({
     if (onKeyDataUpdate) {
       onKeyDataUpdate({
         ...updatedKeyData,
-        created_at: new Date().toISOString(),
+        created_at: new Date().toLocaleString(),
       })
     }
   }
