@@ -48,7 +48,6 @@ pip install litellm==1.74.7
 
 - **Vector Stores** - Support for Vertex RAG Engine, PG Vector, OpenAI & Azure OpenAI Vector Stores.
 - **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
-- **Control Plane + Data Plane Architecture** - Enhanced proxy architecture for better scalability and separation of concerns.
 - **New LLM Providers** - Added Moonshot API `moonshot` and `v0` provider support.
 
 ---
@@ -59,8 +58,7 @@ This release introduces support for using VertexAI RAG Engine, PG Vector, Bedroc
 
 This is ideal for use cases requiring external knowledge sources with LLMs.
 
-This brings the following benefits:
-
+This brings the following benefits for LiteLLM users:
 
 **Proxy Admin Benefits:**
 - Fine-grained access control: determine which Keys and Teams can access specific Vector Stores
@@ -73,10 +71,6 @@ This brings the following benefits:
 
 
 [Get started](../../docs/completion/knowledgebase)
-
----
-
-## Control Plane + Data Plane Architecture
 
 
 ---
