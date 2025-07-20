@@ -480,7 +480,7 @@ async def update_sso_settings(sso_config: SSOConfig):
         elif field_name == "ui_access_mode" and value is not None:
 
             config["general_settings"]["ui_access_mode"] = value
-        elif field_name in env_var_mapping and value is not None:
+        elif field_name in env_var_mapping and value is not None and len(value) > 0:
             env_var_name = env_var_mapping[field_name]
             # Update in config
             config["environment_variables"][env_var_name] = value
