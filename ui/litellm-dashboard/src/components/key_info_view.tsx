@@ -201,7 +201,7 @@ export default function KeyInfoView({
   const handleDelete = async () => {
     try {
       if (!accessToken) return
-      await keyDeleteCall(accessToken as string, currentKeyData.token)
+      await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id)
       message.success("Key deleted successfully")
       if (onDelete) {
         onDelete()
