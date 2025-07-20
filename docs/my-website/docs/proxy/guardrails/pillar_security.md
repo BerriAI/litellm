@@ -50,7 +50,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
-  - guardrail_name: "pillar-dual-protection" # you can change me name
+  - guardrail_name: "pillar-dual-protection" # you can change my name
     litellm_params:
       guardrail: pillar
       mode: [pre_call, post_call]            # Monitor both input and output
@@ -323,7 +323,6 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
         "session_id": "2c0fec96-07a8-4263-aeb6-332545aaadf1",
         "scanners": {
           "jailbreak": true,
-          // ... we have many scanners
         },
         "evidence": [
           {
@@ -374,7 +373,6 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
         "session_id": "1c0a4fff-4377-4763-ae38-ef562373ef7c",
         "scanners": {
           "secret": true,
-          // ... we have many scanners
         },
         "evidence": [
           {
