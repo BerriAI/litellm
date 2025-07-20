@@ -5563,6 +5563,9 @@ async def ahealth_check(
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
             ),
+            "batch": lambda: litellm.alist_batches(
+                **_filter_model_params(model_params),
+            ),
         }
 
         if mode in mode_handlers:

@@ -138,7 +138,6 @@ from ..integrations.logfire_logger import LogfireLevel, LogfireLogger
 from ..integrations.lunary import LunaryLogger
 from ..integrations.openmeter import OpenMeterLogger
 from ..integrations.opik.opik import OpikLogger
-from ..integrations.prometheus import PrometheusLogger
 from ..integrations.prompt_layer import PromptLayerLogger
 from ..integrations.s3 import S3Logger
 from ..integrations.s3_v2 import S3Logger as S3V2Logger
@@ -171,6 +170,8 @@ try:
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
+
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
         Type[EnterpriseStandardLoggingPayloadSetup]
@@ -185,6 +186,7 @@ except Exception as e:
     PagerDutyAlerting = CustomLogger  # type: ignore
     EnterpriseCallbackControls = None  # type: ignore
     EnterpriseStandardLoggingPayloadSetupVAR = None
+    PrometheusLogger = None
 _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
@@ -1311,8 +1313,10 @@ class Logging(LiteLLMLoggingBaseClass):
         # Check for dynamically disabled callbacks via headers
         if (
             EnterpriseCallbackControls is not None
-            and EnterpriseCallbackControls.is_callback_disabled_via_headers(
-                callback, litellm_params
+            and EnterpriseCallbackControls.is_callback_disabled_dynamically(
+                callback=callback, 
+                litellm_params=litellm_params,
+                standard_callback_dynamic_params = self.standard_callback_dynamic_params
             )
         ):
             verbose_logger.debug(

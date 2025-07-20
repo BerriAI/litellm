@@ -116,6 +116,7 @@ async def create_streaming_response(
         first_chunk_value = await generator.__anext__()
 
         if first_chunk_value is not None:
+
             try:
                 error_code_from_chunk = await _parse_event_data_for_error(
                     first_chunk_value
@@ -129,6 +130,7 @@ async def create_streaming_response(
                 verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
 
     except StopAsyncIteration:
+
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
@@ -141,6 +143,7 @@ async def create_streaming_response(
             status_code=default_status_code,
         )
     except Exception as e:
+
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception(
             f"Error consuming first chunk from generator: {e}"
@@ -452,6 +455,7 @@ class ProxyBaseLLMRequestProcessing:
         ) or self._is_streaming_response(
             response
         ):  # use generate_responses to stream responses
+
             custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
@@ -489,6 +493,7 @@ class ProxyBaseLLMRequestProcessing:
                         headers=custom_headers,
                     )
             else:
+
                 selected_data_generator = select_data_generator(
                     response=response,
                     user_api_key_dict=user_api_key_dict,

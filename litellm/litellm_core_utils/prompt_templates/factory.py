@@ -1212,6 +1212,7 @@ def convert_to_anthropic_tool_result(
                     AnthropicMessagesToolResultContent(
                         type="text",
                         text=content["text"],
+                        cache_control=content.get("cache_control", None),
                     )
                 )
             elif content["type"] == "image_url":

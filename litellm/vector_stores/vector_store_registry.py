@@ -127,7 +127,18 @@ class VectorStoreRegistry:
                 if vector_store.get("vector_store_id") == vector_store_id:
                     return vector_store
         return None
-
+    
+    def get_litellm_managed_vector_store_from_registry(
+        self, vector_store_id: str
+    ) -> Optional[LiteLLM_ManagedVectorStore]:
+        """
+        Returns the vector store from the registry
+        """
+        for vector_store in self.vector_stores: 
+            if vector_store.get("vector_store_id") == vector_store_id:
+                return vector_store
+        return None
+    
     def pop_vector_stores_to_run(
         self, non_default_params: Dict, tools: Optional[List[Dict]] = None
     ) -> List[LiteLLM_ManagedVectorStore]:
@@ -242,6 +253,16 @@ class VectorStoreRegistry:
             for vector_store in self.vector_stores
             if vector_store.get("vector_store_id") != vector_store_id
         ]
+
+    def update_vector_store_in_registry(
+        self, vector_store_id: str, updated_data: LiteLLM_ManagedVectorStore
+    ):
+        """Update or add a vector store in the registry"""
+        for i, vector_store in enumerate(self.vector_stores):
+            if vector_store.get("vector_store_id") == vector_store_id:
+                self.vector_stores[i] = updated_data
+                return
+        self.vector_stores.append(updated_data)
 
     #########################################################
     ########### DB management helpers for vector stores ###########
