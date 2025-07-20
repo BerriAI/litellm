@@ -489,11 +489,20 @@ class InMemoryGuardrailHandler:
             )
 
         default_on = litellm_params.default_on
-        _guardrail_callback = _guardrail_class(
-            guardrail_name=guardrail["guardrail_name"],
-            event_hook=mode,
-            default_on=default_on,
-        )
+        api_base = getattr(litellm_params, "api_base", None)
+
+        # Build kwargs to make api_base optional
+        guardrail_kwargs = {
+            "guardrail_name": guardrail["guardrail_name"],
+            "event_hook": mode,
+            "default_on": default_on,
+        }
+
+        # Only add api_base if it's not None
+        if api_base is not None:
+            guardrail_kwargs["api_base"] = api_base
+
+        _guardrail_callback = _guardrail_class(**guardrail_kwargs)
         litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
 
         return _guardrail_callback
