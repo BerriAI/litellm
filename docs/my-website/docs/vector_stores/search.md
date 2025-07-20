@@ -175,3 +175,14 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/vector_stores/vs_abc123/search' \
 </TabItem>
 </Tabs>
 
+## Setting Up Vector Stores
+
+To use vector store search, configure your vector stores in the `vector_store_registry`. See the [Vector Store Configuration Guide](../completion/knowledgebase.md) for:
+
+- Provider-specific configuration (Bedrock, OpenAI, Azure, Vertex AI, PG Vector)
+- Python SDK and Proxy setup examples  
+- Authentication and credential management
+
+## Using Vector Stores with Chat Completions
+
+Pass `vector_store_ids` in chat completion requests to automatically retrieve relevant context. See [Using Vector Stores with Chat Completions](../completion/knowledgebase.md#2-make-a-request-with-vector_store_ids-parameter) for implementation details.
