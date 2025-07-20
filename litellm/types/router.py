@@ -554,6 +554,7 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
     mode: Optional[
         Union[
             str,
@@ -721,7 +722,10 @@ class GenericBudgetWindowDetails(BaseModel):
 
 OptionalPreCallChecks = List[
     Literal[
-        "prompt_caching", "router_budget_limiting", "responses_api_deployment_check"
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "forward_client_headers_by_model_group",
     ]
 ]
 
@@ -758,3 +762,7 @@ class MockRouterTestingParams:
                 "mock_testing_content_policy_fallbacks"
             ),
         )
+
+
+class ModelGroupSettings(BaseModel):
+    forward_client_headers_to_llm_api: Optional[List[str]] = None

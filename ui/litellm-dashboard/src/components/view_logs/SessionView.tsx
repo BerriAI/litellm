@@ -6,6 +6,9 @@ import { Card, Title, Text, Metric, AreaChart, Button as TremorButton } from "@t
 import { RequestViewer } from "./index"
 import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { ArrowLeftIcon } from "@heroicons/react/outline"
+import { Button } from "antd"
+import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
+import { CheckIcon, CopyIcon } from "lucide-react"
 
 interface SessionViewProps {
   sessionId: string
@@ -16,6 +19,8 @@ interface SessionViewProps {
 export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBack }) => {
   // Track which log row is expanded
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null)
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+
   // Calculate session metrics
   const totalCost = logs.reduce((sum, log) => sum + (log.spend || 0), 0)
   const totalTokens = logs.reduce((sum, log) => sum + (log.total_tokens || 0), 0)
@@ -31,6 +36,16 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
     cost: log.spend || 0,
   }))
 
+  const copyToClipboard = async (text: string, key: string) => {
+    const success = await utilCopyToClipboard(text);
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }));
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }));
+      }, 2000);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header with back button */}
@@ -41,7 +56,20 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
         <div className="mt-4">
           <h1 className="text-2xl font-semibold text-gray-900">Session Details</h1>
           <div className="space-y-2">
-            <p className="text-sm text-gray-500 font-mono">{sessionId}</p>
+            <div className="flex items-center cursor-pointer">
+              <p className="text-sm text-gray-500 font-mono">{sessionId}</p>
+              <Button
+                type="text"
+                size="small"
+                icon={copiedStates["session-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                onClick={() => copyToClipboard(sessionId, "session-id")}
+                className={`left-2 z-10 transition-all duration-200 ${
+                  copiedStates["session-id"] 
+                    ? 'text-green-600 bg-green-50 border-green-200' 
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                }`}
+              />
+            </div>
             <a
               href="https://docs.litellm.ai/docs/proxy/ui_logs_sessions"
               target="_blank"
@@ -70,7 +98,7 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
         </Card>
         <Card>
           <Text>Total Cost</Text>
-          <Metric>${formatNumberWithCommas(totalCost, 4)}</Metric>
+          <Metric>${formatNumberWithCommas(totalCost, 6)}</Metric>
         </Card>
         <Card>
           <Text>Total Tokens</Text>

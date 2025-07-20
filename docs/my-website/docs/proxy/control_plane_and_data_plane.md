@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Control Plane and Data Plane (Enterprise)
+# Control Plane for Multi-region Architecture (Enterprise)
 
-Learn how to deploy LiteLLM across multiple instances while maintaining centralized administration and avoiding duplication of management overhead.
+Learn how to deploy LiteLLM across multiple regions while maintaining centralized administration and avoiding duplication of management overhead.
 
 :::info
 
@@ -153,8 +153,6 @@ DISABLE_LLM_ENDPOINTS=true
 - `/v1/*` - OpenAI-compatible APIs
 - `/vertex_ai/*` - Vertex AI pass-through APIs
 - `/bedrock/*` - Bedrock pass-through APIs
-- `/health` - Basic health check
-- `/metrics` - Prometheus metrics
 - All other LLM API endpoints
 
 

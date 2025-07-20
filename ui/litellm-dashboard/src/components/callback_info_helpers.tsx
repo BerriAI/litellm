@@ -1,7 +1,7 @@
 export enum Callbacks {
   Braintrust = "Braintrust",
   CustomCallbackAPI = "Custom Callback API",
-  Datadog = "Datagog",
+  Datadog = "Datadog",
   Langfuse = "Langfuse",
   LangSmith = "LangSmith",
   Lago = "Lago",
@@ -24,7 +24,22 @@ export const callback_map: Record<string, string> = {
   Arize: "arize",
 }
 
-const asset_logos_folder = '/ui/assets/logos/';
+// Reverse mapping from internal values to display names
+export const reverse_callback_map: Record<string, string> = Object.fromEntries(
+  Object.entries(callback_map).map(([key, value]) => [value, key])
+);
+
+// Utility function to convert internal callback values to display names
+export const mapInternalToDisplayNames = (internalValues: string[]): string[] => {
+  return internalValues.map(value => reverse_callback_map[value] || value);
+};
+
+// Utility function to convert display names to internal callback values
+export const mapDisplayToInternalNames = (displayValues: string[]): string[] => {
+  return displayValues.map(value => callback_map[value] || value);
+};
+
+const asset_logos_folder = '/assets/logos/';
 
 interface CallbackInfo {
   logo: string;
@@ -66,7 +81,7 @@ export const callbackInfo: Record<string, CallbackInfo> = {
     },
     [Callbacks.CustomCallbackAPI]: {
         logo: `${asset_logos_folder}custom.svg`,
-        supports_key_team_logging: false,
+        supports_key_team_logging: true,
         dynamic_params: {}
     },
     [Callbacks.Datadog]: {

@@ -19,6 +19,7 @@ import {
   TableBody,
   Table,
   Icon,
+  TextInput,
 } from "@tremor/react";
 import TeamMembersComponent from "./team_member_view";
 import MemberPermissions from "./member_permissions";
@@ -51,6 +52,8 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingSettingsView from "../logging_settings_view";
 import { fetchMCPAccessGroups } from "../networking";
+import { CheckIcon, CopyIcon } from "lucide-react";
+import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
 
 export interface TeamMembership {
   user_id: string;
@@ -143,6 +146,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
 
   console.log("userModels in team info", userModels);
 
@@ -361,6 +365,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const { team_info: info } = teamData;
 
+  const copyToClipboard = async (text: string, key: string) => {
+    const success = await utilCopyToClipboard(text)
+    if (success) {
+      setCopiedStates((prev) => ({ ...prev, [key]: true }))
+      setTimeout(() => {
+        setCopiedStates((prev) => ({ ...prev, [key]: false }))
+      }, 2000)
+    }
+  }
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -374,7 +388,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             Back to Teams
           </TremorButton>
           <Title>{info.team_alias}</Title>
-          <Text className="text-gray-500 font-mono">{info.team_id}</Text>
+          <div className="flex items-center cursor-pointer">
+            <Text className="text-gray-500 font-mono">{info.team_id}</Text> 
+            <Button
+              type="text"
+              size="small"
+              icon={copiedStates["team-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(info.team_id, "team-id")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["team-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
+            />
+          </div>
         </div>
       </div>
 
@@ -452,6 +479,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               </Card>
 
+              <Card>
+                <Text className="font-semibold text-gray-900">Virtual Keys</Text>
+                <div className="mt-2">
+                    <Text>
+                      User Keys: {teamData.keys.filter(key => key.user_id).length}
+                    </Text>
+                    <Text>
+                      Service Account Keys: {teamData.keys.filter(key => !key.user_id).length}
+                    </Text>
+                    <Text className="text-gray-500">
+                      Total: {teamData.keys.length}
+                    </Text>
+                  </div>
+              </Card>
+
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
                 variant="card"
@@ -460,6 +502,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
+                disabledCallbacks={[]}
                 variant="card"
               />
             </Grid>
@@ -524,10 +567,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
                     mcp_servers: info.object_permission?.mcp_servers || [],
-                    mcp_access_groups:
-                      info.object_permission?.mcp_servers || [],
-                    mcp_servers_and_groups:
-                      info.object_permission?.mcp_servers || [],
+                    mcp_access_groups: info.object_permission?.mcp_access_groups || [],
+                    mcp_servers_and_groups: {
+                      servers: info.object_permission?.mcp_servers || [],
+                      accessGroups: info.object_permission?.mcp_access_groups || [],
+                    },
                   }}
                   layout="vertical"
                 >
@@ -578,15 +622,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item
-                    label="Team Member Key Duration"
+                    label="Team Member Key Duration (eg: 1d, 1mo)"
                     name="team_member_key_duration"
-                    tooltip="Set a limit to the duration of a team member's key."
+                    tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                   >
-                    <Select placeholder="n/a">
-                      <Select.Option value="1d">1 day</Select.Option>
-                      <Select.Option value="1w">1 week</Select.Option>
-                      <Select.Option value="1mo">1 month</Select.Option>
-                    </Select>
+                    <TextInput placeholder="e.g., 30d" />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -764,6 +804,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <LoggingSettingsView
                     loggingConfigs={info.metadata?.logging || []}
+                    disabledCallbacks={[]}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />
