@@ -106,7 +106,7 @@ export function RegenerateKeyModal({
       const formValues = await form.validateFields()
 
       // Use the current access token for the API call
-      const response = await regenerateKeyCall(currentAccessToken, selectedToken.token, formValues)
+      const response = await regenerateKeyCall(currentAccessToken, selectedToken.token || selectedToken.token_id, formValues)
       setRegeneratedKey(response.key)
       message.success("API Key regenerated successfully")
 

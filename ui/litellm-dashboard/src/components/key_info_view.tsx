@@ -224,8 +224,6 @@ export default function KeyInfoView({
   }
 
   const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
-    console.log("Received updated key data:", updatedKeyData) // Debug log
-
     // Update local state immediately with ALL the new data
     setCurrentKeyData((prevData) => {
       if (!prevData) return undefined
@@ -235,7 +233,6 @@ export default function KeyInfoView({
         // Update the created_at to show when it was regenerated
         created_at: new Date().toLocaleString(),
       }
-      console.log("Updated currentKeyData with new token:", newData) // Debug log
       return newData
     })
 

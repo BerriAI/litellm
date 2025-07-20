@@ -350,7 +350,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     try {
       const formValues = await regenerateForm.validateFields()
       if (!accessToken) return;
-      const response = await regenerateKeyCall(accessToken, selectedToken.token, formValues)
+      const response = await regenerateKeyCall(accessToken, selectedToken.token || selectedToken.token_id, formValues)
       setRegeneratedKey(response.key)
 
       // Update the data state with the new key_name
