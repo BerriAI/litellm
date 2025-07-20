@@ -625,7 +625,6 @@ export function AllKeysTable({
           userRole={userRole}
           teams={allTeams}
           premiumUser={premiumUser}
-          setAccessToken={() => {}} // No-op function since this component doesn't manage access tokens
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">

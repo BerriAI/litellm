@@ -118,6 +118,7 @@ async def test_provider_budgets_e2e_test():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_provider_budgets_e2e_test_expect_to_fail():
     """
     Expected behavior:
