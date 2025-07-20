@@ -452,9 +452,9 @@ class InMemoryGuardrailHandler:
         config_file_path: Optional[str] = None,
     ) -> Optional[CustomGuardrail]:
         """
-        Initialize a Custom Guardrail from a python file
+        Initialize a Custom Guardrail from a python file.
 
-        This initializes it by adding it to the litellm callback manager
+        This initializes it by adding it to the litellm callback manager.
         """
         if not config_file_path:
             raise Exception(
@@ -462,6 +462,7 @@ class InMemoryGuardrailHandler:
             )
 
         _file_name, _class_name = guardrail_type.split(".")
+
         verbose_proxy_logger.debug(
             "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
             guardrail_type,
