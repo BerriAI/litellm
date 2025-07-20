@@ -2,13 +2,9 @@
 Transformation logic for Vertex AI Online Prediction
 """
 
-import json
-import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import litellm
-from litellm._logging import verbose_logger
-from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import ModelResponse
 
 from .types import (

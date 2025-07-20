@@ -3,7 +3,6 @@ Test file for Vertex AI Online Prediction
 """
 
 import unittest
-from unittest.mock import Mock, patch
 
 from .transformation import VertexAIOnlinePredictionTransformation
 from .types import EndpointConfig

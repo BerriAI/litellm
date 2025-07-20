@@ -2,7 +2,7 @@
 Type definitions for Vertex AI Online Prediction
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 

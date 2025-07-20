@@ -2,11 +2,8 @@
 Handler for Vertex AI Online Prediction
 """
 
-import json
 import traceback
 from typing import Any, Coroutine, Dict, Optional, Union
-
-import httpx
 
 import litellm
 from litellm._logging import verbose_logger
@@ -16,7 +13,7 @@ from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import ModelResponse
 
 from .transformation import VertexAIOnlinePredictionTransformation
-from .types import EndpointConfig, OnlinePredictionRequest, OnlinePredictionResponse
+from .types import OnlinePredictionRequest, OnlinePredictionResponse
 
 
 class VertexAIOnlinePredictionHandler(VertexLLM):

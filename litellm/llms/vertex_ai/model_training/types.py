@@ -2,7 +2,7 @@
 Type definitions for Vertex AI Supervised Fine-Tuning
 """
 
-from typing import Any, Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
 

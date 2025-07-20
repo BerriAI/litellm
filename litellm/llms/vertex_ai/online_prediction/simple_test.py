@@ -21,7 +21,6 @@ def test_parse_endpoint_from_model_simple():
     assert result.endpoint_id == "1234567890123456789"
     assert result.project_id == ""
     assert result.location == ""
-    print("✓ test_parse_endpoint_from_model_simple passed")
 
 
 def test_parse_endpoint_from_model_full():
@@ -32,7 +31,6 @@ def test_parse_endpoint_from_model_full():
     assert result.endpoint_id == "1234567890123456789"
     assert result.project_id == "my-project"
     assert result.location == "us-central1"
-    print("✓ test_parse_endpoint_from_model_full passed")
 
 
 def test_parse_endpoint_from_model_invalid():
@@ -43,7 +41,7 @@ def test_parse_endpoint_from_model_invalid():
         transformation.VertexAIOnlinePredictionTransformation.parse_endpoint_from_model(model)
         assert False, "Should have raised ValueError"
     except ValueError:
-        print("✓ test_parse_endpoint_from_model_invalid passed")
+        pass
 
 
 def test_validate_endpoint_config():
@@ -61,7 +59,6 @@ def test_validate_endpoint_config():
     assert result.project_id == "my-project"
     assert result.location == "us-central1"
     assert result.endpoint_id == "1234567890123456789"
-    print("✓ test_validate_endpoint_config passed")
 
 
 def test_create_prediction_url():
@@ -74,7 +71,6 @@ def test_create_prediction_url():
     
     expected = "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/1234567890123456789:predict"
     assert url == expected
-    print("✓ test_create_prediction_url passed")
 
 
 def test_create_prediction_url_raw():
@@ -88,23 +84,16 @@ def test_create_prediction_url_raw():
     
     expected = "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/endpoints/1234567890123456789:rawPredict"
     assert url == expected
-    print("✓ test_create_prediction_url_raw passed")
 
 
 def run_all_tests():
     """Run all tests"""
-    print("Running Vertex AI Online Prediction tests...")
-    print("=" * 50)
-    
     test_parse_endpoint_from_model_simple()
     test_parse_endpoint_from_model_full()
     test_parse_endpoint_from_model_invalid()
     test_validate_endpoint_config()
     test_create_prediction_url()
     test_create_prediction_url_raw()
-    
-    print("=" * 50)
-    print("All tests passed! 🎉")
 
 
 if __name__ == "__main__":

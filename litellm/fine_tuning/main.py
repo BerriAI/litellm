@@ -619,16 +619,6 @@ def list_fine_tuning_jobs(
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
-            vertex_ai_project = (
-                optional_params.vertex_project
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location = (
-                optional_params.vertex_location
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
-            )
             vertex_credentials = optional_params.vertex_credentials or get_secret_str(
                 "VERTEXAI_CREDENTIALS"
             )
@@ -795,16 +785,6 @@ def retrieve_fine_tuning_job(
             )
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
-            vertex_ai_project = (
-                optional_params.vertex_project
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location = (
-                optional_params.vertex_location
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
-            )
             vertex_credentials = optional_params.vertex_credentials or get_secret_str(
                 "VERTEXAI_CREDENTIALS"
             )

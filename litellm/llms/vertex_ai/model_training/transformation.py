@@ -2,9 +2,8 @@
 Transformation logic for Vertex AI Supervised Fine-Tuning
 """
 
-import json
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from .types import (
     FineTuningHyperparameters,

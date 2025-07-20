@@ -4,9 +4,7 @@ Handler for Vertex AI Supervised Fine-Tuning
 
 import json
 import traceback
-from typing import Any, Coroutine, Dict, List, Optional, Union
-
-import httpx
+from typing import Any, Coroutine, Dict, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,7 +17,6 @@ from .types import (
     FineTuningJobCreate,
     FineTuningJobStatus,
     FineTuningJobList,
-    DatasetValidationResult,
     FineTuningCostEstimate,
 )
 
