@@ -1,4 +1,4 @@
- # used for /metrics endpoint on LiteLLM Proxy
+# used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
 import sys
@@ -2148,7 +2148,9 @@ class PrometheusLogger(CustomLogger):
         """
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
         from litellm.integrations.custom_logger import CustomLogger
-        from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
+        from enterprise.litellm_enterprise.integrations.prometheus import (
+            PrometheusLogger,
+        )
 
         prometheus_loggers: List[
             CustomLogger

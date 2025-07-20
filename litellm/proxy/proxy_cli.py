@@ -301,6 +301,7 @@ class ProxyInitializationHelpers:
             return None  # Let uvicorn choose the default loop on Windows
         return "uvloop"
 
+
 @click.command()
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"

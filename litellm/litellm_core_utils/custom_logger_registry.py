@@ -31,6 +31,7 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
+
 try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
 except Exception:

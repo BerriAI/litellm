@@ -1249,14 +1249,16 @@ async def team_member_add(
         complete_team_data=complete_team_data,
     )
 
-    updated_team, updated_users, updated_team_memberships = (
-        await _add_team_members_to_team(
-            data=data,
-            complete_team_data=complete_team_data,
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-        )
+    (
+        updated_team,
+        updated_users,
+        updated_team_memberships,
+    ) = await _add_team_members_to_team(
+        data=data,
+        complete_team_data=complete_team_data,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
     # Check if updated_team is None

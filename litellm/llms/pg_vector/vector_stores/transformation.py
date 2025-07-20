@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+
 class PGVectorStoreConfig(OpenAIVectorStoreConfig):
     """
     PG Vector Store configuration that inherits from OpenAI since it's OpenAI-compatible.
@@ -69,8 +70,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
 
-        return f"{api_base}/v1/vector_stores" 
-    
+        return f"{api_base}/v1/vector_stores"
 
     def transform_search_vector_store_request(
         self,
@@ -81,7 +81,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> Tuple[str, Dict]:
-        url  = f"{api_base}/{vector_store_id}/search"
+        url = f"{api_base}/{vector_store_id}/search"
         _, request_body = super().transform_search_vector_store_request(
             vector_store_id=vector_store_id,
             query=query,

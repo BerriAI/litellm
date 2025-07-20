@@ -121,5 +121,3 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
     )
     litellm.logging_callback_manager.add_litellm_callback(_secret_detection_object)
     return _secret_detection_object
-
-

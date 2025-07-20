@@ -1172,12 +1172,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
 
-                functions, tools, cumulative_tool_call_index = (
-                    VertexGeminiConfig._transform_parts(
-                        parts=candidate["content"]["parts"],
-                        cumulative_tool_call_idx=cumulative_tool_call_index,
-                        is_function_call=is_function_call(standard_optional_params),
-                    )
+                (
+                    functions,
+                    tools,
+                    cumulative_tool_call_index,
+                ) = VertexGeminiConfig._transform_parts(
+                    parts=candidate["content"]["parts"],
+                    cumulative_tool_call_idx=cumulative_tool_call_index,
+                    is_function_call=is_function_call(standard_optional_params),
                 )
 
             if "logprobsResult" in candidate:

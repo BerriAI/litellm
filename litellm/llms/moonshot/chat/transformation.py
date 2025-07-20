@@ -86,11 +86,11 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - kimi-thinking-preview doesn't support tool calls at all
         """
         excluded_params: List[str] = ["functions"]
-        
+
         # kimi-thinking-preview has additional limitations
         if "kimi-thinking-preview" in model:
             excluded_params.extend(["tools", "tool_choice"])
-        
+
         base_openai_params = super().get_supported_openai_params(model=model)
         final_params: List[str] = []
         for param in base_openai_params:

@@ -43,7 +43,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         # Get credentials and project info
         vertex_credentials = self.get_vertex_ai_credentials(dict(litellm_params))
         vertex_project = self.get_vertex_ai_project(dict(litellm_params))
-        
+
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -70,7 +70,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         """
         vertex_location = self.get_vertex_ai_location(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
-        
+
         if api_base:
             return api_base.rstrip("/")
 
@@ -95,26 +95,18 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         # Vertex AI RAG API endpoint for retrieving contexts
         url = f"{api_base}:retrieveContexts"
-        
+
         # Use helper methods to get project and location, then construct full rag corpus path
         vertex_project = self.get_vertex_ai_project(litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params)
-        
+
         # Construct full rag corpus path
         full_rag_corpus = f"projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{vector_store_id}"
-        
+
         # Build the request body for Vertex AI RAG API
         request_body: Dict[str, Any] = {
-            "vertex_rag_store": {
-                "rag_resources": [
-                    {
-                        "rag_corpus": full_rag_corpus
-                    }
-                ]
-            },
-            "query": {
-                "text": query
-            }
+            "vertex_rag_store": {"rag_resources": [{"rag_corpus": full_rag_corpus}]},
+            "query": {"text": query},
         }
 
         #########################################################

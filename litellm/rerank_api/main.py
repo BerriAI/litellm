@@ -75,7 +75,14 @@ def rerank(  # noqa: PLR0915
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[
-        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy", "hosted_vllm"]
+        Literal[
+            "cohere",
+            "together_ai",
+            "azure_ai",
+            "infinity",
+            "litellm_proxy",
+            "hosted_vllm",
+        ]
     ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,

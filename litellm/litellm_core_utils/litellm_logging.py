@@ -172,7 +172,6 @@ try:
     )
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
 
-
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
         Type[EnterpriseStandardLoggingPayloadSetup]
     ] = EnterpriseStandardLoggingPayloadSetup
@@ -1314,9 +1313,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if (
             EnterpriseCallbackControls is not None
             and EnterpriseCallbackControls.is_callback_disabled_dynamically(
-                callback=callback, 
+                callback=callback,
                 litellm_params=litellm_params,
-                standard_callback_dynamic_params = self.standard_callback_dynamic_params
+                standard_callback_dynamic_params=self.standard_callback_dynamic_params,
             )
         ):
             verbose_logger.debug(

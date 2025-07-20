@@ -786,7 +786,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 data[k] = v
 
     # Add disabled callbacks from key metadata
-    if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:
+    if (
+        user_api_key_dict.metadata
+        and "litellm_disabled_callbacks" in user_api_key_dict.metadata
+    ):
         disabled_callbacks = user_api_key_dict.metadata["litellm_disabled_callbacks"]
         if disabled_callbacks and isinstance(disabled_callbacks, list):
             data["litellm_disabled_callbacks"] = disabled_callbacks

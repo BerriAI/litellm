@@ -866,7 +866,6 @@ class Router:
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
-
         if optional_pre_call_checks is not None:
             for pre_call_check in optional_pre_call_checks:
                 _callback: Optional[CustomLogger] = None
@@ -3369,9 +3368,7 @@ class Router:
         ):
 
             def sync_wrapper(
-                custom_llm_provider: Optional[
-                    str
-                ] = None,
+                custom_llm_provider: Optional[str] = None,
                 client: Optional[Any] = None,
                 **kwargs,
             ):
@@ -3383,9 +3380,7 @@ class Router:
 
         # Handle asynchronous call types
         async def async_wrapper(
-            custom_llm_provider: Optional[
-                str
-            ] = None,
+            custom_llm_provider: Optional[str] = None,
             client: Optional[Any] = None,
             **kwargs,
         ):
@@ -3450,7 +3445,7 @@ class Router:
                 )
 
         return async_wrapper
-    
+
     async def _init_vector_store_api_endpoints(
         self,
         original_function: Callable,

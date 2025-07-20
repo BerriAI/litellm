@@ -311,7 +311,6 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
-
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
@@ -420,7 +419,7 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=True,
         description="Whether to fail the request if Model Armor encounters an error",
     )
-    
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 

@@ -96,13 +96,15 @@ class VectorStorePreCallHook(CustomLogger):
                 # Get vector store id from the vector store config
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
-                litellm_params_for_vector_store = vector_store_to_run.get("litellm_params", {}) or {}
+                litellm_params_for_vector_store = (
+                    vector_store_to_run.get("litellm_params", {}) or {}
+                )
                 # Call litellm.vector_stores.search() with the required parameters
                 search_response = await litellm.vector_stores.asearch(
                     vector_store_id=vector_store_id,
                     query=query,
                     custom_llm_provider=custom_llm_provider,
-                    **litellm_params_for_vector_store
+                    **litellm_params_for_vector_store,
                 )
 
                 verbose_logger.debug(f"search_response: {search_response}")
