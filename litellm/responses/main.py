@@ -123,17 +123,22 @@ async def aresponses_api_with_mcp(
     """
     Async version of responses API with MCP integration.
     
-    When MCP tools with server_url="litellm_proxy" are provided, this function will:
-    1. Get available tools from the MCP server manager
-    2. Insert the tools into the messages/input
-    3. Call the standard responses API
-    4. If require_approval="never" and tool calls are returned, automatically execute them
+    When MCP tools with server_url="litellm_proxy" or builtin are provided, this function will:
+    1. Expand builtin MCP tool references to actual server configurations
+    2. Get available tools from the MCP server manager
+    3. Insert the tools into the messages/input
+    4. Call the standard responses API
+    5. If require_approval="never" and tool calls are returned, automatically execute them
     """
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    # Parse MCP tools and separate from other tools
+    # First, expand any builtin tool references
+    if tools:
+        tools = LiteLLM_Proxy_MCP_Handler._expand_builtin_tools(list(tools))
+
+    # Parse MCP tools and separate from other tools  
     mcp_tools_with_litellm_proxy, other_tools = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
     
     # Get available tools from MCP manager if we have MCP tools
@@ -256,6 +261,41 @@ async def aresponses(
     """
     Async: Handles responses API requests by reusing the synchronous function
     """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+    
+    # Check if we should use MCP gateway (including builtin tools)
+    if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools):
+        return await aresponses_api_with_mcp(
+            input=input,
+            model=model,
+            include=include,
+            instructions=instructions,
+            max_output_tokens=max_output_tokens,
+            prompt=prompt,
+            metadata=metadata,
+            parallel_tool_calls=parallel_tool_calls,
+            previous_response_id=previous_response_id,
+            reasoning=reasoning,
+            store=store,
+            background=background,
+            stream=stream,
+            temperature=temperature,
+            text=text,
+            tool_choice=tool_choice,
+            tools=tools,
+            top_p=top_p,
+            truncation=truncation,
+            user=user,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+    
     local_vars = locals()
     try:
         loop = asyncio.get_event_loop()

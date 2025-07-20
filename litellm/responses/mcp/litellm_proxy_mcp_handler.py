@@ -16,23 +16,23 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
-        Returns True if the user passed a MCP tool with server_url="litellm_proxy"
+        Returns True if the user passed a MCP tool with server_url="litellm_proxy" or builtin field
         """
         if tools:
             for tool in tools:
                 if (isinstance(tool, dict) and 
                     tool.get("type") == "mcp" and 
-                    tool.get("server_url") == "litellm_proxy"):
+                    (tool.get("server_url") == "litellm_proxy" or tool.get("builtin"))):
                     return True
         return False
     
     @staticmethod
     def _parse_mcp_tools(tools: Optional[Iterable[ToolParam]]) -> Tuple[List[ToolParam], List[Any]]:
         """
-        Parse tools and separate MCP tools with litellm_proxy from other tools.
+        Parse tools and separate MCP tools with litellm_proxy or builtin from other tools.
         
         Returns:
-            Tuple of (mcp_tools_with_litellm_proxy, other_tools)
+            Tuple of (mcp_tools_with_litellm_proxy_or_builtin, other_tools)
         """
         mcp_tools_with_litellm_proxy: List[ToolParam] = []
         other_tools: List[Any] = []
@@ -41,12 +41,54 @@ class LiteLLM_Proxy_MCP_Handler:
             for tool in tools:
                 if (isinstance(tool, dict) and 
                     tool.get("type") == "mcp" and 
-                    tool.get("server_url") == "litellm_proxy"):
+                    (tool.get("server_url") == "litellm_proxy" or tool.get("builtin"))):
                     mcp_tools_with_litellm_proxy.append(tool)
                 else:
                     other_tools.append(tool)
         
         return mcp_tools_with_litellm_proxy, other_tools
+    
+    @staticmethod
+    def _expand_builtin_tools(tools: List[ToolParam]) -> List[ToolParam]:
+        """
+        Expand builtin MCP tool references to actual server configurations.
+        
+        Args:
+            tools: List of tools that may include builtin references
+            
+        Returns:
+            List of tools with builtin references expanded to actual server configurations
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        
+        expanded_tools = []
+        
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("type") == "mcp" and tool.get("builtin"):
+                builtin_name = tool.get("builtin")
+                verbose_logger.debug(f"Expanding builtin MCP tool: {builtin_name}")
+                
+                # Resolve builtin to actual server configuration
+                builtin_server = global_mcp_server_manager.resolve_builtin_server(builtin_name)
+                if builtin_server:
+                    # Create a new tool dict with server_url="litellm_proxy" to use existing flow
+                    expanded_tool = tool.copy()
+                    expanded_tool["server_url"] = "litellm_proxy"
+                    # Store the builtin server info for later use
+                    expanded_tool["_builtin_server_id"] = builtin_server.server_id
+                    expanded_tool["_builtin_name"] = builtin_name
+                    # Remove the builtin field since we've expanded it
+                    expanded_tool.pop("builtin", None)
+                    expanded_tools.append(expanded_tool)
+                    verbose_logger.debug(f"Expanded builtin '{builtin_name}' to server_id: {builtin_server.server_id}")
+                else:
+                    verbose_logger.warning(f"Builtin MCP server '{builtin_name}' not available, skipping tool")
+            else:
+                expanded_tools.append(tool)
+                
+        return expanded_tools
     
     @staticmethod
     async def _get_mcp_tools_from_manager(user_api_key_auth: Any) -> List[Any]:

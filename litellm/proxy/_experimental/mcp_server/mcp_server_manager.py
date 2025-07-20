@@ -20,6 +20,9 @@ from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.builtin_registry import (
+    global_builtin_registry,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_tool_name,
     get_server_name_prefix_tool_mcp,
@@ -96,8 +99,23 @@ class MCPServerManager:
     def get_registry(self) -> Dict[str, MCPServer]:
         """
         Get the registered MCP Servers from the registry and union with the config MCP Servers
+        and built-in MCP servers
         """
-        return self.config_mcp_servers | self.registry
+        # Start with config and registry servers
+        all_servers = self.config_mcp_servers | self.registry
+        
+        # Add built-in servers that are available
+        builtin_servers = global_builtin_registry.get_available_builtins()
+        all_servers.update(builtin_servers)
+        
+        verbose_logger.debug(
+            f"Registry contains {len(all_servers)} servers: "
+            f"{len(self.config_mcp_servers)} config, "
+            f"{len(self.registry)} registry, "
+            f"{len(builtin_servers)} built-in"
+        )
+        
+        return all_servers
 
     def load_servers_from_config(self, mcp_servers_config: Dict[str, Any]):
         """
@@ -528,6 +546,55 @@ class MCPServerManager:
 
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
+
+    def resolve_builtin_server(self, builtin_name: str) -> Optional[MCPServer]:
+        """
+        Resolve a built-in server name to an MCPServer instance
+        
+        Args:
+            builtin_name: Name of the built-in server (e.g., "zapier", "jira")
+            
+        Returns:
+            MCPServer instance if built-in is available, None otherwise
+        """
+        if not global_builtin_registry.is_builtin_available(builtin_name):
+            verbose_logger.warning(f"Built-in MCP server '{builtin_name}' is not available")
+            return None
+            
+        return global_builtin_registry.get_builtin_server(builtin_name)
+        
+    def is_builtin_server(self, server_identifier: str) -> bool:
+        """
+        Check if a server identifier refers to a built-in server
+        
+        Args:
+            server_identifier: Either a builtin name or server ID
+            
+        Returns:
+            True if this is a built-in server
+        """
+        # Check if it's a built-in name directly
+        if global_builtin_registry.get_builtin_config(server_identifier):
+            return True
+            
+        # Check if it's a built-in server ID (format: builtin_<name>)
+        if server_identifier.startswith("builtin_"):
+            builtin_name = server_identifier[8:]  # Remove "builtin_" prefix
+            return global_builtin_registry.get_builtin_config(builtin_name) is not None
+            
+        return False
+        
+    def get_available_builtin_names(self) -> List[str]:
+        """
+        Get list of available built-in server names
+        
+        Returns:
+            List of available built-in server names
+        """
+        return [
+            name for name in global_builtin_registry.list_builtin_names()
+            if global_builtin_registry.is_builtin_available(name)
+        ]
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()
