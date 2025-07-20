@@ -173,6 +173,7 @@ const sidebars = {
             "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
+            "proxy/ui/bulk_edit_users",
             {
               type: "category",
               label: "UI Logs",
