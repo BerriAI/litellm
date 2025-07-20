@@ -670,7 +670,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Vector Store / Knowledge Base hooks
         #########################################################
         if litellm.vector_store_registry is not None:
-            if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(
+            if vector_store_to_run := litellm.vector_store_registry.get_vector_store_to_run(  # noqa: F841
                 non_default_params=non_default_params, tools=tools
             ):
                 vector_store_custom_logger = _init_custom_logger_compatible_class(
