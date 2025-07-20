@@ -22,6 +22,7 @@ else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
 
+
 class BaseVectorStoreConfig:
     @abstractmethod
     def transform_search_vector_store_request(
@@ -36,7 +37,9 @@ class BaseVectorStoreConfig:
         pass
 
     @abstractmethod
-    def transform_search_vector_store_response(self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj) -> VectorStoreSearchResponse:
+    def transform_search_vector_store_response(
+        self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
+    ) -> VectorStoreSearchResponse:
         pass
 
     @abstractmethod
@@ -48,7 +51,9 @@ class BaseVectorStoreConfig:
         pass
 
     @abstractmethod
-    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(
+        self, response: httpx.Response
+    ) -> VectorStoreCreateResponse:
         pass
 
     @abstractmethod
@@ -73,7 +78,6 @@ class BaseVectorStoreConfig:
         if api_base is None:
             raise ValueError("api_base is required")
         return api_base
-    
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -101,4 +105,3 @@ class BaseVectorStoreConfig:
         for the signed body.
         """
         return headers, None
-

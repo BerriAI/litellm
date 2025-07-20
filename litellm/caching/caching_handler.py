@@ -306,13 +306,15 @@ class LLMCachingHandler:
         else:
             raise ValueError("input must be a string or a list")
 
-    def _extract_model_from_cached_results(self, non_null_list: List[Tuple[int, CachedEmbedding]]) -> Optional[str]:
+    def _extract_model_from_cached_results(
+        self, non_null_list: List[Tuple[int, CachedEmbedding]]
+    ) -> Optional[str]:
         """
         Helper method to extract the model name from cached results.
-        
+
         Args:
             non_null_list: List of (idx, cr) tuples where cr is the cached result dict
-            
+
         Returns:
             Optional[str]: The model name if found, None otherwise
         """

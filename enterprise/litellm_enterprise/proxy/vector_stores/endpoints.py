@@ -29,6 +29,7 @@ from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
 
+
 ########################################################
 # Management Endpoints
 ########################################################
@@ -79,7 +80,9 @@ async def new_vector_store(
         litellm_params_json: Optional[str] = None
         _input_litellm_params: dict = vector_store.get("litellm_params", {}) or {}
         if _input_litellm_params is not None:
-            litellm_params_dict = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
+            litellm_params_dict = GenericLiteLLMParams(
+                **_input_litellm_params
+            ).model_dump(exclude_none=True)
             litellm_params_json = safe_dumps(litellm_params_dict)
             del vector_store["litellm_params"]
 
@@ -239,8 +242,10 @@ async def get_vector_store_info(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        vector_store = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-            where={"vector_store_id": data.vector_store_id}
+        vector_store = (
+            await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+                where={"vector_store_id": data.vector_store_id}
+            )
         )
         if vector_store is None:
             raise HTTPException(
@@ -274,7 +279,9 @@ async def update_vector_store(
         update_data = data.model_dump(exclude_unset=True)
         vector_store_id = update_data.pop("vector_store_id")
         if update_data.get("vector_store_metadata") is not None:
-            update_data["vector_store_metadata"] = safe_dumps(update_data["vector_store_metadata"])
+            update_data["vector_store_metadata"] = safe_dumps(
+                update_data["vector_store_metadata"]
+            )
 
         updated = await prisma_client.db.litellm_managedvectorstorestable.update(
             where={"vector_store_id": vector_store_id},

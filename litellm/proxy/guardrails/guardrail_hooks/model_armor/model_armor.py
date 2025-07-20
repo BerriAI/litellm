@@ -58,7 +58,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Initialize parent classes first
         super().__init__(**kwargs)
         VertexBase.__init__(self)
-        
+
         # Then set our attributes (this ensures project_id is not overwritten)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
@@ -94,14 +94,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"model_response_data": {"text": content}}
 
-
-
     def _extract_content_from_response(
         self, response: Union[Any, ModelResponse]
     ) -> str:
         """
         Extract text content from model response.
-        
+
         Returns empty string for non-text responses (TTS, images, etc.) to skip guardrail processing.
         """
         from litellm.litellm_core_utils.prompt_templates.common_utils import (

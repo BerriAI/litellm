@@ -61,7 +61,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
 
         return base_openai_params
-    
+
     def _supports_stop_reason(self, model: str) -> bool:
         if "grok-3-mini" in model:
             return False
@@ -115,13 +115,15 @@ class XAIChatConfig(OpenAIGPTConfig):
     def _fix_choice_finish_reason_for_tool_calls(choice: Choices) -> None:
         """
         Helper to fix finish_reason for tool calls when XAI API returns empty string.
-        
+
         XAI API returns empty string for finish_reason when using tools,
         so we need to set it to "tool_calls" when tool_calls are present.
         """
-        if (choice.finish_reason == "" and 
-            choice.message.tool_calls and 
-            len(choice.message.tool_calls) > 0):
+        if (
+            choice.finish_reason == ""
+            and choice.message.tool_calls
+            and len(choice.message.tool_calls) > 0
+        ):
             choice.finish_reason = "tool_calls"
 
     def transform_response(
@@ -140,11 +142,11 @@ class XAIChatConfig(OpenAIGPTConfig):
     ) -> ModelResponse:
         """
         Transform the response from the XAI API.
-        
+
         XAI API returns empty string for finish_reason when using tools,
         so we need to fix this after the standard OpenAI transformation.
         """
-        
+
         # First, let the parent class handle the standard transformation
         response = super().transform_response(
             model=model,

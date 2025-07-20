@@ -30,7 +30,9 @@ class MCPRequestHandler:
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
     @staticmethod
-    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
+    async def process_mcp_request(
+        scope: Scope,
+    ) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
         """
         Process and validate MCP request headers from the ASGI scope.
         This includes:
@@ -54,30 +56,37 @@ class MCPRequestHandler:
             MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
         )
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
-        
+
         # Parse MCP servers from header
-        mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+        mcp_servers_header = headers.get(
+            MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME
+        )
         verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
         mcp_servers = None
         if mcp_servers_header is not None:
             try:
-                mcp_servers = [s.strip() for s in mcp_servers_header.split(",") if s.strip()]
+                mcp_servers = [
+                    s.strip() for s in mcp_servers_header.split(",") if s.strip()
+                ]
                 verbose_logger.debug(f"Parsed MCP servers: {mcp_servers}")
             except Exception as e:
                 verbose_logger.debug(f"Error parsing mcp_servers header: {e}")
                 mcp_servers = None
-            if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
+            if mcp_servers_header == "" or (
+                mcp_servers is not None and len(mcp_servers) == 0
+            ):
                 mcp_servers = []
         # Create a proper Request object with mock body method to avoid ASGI receive channel issues
         request = Request(scope=scope)
+
         async def mock_body():
             return b"{}"
+
         request.body = mock_body  # type: ignore
         validated_user_api_key_auth = await user_api_key_auth(
             api_key=litellm_api_key, request=request
         )
         return validated_user_api_key_auth, mcp_auth_header, mcp_servers
-    
 
     @staticmethod
     def _get_mcp_auth_header_from_headers(headers: Headers) -> Optional[str]:
@@ -92,9 +101,11 @@ class MCPRequestHandler:
 
         If you want to use a different header name, you can set the `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` in the secret manager or `mcp_client_side_auth_header_name` in the general settings.
         """
-        mcp_client_side_auth_header_name: str = MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        mcp_client_side_auth_header_name: str = (
+            MCPRequestHandler._get_mcp_client_side_auth_header_name()
+        )
         return headers.get(mcp_client_side_auth_header_name)
-    
+
     @staticmethod
     def _get_mcp_client_side_auth_header_name() -> str:
         """
@@ -106,13 +117,21 @@ class MCPRequestHandler:
         """
         from litellm.proxy.proxy_server import general_settings
         from litellm.secret_managers.main import get_secret_str
-        MCP_CLIENT_SIDE_AUTH_HEADER_NAME: str = MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
-        if get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME") is not None:
-            MCP_CLIENT_SIDE_AUTH_HEADER_NAME = get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME") or MCP_CLIENT_SIDE_AUTH_HEADER_NAME
-        elif general_settings.get("mcp_client_side_auth_header_name") is not None:
-            MCP_CLIENT_SIDE_AUTH_HEADER_NAME = general_settings.get("mcp_client_side_auth_header_name") or MCP_CLIENT_SIDE_AUTH_HEADER_NAME
-        return MCP_CLIENT_SIDE_AUTH_HEADER_NAME
 
+        MCP_CLIENT_SIDE_AUTH_HEADER_NAME: str = (
+            MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
+        )
+        if get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME") is not None:
+            MCP_CLIENT_SIDE_AUTH_HEADER_NAME = (
+                get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME")
+                or MCP_CLIENT_SIDE_AUTH_HEADER_NAME
+            )
+        elif general_settings.get("mcp_client_side_auth_header_name") is not None:
+            MCP_CLIENT_SIDE_AUTH_HEADER_NAME = (
+                general_settings.get("mcp_client_side_auth_header_name")
+                or MCP_CLIENT_SIDE_AUTH_HEADER_NAME
+            )
+        return MCP_CLIENT_SIDE_AUTH_HEADER_NAME
 
     @staticmethod
     def get_litellm_api_key_from_headers(headers: Headers) -> Optional[str]:
@@ -216,12 +235,14 @@ class MCPRequestHandler:
 
         # Get direct MCP servers
         direct_mcp_servers = key_object_permission.mcp_servers or []
-        
+
         # Get MCP servers from access groups
-        access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            key_object_permission.mcp_access_groups or []
+        access_group_servers = (
+            await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                key_object_permission.mcp_access_groups or []
+            )
         )
-        
+
         # Combine both lists
         all_servers = direct_mcp_servers + access_group_servers
         return list(set(all_servers))
@@ -248,10 +269,10 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        team_obj: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_auth.team_id},
-            )
+        team_obj: Optional[
+            LiteLLM_TeamTable
+        ] = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": user_api_key_auth.team_id},
         )
         if team_obj is None:
             verbose_logger.debug("team_obj is None")
@@ -263,18 +284,22 @@ class MCPRequestHandler:
 
         # Get direct MCP servers
         direct_mcp_servers = object_permissions.mcp_servers or []
-        
+
         # Get MCP servers from access groups
-        access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            object_permissions.mcp_access_groups or []
+        access_group_servers = (
+            await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                object_permissions.mcp_access_groups or []
+            )
         )
-        
+
         # Combine both lists
         all_servers = direct_mcp_servers + access_group_servers
         return list(set(all_servers))
 
     @staticmethod
-    def _get_config_server_ids_for_access_groups(config_mcp_servers, access_groups: List[str]) -> set:
+    def _get_config_server_ids_for_access_groups(
+        config_mcp_servers, access_groups: List[str]
+    ) -> set:
         """
         Helper to get server_ids from config-loaded servers that match any of the given access groups.
         """
@@ -286,7 +311,9 @@ class MCPRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_db_server_ids_for_access_groups(prisma_client, access_groups: List[str]) -> set:
+    async def _get_db_server_ids_for_access_groups(
+        prisma_client, access_groups: List[str]
+    ) -> set:
         """
         Helper to get server_ids from DB servers that match any of the given access groups.
         """
@@ -294,27 +321,27 @@ class MCPRequestHandler:
         if access_groups and prisma_client is not None:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
-                    where={
-                        "mcp_access_groups": {
-                            "hasSome": access_groups
-                        }
-                    }
+                    where={"mcp_access_groups": {"hasSome": access_groups}}
                 )
                 for server in mcp_servers:
                     server_ids.add(server.server_id)
             except Exception as e:
-                verbose_logger.debug(f"Error getting MCP servers from access groups: {e}")
+                verbose_logger.debug(
+                    f"Error getting MCP servers from access groups: {e}"
+                )
         return server_ids
 
     @staticmethod
     async def _get_mcp_servers_from_access_groups(
-        access_groups: List[str]
+        access_groups: List[str],
     ) -> List[str]:
         """
         Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers
         """
         from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
 
         # Use the new helper for config-loaded servers
         server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
@@ -339,8 +366,8 @@ class MCPRequestHandler:
         from typing import List
 
         access_groups: List[str] = []
-        access_groups_for_key = (
-            await MCPRequestHandler._get_mcp_access_groups_for_key(user_api_key_auth)
+        access_groups_for_key = await MCPRequestHandler._get_mcp_access_groups_for_key(
+            user_api_key_auth
         )
         access_groups_for_team = (
             await MCPRequestHandler._get_mcp_access_groups_for_team(user_api_key_auth)
@@ -403,10 +430,10 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        team_obj: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_auth.team_id},
-            )
+        team_obj: Optional[
+            LiteLLM_TeamTable
+        ] = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": user_api_key_auth.team_id},
         )
         if team_obj is None:
             verbose_logger.debug("team_obj is None")
@@ -423,10 +450,14 @@ class MCPRequestHandler:
         """
         Extract and parse the x-mcp-access-groups header as a list of strings.
         """
-        mcp_access_groups_header = headers.get(MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME)
+        mcp_access_groups_header = headers.get(
+            MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME
+        )
         if mcp_access_groups_header is not None:
             try:
-                return [s.strip() for s in mcp_access_groups_header.split(",") if s.strip()]
+                return [
+                    s.strip() for s in mcp_access_groups_header.split(",") if s.strip()
+                ]
             except Exception:
                 return None
         return None

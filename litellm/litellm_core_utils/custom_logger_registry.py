@@ -31,6 +31,7 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
+
 try:
     from litellm_enterprise.integrations.prometheus import PrometheusLogger
 except Exception:
@@ -47,6 +48,7 @@ class CustomLoggerRegistry:
     """
     Registry mapping the callback class string to the class type.
     """
+
     CALLBACK_CLASS_STR_TO_CLASS_TYPE = {
         "lago": LagoLogger,
         "openmeter": OpenMeterLogger,
@@ -110,14 +112,17 @@ class CustomLoggerRegistry:
     def get_callback_str_from_class_type(cls, class_type: type) -> Union[str, None]:
         """
         Get the callback string from the class type.
-        
+
         Args:
             class_type: The class type to find the string for
-            
+
         Returns:
             str: The callback string, or None if not found
         """
-        for callback_str, callback_class in cls.CALLBACK_CLASS_STR_TO_CLASS_TYPE.items():
+        for (
+            callback_str,
+            callback_class,
+        ) in cls.CALLBACK_CLASS_STR_TO_CLASS_TYPE.items():
             if callback_class == class_type:
                 return callback_str
         return None
@@ -127,15 +132,18 @@ class CustomLoggerRegistry:
         """
         Get all callback strings that map to the same class type.
         Some class types (like OpenTelemetry) have multiple string mappings.
-        
+
         Args:
             class_type: The class type to find all strings for
-            
+
         Returns:
             list: List of callback strings that map to the class type
         """
         callback_strs: list[str] = []
-        for callback_str, callback_class in cls.CALLBACK_CLASS_STR_TO_CLASS_TYPE.items():
+        for (
+            callback_str,
+            callback_class,
+        ) in cls.CALLBACK_CLASS_STR_TO_CLASS_TYPE.items():
             if callback_class == class_type:
                 callback_strs.append(callback_str)
         return callback_strs

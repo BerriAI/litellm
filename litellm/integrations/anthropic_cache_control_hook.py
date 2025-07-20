@@ -81,10 +81,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Case 1: Target by specific index
         if targetted_index is not None:
             if 0 <= targetted_index < len(messages):
-                messages[targetted_index] = (
-                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                        messages[targetted_index], control
-                    )
+                messages[
+                    targetted_index
+                ] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                    messages[targetted_index], control
                 )
         # Case 2: Target by role
         elif targetted_role is not None:

@@ -163,16 +163,16 @@ class BedrockEmbedding(BaseAWSLLM):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-                
+
             prepped = self.get_request_headers(
-                 credentials=credentials,
-                 aws_region_name=aws_region_name,
-                 extra_headers=extra_headers,
-                 endpoint_url=endpoint_url,
-                 data=json.dumps(data),
-                 headers=headers,
-                 api_key=api_key
-             )
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=endpoint_url,
+                data=json.dumps(data),
+                headers=headers,
+                api_key=api_key,
+            )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -247,16 +247,16 @@ class BedrockEmbedding(BaseAWSLLM):
             headers = {"Content-Type": "application/json"}
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
-                
+
             prepped = self.get_request_headers(
-                 credentials=credentials,
-                 aws_region_name=aws_region_name,
-                 extra_headers=extra_headers,
-                 endpoint_url=endpoint_url,
-                 data=json.dumps(data),
-                 headers=headers,
-                 api_key=api_key,
-             )
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=endpoint_url,
+                data=json.dumps(data),
+                headers=headers,
+                api_key=api_key,
+            )
 
             ## LOGGING
             logging_obj.pre_call(
@@ -437,7 +437,7 @@ class BedrockEmbedding(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        
+
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,

@@ -23,12 +23,13 @@ else:
 class AudioTranscriptionRequestData:
     """
     Structured data for audio transcription requests.
-    
+
     Attributes:
         data: The request data (form data for multipart, json data for regular requests)
         files: Optional files dict for multipart form data
         content_type: Optional content type override
     """
+
     data: Union[dict, bytes]
     files: Optional[dict] = None
     content_type: Optional[str] = None
@@ -71,8 +72,6 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
             "AudioTranscriptionConfig needs a request transformation for audio transcription models"
         )
 
-
-    
     def transform_audio_transcription_response(
         self,
         raw_response: httpx.Response,
@@ -110,7 +109,6 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
         )
-    
 
     def get_provider_specific_params(
         self,
@@ -141,7 +139,7 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
             provider_specific_params[key] = value
 
         return provider_specific_params
-    
+
     def _should_exclude_param(
         self,
         param_name: str,

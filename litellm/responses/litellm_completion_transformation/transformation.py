@@ -119,7 +119,10 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
-        tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+        (
+            tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or []  # type: ignore
         )
         litellm_completion_request: dict = {
@@ -423,19 +426,17 @@ class LiteLLMCompletionResponsesConfig:
         return new_item
 
     @staticmethod
-    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageItem:
+    def _transform_input_image_item_to_image_item(
+        item: Dict[str, Any]
+    ) -> ChatCompletionImageItem:
         """
         Transform a Responses API input_image item to a Chat Completion image item
         """
         image_url_obj = ChatCompletionImageUrlObject(
-            url=item.get("image_url") or "",
-            detail=item.get("detail") or "auto"
+            url=item.get("image_url") or "", detail=item.get("detail") or "auto"
         )
 
-        return ChatCompletionImageItem(
-            type="image",
-            image_url=image_url_obj
-        )
+        return ChatCompletionImageItem(type="image", image_url=image_url_obj)
 
     @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
@@ -503,7 +504,10 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
-    ) -> Tuple[List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]], Optional[OpenAIWebSearchOptions]]:
+    ) -> Tuple[
+        List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
+        Optional[OpenAIWebSearchOptions],
+    ]:
         """
         Transform a Responses API tools into a Chat Completion tools
         """
@@ -516,9 +520,17 @@ class LiteLLMCompletionResponsesConfig:
         for tool in tools:
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
-            elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
-                _search_context_size: Literal["low", "medium", "high"] = cast(Literal["low", "medium", "high"], tool.get("search_context_size"))
-                _user_location: Optional[OpenAIWebSearchUserLocation] = cast(Optional[OpenAIWebSearchUserLocation], tool.get("user_location") or None)
+            elif (
+                tool.get("type") == "web_search_preview"
+                or tool.get("type") == "web_search"
+            ):
+                _search_context_size: Literal["low", "medium", "high"] = cast(
+                    Literal["low", "medium", "high"], tool.get("search_context_size")
+                )
+                _user_location: Optional[OpenAIWebSearchUserLocation] = cast(
+                    Optional[OpenAIWebSearchUserLocation],
+                    tool.get("user_location") or None,
+                )
                 web_search_options = OpenAIWebSearchOptions(
                     search_context_size=_search_context_size,
                     user_location=_user_location,
@@ -788,7 +800,6 @@ class LiteLLMCompletionResponsesConfig:
             # Handle other annotation types here
 
         return response_output_annotations
-
 
     @staticmethod
     def _transform_chat_completion_usage_to_responses_usage(

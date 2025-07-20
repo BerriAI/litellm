@@ -78,22 +78,24 @@ class MCPClient:
         """Initialize the transport and session."""
         if self._session:
             return  # Already connected
-            
+
         try:
             if self.transport_type == MCPTransport.stdio:
                 # For stdio transport, use stdio_client with command-line parameters
                 if not self.stdio_config:
                     raise ValueError("stdio_config is required for stdio transport")
-                    
+
                 server_params = StdioServerParameters(
                     command=self.stdio_config.get("command", ""),
                     args=self.stdio_config.get("args", []),
-                    env=self.stdio_config.get("env", {})
+                    env=self.stdio_config.get("env", {}),
                 )
-                
+
                 self._transport_ctx = stdio_client(server_params)
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
             elif self.transport_type == MCPTransport.sse:
@@ -104,7 +106,9 @@ class MCPClient:
                     headers=headers,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
             else:  # http
@@ -115,7 +119,9 @@ class MCPClient:
                     headers=headers,
                 )
                 self._transport = await self._transport_ctx.__aenter__()
-                self._session_ctx = ClientSession(self._transport[0], self._transport[1])
+                self._session_ctx = ClientSession(
+                    self._transport[0], self._transport[1]
+                )
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
         except Exception:
@@ -208,7 +214,7 @@ class MCPClient:
 
         if self._session is None:
             raise ValueError("Session is not initialized")
-        
+
         try:
             tool_result = await self._session.call_tool(
                 name=call_tool_request_params.name,
@@ -221,5 +227,3 @@ class MCPClient:
         except Exception:
             await self.disconnect()
             raise
-        
-
