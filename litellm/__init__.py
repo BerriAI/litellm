@@ -503,6 +503,7 @@ elevenlabs_models: List = []
 dashscope_models: List = []
 moonshot_models: List = []
 v0_models: List = []
+morph_models: List = []
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -683,6 +684,8 @@ def add_known_models():
             moonshot_models.append(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.append(key)
+        elif value.get("litellm_provider") == "morph":
+            morph_models.append(key)
 
 
 add_known_models()
@@ -768,6 +771,7 @@ model_list = (
     + dashscope_models
     + moonshot_models
     + v0_models
+    + morph_models
 )
 
 model_list_set = set(model_list)
@@ -836,6 +840,7 @@ models_by_provider: dict = {
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
     "v0": v0_models,
+    "morph": morph_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1156,6 +1161,7 @@ from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
+from .llms.morph.chat.transformation import MorphChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients

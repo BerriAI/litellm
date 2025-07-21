@@ -691,6 +691,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.V0ChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "morph":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.MorphChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

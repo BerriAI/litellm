@@ -16624,5 +16624,33 @@
         "supports_vision": true,
         "mode": "chat",
         "source": "https://platform.moonshot.ai/docs/pricing"
+    },
+    "morph/morph-v3-fast": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "morph",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false
+    },
+    "morph/morph-v3-large": {
+        "max_tokens": 16000,
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000,
+        "input_cost_per_token": 9e-07,
+        "output_cost_per_token": 1.9e-06,
+        "litellm_provider": "morph",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "supports_system_messages": true,
+        "supports_tool_choice": false
     }
 }
