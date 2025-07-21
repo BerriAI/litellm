@@ -44,6 +44,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
+from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+    UpdateUsefulLinksRequest,
+)
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -1018,6 +1021,73 @@ async def update_public_model_groups(
         return {
             "message": "Successfully updated public model groups",
             "public_model_groups": request.model_groups,
+            "updated_by": user_api_key_dict.user_id,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating public model groups: {str(e)}")
+
+        if isinstance(e, HTTPException):
+            raise e
+
+        raise ProxyException(
+            message=f"Error updating public model groups: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+
+@router.post(
+    "/model_hub/update_useful_links",
+    description="Update useful links",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_useful_links(
+    request: UpdateUsefulLinksRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update useful links.
+    """
+    try:
+        # Update the public model groups
+        import litellm
+        from litellm.proxy.proxy_server import proxy_config
+
+        # Check if user has admin permissions
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only proxy admins can update public model groups. Your role={}".format(
+                        user_api_key_dict.user_role
+                    )
+                },
+            )
+
+        litellm.public_model_groups_links = request.useful_links
+
+        # Load existing config
+        config = await proxy_config.get_config()
+
+        # Update config with new settings
+        if "litellm_settings" not in config:
+            config["litellm_settings"] = {}
+
+        config["litellm_settings"]["public_model_groups_links"] = request.useful_links
+
+        # Save the updated config
+        await proxy_config.save_config(new_config=config)
+
+        verbose_proxy_logger.info(
+            f"Updated useful links to: {request.useful_links} by user: {user_api_key_dict.user_id}"
+        )
+
+        return {
+            "message": "Successfully updated useful links",
+            "useful_links": request.useful_links,
             "updated_by": user_api_key_dict.user_id,
         }
 
