@@ -15,7 +15,6 @@ import os
 from typing import Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
-from litellm.types.mcp import MCPTransport, MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
