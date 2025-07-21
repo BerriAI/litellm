@@ -448,6 +448,7 @@ const sidebars = {
         "providers/togetherai",
         "providers/v0",
         "providers/morph",
+        "providers/lambda_ai",
         "providers/novita",
         "providers/voyage",
         "providers/jina_ai",
@@ -624,6 +625,7 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
+            "projects/HolmesGPT"
           ],
         },
         "extras/code_quality",

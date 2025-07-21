@@ -280,6 +280,7 @@ LITELLM_CHAT_PROVIDERS = [
     "moonshot",
     "v0",
     "morph",
+    "lambda_ai",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -410,6 +411,7 @@ openai_compatible_endpoints: List = [
     "https://api.moonshot.ai/v1",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
+    "https://api.lambda.ai/v1",
 ]
 
 
@@ -449,6 +451,7 @@ openai_compatible_providers: List = [
     "moonshot",
     "v0",
     "morph",
+    "lambda_ai",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -461,6 +464,8 @@ openai_text_completion_compatible_providers: List = (
         "nebius",
         "dashscope",
         "moonshot",
+        "v0",
+        "lambda_ai",
     ]
 )
 _openai_like_providers: List = [
