@@ -827,7 +827,7 @@ class CustomStreamWrapper:
                     if _index is not None:
                         model_response.choices[0].index = _index
 
-                model_response = self._parse_thinking_block(
+                self._parse_thinking_block(
                     response_obj=response_obj,
                     model_response=model_response
                 )
@@ -914,8 +914,6 @@ class CustomStreamWrapper:
             # Move the text content to reasoning_content instead of regular content
             model_response.choices[0].delta.reasoning_content = response_obj["text"]
             model_response.choices[0].delta.content = None
-        
-        return model_response
 
     def _optional_combine_thinking_block_in_choices(
         self, model_response: ModelResponseStream
