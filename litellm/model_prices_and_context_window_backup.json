@@ -7164,6 +7164,54 @@
         "cache_read_input_token_cost": 3.125e-07,
         "supports_prompt_caching": true
     },
+    "gemini/gemini-2.0-flash-live-001": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_token": 3.5e-07,       
+        "input_cost_per_audio_token": 2.1e-06,
+        "input_cost_per_image_token": 2.1e-06,
+        "input_cost_per_video_token": 2.1e-06,
+        "output_cost_per_token": 1.5e-06,
+        "output_cost_per_audio_token": 8.5e-06, 
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "rpm": 10,
+        "tpm": 250000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_audio_output": false,
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2-0-flash-live-001",
+        "supports_web_search": true,
+        "supports_url_context": true,
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true
+    },
     "gemini/gemini-2.5-pro-exp-03-25": {
         "max_tokens": 65535,
         "max_input_tokens": 1048576,
