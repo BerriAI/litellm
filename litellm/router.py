@@ -1230,8 +1230,12 @@ class Router:
             {"model_group": model, "model_group_alias": model_group_alias}
         )
 
+    # Fix bug:
+    # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
+    # https://github.com/BerriAI/litellm/issues/12800
+    # tonny.huang@navercorp.com, yea.hb@navercorp.com
     def _update_kwargs_with_default_litellm_params(
-        self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
+        self, model: str, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
     ) -> None:
         """
         Adds default litellm params to kwargs, if set.
@@ -1250,6 +1254,12 @@ class Router:
 
         # 3) merge in metadata, this handles inserting this as either "metadata" or "litellm_metadata"
         kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
+        
+        # Fix bug:
+        # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
+        # https://github.com/BerriAI/litellm/issues/12800
+        # tonny.huang@navercorp.com, yea.hb@navercorp.com
+        kwargs.setdefault(metadata_variable_name, {}).update({"model_group": model})
 
     def _handle_clientside_credential(
         self, deployment: dict, kwargs: dict
@@ -1295,6 +1305,13 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name = deployment["model_name"]
+        
+        # Fix bug:
+        # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
+        # https://github.com/BerriAI/litellm/issues/12800
+        # tonny.huang@navercorp.com, yea.hb@navercorp.com
+        model_group_name = deployment["model_name"]
+        
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs
@@ -1323,6 +1340,14 @@ class Router:
 
         self._update_kwargs_with_default_litellm_params(
             kwargs=kwargs, metadata_variable_name=metadata_variable_name
+        )
+        
+        # Fix bug:
+        # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
+        # https://github.com/BerriAI/litellm/issues/12800
+        # tonny.huang@navercorp.com, yea.hb@navercorp.com
+        self._update_kwargs_with_default_litellm_params(model=model_group_name,
+            kwargs=kwargs, metadata_variable_name="metadata"
         )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
