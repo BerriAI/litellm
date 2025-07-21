@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import (
@@ -433,7 +434,9 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = HTTPHandler(timeout=timeout)  # type: ignore
+                    client = _get_httpx_client(
+                        params={"timeout": timeout}
+                    )
                 else:
                     client = client
 
