@@ -12,7 +12,13 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
+)
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.secret_managers.get_azure_ad_token_provider import (
+    AzureCredentialType,
+)
 from litellm.types.utils import CallTypes
 
 
@@ -1298,7 +1304,7 @@ def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
 
     # Verify the debug message was logged
     setup_mocks["logger"].debug.assert_any_call(
-        "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+        "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
     )
 
     # Verify get_azure_ad_token_provider was called
@@ -1325,7 +1331,7 @@ def test_get_azure_ad_token_with_token_refresh_error(setup_mocks):
 
     # Verify the debug message was logged
     setup_mocks["logger"].debug.assert_any_call(
-        "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+        "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
     )
 
     # Verify error was logged
@@ -1333,8 +1339,8 @@ def test_get_azure_ad_token_with_token_refresh_error(setup_mocks):
         "Azure AD Token Provider could not be used."
     )
 
-    # Verify get_azure_ad_token_provider was called
-    setup_mocks["token_provider"].assert_called_once()
+    # Verify get_azure_ad_token_provider was called twice (once for service principal, once for DefaultAzureCredential)
+    assert setup_mocks["token_provider"].call_count == 2
 
     # Verify the token is None since the provider raised an error
     assert token is None
@@ -1380,3 +1386,38 @@ def test_token_provider_raises_exception(setup_mocks):
 
     # Verify the error was logged
     setup_mocks["logger"].error.assert_called()
+
+
+def test_get_azure_ad_token_provider_with_default_azure_credential():
+    """
+    Test that get_azure_ad_token_provider correctly uses DefaultAzureCredential 
+    when explicitly specified as the credential type. This verifies that the function
+    can dynamically instantiate DefaultAzureCredential and return a working token provider.
+    """
+    # Mock Azure identity classes
+    with patch('azure.identity.DefaultAzureCredential') as mock_default_cred, \
+         patch('azure.identity.get_bearer_token_provider') as mock_token_provider:
+        
+        # Configure mocks
+        mock_credential_instance = MagicMock()
+        mock_default_cred.return_value = mock_credential_instance
+        mock_token_provider.return_value = lambda: "test-default-azure-token"
+        
+        # Test with DefaultAzureCredential specified explicitly
+        token_provider = get_azure_ad_token_provider(
+            azure_scope="https://cognitiveservices.azure.com/.default",
+            azure_credential=AzureCredentialType.DefaultAzureCredential
+        )
+        
+        # Verify DefaultAzureCredential was instantiated
+        mock_default_cred.assert_called_once_with()
+        
+        # Verify get_bearer_token_provider was called with the right parameters
+        mock_token_provider.assert_called_once_with(
+            mock_credential_instance, 
+            "https://cognitiveservices.azure.com/.default"
+        )
+        
+        # Verify the returned token provider works
+        token = token_provider()
+        assert token == "test-default-azure-token"
