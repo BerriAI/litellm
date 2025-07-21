@@ -29,19 +29,7 @@ Use Pillar Security for comprehensive LLM security including:
 
 Add Pillar Security to your `config.yaml`:
 
-## Supported Guardrail Modes
-
-Pillar Security supports three execution modes for comprehensive protection:
-
-| Mode | When It Runs | What It Protects | Use Case
-|------|-------------|------------------|----------
-| **`pre_call`** | Before LLM call | User input only | Block malicious prompts, prevent prompt injection
-| **`during_call`** | Parallel with LLM call | User input only | Input monitoring with lower latency
-| **`post_call`** | After LLM response | Full conversation context | Output filtering, PII detection in responses
-
-### Recommended Configurations
-
-**🌟 Maximum Security (Dual Mode) - RECOMMENDED:**
+**🌟 Recommended Configuration (Dual Mode):**
 ```yaml
 model_list:
   - model_name: gpt-4.1-mini
@@ -66,7 +54,26 @@ litellm_settings:
   set_verbose: true                          # Enable detailed logging
 ```
 
-**Why Dual Mode is Recommended:**
+### 3. Start the Proxy
+
+```bash
+litellm --config config.yaml --port 4000
+```
+
+## Guardrail Modes
+
+### Overview
+
+Pillar Security supports three execution modes for comprehensive protection:
+
+| Mode | When It Runs | What It Protects | Use Case
+|------|-------------|------------------|----------
+| **`pre_call`** | Before LLM call | User input only | Block malicious prompts, prevent prompt injection
+| **`during_call`** | Parallel with LLM call | User input only | Input monitoring with lower latency
+| **`post_call`** | After LLM response | Full conversation context | Output filtering, PII detection in responses
+
+### Why Dual Mode is Recommended
+
 - ✅ **Complete Protection**: Guards both incoming prompts and outgoing responses
 - ✅ **Prompt Injection Defense**: Blocks malicious input before reaching the LLM
 - ✅ **Response Monitoring**: Detects PII, secrets, or inappropriate content in outputs
@@ -174,12 +181,6 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
-### 3. Start the Proxy
-
-```bash
-litellm --config config.yaml --port 4000
-```
-
 ## Configuration Reference
 
 ### Environment Variables
@@ -232,9 +233,9 @@ on_flagged_action: "monitor"
 
 
 <Tabs>
-<TabItem value="safe" label="Safe Request">
+<TabItem value="safe" label="Simple Safe Request">
 
-## Requset
+**Safe requset**
 
 ```bash
 # Test with safe content
@@ -248,7 +249,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
   }'
 ```
 
-## Response
+**Expected response (Allowed)**
 ```json
 {
   "id": "chatcmpl-BvQhm0VZpiDSEbrssSzO7GLHgHCkW",
@@ -262,7 +263,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
       "finish_reason": "stop",
       "message": {
         "role": "assistant",
-        "content": "Sure! Here's a joke for you:\n\nWhy don’t scientists trust atoms?  \nBecause they make up everything!",
+        "content": "Sure! Here's a joke for you:\n\nWhy don't scientists trust atoms?  \nBecause they make up everything!",
         "tool_calls": null,
         "function_call": null,
         "annotations": []
@@ -292,9 +293,9 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
 ```
 
 </TabItem>
-<TabItem value="injection" label="Prompt injection">
+<TabItem value="injection" label="Prompt Injection">
 
-**Test prompt injection detection:**
+**Prompt injection detection request:**
 
 ```bash
 curl -X POST "http://localhost:4000/v1/chat/completions" \
@@ -344,7 +345,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
 </TabItem>
 <TabItem value="secrets" label="Secrets">
 
-**Test prompt injection detection:**
+**Secret detection request:**
 
 ```bash
 curl -X POST "http://localhost:4000/v1/chat/completions" \
@@ -401,6 +402,7 @@ Feel free to contact us at support@pillar.security
 
 ### 📚 Resources
 
-- **Pillar Security**: [pillar.security](https://pillar.security)
-- **Pillar Security API Reference**: [docs.pillar.security/api](https://docs.pillar.security/docs/api/introduction)
-- **Documentation**: [docs.litellm.ai](https://docs.litellm.ai)
+- [Pillar Security API Docs](https://docs.pillar.security/docs/api/introduction)
+- [Pillar Security Dashboard](https://app.pillar.security)
+- [Pillar Security Website](https://pillar.security)
+- [LiteLLM Docs](https://docs.litellm.ai)
