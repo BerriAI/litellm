@@ -167,6 +167,7 @@ from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
+    get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
     get_mcp_server_ids,
@@ -3657,11 +3658,18 @@ async def model_list(
     team_id: Optional[str] = None,
     include_model_access_groups: Optional[bool] = False,
     only_model_access_groups: Optional[bool] = False,
+    include_metadata: Optional[bool] = False,
+    fallback_type: Optional[str] = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
 
     This is just for compatibility with openai projects like aider.
+    
+    Query Parameters:
+    - include_metadata: Include additional metadata in the response with fallback information
+    - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
+                    Defaults to "general" when include_metadata=true
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
     all_models = []
@@ -3722,16 +3730,44 @@ async def model_list(
         only_model_access_groups=only_model_access_groups,
     )
 
+    # Build response data
+    model_data = []
+    for model in all_models:
+        model_info = {
+            "id": model,
+            "object": "model",
+            "created": DEFAULT_MODEL_CREATED_AT_TIME,
+            "owned_by": "openai",
+        }
+        
+        # Add metadata if requested
+        if include_metadata:
+            metadata = {}
+            
+            # Default fallback_type to "general" if include_metadata is true
+            effective_fallback_type = fallback_type if fallback_type is not None else "general"
+            
+            # Validate fallback_type
+            valid_fallback_types = ["general", "context_window", "content_policy"]
+            if effective_fallback_type not in valid_fallback_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}"
+                )
+            
+            fallbacks = get_all_fallbacks(
+                model=model,
+                llm_router=llm_router,
+                fallback_type=effective_fallback_type
+            )
+            metadata["fallbacks"] = fallbacks
+            
+            model_info["metadata"] = metadata
+        
+        model_data.append(model_info)
+
     return dict(
-        data=[
-            {
-                "id": model,
-                "object": "model",
-                "created": DEFAULT_MODEL_CREATED_AT_TIME,
-                "owned_by": "openai",
-            }
-            for model in all_models
-        ],
+        data=model_data,
         object="list",
     )
 
