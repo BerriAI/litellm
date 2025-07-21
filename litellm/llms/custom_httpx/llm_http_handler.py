@@ -2710,17 +2710,11 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        # Create messages list with the prompt for consistency with BaseConfig interface
-        from typing import cast
-
-        from litellm.types.llms.openai import AllMessageValues
-        messages = cast(List[AllMessageValues], [{"role": "user", "content": prompt}])
-
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.api_key,
             headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
-            messages=messages,
+            messages=[],
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
         )
@@ -2736,9 +2730,9 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data = image_generation_provider_config.transform_request(
+        data = image_generation_provider_config.transform_image_generation_request(
             model=model,
-            messages=messages,
+            prompt=prompt,
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
             headers=headers,
@@ -2769,25 +2763,18 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response = image_generation_provider_config.transform_response(
+        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
             model=model,
             raw_response=response,
-            model_response=litellm.ModelResponse(),
+            model_response=litellm.ImageResponse(),
             logging_obj=logging_obj,
             request_data=data,
-            messages=messages,
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
             encoding=None,
         )
-        
-        # Convert ModelResponse to ImageResponse if needed
-        from litellm.utils import ImageResponse
-        if isinstance(model_response, ImageResponse):
-            return model_response
-        else:
-            # Create ImageResponse from ModelResponse
-            return ImageResponse()
+
+        return model_response
 
     async def async_image_generation_handler(
         self,
@@ -2817,15 +2804,12 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        # Create messages list with the prompt for consistency with BaseConfig interface
-        from litellm.types.llms.openai import AllMessageValues
-        messages = cast(List[AllMessageValues], [{"role": "user", "content": prompt}])
 
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.api_key,
             headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
-            messages=messages,
+            messages=[],
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
         )
@@ -2841,9 +2825,9 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data = image_generation_provider_config.transform_request(
+        data = image_generation_provider_config.transform_image_generation_request(
             model=model,
-            messages=messages,
+            prompt=prompt,
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
             headers=headers,
@@ -2874,25 +2858,18 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response = image_generation_provider_config.transform_response(
+        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
             model=model,
             raw_response=response,
-            model_response=litellm.ModelResponse(),
+            model_response=litellm.ImageResponse(),
             logging_obj=logging_obj,
             request_data=data,
-            messages=messages,
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
             encoding=None,
         )
         
-        # Convert ModelResponse to ImageResponse if needed
-        from litellm.utils import ImageResponse
-        if isinstance(model_response, ImageResponse):
-            return model_response
-        else:
-            # Create ImageResponse from ModelResponse
-            return ImageResponse()
+        return model_response
 
     ###### VECTOR STORE HANDLER ######
     async def async_vector_store_search_handler(
