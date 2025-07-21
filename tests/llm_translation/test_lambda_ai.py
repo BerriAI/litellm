@@ -99,6 +99,10 @@ def test_lambda_ai_models_configuration():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     
+    # Clear and repopulate lambda_ai_models list after reloading model_cost
+    litellm.lambda_ai_models = []
+    litellm.add_known_models()
+    
     # Some Lambda AI models to test
     lambda_ai_models = [
         "lambda_ai/deepseek-llama3.3-70b",
@@ -123,6 +127,14 @@ def test_lambda_ai_models_configuration():
 
 def test_lambda_ai_model_list_populated():
     """Test that lambda_ai_models list is populated correctly"""
+    # Ensure we're using local model cost map and repopulate models
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    
+    # Clear and repopulate all model lists after reloading model_cost
+    litellm.lambda_ai_models = []
+    litellm.add_known_models()
+    
     # This should be populated by the add_known_models function
     assert len(litellm.lambda_ai_models) > 0, "lambda_ai_models list should not be empty"
     
