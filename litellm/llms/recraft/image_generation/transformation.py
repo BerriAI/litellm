@@ -6,6 +6,7 @@ import httpx
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
@@ -21,6 +22,8 @@ else:
 
 
 class RecraftImageGenerationConfig(BaseImageGenerationConfig):
+    DEFAULT_BASE_URL: str = "https://api.recraft.ai/v1"
+    
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
@@ -44,13 +47,19 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         stream: Optional[bool] = None,
     ) -> str:
         """
-        OPTIONAL
-
         Get the complete url for the request
 
         Some providers need `model` in `api_base`
         """
-        return api_base or ""
+        complete_url: str = (
+            api_base 
+            or get_secret_str("RECRAFT_API_BASE") 
+            or self.DEFAULT_BASE_URL
+        )
+
+        complete_url = complete_url.rstrip("/")
+        complete_url = f"{complete_url}/v1/images/generations"
+        return complete_url
 
     def validate_environment(
         self,
@@ -62,7 +71,15 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        return {}
+        final_api_key: Optional[str] = (
+            api_key or 
+            get_secret_str("RECRAFT_API_KEY")
+        )
+        if not final_api_key:
+            raise ValueError("RECRAFT_API_KEY is not set")
+        
+        headers["Authorization"] = f"Bearer {final_api_key}"        
+        return headers
 
 
 
