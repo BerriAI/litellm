@@ -148,6 +148,186 @@ def test_builtin_tool_expansion():
     print("✓ Calculator builtin tool expansion works")
 
 
+def test_remote_mcp_tool_processing():
+    """Test processing of remote MCP tools"""
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    tools = [
+        {
+            "type": "mcp",
+            "server_label": "stripe",
+            "server_url": "https://mcp.stripe.com",
+            "headers": {"Authorization": "Bearer sk-test-123"},
+            "allowed_tools": ["create_payment_link"],
+            "require_approval": "never"
+        },
+        {"type": "function", "function": {"name": "test"}}
+    ]
+    
+    processed_tools = LiteLLM_Proxy_MCP_Handler._process_remote_mcp_tools(tools)
+    
+    assert len(processed_tools) == 2
+    
+    # Find the processed remote tool
+    remote_tool = next((t for t in processed_tools if isinstance(t, dict) and t.get("_remote_server_url")), None)
+    assert remote_tool is not None
+    assert remote_tool.get("server_url") == "litellm_proxy"
+    assert remote_tool.get("_remote_server_url") == "https://mcp.stripe.com"
+    assert remote_tool.get("_remote_server_label") == "stripe"
+    assert remote_tool.get("_allowed_tools") == ["create_payment_link"]
+    assert remote_tool.get("_require_approval") == "never"
+    assert "headers" not in remote_tool  # Should be moved to _remote_headers
+    assert remote_tool.get("_remote_headers") == {"Authorization": "Bearer sk-test-123"}
+    print("✓ Remote MCP tool processing works")
+
+
+def test_hybrid_mcp_usage():
+    """Test mixing builtin and remote MCP tools"""
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    tools = [
+        {"type": "mcp", "builtin": "calculator"},
+        {
+            "type": "mcp",
+            "server_url": "https://mcp.stripe.com",
+            "server_label": "stripe"
+        },
+        {"type": "function", "function": {"name": "regular_func"}}
+    ]
+    
+    # First process remote tools
+    processed = LiteLLM_Proxy_MCP_Handler._process_remote_mcp_tools(tools)
+    # Then expand builtin tools
+    expanded = LiteLLM_Proxy_MCP_Handler._expand_builtin_tools(processed)
+    
+    assert len(expanded) == 3
+    
+    # Check that we have both types
+    builtin_tool = next((t for t in expanded if isinstance(t, dict) and t.get("_builtin_name")), None)
+    remote_tool = next((t for t in expanded if isinstance(t, dict) and t.get("_remote_server_url")), None)
+    regular_tool = next((t for t in expanded if isinstance(t, dict) and t.get("type") == "function"), None)
+    
+    assert builtin_tool is not None
+    assert remote_tool is not None  
+    assert regular_tool is not None
+    print("✓ Hybrid MCP usage (builtin + remote + regular) works")
+
+
+def test_mcp_approval_workflow():
+    """Test MCP approval request/response workflow"""
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    # Test approval request creation
+    approval_request = LiteLLM_Proxy_MCP_Handler._create_approval_request(
+        tool_name="create_payment",
+        tool_arguments='{"amount": 100}',
+        server_label="stripe"
+    )
+    
+    assert approval_request["type"] == "mcp_approval_request"
+    assert approval_request["name"] == "create_payment"
+    assert approval_request["arguments"] == '{"amount": 100}'
+    assert approval_request["server_label"] == "stripe"
+    assert "id" in approval_request
+    assert approval_request["id"].startswith("mcpr_")
+    print("✓ MCP approval request creation works")
+
+
+def test_mcp_call_result_creation():
+    """Test MCP call result creation"""
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    # Test successful call result
+    call_result = LiteLLM_Proxy_MCP_Handler._create_mcp_call_result(
+        tool_name="create_payment",
+        tool_arguments='{"amount": 100}',
+        result="Payment created successfully",
+        server_label="stripe",
+        approval_request_id="mcpr_123"
+    )
+    
+    assert call_result["type"] == "mcp_call"
+    assert call_result["name"] == "create_payment"
+    assert call_result["arguments"] == '{"amount": 100}'
+    assert call_result["output"] == "Payment created successfully"
+    assert call_result["server_label"] == "stripe"
+    assert call_result["approval_request_id"] == "mcpr_123"
+    assert call_result["error"] is None
+    assert "id" in call_result
+    assert call_result["id"].startswith("mcp_")
+    
+    # Test error call result
+    error_result = LiteLLM_Proxy_MCP_Handler._create_mcp_call_result(
+        tool_name="create_payment",
+        tool_arguments='{"amount": 100}',
+        result="",
+        server_label="stripe",
+        error="Insufficient funds"
+    )
+    
+    assert error_result["error"] == "Insufficient funds"
+    assert error_result["output"] == ""
+    print("✓ MCP call result creation works")
+
+
+def test_approval_response_processing():
+    """Test processing of approval responses"""
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    input_items = [
+        {"type": "message", "content": "Hello"},
+        {
+            "type": "mcp_approval_response",
+            "approve": True,
+            "approval_request_id": "mcpr_123"
+        },
+        {
+            "type": "mcp_approval_response", 
+            "approve": False,
+            "approval_request_id": "mcpr_456"
+        },
+        {
+            "type": "mcp_approval_response",
+            "approve": True,
+            "approval_request_id": "mcpr_789"
+        }
+    ]
+    
+    approved_ids = LiteLLM_Proxy_MCP_Handler._process_approval_responses(input_items)
+    
+    assert len(approved_ids) == 2
+    assert "mcpr_123" in approved_ids
+    assert "mcpr_789" in approved_ids
+    assert "mcpr_456" not in approved_ids
+    print("✓ Approval response processing works")
+
+
+def test_tool_approval_checking():
+    """Test tool approval requirement checking"""
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    # Test simple "never" approval
+    config_never = {"_require_approval": "never"}
+    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("test_tool", config_never) == False
+    
+    # Test default (always require approval)
+    config_default = {}
+    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("test_tool", config_default) == True
+    
+    # Test granular approval - tool allowed
+    config_granular = {
+        "_require_approval": {
+            "never": {
+                "tool_names": ["safe_tool", "read_only_tool"]
+            }
+        }
+    }
+    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("safe_tool", config_granular) == False
+    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("dangerous_tool", config_granular) == True
+    
+    print("✓ Tool approval checking works")
+
+
 if __name__ == "__main__":
     print("Running built-in MCP integration tests...\n")
     
@@ -165,10 +345,21 @@ if __name__ == "__main__":
             test_mcp_handler_tool_parsing()
             test_calculator_builtin_server()
             test_builtin_tool_expansion()
+            
+            # Test new remote MCP functionality
+            test_remote_mcp_tool_processing()
+            test_hybrid_mcp_usage()
+            
+            # Test new approval functionality
+            test_mcp_approval_workflow()
+            test_mcp_call_result_creation()
+            test_approval_response_processing()
+            test_tool_approval_checking()
+            
         except ImportError as e:
             print(f"⚠️  Skipping MCP handler tests: {e}")
         
-        print("\n🎉 Basic builtin MCP integration tests passed!")
+        print("\n🎉 Built-in, Remote MCP, and Approval workflow tests passed!")
         print("💡 Note: Full functionality requires the 'mcp' module to be installed")
         
     except Exception as e:

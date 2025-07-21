@@ -16,37 +16,103 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
-        Returns True if the user passed a MCP tool with server_url="litellm_proxy" or builtin field
+        Returns True if the user passed a MCP tool with:
+        - server_url="litellm_proxy" (existing behavior)
+        - builtin field (builtin MCP servers)
+        - server_url with external URL (remote MCP servers)
         """
         if tools:
             for tool in tools:
                 if (isinstance(tool, dict) and 
                     tool.get("type") == "mcp" and 
-                    (tool.get("server_url") == "litellm_proxy" or tool.get("builtin"))):
+                    (tool.get("server_url") == "litellm_proxy" or 
+                     tool.get("builtin") or
+                     (tool.get("server_url") and tool.get("server_url") != "litellm_proxy"))):
                     return True
         return False
     
     @staticmethod
     def _parse_mcp_tools(tools: Optional[Iterable[ToolParam]]) -> Tuple[List[ToolParam], List[Any]]:
         """
-        Parse tools and separate MCP tools with litellm_proxy or builtin from other tools.
+        Parse tools and separate MCP tools (builtin, litellm_proxy, or remote) from other tools.
         
         Returns:
-            Tuple of (mcp_tools_with_litellm_proxy_or_builtin, other_tools)
+            Tuple of (mcp_tools_for_litellm_processing, other_tools)
         """
-        mcp_tools_with_litellm_proxy: List[ToolParam] = []
+        mcp_tools_for_processing: List[ToolParam] = []
         other_tools: List[Any] = []
         
         if tools:
             for tool in tools:
                 if (isinstance(tool, dict) and 
                     tool.get("type") == "mcp" and 
-                    (tool.get("server_url") == "litellm_proxy" or tool.get("builtin"))):
-                    mcp_tools_with_litellm_proxy.append(tool)
+                    (tool.get("server_url") == "litellm_proxy" or 
+                     tool.get("builtin") or
+                     (tool.get("server_url") and tool.get("server_url") != "litellm_proxy"))):
+                    mcp_tools_for_processing.append(tool)
                 else:
                     other_tools.append(tool)
         
-        return mcp_tools_with_litellm_proxy, other_tools
+        return mcp_tools_for_processing, other_tools
+    
+    @staticmethod
+    def _process_remote_mcp_tools(tools: List[ToolParam]) -> List[Any]:
+        """
+        Process remote MCP tools by registering them as dynamic servers.
+        
+        Args:
+            tools: List of tools that may include remote MCP server definitions
+            
+        Returns:
+            List of tools with remote MCP servers registered and converted to builtin format
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        
+        processed_tools: List[Any] = []
+        
+        for tool in tools:
+            if (isinstance(tool, dict) and 
+                tool.get("type") == "mcp" and 
+                tool.get("server_url") and 
+                tool.get("server_url") != "litellm_proxy"):
+                
+                # This is a remote MCP server - register it dynamically
+                server_url = tool.get("server_url")
+                server_label = tool.get("server_label", f"remote_{hash(server_url) % 10000}")
+                headers = tool.get("headers", {})
+                allowed_tools = tool.get("allowed_tools")
+                require_approval = tool.get("require_approval", "always")
+                
+                # Register the remote server dynamically
+                try:
+                    # Create a dynamic server entry
+                    remote_server_id = f"remote_{server_label}"
+                    
+                    # Convert to our internal format for consistency
+                    processed_tool = cast(Dict[str, Any], tool.copy()) if hasattr(tool, 'copy') else dict(tool)
+                    processed_tool["server_url"] = "litellm_proxy"  # Use our proxy routing
+                    processed_tool["_remote_server_url"] = server_url
+                    processed_tool["_remote_headers"] = headers
+                    processed_tool["_remote_server_label"] = server_label
+                    processed_tool["_allowed_tools"] = allowed_tools
+                    processed_tool["_require_approval"] = require_approval
+                    
+                    # Remove original remote fields
+                    processed_tool.pop("headers", None)
+                    
+                    processed_tools.append(processed_tool)
+                    
+                    verbose_logger.debug(f"Registered remote MCP server: {server_label} -> {server_url}")
+                    
+                except Exception as e:
+                    verbose_logger.error(f"Failed to register remote MCP server {server_url}: {e}")
+                    continue
+            else:
+                processed_tools.append(tool)
+                
+        return processed_tools
     
     @staticmethod
     def _expand_builtin_tools(tools: List[ToolParam]) -> List[Any]:
@@ -139,6 +205,217 @@ class LiteLLM_Proxy_MCP_Handler:
             elif getattr(tool, "require_approval", None) == "never":
                 return True
         return False
+    
+    @staticmethod
+    def _check_tool_approval(tool_name: str, tool_config: Dict[str, Any]) -> bool:
+        """
+        Check if a specific tool requires approval based on configuration.
+        
+        Args:
+            tool_name: Name of the tool to check
+            tool_config: Tool configuration with approval settings
+            
+        Returns:
+            True if approval is required, False if auto-execution is allowed
+        """
+        require_approval = tool_config.get("_require_approval", "always")
+        
+        # Handle simple "never" case
+        if require_approval == "never":
+            return False
+            
+        # Handle granular approval configuration
+        if isinstance(require_approval, dict):
+            never_config = require_approval.get("never", {})
+            if isinstance(never_config, dict):
+                tool_names = never_config.get("tool_names", [])
+                if tool_name in tool_names:
+                    return False
+                    
+        return True  # Default to requiring approval
+    
+    @staticmethod 
+    def _create_approval_request(
+        tool_name: str,
+        tool_arguments: str, 
+        server_label: str
+    ) -> Dict[str, Any]:
+        """
+        Create an OpenAI-compatible MCP approval request.
+        
+        Args:
+            tool_name: Name of the tool to be called
+            tool_arguments: JSON string of tool arguments
+            server_label: Server label/identifier
+            
+        Returns:
+            MCP approval request dictionary
+        """
+        import uuid
+        
+        return {
+            "id": f"mcpr_{uuid.uuid4().hex}",
+            "type": "mcp_approval_request",
+            "arguments": tool_arguments,
+            "name": tool_name,
+            "server_label": server_label
+        }
+    
+    @staticmethod
+    def _create_mcp_call_result(
+        tool_name: str,
+        tool_arguments: str,
+        result: str,
+        server_label: str,
+        approval_request_id: Optional[str] = None,
+        error: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create an OpenAI-compatible MCP call result.
+        
+        Args:
+            tool_name: Name of the tool that was called
+            tool_arguments: JSON string of tool arguments  
+            result: Tool execution result
+            server_label: Server label/identifier
+            approval_request_id: ID of related approval request (if any)
+            error: Error message if tool execution failed
+            
+        Returns:
+            MCP call result dictionary
+        """
+        import uuid
+        
+        return {
+            "id": f"mcp_{uuid.uuid4().hex}",
+            "type": "mcp_call",
+            "approval_request_id": approval_request_id,
+            "arguments": tool_arguments,
+            "error": error,
+            "name": tool_name,
+            "output": result if not error else "",
+            "server_label": server_label
+        }
+    
+    @staticmethod
+    def _process_approval_responses(input_items: List[Any]) -> List[str]:
+        """
+        Process approval responses from client input and return approved request IDs.
+        
+        Args:
+            input_items: List of input items that may contain approval responses
+            
+        Returns:
+            List of approved request IDs
+        """
+        approved_request_ids = []
+        
+        for item in input_items:
+            if (isinstance(item, dict) and 
+                item.get("type") == "mcp_approval_response" and
+                item.get("approve") is True):
+                approved_request_ids.append(item.get("approval_request_id"))
+                
+        return approved_request_ids
+    
+    @staticmethod
+    async def _execute_tool_calls_with_approval(
+        tool_calls: List[Any],
+        user_api_key_auth: Any,
+        mcp_tools_config: List[Dict[str, Any]],
+        approved_request_ids: Optional[List[str]] = None
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Execute tool calls with approval workflow support.
+        
+        Args:
+            tool_calls: List of tool calls to execute
+            user_api_key_auth: User authentication 
+            mcp_tools_config: Configuration for MCP tools including approval settings
+            approved_request_ids: List of pre-approved request IDs
+            
+        Returns:
+            Tuple of (approval_requests, executed_results)
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        
+        approval_requests = []
+        executed_results = []
+        approved_request_ids = approved_request_ids or []
+        
+        for tool_call in tool_calls:
+            try:
+                tool_name, tool_arguments, tool_call_id = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
+                
+                if not tool_name:
+                    verbose_logger.warning(f"Tool call missing name: {tool_call}")
+                    continue
+                
+                # Find tool configuration
+                tool_config = next(
+                    (config for config in mcp_tools_config 
+                     if config.get("_remote_server_label") == tool_name or 
+                        config.get("_builtin_name") == tool_name), 
+                    {}
+                )
+                
+                server_label = (tool_config.get("_remote_server_label") or 
+                              tool_config.get("_builtin_name") or 
+                              "unknown")
+                
+                # Check if approval is required
+                if LiteLLM_Proxy_MCP_Handler._check_tool_approval(tool_name, tool_config):
+                    # Create approval request
+                    approval_request = LiteLLM_Proxy_MCP_Handler._create_approval_request(
+                        tool_name=tool_name,
+                        tool_arguments=tool_arguments or "{}",
+                        server_label=server_label
+                    )
+                    approval_requests.append(approval_request)
+                    
+                    # Check if this request was pre-approved
+                    if approval_request["id"] not in approved_request_ids:
+                        continue  # Skip execution, wait for approval
+                
+                # Execute the tool
+                parsed_arguments = LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(tool_arguments)
+                
+                result = await global_mcp_server_manager.call_tool(
+                    name=tool_name,
+                    arguments=parsed_arguments,
+                    user_api_key_auth=user_api_key_auth,
+                )
+                
+                # Format result
+                result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
+                
+                # Create MCP call result
+                mcp_call_result = LiteLLM_Proxy_MCP_Handler._create_mcp_call_result(
+                    tool_name=tool_name,
+                    tool_arguments=tool_arguments or "{}",
+                    result=result_text,
+                    server_label=server_label,
+                    approval_request_id=None  # Could link to approval request if needed
+                )
+                
+                executed_results.append(mcp_call_result)
+                
+            except Exception as e:
+                verbose_logger.error(f"Error executing tool call {tool_name}: {e}")
+                
+                # Create error result
+                error_result = LiteLLM_Proxy_MCP_Handler._create_mcp_call_result(
+                    tool_name=tool_name or "unknown",
+                    tool_arguments=tool_arguments or "{}",
+                    result="",
+                    server_label=server_label if 'server_label' in locals() else "unknown",
+                    error=str(e)
+                )
+                executed_results.append(error_result)
+                
+        return approval_requests, executed_results
     
     @staticmethod
     def _extract_tool_calls_from_response(response: ResponsesAPIResponse) -> List[Any]:

@@ -1041,6 +1041,43 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
+# MCP Approval Types - OpenAI Compatible
+class MCPApprovalRequest(TypedDict):
+    """OpenAI-compatible MCP approval request"""
+    id: str
+    type: Literal["mcp_approval_request"]
+    arguments: str  # JSON string of tool arguments
+    name: str  # Tool name
+    server_label: str  # Server label/identifier
+
+
+class MCPApprovalResponse(TypedDict):
+    """OpenAI-compatible MCP approval response"""
+    type: Literal["mcp_approval_response"]
+    approve: bool
+    approval_request_id: str
+
+
+class MCPCall(TypedDict):
+    """OpenAI-compatible MCP call result"""
+    id: str
+    type: Literal["mcp_call"]
+    approval_request_id: Optional[str]
+    arguments: str  # JSON string of tool arguments
+    error: Optional[str]
+    name: str  # Tool name
+    output: str  # Tool execution result
+    server_label: str
+
+
+class MCPListTools(TypedDict):
+    """OpenAI-compatible MCP list tools result"""
+    id: str
+    type: Literal["mcp_list_tools"]
+    server_label: str
+    tools: List[Dict[str, Any]]  # List of available tools
+
+
 class ResponsesAPIStreamEvents(str, Enum):
     """
     Enum representing all supported OpenAI stream event types for the Responses API.

@@ -134,7 +134,11 @@ async def aresponses_api_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    # First, expand any builtin tool references
+    # First, process any remote MCP servers and register them
+    if tools:
+        tools = LiteLLM_Proxy_MCP_Handler._process_remote_mcp_tools(list(tools))
+    
+    # Then, expand any builtin tool references
     if tools:
         tools = LiteLLM_Proxy_MCP_Handler._expand_builtin_tools(list(tools))
 

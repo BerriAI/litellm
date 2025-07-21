@@ -1,6 +1,6 @@
 # Built-in MCP Server Integration Examples
 
-This document demonstrates how to use the new Built-in MCP Server Integration feature with practical examples.
+This document demonstrates how to use both Built-in and Remote MCP Server Integration features.
 
 ## 📋 Quick Reference
 
@@ -11,63 +11,74 @@ This document demonstrates how to use the new Built-in MCP Server Integration fe
 
 ## Overview
 
-Built-in MCP Server Integration allows you to use MCP tools with simple references instead of complex server configurations:
+LiteLLM supports two MCP integration approaches:
 
-### Before: Complex Configuration
+### 1. Built-in MCP Servers (Simplified)
+Pre-configured servers managed by the proxy:
 ```json
 {
-  "model": "gpt-4o",
-  "input": "Add 15 and 27",
+  "tools": [{"type": "mcp", "builtin": "calculator"}]
+}
+```
+
+### 2. Remote MCP Servers (OpenAI-compatible)
+Direct server URL with full configuration:
+```json
+{
   "tools": [{
     "type": "mcp",
-    "server_url": "https://external-mcp-server.com/mcp",
-    "headers": {"Authorization": "Bearer your-secret-token"},
-    "require_approval": "never"
+    "server_label": "stripe",
+    "server_url": "https://mcp.stripe.com",
+    "headers": {"Authorization": "Bearer sk-xxx"}
   }]
 }
 ```
 
-### After: Simple Builtin Reference
+### 3. Hybrid Usage
+Mix both approaches in a single request:
 ```json
 {
-  "model": "gpt-4o", 
-  "input": "Add 15 and 27",
-  "tools": [{
-    "type": "mcp",
-    "builtin": "calculator",
-    "require_approval": "never"
-  }]
+  "tools": [
+    {"type": "mcp", "builtin": "calculator"},
+    {
+      "type": "mcp", 
+      "server_url": "https://mcp.stripe.com",
+      "headers": {"Authorization": "Bearer sk-xxx"}
+    }
+  ]
 }
 ```
 
-## 🚀 Quick Start
+## 🚀 Quick Start Examples
 
-### 1. Test the Calculator Server
+### Built-in MCP Server
 ```bash
-# Test the calculator MCP server directly
-python examples/sample_calculator_mcp_server.py test
+curl -X POST http://localhost:4000/responses \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "input": [{"type": "message", "role": "user", "content": "Calculate 10 + 5"}],
+    "tools": [{"type": "mcp", "builtin": "calculator"}]
+  }'
 ```
 
-### 2. Use with LiteLLM Responses API
-```python
-import litellm
-import asyncio
-
-async def calculator_example():
-    response = await litellm.aresponses(
-        model="gpt-4o",
-        input="I need to calculate the total cost: 3 items at $15.99 each, plus 8.5% tax",
-        tools=[{
-            "type": "mcp",
-            "builtin": "calculator",
-            "require_approval": "never"
-        }]
-    )
-    
-    print("Response:", response.output[0].content[0].text)
-
-# Run the example
-asyncio.run(calculator_example())
+### Remote MCP Server  
+```bash
+curl -X POST http://localhost:4000/responses \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "input": [{"type": "message", "role": "user", "content": "Create a payment link for $20"}],
+    "tools": [{
+      "type": "mcp",
+      "server_label": "stripe",
+      "server_url": "https://mcp.stripe.com",
+      "headers": {"Authorization": "Bearer sk-live-xxx"},
+      "require_approval": "never"
+    }]
+  }'
 ```
 
 ## 🛠️ Available Built-in Servers
@@ -77,22 +88,196 @@ asyncio.run(calculator_example())
 - **Tools**: `add`, `subtract`, `multiply`, `divide`, `calculate`
 - **Setup**: No setup required (included sample server)
 
-### Production Services
+### Production Services (Configurable)
 - **Zapier**: `{"type": "mcp", "builtin": "zapier"}` (requires `ZAPIER_TOKEN`)
 - **GitHub**: `{"type": "mcp", "builtin": "github"}` (requires `GITHUB_TOKEN`)
 - **Jira**: `{"type": "mcp", "builtin": "jira"}` (requires `JIRA_TOKEN`)
 
-## 🔧 Configuration
+## 🌐 Remote MCP Server Features
 
-### Config-based Setup (Recommended)
+### Full OpenAI Compatibility
+```json
+{
+  "type": "mcp",
+  "server_label": "custom_service",
+  "server_url": "https://mcp.service.com/api",
+  "headers": {
+    "Authorization": "Bearer token",
+    "X-API-Key": "key123"
+  },
+  "allowed_tools": ["specific_tool"],
+  "require_approval": "never"
+}
+```
+
+### Tool Filtering
+```json
+{
+  "type": "mcp",
+  "server_url": "https://mcp.github.com",
+  "allowed_tools": ["create_issue", "list_repos"],
+  "headers": {"Authorization": "Bearer ghp-xxx"}
+}
+```
+
+### Approval Control
+Support for OpenAI-compatible approval workflow:
+
+#### Simple Approval Settings
+```json
+{
+  "type": "mcp",
+  "server_url": "https://mcp.stripe.com",
+  "require_approval": "never"  // Skip all approvals
+}
+```
+
+#### Granular Approval Control
+```json
+{
+  "type": "mcp",
+  "server_url": "https://mcp.stripe.com",
+  "require_approval": {
+    "never": {
+      "tool_names": ["get_balance", "list_transactions"]
+    }
+  }
+}
+```
+
+#### Approval Workflow Example
+```bash
+# 1. Initial request (triggers approval)
+curl -X POST http://localhost:4000/responses \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "input": [{"type": "message", "role": "user", "content": "Create a $100 payment"}],
+    "tools": [{
+      "type": "mcp",
+      "server_url": "https://mcp.stripe.com",
+      "headers": {"Authorization": "Bearer sk-xxx"}
+    }]
+  }'
+
+# Response includes approval request:
+# {
+#   "output": [{
+#     "id": "mcpr_12345...",
+#     "type": "mcp_approval_request", 
+#     "name": "create_payment",
+#     "arguments": "{\"amount\": 100}",
+#     "server_label": "stripe"
+#   }]
+# }
+
+# 2. Approval response
+curl -X POST http://localhost:4000/responses \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o-mini",
+    "previous_response_id": "resp_12345...",
+    "tools": [{
+      "type": "mcp",
+      "server_url": "https://mcp.stripe.com", 
+      "headers": {"Authorization": "Bearer sk-xxx"}
+    }],
+    "input": [{
+      "type": "mcp_approval_response",
+      "approve": true,
+      "approval_request_id": "mcpr_12345..."
+    }]
+  }'
+
+# Final response includes execution result:
+# {
+#   "output": [{
+#     "id": "mcp_67890...",
+#     "type": "mcp_call",
+#     "name": "create_payment",
+#     "arguments": "{\"amount\": 100}",
+#     "output": "Payment created successfully",
+#     "server_label": "stripe",
+#     "approval_request_id": "mcpr_12345...",
+#     "error": null
+#   }]
+# }
+```
+
+## 🎯 Complete Examples
+
+### Hybrid Usage - Built-in + Remote
+```python
+import httpx
+import asyncio
+
+async def hybrid_example():
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "http://localhost:4000/responses",
+            headers={
+                "Authorization": "Bearer sk-1234",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "input": [{"type": "message", "role": "user", "content": "Calculate 15% tip on $45 and create a Stripe payment link"}],
+                "tools": [
+                    # Built-in server
+                    {"type": "mcp", "builtin": "calculator"},
+                    # Remote server
+                    {
+                        "type": "mcp",
+                        "server_label": "stripe",
+                        "server_url": "https://mcp.stripe.com",
+                        "headers": {"Authorization": "Bearer sk-live-xxx"},
+                        "allowed_tools": ["create_payment_link"]
+                    }
+                ]
+            }
+        )
+        return response.json()
+
+result = asyncio.run(hybrid_example())
+```
+
+### Multi-Remote Server Usage
+```json
+{
+  "model": "gpt-4o-mini",
+  "input": [{"type": "message", "role": "user", "content": "Check GitHub issues and create Stripe invoice"}],
+  "tools": [
+    {
+      "type": "mcp",
+      "server_label": "github",
+      "server_url": "https://mcp.github.com",
+      "headers": {"Authorization": "Bearer ghp-xxx"}
+    },
+    {
+      "type": "mcp", 
+      "server_label": "stripe",
+      "server_url": "https://mcp.stripe.com",
+      "headers": {"Authorization": "Bearer sk-xxx"}
+    }
+  ]
+}
+```
+
+## 🔧 Configuration Comparison
+
+| Feature | Built-in MCP | Remote MCP |
+|---------|-------------|------------|
+| **Setup** | Config file once | Per-request |
+| **Security** | Server-managed tokens | Client-provided headers |
+| **Discovery** | Simple names | Full URLs |
+| **Flexibility** | Pre-configured | Fully customizable |
+| **Management** | Centralized | Distributed |
+
+### Built-in Server Config
 ```yaml
 mcp_builtin_servers:
-  calculator:
-    transport: "stdio"
-    command: "python"
-    args: ["examples/sample_calculator_mcp_server.py"]
-    enabled: true
-    
   zapier:
     url: "https://mcp.zapier.com/api/mcp"
     transport: "sse"
@@ -101,49 +286,12 @@ mcp_builtin_servers:
     enabled: true
 ```
 
-### Client Token Override
+### Remote Server Usage
 ```json
 {
-  "tools": [{
-    "type": "mcp",
-    "builtin": "zapier",
-    "auth_token": "user_personal_token"
-  }]
-}
-```
-
-## 🎯 Complete Examples
-
-### Multiple Tool Usage
-```python
-# Use both calculator and external tools
-response = await litellm.aresponses(
-    model="gpt-4o",
-    input="Calculate 15% tip on $45.30 and remind me to pay the bill",
-    tools=[
-        {"type": "mcp", "builtin": "calculator"},
-        {"type": "function", "function": {
-            "name": "set_reminder",
-            "description": "Set a reminder",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"}
-                }
-            }
-        }}
-    ]
-)
-```
-
-### Mixed Built-in and External Servers
-```json
-{
-  "tools": [
-    {"type": "mcp", "builtin": "calculator"},
-    {"type": "mcp", "server_url": "https://my-custom-server.com/mcp"},
-    {"type": "function", "function": {"name": "regular_function"}}
-  ]
+  "type": "mcp",
+  "server_url": "https://mcp.zapier.com/api/mcp", 
+  "headers": {"Authorization": "Bearer user-token"}
 }
 ```
 
@@ -156,12 +304,23 @@ response = await litellm.aresponses(
 
 ## 🎉 Benefits
 
+### Built-in MCP
 - ✅ **Enhanced Security**: No credential exposure to clients
 - ✅ **Simplified Usage**: Just specify `"builtin": "service_name"`
 - ✅ **Centralized Management**: Server-side configuration
 - ✅ **Client Personalization**: Optional client token override
+
+### Remote MCP  
+- ✅ **Full Compatibility**: OpenAI Remote MCP compatible
+- ✅ **Maximum Flexibility**: Custom headers and configuration
+- ✅ **Tool Filtering**: Granular tool access control
+- ✅ **Dynamic Usage**: No server-side setup required
+
+### Hybrid Approach
+- ✅ **Best of Both Worlds**: Use appropriate method per service
+- ✅ **Gradual Migration**: Move from remote to built-in as needed
 - ✅ **Backward Compatible**: Works with existing MCP usage
 
 ---
 
-For detailed setup instructions and advanced configuration, see the [Complete User Guide](builtin_mcp_user_guide.md)!
+Choose the approach that best fits your use case, or mix both for maximum flexibility!
