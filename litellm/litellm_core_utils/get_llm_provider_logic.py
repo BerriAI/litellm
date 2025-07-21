@@ -237,6 +237,12 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
+                    elif endpoint == "https://api.v0.dev/v1":
+                        custom_llm_provider = "v0"
+                        dynamic_api_key = get_secret_str("V0_API_KEY")
+                    elif endpoint == "https://api.lambda.ai/v1":
+                        custom_llm_provider = "lambda_ai"
+                        dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -679,6 +685,20 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "v0":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.V0ChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "lambda_ai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 
