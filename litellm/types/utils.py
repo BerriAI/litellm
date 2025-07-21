@@ -2315,12 +2315,16 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     RECRAFT = "recraft"
 =======
     HYPERBOLIC = "hyperbolic"
 >>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 =======
 >>>>>>> e4e10aa4e (Litellm dev 07 21 2025 p1 (#12848))
+=======
+    RECRAFT = "recraft"
+>>>>>>> 03baf23ad ([Feat] Add Recraft Image Generation API Support - New LLM Provider (#12832))
 
 
 # Create a set of all provider values for quick lookup

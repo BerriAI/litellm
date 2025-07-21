@@ -16834,11 +16834,10 @@
         "supports_vision": true,
         "mode": "chat",
         "source": "https://platform.moonshot.ai/docs/pricing"
-<<<<<<< HEAD
     },
     "recraft/recraftv3": {
         "mode": "image_generation",
-        "output_cost_per_image": 0.04,
+        "input_cost_per_image": 0.04,
         "litellm_provider": "recraft",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -16847,7 +16846,7 @@
     },
     "recraft/recraftv2": {
         "mode": "image_generation",
-        "output_cost_per_image": 0.022,
+        "input_cost_per_image": 0.022,
         "litellm_provider": "recraft",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -16881,7 +16880,5 @@
         "supports_vision": false,
         "supports_system_messages": true,
         "supports_tool_choice": false
-=======
->>>>>>> 68ddfae8e (Litellm dev 07 21 2025 p1 (#12848))
     }
 }

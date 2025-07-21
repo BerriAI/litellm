@@ -504,6 +504,7 @@ dashscope_models: List = []
 moonshot_models: List = []
 v0_models: List = []
 <<<<<<< HEAD
+<<<<<<< HEAD
 morph_models: List = []
 lambda_ai_models: List = []
 <<<<<<< HEAD
@@ -514,6 +515,11 @@ hyperbolic_models: List = []
 >>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 =======
 >>>>>>> e4e10aa4e (Litellm dev 07 21 2025 p1 (#12848))
+=======
+morph_models: List = []
+lambda_ai_models: List = []
+recraft_models: List = []
+>>>>>>> 03baf23ad ([Feat] Add Recraft Image Generation API Support - New LLM Provider (#12832))
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -695,10 +701,14 @@ def add_known_models():
         elif value.get("litellm_provider") == "v0":
             v0_models.append(key)
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 03baf23ad ([Feat] Add Recraft Image Generation API Support - New LLM Provider (#12832))
         elif value.get("litellm_provider") == "morph":
             morph_models.append(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.append(key)
+<<<<<<< HEAD
 <<<<<<< HEAD
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
@@ -708,6 +718,10 @@ def add_known_models():
 >>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 =======
 >>>>>>> e4e10aa4e (Litellm dev 07 21 2025 p1 (#12848))
+=======
+        elif value.get("litellm_provider") == "recraft":
+            recraft_models.append(key)
+>>>>>>> 03baf23ad ([Feat] Add Recraft Image Generation API Support - New LLM Provider (#12832))
 
 
 add_known_models()
@@ -793,6 +807,9 @@ model_list = (
     + dashscope_models
     + moonshot_models
     + v0_models
+    + morph_models
+    + lambda_ai_models
+    + recraft_models
 )
 
 model_list_set = set(model_list)
@@ -862,6 +879,7 @@ models_by_provider: dict = {
     "moonshot": moonshot_models,
     "v0": v0_models,
 <<<<<<< HEAD
+<<<<<<< HEAD
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
 <<<<<<< HEAD
@@ -871,6 +889,11 @@ models_by_provider: dict = {
 >>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 =======
 >>>>>>> e4e10aa4e (Litellm dev 07 21 2025 p1 (#12848))
+=======
+    "morph": morph_models,
+    "lambda_ai": lambda_ai_models,
+    "recraft": recraft_models,
+>>>>>>> 03baf23ad ([Feat] Add Recraft Image Generation API Support - New LLM Provider (#12832))
 }
 
 # mapping for those models which have larger equivalents
