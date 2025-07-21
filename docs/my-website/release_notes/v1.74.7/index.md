@@ -1,6 +1,6 @@
 ---
-title: "v1.74.6"
-slug: "v1-74-6"
+title: "[Pre Release] v1.74.7"
+slug: "v1-74-7"
 date: 2025-07-19T10:00:00
 authors:
   - name: Krrish Dholakia
@@ -28,14 +28,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.6
+ghcr.io/berriai/litellm:v1.74.7.rc.1
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.74.6
+pip install litellm==1.74.7rc1
 ```
 
 </TabItem>
@@ -48,45 +48,29 @@ pip install litellm==1.74.6
 
 - **Vector Stores** - Support for Vertex RAG Engine, PG Vector, OpenAI & Azure OpenAI Vector Stores.
 - **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
-- **Control Plane + Data Plane Architecture** - Enhanced proxy architecture for better scalability and separation of concerns.
 - **New LLM Providers** - Added Moonshot API `moonshot` and `v0` provider support.
-
----
-
-## MCP Gateway: Enhanced Namespacing
-
-v1.74.6 introduces improved URL-based namespacing for MCP servers, enabling better segregation and organization of MCP tools across different environments and teams.
-
-Key features include:
-- **URL-based namespacing**: Better isolation between different MCP server instances
-- **Access group improvements**: Enhanced management of MCP server access through configuration
-- **Tool permission management**: Improved object permissions when updating/deleting keys and teams
-
-Read more [here](https://docs.litellm.ai/docs/mcp#grouping-mcps-access-groups)
 
 ---
 
 ## Vector Stores API
 
-v1.74.6 introduces OpenAI-compatible vector store endpoints, bringing powerful vector search capabilities to the LiteLLM proxy.
+This release introduces support for using VertexAI RAG Engine, PG Vector, Bedrock Knowledge Bases, and OpenAI Vector Stores with LiteLLM.
 
-**New Endpoints:**
-- `/v1/vector_stores` - Create and manage vector stores
-- `/v1/vector_stores/{vector_store_id}/search` - Perform vector searches
+This is ideal for use cases requiring external knowledge sources with LLMs.
 
-**Supported Providers:**
-- **Vertex RAG Engine** - Google's managed RAG solution
-- **PG Vector** - PostgreSQL vector extension support
-- **OpenAI Vector Stores** - Full OpenAI compatibility
-- **Azure AI Search** - Microsoft's vector search service
+This brings the following benefits for LiteLLM users:
 
-This enables developers to easily integrate vector search capabilities into their applications while maintaining compatibility with OpenAI's vector store API.
+**Proxy Admin Benefits:**
+- Fine-grained access control: determine which Keys and Teams can access specific Vector Stores
+- Complete usage tracking and monitoring across all vector store operations
 
-[Get started](../../docs/proxy/vector_stores)
+**Developer Benefits:**
+- Simple, unified interface for querying vector stores and using them with LLM API requests
+- Consistent API experience across all supported vector store providers 
 
----
 
-## Control Plane + Data Plane Architecture
+
+[Get started](../../docs/completion/knowledgebase)
 
 
 ---
@@ -148,7 +132,7 @@ This enables developers to easily integrate vector search capabilities into thei
     - Custom TTL support for context caching - [PR #12541](https://github.com/BerriAI/litellm/pull/12541)
     - Fix implicit caching cost calculation for Gemini 2.x models - [PR #12585](https://github.com/BerriAI/litellm/pull/12585)
 - **[VertexAI](../../docs/providers/vertex)**
-    - Added Vertex AI RAG Engine support (use with OpenAI compatible `/vector_stores` API) - [PR #12752](https://github.com/BerriAI/litellm/pull/12595), **DOC NEEDED**
+    - Added Vertex AI RAG Engine support (use with OpenAI compatible `/vector_stores` API) - [PR #12752](https://github.com/BerriAI/litellm/pull/12595), [Get Started](../../docs/completion/knowledgebase)
 - **[vLLM](../../docs/providers/vllm)**
     - Added support for using Rerank endpoints with vLLM - [PR #12738](https://github.com/BerriAI/litellm/pull/12738), [Get Started](../../docs/providers/vllm#rerank)
 - **[AI21](../../docs/providers/ai21)**
@@ -180,15 +164,15 @@ This enables developers to easily integrate vector search capabilities into thei
 #### Features
 - **[/chat/completions](../../docs/completion/input)** 
     - Include tool calls in output of trim_messages - [PR #11517](https://github.com/BerriAI/litellm/pull/11517)
-- **[/v1/vector_stores](../../docs/proxy/vector_stores)**
-    - New OpenAI-compatible vector store endpoints - [PR #12699](https://github.com/BerriAI/litellm/pull/12699)
-    - Vector store search endpoint - [PR #12749](https://github.com/BerriAI/litellm/pull/12749)
-    - Support for using PG Vector as a vector store - [PR #12667](https://github.com/BerriAI/litellm/pull/12667)
-- **[/streamGenerateContent](../../docs/image_generation#streamgeneratecontent)**
+- **[/v1/vector_stores](../../docs/vector_stores/search)**
+    - New OpenAI-compatible vector store endpoints - [PR #12699](https://github.com/BerriAI/litellm/pull/12699), [Get Started](../../docs/vector_stores/search)
+    - Vector store search endpoint - [PR #12749](https://github.com/BerriAI/litellm/pull/12749), [Get Started](../../docs/vector_stores/search)
+    - Support for using PG Vector as a vector store - [PR #12667](https://github.com/BerriAI/litellm/pull/12667), [Get Started](../../docs/completion/knowledgebase)
+- **[/streamGenerateContent](../../docs/generateContent)**
     - Non-gemini model support - [PR #12647](https://github.com/BerriAI/litellm/pull/12647)
 
 #### Bugs
-- **[/vector_stores](../../docs/proxy/vector_stores)**
+- **[/vector_stores](../../docs/vector_stores/search)**
     - Knowledge Base Call returning error when passing as `tools` - [PR #12628](https://github.com/BerriAI/litellm/pull/12628)
 
 ---
