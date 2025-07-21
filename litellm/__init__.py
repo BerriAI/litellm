@@ -505,6 +505,7 @@ moonshot_models: List = []
 v0_models: List = []
 morph_models: List = []
 lambda_ai_models: List = []
+recraft_models: List = []
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -689,6 +690,8 @@ def add_known_models():
             morph_models.append(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.append(key)
+        elif value.get("litellm_provider") == "recraft":
+            recraft_models.append(key)
 
 
 add_known_models()
@@ -776,6 +779,7 @@ model_list = (
     + v0_models
     + morph_models
     + lambda_ai_models
+    + recraft_models
 )
 
 model_list_set = set(model_list)
@@ -846,6 +850,7 @@ models_by_provider: dict = {
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
+    "recraft": recraft_models,
 }
 
 # mapping for those models which have larger equivalents
