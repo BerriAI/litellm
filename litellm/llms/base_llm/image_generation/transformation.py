@@ -18,7 +18,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class BaseImageGenerationConfig(BaseConfig, ABC):
+class BaseImageGenerationConfig(ABC):
     @abstractmethod
     def get_supported_openai_params(
         self, model: str
