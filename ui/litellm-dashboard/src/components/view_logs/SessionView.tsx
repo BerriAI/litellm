@@ -98,7 +98,7 @@ export const SessionView: React.FC<SessionViewProps> = ({ sessionId, logs, onBac
         </Card>
         <Card>
           <Text>Total Cost</Text>
-          <Metric>${formatNumberWithCommas(totalCost, 4)}</Metric>
+          <Metric>${formatNumberWithCommas(totalCost, 6)}</Metric>
         </Card>
         <Card>
           <Text>Total Tokens</Text>

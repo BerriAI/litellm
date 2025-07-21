@@ -1313,8 +1313,10 @@ class Logging(LiteLLMLoggingBaseClass):
         # Check for dynamically disabled callbacks via headers
         if (
             EnterpriseCallbackControls is not None
-            and EnterpriseCallbackControls.is_callback_disabled_via_headers(
-                callback, litellm_params
+            and EnterpriseCallbackControls.is_callback_disabled_dynamically(
+                callback=callback, 
+                litellm_params=litellm_params,
+                standard_callback_dynamic_params = self.standard_callback_dynamic_params
             )
         ):
             verbose_logger.debug(

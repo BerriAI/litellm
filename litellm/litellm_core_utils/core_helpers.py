@@ -10,6 +10,8 @@ from litellm.types.llms.openai import AllMessageValues
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.types.utils import ModelResponseStream
+
     Span = Union[_Span, Any]
 else:
     Span = Any
@@ -189,3 +191,15 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
         **additional_headers,
     }
     return additional_headers
+
+
+def preserve_upstream_non_openai_attributes(
+    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
+):
+    """
+    Preserve non-OpenAI attributes from the original chunk.
+    """
+    expected_keys = set(model_response.model_fields.keys()).union({"usage"})
+    for key, value in original_chunk.model_dump().items():
+        if key not in expected_keys:
+            setattr(model_response, key, value)

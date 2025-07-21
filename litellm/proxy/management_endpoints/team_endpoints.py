@@ -92,8 +92,11 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
+    BulkTeamMemberAddRequest,
+    BulkTeamMemberAddResponse,
     GetTeamMemberPermissionsResponse,
     TeamListResponse,
+    TeamMemberAddResult,
     UpdateTeamMemberPermissionsRequest,
 )
 
@@ -1539,6 +1542,154 @@ async def team_member_update(
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
     )
+
+
+def _create_results_from_response(
+    members: List[Member],
+    response: TeamAddMemberResponse,
+) -> List[TeamMemberAddResult]:
+    """
+    Convert TeamAddMemberResponse into individual TeamMemberAddResult objects
+    """
+    results: List[TeamMemberAddResult] = []
+
+    for member in members:
+        # Find corresponding updated user
+        updated_user = None
+        for user in response.updated_users:
+            if (member.user_id and user.user_id == member.user_id) or (
+                member.user_email and user.user_email == member.user_email
+            ):
+                updated_user = user.model_dump()
+                break
+
+        # Find corresponding updated team membership
+        updated_team_membership = None
+        for tm in response.updated_team_memberships:
+            if member.user_id and tm.user_id == member.user_id:
+                updated_team_membership = tm.model_dump()
+                break
+
+        results.append(
+            TeamMemberAddResult(
+                user_id=member.user_id,
+                user_email=member.user_email,
+                success=True,
+                updated_user=updated_user,
+                updated_team_membership=updated_team_membership,
+            )
+        )
+
+    return results
+
+
+@router.post(
+    "/team/bulk_member_add",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkTeamMemberAddResponse,
+)
+@management_endpoint_wrapper
+async def bulk_team_member_add(
+    data: BulkTeamMemberAddRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Bulk add multiple members to a team at once.
+    
+    This endpoint reuses the same logic as /team/member_add but provides a bulk-friendly response format.
+    
+    Parameters:
+    - team_id: str - The ID of the team to add members to
+    - members: List[Member] - List of members to add to the team
+    - max_budget_in_team: Optional[float] - Maximum budget allocated to each user within the team
+    
+    Returns:
+    - results: List of individual member addition results
+    - total_requested: Total number of members requested for addition
+    - successful_additions: Number of successful additions  
+    - failed_additions: Number of failed additions
+    - updated_team: The updated team object
+    
+    Example request:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/team/bulk_member_add' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "team_id": "team-1234",
+        "members": [
+            {
+                "user_id": "user1",
+                "role": "user"
+            },
+            {
+                "user_email": "user2@example.com",
+                "role": "admin"
+            }
+        ],
+        "max_budget_in_team": 100.0
+    }'
+    ```
+    """
+    if not data.members:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "At least one member is required"},
+        )
+
+    # Limit batch size to prevent overwhelming the system
+    MAX_BATCH_SIZE = 100
+    if len(data.members) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Maximum {MAX_BATCH_SIZE} members can be added at once"},
+        )
+
+    try:
+        # Reuse the existing team_member_add logic directly
+        response = await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=data.team_id,
+                member=data.members,  # Pass the entire list
+                max_budget_in_team=data.max_budget_in_team,
+            ),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Convert to bulk response format
+        results = _create_results_from_response(data.members, response)
+
+        return BulkTeamMemberAddResponse(
+            team_id=data.team_id,
+            results=results,
+            total_requested=len(data.members),
+            successful_additions=len(results),  # All succeeded if we got here
+            failed_additions=0,
+            updated_team=response.model_dump(),
+        )
+
+    except Exception as e:
+        # If the entire operation fails, mark all members as failed
+        error_message = str(e)
+        results = [
+            TeamMemberAddResult(
+                user_id=member.user_id,
+                user_email=member.user_email,
+                success=False,
+                error=error_message,
+            )
+            for member in data.members
+        ]
+
+        return BulkTeamMemberAddResponse(
+            team_id=data.team_id,
+            results=results,
+            total_requested=len(data.members),
+            successful_additions=0,
+            failed_additions=len(data.members),
+            updated_team=None,
+        )
 
 
 @router.post(
