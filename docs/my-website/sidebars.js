@@ -39,6 +39,7 @@ const sidebars = {
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
+          "proxy/guardrails/model_armor",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pii_masking_v2",
