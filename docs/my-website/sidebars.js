@@ -623,6 +623,7 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
+            "projects/HolmesGPT"
           ],
         },
         "extras/code_quality",
