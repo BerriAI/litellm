@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
 from litellm.responses.main import aresponses
@@ -49,7 +49,7 @@ class LiteLLM_Proxy_MCP_Handler:
         return mcp_tools_with_litellm_proxy, other_tools
     
     @staticmethod
-    def _expand_builtin_tools(tools: List[ToolParam]) -> List[ToolParam]:
+    def _expand_builtin_tools(tools: List[ToolParam]) -> List[Any]:
         """
         Expand builtin MCP tool references to actual server configurations.
         
@@ -63,28 +63,29 @@ class LiteLLM_Proxy_MCP_Handler:
             global_mcp_server_manager,
         )
         
-        expanded_tools = []
+        expanded_tools: List[Any] = []
         
         for tool in tools:
             if isinstance(tool, dict) and tool.get("type") == "mcp" and tool.get("builtin"):
                 builtin_name = tool.get("builtin")
-                verbose_logger.debug(f"Expanding builtin MCP tool: {builtin_name}")
-                
-                # Resolve builtin to actual server configuration
-                builtin_server = global_mcp_server_manager.resolve_builtin_server(builtin_name)
-                if builtin_server:
-                    # Create a new tool dict with server_url="litellm_proxy" to use existing flow
-                    expanded_tool = tool.copy()
-                    expanded_tool["server_url"] = "litellm_proxy"
-                    # Store the builtin server info for later use
-                    expanded_tool["_builtin_server_id"] = builtin_server.server_id
-                    expanded_tool["_builtin_name"] = builtin_name
-                    # Remove the builtin field since we've expanded it
-                    expanded_tool.pop("builtin", None)
-                    expanded_tools.append(expanded_tool)
-                    verbose_logger.debug(f"Expanded builtin '{builtin_name}' to server_id: {builtin_server.server_id}")
-                else:
-                    verbose_logger.warning(f"Builtin MCP server '{builtin_name}' not available, skipping tool")
+                if isinstance(builtin_name, str):
+                    verbose_logger.debug(f"Expanding builtin MCP tool: {builtin_name}")
+                    
+                    # Resolve builtin to actual server configuration
+                    builtin_server = global_mcp_server_manager.resolve_builtin_server(builtin_name)
+                    if builtin_server:
+                        # Create a new tool dict with server_url="litellm_proxy" to use existing flow
+                        expanded_tool = cast(Dict[str, Any], tool.copy()) if hasattr(tool, 'copy') else dict(tool)
+                        expanded_tool["server_url"] = "litellm_proxy"
+                        # Store the builtin server info for later use
+                        expanded_tool["_builtin_server_id"] = builtin_server.server_id
+                        expanded_tool["_builtin_name"] = builtin_name
+                        # Remove the builtin field since we've expanded it
+                        expanded_tool.pop("builtin", None)
+                        expanded_tools.append(expanded_tool)
+                        verbose_logger.debug(f"Expanded builtin '{builtin_name}' to server_id: {builtin_server.server_id}")
+                    else:
+                        verbose_logger.warning(f"Builtin MCP server '{builtin_name}' not available, skipping tool")
             else:
                 expanded_tools.append(tool)
                 

@@ -15,6 +15,7 @@ import os
 from typing import Dict, List, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.types.mcp import MCPTransport, MCPAuth, MCPSpecVersion
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -25,7 +26,7 @@ class BuiltinStdioMCPServerConfig:
         self,
         name: str,
         command: str,
-        args: List[str] = None,
+        args: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = None,
         description: Optional[str] = None,
         spec_version: str = "2025-03-26"
@@ -46,9 +47,9 @@ class BuiltinStdioMCPServerConfig:
             server_id=server_id,
             name=self.name,
             url=None,  # No URL for stdio transport
-            transport=self.transport,
-            auth_type=self.auth_type,
-            spec_version=self.spec_version,
+            transport=MCPTransport.stdio,
+            auth_type=None,
+            spec_version=MCPSpecVersion.mar_2025,
             command=self.command,
             args=self.args,
             env=self.env
@@ -78,7 +79,7 @@ class BuiltinMCPServerConfig:
     
     def to_mcp_server(self, server_id: str) -> MCPServer:
         """Convert to MCPServer instance with environment-based authentication"""
-        auth_headers = {}
+        auth_token = None
         
         # Set up authentication if configured
         if self.auth_type and self.env_key:
@@ -88,22 +89,21 @@ class BuiltinMCPServerConfig:
                     f"Environment variable {self.env_key} not set for builtin MCP server '{self.name}'"
                 )
             else:
-                if self.auth_type == "bearer_token":
-                    auth_headers["Authorization"] = f"Bearer {token}"
-                elif self.auth_type == "api_key":
-                    auth_headers["Authorization"] = f"Bearer {token}"
-                elif self.auth_type == "basic":
-                    import base64
-                    auth_headers["Authorization"] = f"Basic {base64.b64encode(token.encode()).decode()}"
+                auth_token = token
+        
+        # Convert string values to proper enum types
+        transport_type = getattr(MCPTransport, self.transport, MCPTransport.sse)
+        auth_type_enum = getattr(MCPAuth, self.auth_type, None) if self.auth_type else None
+        spec_version_enum = getattr(MCPSpecVersion, self.spec_version.replace('-', '_').replace('.', '_'), MCPSpecVersion.mar_2025)
         
         return MCPServer(
             server_id=server_id,
             name=self.name,
             url=self.url,
-            transport=self.transport,  # Already string, let pydantic handle validation
-            auth_type=self.auth_type,  # Already string, let pydantic handle validation  
-            spec_version=self.spec_version,
-            authentication_token=os.getenv(self.env_key) if self.env_key else None
+            transport=transport_type,
+            auth_type=auth_type_enum,
+            spec_version=spec_version_enum,
+            authentication_token=auth_token
         )
 
 
