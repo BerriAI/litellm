@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import Mock, patch
 
 
@@ -65,7 +64,6 @@ def test_model_list_with_fallback_metadata(
     mock_get_complete_model_list, mock_router
 ):
     """Test model_list function with fallback metadata."""
-    from litellm.proxy.proxy_server import model_list
     
     # Setup mocks
     mock_user_auth = create_mock_user_api_key_auth()
