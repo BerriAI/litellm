@@ -8,6 +8,7 @@ import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import safe_divide_seconds
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.utils import LiteLLMPydanticObjectBase
 

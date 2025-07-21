@@ -65,7 +65,20 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           <Button icon={ArrowLeftIcon} variant="light" className="mb-4" onClick={onBack}>
             Back to All Servers
           </Button>
-          <Title>{mcpServer.alias}</Title>
+          <div className="flex items-center cursor-pointer">
+            <Title>{mcpServer.alias}</Title>
+            <AntdButton
+              type="text"
+              size="small"
+              icon={copiedStates["mcp-alias"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(mcpServer.alias, "mcp-alias")}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["mcp-alias"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
+            />
+          </div>
           <div className="flex items-center cursor-pointer">
             <Text className="text-gray-500 font-mono">{mcpServer.server_id}</Text>
             <AntdButton

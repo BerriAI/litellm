@@ -8,6 +8,7 @@ Example:
     "prometheus" -> PrometheusLogger
 """
 from typing import Union
+
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
@@ -30,11 +31,14 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
-from litellm.integrations.prometheus import PrometheusLogger
+try:
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
+except Exception:
+    PrometheusLogger = None
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
-from litellm.integrations.vector_store_integrations.bedrock_vector_store import (
-    BedrockVectorStore,
+from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    VectorStorePreCallHook,
 )
 from litellm.proxy.hooks.dynamic_rate_limiter import _PROXY_DynamicRateLimitHandler
 
@@ -71,11 +75,11 @@ class CustomLoggerRegistry:
         "gcs_pubsub": GcsPubSubLogger,
         "anthropic_cache_control_hook": AnthropicCacheControlHook,
         "agentops": AgentOps,
-        "bedrock_vector_store": BedrockVectorStore,
         "deepeval": DeepEvalLogger,
         "s3_v2": S3Logger,
         "aws_sqs": SQSLogger,
         "dynamic_rate_limiter": _PROXY_DynamicRateLimitHandler,
+        "vector_store_pre_call_hook": VectorStorePreCallHook,
     }
 
     try:

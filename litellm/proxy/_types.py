@@ -307,6 +307,12 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
+
+        # vector stores
+        "/vector_stores",
+        "/v1/vector_stores",
+        "/vector_stores/{vector_store_id}/search",
+        "/v1/vector_stores/{vector_store_id}/search",
     ]
 
     mapped_pass_through_routes = [
@@ -2540,7 +2546,10 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
         member_data = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
-            members = [Member(**item) for item in member_data]
+            members = [
+                Member(**item) if isinstance(item, dict) else item
+                for item in member_data
+            ]
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):

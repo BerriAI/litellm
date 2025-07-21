@@ -37,6 +37,7 @@ class SupportedGuardrailIntegrations(Enum):
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
+    MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
 
 class Role(Enum):
@@ -273,6 +274,10 @@ class BedrockGuardrailConfigModel(BaseModel):
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
     )
+    disable_exception_on_block: Optional[bool] = Field(
+        default=False,
+        description="If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
+    )
     aws_region_name: Optional[str] = Field(
         default=None, description="AWS region where your guardrail is deployed"
     )
@@ -303,6 +308,7 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_bedrock_runtime_endpoint: Optional[str] = Field(
         default=None, description="AWS Bedrock runtime endpoint URL"
     )
+
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
@@ -394,6 +400,25 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=None, description="Optional field if guardrail requires a 'model' parameter"
     )
 
+    # Model Armor params
+    template_id: Optional[str] = Field(
+        default=None, description="The ID of your Model Armor template"
+    )
+    location: Optional[str] = Field(
+        default=None, description="Google Cloud location/region (e.g., us-central1)"
+    )
+    credentials: Optional[str] = Field(
+        default=None,
+        description="Path to Google Cloud credentials JSON file or JSON string",
+    )
+    api_endpoint: Optional[str] = Field(
+        default=None, description="Optional custom API endpoint for Model Armor"
+    )
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description="Whether to fail the request if Model Armor encounters an error",
+    )
+    
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 

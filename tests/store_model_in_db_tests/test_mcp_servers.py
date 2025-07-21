@@ -291,4 +291,4 @@ async def test_create_mcp_server_invalid_alias():
             )
         
         assert exc_info.value.status_code == 400
-        assert "Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead." in str(exc_info.value.detail)
+        assert "Server name cannot contain '-'. Use an alternative character instead Found: invalid-alias" in str(exc_info.value.detail)

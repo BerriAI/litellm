@@ -329,6 +329,7 @@ from litellm.proxy.utils import (
     hash_token,
     update_spend,
 )
+from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
 )
@@ -465,10 +466,13 @@ else:
     )
 
 ui_link = f"{server_root_path}/ui/"
+model_hub_link = f"{server_root_path}/ui/model_hub_table"
 ui_message = (
     f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO"
 )
 ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
+
+ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/model_hub)"
 
 custom_swagger_message = "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 
@@ -1803,6 +1807,11 @@ class ProxyConfig:
                         litellm_settings=litellm_settings,
                     )
 
+                elif key == "model_group_settings":
+                    from litellm.types.router import ModelGroupSettings
+
+                    litellm.model_group_settings = ModelGroupSettings(**value)
+
                 elif key == "post_call_rules":
                     litellm.post_call_rules = [
                         get_instance_fn(value=value, config_file_path=config_file_path)
@@ -1849,11 +1858,20 @@ class ProxyConfig:
                                 callback
                             )
                             if "prometheus" in callback:
-                                from litellm.integrations.prometheus import (
-                                    PrometheusLogger,
-                                )
+                                try:
+                                    from litellm_enterprise.integrations.prometheus import (
+                                        PrometheusLogger,
+                                    )
+                                except Exception:
+                                    PrometheusLogger = None
 
-                                PrometheusLogger._mount_metrics_endpoint(premium_user)
+                                if PrometheusLogger is not None:
+                                    verbose_proxy_logger.debug(
+                                        "mounting metrics endpoint"
+                                    )
+                                    PrometheusLogger._mount_metrics_endpoint(
+                                        premium_user
+                                    )
                     print(  # noqa
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
@@ -3505,9 +3523,12 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
         if litellm.prometheus_initialize_budget_metrics is True:
-            from litellm.integrations.prometheus import PrometheusLogger
+            try:
+                from litellm_enterprise.integrations.prometheus import PrometheusLogger
 
-            PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+            except Exception:
+                PrometheusLogger = None
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
@@ -8708,6 +8729,7 @@ app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
+app.include_router(vector_store_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)

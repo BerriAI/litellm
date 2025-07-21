@@ -544,6 +544,47 @@ async def test_openai_codex(sync_mode):
 
     assert response.choices[0].message.content is not None
 
+@pytest.mark.asyncio
+async def test_openai_via_gemini_streaming_bridge():
+    """
+    Test that the openai via gemini streaming bridge works correctly
+    """
+    from litellm import Router
+    from litellm.types.utils import ModelResponseStream
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                },
+                "model_info": {
+                    "version": 2,
+                },
+            }
+        ],
+        model_group_alias={"gemini-2.5-pro": "openai/gpt-3.5-turbo"},
+    )
+
+    response = await router.agenerate_content_stream(
+        model="openai/gpt-3.5-turbo",
+        contents=[
+            {
+                "parts": [{"text": "Write a long story about space exploration"}],
+                "role": "user",
+            }
+        ],
+        generationConfig={"maxOutputTokens": 500},
+    )
+
+    printed_chunks = []
+    async for chunk in response:
+        print("chunk: ", chunk)
+        printed_chunks.append(chunk)
+        assert not isinstance(chunk, ModelResponseStream)
+
+    assert len(printed_chunks) > 0
 
 def test_openai_deepresearch_model_bridge():
     """
@@ -552,7 +593,7 @@ def test_openai_deepresearch_model_bridge():
     litellm._turn_on_debug()
     response = litellm.completion(
         model="o3-deep-research-2025-06-26",
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
         tools=[
             {"type": "web_search_preview"},
             {"type": "code_interpreter", "container": {"type": "auto"}},
