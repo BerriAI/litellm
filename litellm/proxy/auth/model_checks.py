@@ -329,29 +329,19 @@ def get_next_fallback(
     if not fallbacks:
         return None
     
-    # Get the fallback model group for this model
-    fallback_model_group, _ = get_fallback_model_group(
-        fallbacks=fallbacks,
-        model_group=model
-    )
-    
-    if not fallback_model_group:
-        return None
-    
-    # Find the current model's position in the fallback chain
-    # If the model is the primary model, return the first fallback
-    # If the model is already a fallback, return the next one in the chain
-    
-    # First check if this model is a primary model with fallbacks
+    # Search through all fallback configurations to find where this model appears
     for fallback_dict in fallbacks:
         if isinstance(fallback_dict, dict):
             primary_model = list(fallback_dict.keys())[0]
             fallback_list = fallback_dict[primary_model]
             
+            # Check if this model is the primary model in this fallback configuration
             if primary_model == model or _check_stripped_model_group(model, primary_model):
                 # This is a primary model, return the first fallback
                 if fallback_list and len(fallback_list) > 0:
                     return fallback_list[0]
+            
+            # Check if this model appears anywhere in the fallback list
             elif model in fallback_list:
                 # This model is in the fallback chain, find its position and return the next one
                 current_index = fallback_list.index(model)
@@ -361,12 +351,28 @@ def get_next_fallback(
                 return None
             
             # Also check with stripped model names for provider prefixes
-            for idx, fallback_model in enumerate(fallback_list):
-                if _check_stripped_model_group(model, fallback_model) or _check_stripped_model_group(fallback_model, model):
-                    # Found current model in fallback chain, return next one
-                    if idx + 1 < len(fallback_list):
-                        return fallback_list[idx + 1]
-                    return None
+            else:
+                # Check if model matches primary with stripped names
+                if _check_stripped_model_group(model, primary_model) or _check_stripped_model_group(primary_model, model):
+                    if fallback_list and len(fallback_list) > 0:
+                        return fallback_list[0]
+                
+                # Check if model matches any fallback with stripped names
+                for idx, fallback_model in enumerate(fallback_list):
+                    if _check_stripped_model_group(model, fallback_model) or _check_stripped_model_group(fallback_model, model):
+                        # Found current model in fallback chain, return next one
+                        if idx + 1 < len(fallback_list):
+                            return fallback_list[idx + 1]
+                        return None
+    
+    # Check for generic wildcard fallbacks
+    for fallback_dict in fallbacks:
+        if isinstance(fallback_dict, dict):
+            primary_model = list(fallback_dict.keys())[0]
+            if primary_model == "*":  # Generic fallback
+                fallback_list = fallback_dict["*"]
+                if fallback_list and len(fallback_list) > 0:
+                    return fallback_list[0]
     
     return None
 
