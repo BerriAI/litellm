@@ -1235,9 +1235,7 @@ class CustomStreamWrapper:
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 if response_obj is None:
                     return
-                
                 completion_obj["content"] = response_obj["text"]
-
                 self.intermittent_finish_reason = response_obj.get(
                     "finish_reason", None
                 )
@@ -1442,7 +1440,6 @@ class CustomStreamWrapper:
                 custom_llm_provider=self.custom_llm_provider,
                 original_exception=e,
             )
-
 
     def set_logging_event_loop(self, loop):
         """
