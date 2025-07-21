@@ -12,17 +12,21 @@ from ..openai import OpenAIChatCompletion
 
 
 class OpenAIRealtime(OpenAIChatCompletion):
-    def _construct_url(self, api_base: str, model: str) -> str:
+    def _construct_url(self, api_base: str, query_params: dict) -> str:
         """
-        Example output:
-        "BACKEND_WS_URL = "wss://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"";
+        Construct the backend websocket URL with all query parameters (excluding 'model' if present).
         """
         from httpx import URL
 
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base).join("/v1/realtime")
-        return str(url.copy_add_param("model", model))
+        # Add all query params except 'model'
+        for k, v in query_params.items():
+            if k == "model":
+                continue
+            url = url.copy_add_param(k, v)
+        return str(url)
 
     async def async_realtime(
         self,
@@ -33,6 +37,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
+        query_params: Optional[dict] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -42,7 +47,10 @@ class OpenAIRealtime(OpenAIChatCompletion):
         if api_key is None:
             raise ValueError("api_key is required for Azure OpenAI calls")
 
-        url = self._construct_url(api_base, model)
+        # Use all query params if provided, else fallback to just model
+        if query_params is None:
+            query_params = {"model": model}
+        url = self._construct_url(api_base, query_params)
 
         try:
             async with websockets.connect(  # type: ignore

@@ -124,6 +124,9 @@ async def _arealtime(
             or get_secret_str("OPENAI_API_KEY")
         )
 
+        # Forward all query params if present
+        query_params = kwargs.get("query_params")
+
         await openai_realtime.async_realtime(
             model=model,
             websocket=websocket,
@@ -132,6 +135,7 @@ async def _arealtime(
             api_key=api_key,
             client=None,
             timeout=timeout,
+            query_params=query_params,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
