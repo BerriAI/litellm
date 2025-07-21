@@ -3,6 +3,7 @@ Minimal test for Vertex AI Online Prediction core logic
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass

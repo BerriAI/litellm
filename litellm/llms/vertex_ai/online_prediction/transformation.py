@@ -2,6 +2,7 @@
 Transformation logic for Vertex AI Online Prediction
 """
 
+import json
 from typing import Any, Dict, List, Optional
 
 import litellm
