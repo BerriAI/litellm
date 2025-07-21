@@ -1658,11 +1658,11 @@ def anthropic_messages_pt(  # noqa: PLR0915
 
             if assistant_content_block.get("reasoning_content"):
                 reasoning_content = assistant_content_block.get("reasoning_content")
-                block = AnthropicMessagesTextParam(
+                assistant_content_block["thinking_blocks"] = AnthropicMessagesTextParam(
                     type="thinking",
                     thinking=reasoning_content,
+                    signature=assistant_content_block.get("signature", None),
                 )
-                assistant_content.append(block)
 
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
 
@@ -1671,7 +1671,7 @@ def anthropic_messages_pt(  # noqa: PLR0915
             if (
                 thinking_blocks is not None
             ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
-                assistant_content.extend(thinking_blocks)
+                assistant_content.append(thinking_blocks)  # Instead of extend()
             if "content" in assistant_content_block and isinstance(
                 assistant_content_block["content"], list
             ):

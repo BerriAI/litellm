@@ -88,6 +88,7 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     type: Required[Literal["text"]]
     text: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    signature: Optional[str] # if you're passing in thinking blocks, you must pass in a signature to identify the thinking block
 
 
 class AnthropicMessagesToolUseParam(TypedDict, total=False):

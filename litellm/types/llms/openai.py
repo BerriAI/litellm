@@ -656,6 +656,7 @@ class OpenAIChatCompletionAssistantMessage(TypedDict, total=False):
     tool_calls: Optional[List[ChatCompletionAssistantToolCall]]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
     reasoning_content: Optional[str]
+    signature: Optional[str] # for Anthropic: if you're passing in thinking blocks, you must pass in a signature to identify the thinking block
 
 
 class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total=False):
