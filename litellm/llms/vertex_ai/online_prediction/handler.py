@@ -16,13 +16,13 @@ from .transformation import VertexAIOnlinePredictionTransformation
 from .types import OnlinePredictionRequest, OnlinePredictionResponse
 
 
-class VertexAIOnlinePredictionHandler(VertexLLM):
+class VertexAIOnlinePredictionHandler:
     """
     Handler for Vertex AI Online Prediction endpoints
     """
 
     def __init__(self) -> None:
-        super().__init__()
+        self.vertex_llm = VertexLLM()
         self.async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
             params={"timeout": 60.0},  # Shorter timeout for online prediction
@@ -33,7 +33,7 @@ class VertexAIOnlinePredictionHandler(VertexLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        print_verbose: callable,
+        print_verbose,
         encoding,
         logging_obj,
         optional_params: dict,
@@ -56,7 +56,7 @@ class VertexAIOnlinePredictionHandler(VertexLLM):
             )
 
             # Get authentication
-            access_token, project_id = self._ensure_access_token(
+            access_token, project_id = self.vertex_llm._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_project or endpoint_config.project_id,
                 custom_llm_provider="vertex_ai",
