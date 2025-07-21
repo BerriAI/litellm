@@ -877,8 +877,6 @@ def _get_wrapper_timeout(
     )
 
     return timeout
-
-
 def client(original_function):  # noqa: PLR0915
     rules_obj = Rules()
 
@@ -1663,8 +1661,6 @@ def _select_tokenizer(
         )
         return _tokenizer
     return _select_tokenizer_helper(model=model)
-
-
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
     if litellm.disable_hf_tokenizer_download is True:
@@ -3987,8 +3983,6 @@ def _apply_openai_param_overrides(
             if param not in optional_params:
                 optional_params[param] = non_default_params.pop(param, None)
     return optional_params
-
-
 def get_non_default_params(passed_params: dict) -> dict:
     # filter out those parameters that were passed with non-default values
     non_default_params = {
@@ -5656,12 +5650,12 @@ def register_prompt_template(
         initial_prompt_value="You are a good assistant" # [OPTIONAL]
             roles={
             "system": {
-                "pre_message": "[INST] <<SYS>>\n", # [OPTIONAL]
-                "post_message": "\n<</SYS>>\n [/INST]\n" # [OPTIONAL]
+                "pre_message": "  <<SYS>>\n", # [OPTIONAL]
+                "post_message": "\n<</SYS>>\n  \n" # [OPTIONAL]
             },
             "user": {
-                "pre_message": "[INST] ", # [OPTIONAL]
-                "post_message": " [/INST]" # [OPTIONAL]
+                "pre_message": "  ", # [OPTIONAL]
+                "post_message": "  " # [OPTIONAL]
             },
             "assistant": {
                 "pre_message": "\n" # [OPTIONAL]
@@ -6658,8 +6652,6 @@ def validate_chat_completion_tool_choice(
     raise Exception(
         f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
     )
-
-
 class ProviderConfigManager:
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
@@ -6882,6 +6874,8 @@ class ProviderConfigManager:
             return litellm.OpenAIGPTConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
+        elif litellm.LlmProviders.RECRAFT == provider:
+            return litellm.RecraftChatConfig()
         return None
 
     @staticmethod
@@ -7149,6 +7143,12 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_generation import (
+                RecraftImageGenerationConfig,
+            )
+
+            return RecraftImageGenerationConfig()
         return None
 
     @staticmethod
@@ -7416,8 +7416,6 @@ def add_openai_metadata(metadata: dict) -> dict:
         visible_metadata = filtered_metadata
 
     return visible_metadata.copy()
-
-
 def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
     """
     Return the json str of the request

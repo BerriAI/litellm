@@ -2298,22 +2298,7 @@ class LlmProviders(str, Enum):
     HOSTED_VLLM = "hosted_vllm"
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
-    GALADRIEL = "galadriel"
-    NEBIUS = "nebius"
-    INFINITY = "infinity"
-    DEEPGRAM = "deepgram"
-    ELEVENLABS = "elevenlabs"
-    NOVITA = "novita"
-    AIOHTTP_OPENAI = "aiohttp_openai"
-    LANGFUSE = "langfuse"
-    HUMANLOOP = "humanloop"
-    TOPAZ = "topaz"
-    ASSEMBLYAI = "assemblyai"
-    GITHUB_COPILOT = "github_copilot"
-    SNOWFLAKE = "snowflake"
-    LLAMA = "meta_llama"
-    NSCALE = "nscale"
-    PG_VECTOR = "pg_vector"
+    RECRAFT = "recraft"
 
 
 # Create a set of all provider values for quick lookup

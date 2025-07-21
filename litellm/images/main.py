@@ -348,6 +348,35 @@ def image_generation(  # noqa: PLR0915
                 api_base=api_base,
                 client=client,
             )
+        elif custom_llm_provider == "recraft":
+            from litellm.llms.recraft.image_generation import RecraftImageGenerationConfig
+            
+            recraft_config = RecraftImageGenerationConfig()
+            
+            if aimg_generation is True:
+                model_response = recraft_config.aimage_generation(
+                    model=model,
+                    prompt=prompt,
+                    api_key=api_key or dynamic_api_key,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=client,
+                )
+            else:
+                model_response = recraft_config.image_generation(
+                    model=model,
+                    prompt=prompt,
+                    api_key=api_key or dynamic_api_key,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=client,
+                )
         elif (
             custom_llm_provider in litellm._custom_providers
         ):  # Assume custom LLM provider
