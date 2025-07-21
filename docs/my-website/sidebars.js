@@ -444,6 +444,7 @@ const sidebars = {
         "providers/github_copilot",
         "providers/ai21",
         "providers/nlp_cloud",
+        "providers/recraft",
         "providers/replicate",
         "providers/togetherai",
         "providers/v0",
