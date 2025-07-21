@@ -6834,6 +6834,8 @@ class ProviderConfigManager:
             return litellm.MoonshotChatConfig()
         elif litellm.LlmProviders.V0 == provider:
             return litellm.V0ChatConfig()
+        elif litellm.LlmProviders.MORPH == provider:
+            return litellm.MorphChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -7151,6 +7153,12 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_generation import (
+                get_recraft_image_generation_config,
+            )
+
+            return get_recraft_image_generation_config(model)
         return None
 
     @staticmethod
