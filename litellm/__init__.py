@@ -150,6 +150,12 @@ gcs_pub_sub_use_v1: Optional[
 generic_api_use_v1: Optional[
     bool
 ] = False  # if you want to use v1 generic api logged payload
+gcs_pub_sub_use_v1: Optional[
+    bool
+] = False  # if you want to use v1 gcs pubsub logged payload
+generic_api_use_v1: Optional[
+    bool
+] = False  # if you want to use v1 generic api logged payload
 argilla_transformation_object: Optional[Dict[str, Any]] = None
 _async_input_callback: List[
     Union[str, Callable, CustomLogger]
@@ -491,8 +497,12 @@ moonshot_models: List = []
 v0_models: List = []
 morph_models: List = []
 lambda_ai_models: List = []
-hyperbolic_models: List = []
+<<<<<<< HEAD
 recraft_models: List = []
+=======
+hyperbolic_models: List = []
+
+>>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -677,10 +687,13 @@ def add_known_models():
             morph_models.append(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.append(key)
-        elif value.get("litellm_provider") == "hyperbolic":
-            hyperbolic_models.append(key)
+<<<<<<< HEAD
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
+=======
+        elif value.get("litellm_provider") == "hyperbolic":
+            hyperbolic_models.append(key)
+>>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 
 
 add_known_models()
@@ -839,8 +852,11 @@ models_by_provider: dict = {
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
-    "hyperbolic": hyperbolic_models,
+<<<<<<< HEAD
     "recraft": recraft_models,
+=======
+    "hyperbolic": hyperbolic_models,
+>>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 }
 
 # mapping for those models which have larger equivalents

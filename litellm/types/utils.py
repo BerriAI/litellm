@@ -2315,8 +2315,11 @@ class LlmProviders(str, Enum):
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
-    HYPERBOLIC = "hyperbolic"
+<<<<<<< HEAD
     RECRAFT = "recraft"
+=======
+    HYPERBOLIC = "hyperbolic"
+>>>>>>> 6040c329a (feat: add Hyperbolic provider support)
 
 
 # Create a set of all provider values for quick lookup
