@@ -100,6 +100,47 @@ Recraft supports the following OpenAI-compatible parameters:
 | `size` | string | Image dimensions | `"1024x1024"` |
 | `style` | string | Image style/artistic direction | `"realistic"` |
 
+### Using Non-OpenAI Parameters
+
+If you want to pass parameters that are not supported by OpenAI, you can pass them in your request body, LiteLLM will automatically route it to recraft.
+
+In this example we will pass `style_id` parameter to the recraft image generation call.
+
+**Usage with LiteLLM Python SDK**
+
+```python showLineNumbers
+from litellm import image_generation
+import os
+
+os.environ['RECRAFT_API_KEY'] = "your-api-key"
+
+response = image_generation(
+    model="recraft/recraftv3",
+    prompt="A beautiful sunset over a calm ocean",
+    style_id="your-style-id",
+)
+```
+
+**Usage with LiteLLM Proxy Server + OpenAI Python SDK**
+
+```python showLineNumbers
+from openai import OpenAI
+import os
+
+os.environ['RECRAFT_API_KEY'] = "your-api-key"
+
+client = OpenAI(api_key=os.environ['RECRAFT_API_KEY'])
+
+response = client.images.generate(
+    model="recraft/recraftv3",
+    prompt="A beautiful sunset over a calm ocean",
+    extra_body={
+        "style_id": "your-style-id",
+    },
+)
+print(response)
+```
+
 ### Supported Image Generation Models
 
 **Note: All recraft models are supported by LiteLLM** Just pass the model name with `recraft/<model_name>` and litellm will route it to recraft.
