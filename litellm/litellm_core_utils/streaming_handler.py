@@ -473,7 +473,6 @@ class CustomStreamWrapper:
             }
         except Exception as e:
             raise e
-        
 
     def handle_azure_text_completion_chunk(self, chunk):
         try:
