@@ -827,10 +827,14 @@ class CustomStreamWrapper:
                     if _index is not None:
                         model_response.choices[0].index = _index
 
-                self._parse_thinking_block(
+                # Check if we should skip this chunk due to thinking block tags
+                should_skip = self._parse_thinking_block(
                     response_obj=response_obj,
                     model_response=model_response
                 )
+                
+                if should_skip:
+                    return  # Skip this chunk entirely
 
                 self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
@@ -892,28 +896,34 @@ class CustomStreamWrapper:
                 self.chunks.append(model_response)
             return
 
-    def _parse_thinking_block(self, response_obj: Dict[str, Any], model_response: ModelResponseStream) -> None:
+    def _parse_thinking_block(self, response_obj: Dict[str, Any], model_response: ModelResponseStream) -> bool:
         """
         # Some LLM providers might send thinking blocks in the content field
         # we want to put it into the reasoning content field.
         # If the client wants to get the reasoning_content in the main content field like for OpenWebUI,
         # they can set the litellm_params["merge_reasoning_content_in_choices"] to True and the reasoning_content should be translated back.
+        
+        Returns:
+            bool: True if this chunk should be skipped entirely, False otherwise
         """
         # end of thinking block
         if "</think>" in response_obj["text"]:
             self.sent_first_thinking_block_parsed = False
             # skip the content. we don't want the </think> in the main content
-            return
+            return True  # Skip this chunk
         # start of thinking block
         elif "<think>" in response_obj["text"]:
             self.sent_first_thinking_block_parsed = True
             # skip the content. we don't want the <think> in the main content
-            return
+            return True  # Skip this chunk
         # middle of thinking block
         elif self.sent_first_thinking_block_parsed:
             # Move the text content to reasoning_content instead of regular content
             model_response.choices[0].delta.reasoning_content = response_obj["text"]
             model_response.choices[0].delta.content = None
+            return False  # Don't skip, but content is now in reasoning_content
+        
+        return False  # Normal content, don't skip
 
     def _optional_combine_thinking_block_in_choices(
         self, model_response: ModelResponseStream
