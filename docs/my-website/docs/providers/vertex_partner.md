@@ -313,6 +313,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## VertexAI Mistral API
 
 [**Supported OpenAI Params**](https://github.com/BerriAI/litellm/blob/e0f3cd580cb85066f7d36241a03c30aa50a8a31d/litellm/llms/openai.py#L137)
+
+**LiteLLM Supports all Vertex AI Mistral Models.** Ensure you use the `vertex_ai/mistral-` prefix for all Vertex AI Mistral models.
  
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
