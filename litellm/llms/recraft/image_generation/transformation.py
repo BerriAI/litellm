@@ -11,6 +11,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
+from litellm.types.llms.recraft import RecraftImageGenerationRequestParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse
 
 if TYPE_CHECKING:
@@ -113,11 +114,17 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        return {
-            "prompt": prompt,
-            "model": model,
+        """
+        Transform the image generation request to the recraft image generation request body
+
+        https://www.recraft.ai/docs#generate-image
+        """
+        recratft_image_generation_request_body: RecraftImageGenerationRequestParams = RecraftImageGenerationRequestParams(
+            prompt=prompt,
+            model=model,
             **optional_params,
-        }
+        )
+        return dict(recratft_image_generation_request_body)
 
     def transform_image_generation_response(
         self,
@@ -132,6 +139,11 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ImageResponse:
+        """
+        Transform the image generation response to the litellm image response
+
+        https://www.recraft.ai/docs#generate-image
+        """
         try:
             response_data = raw_response.json()
         except Exception as e:
