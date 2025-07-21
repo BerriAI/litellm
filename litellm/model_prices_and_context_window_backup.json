@@ -14791,7 +14791,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "lambda_ai/deepseek-r1-0528": {
         "max_tokens": 131072,
@@ -14804,7 +14805,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "lambda_ai/deepseek-r1-671b": {
         "max_tokens": 131072,
@@ -14817,7 +14819,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "lambda_ai/deepseek-v3-0324": {
         "max_tokens": 131072,
@@ -15039,7 +15042,8 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "supports_reasoning": true
     },
     "voyage/voyage-01": {
         "max_tokens": 4096,
