@@ -318,6 +318,8 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 |------------------|--------------------------------------|
 | mistral-large@latest   | `completion('vertex_ai/mistral-large@latest', messages)` |
 | mistral-large@2407   | `completion('vertex_ai/mistral-large@2407', messages)` |
+| mistral-small-2503   | `completion('vertex_ai/mistral-small-2503', messages)` |
+| mistral-large-2411   | `completion('vertex_ai/mistral-large-2411', messages)` |
 | mistral-nemo@latest   | `completion('vertex_ai/mistral-nemo@latest', messages)` |
 | codestral@latest   | `completion('vertex_ai/codestral@latest', messages)` |
 | codestral@@2405   | `completion('vertex_ai/codestral@2405', messages)` |
