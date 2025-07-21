@@ -59,6 +59,7 @@ from litellm.proxy.utils import (
     _hash_token_if_needed,
     handle_exception_on_proxy,
     jsonify_object,
+    is_valid_api_key,
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret
@@ -2667,10 +2668,14 @@ async def block_key(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
-    if data.key.startswith("sk-"):
-        hashed_token = hash_token(token=data.key)
-    else:
-        hashed_token = data.key
+    if not is_valid_api_key(data.key):
+        raise ProxyException(
+            message="Invalid key format.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    hashed_token = hash_token(token=data.key)
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update
@@ -2774,10 +2779,14 @@ async def unblock_key(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
-    if data.key.startswith("sk-"):
-        hashed_token = hash_token(token=data.key)
-    else:
-        hashed_token = data.key
+    if not is_valid_api_key(data.key):
+        raise ProxyException(
+            message="Invalid key format.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    hashed_token = hash_token(token=data.key)
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update
