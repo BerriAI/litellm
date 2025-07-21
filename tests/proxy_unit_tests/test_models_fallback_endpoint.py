@@ -140,10 +140,14 @@ def test_model_list_with_fallback_metadata(
     assert claude_model is not None
     assert "metadata" in claude_model
     assert "fallbacks" in claude_model["metadata"]
-    assert claude_model["metadata"]["fallbacks"] == ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]
+    assert claude_model["metadata"]["fallbacks"] == [
+        "bedrock-claude-sonnet-4", "google-claude-sonnet-4"
+    ]
     
     # Find bedrock-claude-sonnet-4 in response (should have no fallbacks)
-    bedrock_model = next((m for m in response["data"] if m["id"] == "bedrock-claude-sonnet-4"), None)
+    bedrock_model = next(
+        (m for m in response["data"] if m["id"] == "bedrock-claude-sonnet-4"), None
+    )
     assert bedrock_model is not None
     assert "metadata" in bedrock_model
     assert "fallbacks" in bedrock_model["metadata"]

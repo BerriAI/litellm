@@ -53,7 +53,7 @@ def _get_models_from_access_groups(
         if model in model_access_groups:
             if (
                 not include_model_access_groups
-            ):  # remove access group, unless requested - e.g. when creating a key and trying to see list of models
+            ):  # remove access group, unless requested - e.g. when creating a key
                 idx_to_remove.append(idx)
             new_models.extend(model_access_groups[model])
 
@@ -105,7 +105,8 @@ def get_key_models(
     - List of model name strings
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
-    - If include_model_access_groups is True, it includes the 'keys' of the model_access_groups in the response - {"beta-models": ["gpt-4", "claude-v1"]} -> returns 'beta-models'
+    - If include_model_access_groups is True, it includes the 'keys' of the model_access_groups
+      in the response - {"beta-models": ["gpt-4", "claude-v1"]} -> returns 'beta-models'
     """
     all_models: List[str] = []
     if len(user_api_key_dict.models) > 0:
