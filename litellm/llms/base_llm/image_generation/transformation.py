@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,

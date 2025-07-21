@@ -1,5 +1,4 @@
-from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
@@ -12,7 +11,7 @@ from litellm.types.llms.openai import (
     OpenAIImageGenerationOptionalParams,
 )
 from litellm.types.llms.recraft import RecraftImageGenerationRequestParams
-from litellm.types.utils import ImageObject, ImageResponse, ModelResponse
+from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
