@@ -6,6 +6,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
+from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import get_valid_models
 
@@ -287,3 +288,110 @@ def _get_wildcard_models(
         unique_models.remove(model)
 
     return all_wildcard_models
+
+
+def get_next_fallback(
+    model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Optional[Router] = None,
+    fallback_type: str = "general",
+) -> Optional[str]:
+    """
+    Returns the next immediate fallback for a specific model.
+    
+    Args:
+        model: The current model to find fallback for
+        user_api_key_dict: User API key authentication info
+        llm_router: Router instance containing fallback configurations
+        fallback_type: Type of fallback ("general", "context_window", "content_policy")
+    
+    Returns:
+        The next fallback model name, or None if no fallback exists
+        
+    Example:
+        For fallback config: {"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}
+        get_next_fallback("claude-4-sonnet") -> "bedrock-claude-sonnet-4"
+        get_next_fallback("bedrock-claude-sonnet-4") -> "google-claude-sonnet-4" 
+        get_next_fallback("google-claude-sonnet-4") -> None
+    """
+    if llm_router is None:
+        return None
+    
+    # Get the appropriate fallback configuration based on type
+    fallbacks = None
+    if fallback_type == "context_window":
+        fallbacks = llm_router.context_window_fallbacks
+    elif fallback_type == "content_policy":
+        fallbacks = llm_router.content_policy_fallbacks
+    else:  # general or default
+        fallbacks = llm_router.fallbacks
+        
+    if not fallbacks:
+        return None
+    
+    # Get the fallback model group for this model
+    fallback_model_group, _ = get_fallback_model_group(
+        fallbacks=fallbacks,
+        model_group=model
+    )
+    
+    if not fallback_model_group:
+        return None
+    
+    # Find the current model's position in the fallback chain
+    # If the model is the primary model, return the first fallback
+    # If the model is already a fallback, return the next one in the chain
+    
+    # First check if this model is a primary model with fallbacks
+    for fallback_dict in fallbacks:
+        if isinstance(fallback_dict, dict):
+            primary_model = list(fallback_dict.keys())[0]
+            fallback_list = fallback_dict[primary_model]
+            
+            if primary_model == model or _check_stripped_model_group(model, primary_model):
+                # This is a primary model, return the first fallback
+                if fallback_list and len(fallback_list) > 0:
+                    return fallback_list[0]
+            elif model in fallback_list:
+                # This model is in the fallback chain, find its position and return the next one
+                current_index = fallback_list.index(model)
+                if current_index + 1 < len(fallback_list):
+                    return fallback_list[current_index + 1]
+                # If we're at the end of the chain, no more fallbacks
+                return None
+            
+            # Also check with stripped model names for provider prefixes
+            for idx, fallback_model in enumerate(fallback_list):
+                if _check_stripped_model_group(model, fallback_model) or _check_stripped_model_group(fallback_model, model):
+                    # Found current model in fallback chain, return next one
+                    if idx + 1 < len(fallback_list):
+                        return fallback_list[idx + 1]
+                    return None
+    
+    return None
+
+
+def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
+    """
+    Handles wildcard routing scenario - reused from router_utils for consistency
+    
+    where fallbacks set like:
+    [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
+    
+    but model_group is like:
+    "openai/gpt-3.5-turbo"
+    
+    Returns:
+    - True if the stripped model group == fallback_key
+    """
+    for provider in litellm.provider_list:
+        from enum import Enum
+        if isinstance(provider, Enum):
+            _provider = provider.value
+        else:
+            _provider = provider
+        if model_group.startswith(f"{_provider}/"):
+            stripped_model_group = model_group.replace(f"{_provider}/", "")
+            if stripped_model_group == fallback_key:
+                return True
+    return False

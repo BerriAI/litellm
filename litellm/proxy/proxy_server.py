@@ -3736,6 +3736,162 @@ async def model_list(
     )
 
 
+@router.get(
+    "/v1/models/{model}/next-fallback",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["model management"],
+)
+async def get_model_next_fallback(
+    model: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    fallback_type: str = "general",
+):
+    """
+    Returns the next immediate fallback for a specific model.
+    
+    Args:
+        model: The current model to find fallback for
+        fallback_type: Type of fallback ("general", "context_window", "content_policy")
+    
+    Returns:
+        JSON response with the next fallback model or 404 if no fallback exists
+        
+    Example:
+        GET /v1/models/claude-4-sonnet/next-fallback
+        Returns: {"current_model": "claude-4-sonnet", "next_fallback": "bedrock-claude-sonnet-4", ...}
+    """
+    from litellm.proxy.auth.model_checks import get_next_fallback
+    
+    global llm_router
+    
+    if llm_router is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "message": "No router configured - fallbacks not available",
+                    "type": "not_found", 
+                    "code": "no_router_configured"
+                }
+            }
+        )
+    
+    # Validate fallback_type parameter
+    valid_fallback_types = ["general", "context_window", "content_policy"]
+    if fallback_type not in valid_fallback_types:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
+                    "type": "invalid_request_error",
+                    "code": "invalid_fallback_type"
+                }
+            }
+        )
+    
+    # Check if user has access to the requested model
+    proxy_model_list = llm_router.get_model_names() if llm_router else []
+    model_access_groups = llm_router.get_model_access_groups() if llm_router else {}
+    
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    team_models = get_team_models(
+        team_models=user_api_key_dict.team_models,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    all_accessible_models = get_complete_model_list(
+        key_models=key_models,
+        team_models=team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+        llm_router=llm_router,
+        model_access_groups=model_access_groups,
+    )
+    
+    # Check if the user has access to the requested model
+    if model not in all_accessible_models:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "message": f"Model '{model}' not found or not accessible",
+                    "type": "not_found",
+                    "code": "model_not_found"
+                }
+            }
+        )
+    
+    # Get the next fallback
+    next_fallback = get_next_fallback(
+        model=model,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        fallback_type=fallback_type,
+    )
+    
+    if next_fallback is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "message": f"No fallback available for model: {model}",
+                    "type": "not_found",
+                    "code": "no_fallback_available"
+                }
+            }
+        )
+    
+    # Validate user has access to the fallback model
+    if next_fallback not in all_accessible_models:
+        # If user doesn't have access to this fallback, try to find the next one they do have access to
+        # This handles cases where some fallbacks might be restricted
+        from litellm.proxy.auth.model_checks import get_next_fallback
+        
+        # Try to get the fallback after this one
+        temp_fallback = get_next_fallback(
+            model=next_fallback,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            fallback_type=fallback_type,
+        )
+        
+        # Keep looking until we find an accessible one or run out
+        while temp_fallback and temp_fallback not in all_accessible_models:
+            temp_fallback = get_next_fallback(
+                model=temp_fallback,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+                fallback_type=fallback_type,
+            )
+        
+        if temp_fallback and temp_fallback in all_accessible_models:
+            next_fallback = temp_fallback
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": {
+                        "message": f"No accessible fallback available for model: {model}",
+                        "type": "not_found",
+                        "code": "no_accessible_fallback"
+                    }
+                }
+            )
+    
+    return {
+        "current_model": model,
+        "next_fallback": next_fallback,
+        "fallback_type": fallback_type,
+        "object": "next_fallback"
+    }
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
