@@ -22,7 +22,7 @@ Use Pillar Security for comprehensive LLM security including:
 4. Set your API key as an environment variable:
    ```bash
    export PILLAR_API_KEY="your_api_key_here"
-   export PILLAR_API_BASE="https://api.pillar.security" # Optional, default is https://api.pillar.security
+   export PILLAR_API_BASE="https://api.pillar.security" # Optional, default
    ```
 
 ### 2. Configure LiteLLM Proxy
@@ -38,14 +38,14 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
-  - guardrail_name: "pillar-dual-protection" # you can change my name
+  - guardrail_name: "pillar-minitor-everything"     # you can change my name
     litellm_params:
       guardrail: pillar
-      mode: [pre_call, post_call]            # Monitor both input and output
-      api_key: os.environ/PILLAR_API_KEY     # Your Pillar API key
-      api_base: os.environ/PILLAR_API_BASE   # Pillar API endpoint
-      on_flagged_action: "monitor"           # Log threats but allow requests
-      default_on: true                       # Enable for all requests
+      mode: [pre_call, post_call]                   # Monitor both input and output
+      api_key: os.environ/PILLAR_API_KEY            # Your Pillar API key
+      api_base: os.environ/PILLAR_API_BASE          # Pillar API endpoint
+      on_flagged_action: "monitor"                  # Log threats but allow requests
+      default_on: true                              # Enable for all requests
 
 general_settings:
   master_key: "your-secure-master-key-here"
@@ -146,13 +146,13 @@ litellm_settings:
 ```
 
 </TabItem>
-<TabItem value="monitorall" label="Monitoring - Both Input & Output">
+<TabItem value="blockall" label="Blocking Both Input & Output">
 
 **Best for:**
-- 📊 **Analytics & Insights**: Collect comprehensive security data
-- 🔍 **Full Coverage**: Monitor both input prompts and output responses
-- 📈 **Compliance**: Log security events without disrupting user experience
-- 🚫 **Non-Blocking**: Allow all requests while tracking threats
+- 🛡️ **Maximum Security**: Block threats at both input and output stages
+- 🔍 **Full Coverage**: Protect both input prompts and output responses
+- 🚫 **Zero Tolerance**: Prevent any flagged content from passing through
+- 📈 **Compliance**: Ensure strict adherence to security policies
 
 ```yaml
 model_list:
@@ -165,10 +165,10 @@ guardrails:
   - guardrail_name: "pillar-full-monitoring"
     litellm_params:
       guardrail: pillar
-      mode: [pre_call, post_call]            # Monitor both input and output
+      mode: [pre_call, post_call]            # Threats on input and output
       api_key: os.environ/PILLAR_API_KEY     # Your Pillar API key
       api_base: os.environ/PILLAR_API_BASE   # Pillar API endpoint
-      on_flagged_action: "monitor"           # Log threats but allow requests
+      on_flagged_action: "block"             # Block threats on input and output
       default_on: true                       # Enable for all requests
 
 general_settings:
@@ -249,7 +249,7 @@ curl -X POST "http://localhost:4000/v1/chat/completions" \
   }'
 ```
 
-**Expected response (Allowed)**
+**Expected response (Allowed):**
 ```json
 {
   "id": "chatcmpl-BvQhm0VZpiDSEbrssSzO7GLHgHCkW",
