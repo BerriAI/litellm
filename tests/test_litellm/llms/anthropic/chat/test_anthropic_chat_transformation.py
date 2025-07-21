@@ -2,6 +2,7 @@ import json
 import os
 import sys
 
+import litellm
 import pytest
 from fastapi.testclient import TestClient
 
@@ -342,7 +343,24 @@ def test_transform_response_with_prefix_prompt():
     )
 
 
-def test_get_supported_params_thinking():
+def test_get_supported_params_thinking_and_reasoning_effort():
+    """
+    Tests that `thinking` and `reasoning_effort` are returned as supported params ONLY for models that support it.
+    """
     config = AnthropicConfig()
-    params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
-    assert "thinking" in params
+
+    # No reasoningf or unsupported
+    params_no_reasoning = config.get_supported_openai_params(
+        model="claude-3-5-sonnet-latest"
+    )
+    assert params_no_reasoning
+    assert "thinking" not in params_no_reasoning
+    assert "reasoning_effort" not in params_no_reasoning
+
+    for model in ("claude-3-7-sonnet-latest", "claude-4-opus-20250514", "claude-4-sonnet-20250514"):
+        params_with_reasoning = config.get_supported_openai_params(
+          model=model
+        )
+        assert params_no_reasoning
+        assert "thinking" in params_with_reasoning
+        assert "reasoning_effort" in params_with_reasoning

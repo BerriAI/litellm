@@ -127,15 +127,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
-            "reasoning_effort",
             "web_search_options",
         ]
 
-        if "claude-3-7-sonnet" in model or supports_reasoning(
+        if supports_reasoning(
             model=model,
             custom_llm_provider=self.custom_llm_provider,
         ):
             params.append("thinking")
+            params.append("reasoning_effort")
 
         return params
 
