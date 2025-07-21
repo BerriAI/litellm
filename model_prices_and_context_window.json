@@ -5417,12 +5417,12 @@
         "supports_tool_choice": true,
         "deprecation_date": "2025-01-06"
     },
-    "groq/qwen-qwq-32b": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
+    "groq/qwen/qwen3-32b": {
+        "max_tokens": 131000,
+        "max_input_tokens": 131000,
+        "max_output_tokens": 131000,
         "input_cost_per_token": 2.9e-07,
-        "output_cost_per_token": 3.9e-07,
+        "output_cost_per_token": 5.9e-07,
         "litellm_provider": "groq",
         "mode": "chat",
         "supports_function_calling": true,
