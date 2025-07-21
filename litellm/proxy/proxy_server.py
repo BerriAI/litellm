@@ -3370,19 +3370,7 @@ class ProxyStartupEvent:
     @classmethod
     async def _update_default_team_member_budget(cls):
         """Update the default team member budget"""
-        if litellm.default_internal_user_params is None:
-            return
-
-        _teams = litellm.default_internal_user_params.get("teams") or []
-        if _teams and all(isinstance(team, dict) for team in _teams):
-            from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-                update_default_team_member_budget,
-            )
-
-            teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
-            await update_default_team_member_budget(
-                teams=teams_pydantic_obj, user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key))  # type: ignore
-            )
+        pass
 
     @classmethod
     async def initialize_scheduled_background_jobs(
