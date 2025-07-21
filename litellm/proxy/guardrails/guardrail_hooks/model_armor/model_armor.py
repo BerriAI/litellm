@@ -55,6 +55,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         api_endpoint: Optional[str] = None,
         **kwargs,
     ):
+        # Initialize parent classes first
+        super().__init__(**kwargs)
+        VertexBase.__init__(self)
+        
+        # Then set our attributes (this ensures project_id is not overwritten)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
@@ -66,9 +71,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         # Store optional params
         self.optional_params = kwargs
-
-        super().__init__(**kwargs)
-        VertexBase.__init__(self)
 
         verbose_proxy_logger.debug(
             "Model Armor Guardrail initialized with template_id: %s, project_id: %s, location: %s",

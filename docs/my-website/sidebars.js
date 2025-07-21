@@ -173,6 +173,7 @@ const sidebars = {
             "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
+            "proxy/ui/bulk_edit_users",
             {
               type: "category",
               label: "UI Logs",
@@ -282,7 +283,6 @@ const sidebars = {
           type: "category",
           label: "/vector_stores",
           items: [
-            "vector_stores/create",
             "vector_stores/search",
           ]
         },
@@ -447,6 +447,7 @@ const sidebars = {
         "providers/replicate",
         "providers/togetherai",
         "providers/v0",
+        "providers/lambda_ai",
         "providers/novita",
         "providers/voyage",
         "providers/jina_ai",
@@ -623,6 +624,7 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
+            "projects/HolmesGPT"
           ],
         },
         "extras/code_quality",

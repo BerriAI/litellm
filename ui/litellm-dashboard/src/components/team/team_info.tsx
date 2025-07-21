@@ -30,6 +30,7 @@ import {
   teamMemberUpdateCall,
   Member,
   teamUpdateCall,
+  getGuardrailsList,
 } from "@/components/networking";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -147,6 +148,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
 
   console.log("userModels in team info", userModels);
 
@@ -181,6 +183,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       console.error("Failed to fetch MCP access groups:", error);
     }
   };
+
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        if (!accessToken) return;
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    fetchGuardrails();
+  }, [accessToken]);
 
   const handleMemberCreate = async (values: any) => {
     try {
@@ -502,6 +521,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
+                disabledCallbacks={[]}
                 variant="card"
               />
             </Grid>
@@ -672,13 +692,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Select
                       mode="tags"
                       placeholder="Select or enter guardrails"
+                      options={guardrailsList.map(name => ({ value: name, label: name }))}
                     />
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
                     <VectorStoreSelector
                       onChange={(values) =>
-                        form.setFieldValue("vector_stores", values)
+                         form.setFieldValue("vector_stores", values)
                       }
                       value={form.getFieldValue("vector_stores")}
                       accessToken={accessToken || ""}
@@ -803,6 +824,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <LoggingSettingsView
                     loggingConfigs={info.metadata?.logging || []}
+                    disabledCallbacks={[]}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />
