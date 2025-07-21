@@ -69,10 +69,11 @@ class LiteLLM_Proxy_MCP_Handler:
             if isinstance(tool, dict) and tool.get("type") == "mcp" and tool.get("builtin"):
                 builtin_name = tool.get("builtin")
                 if isinstance(builtin_name, str):
-                    verbose_logger.debug(f"Expanding builtin MCP tool: {builtin_name}")
+                    # Get client-provided auth token if available
+                    client_auth_token = tool.get("auth_token") or tool.get("authentication_token")
                     
                     # Resolve builtin to actual server configuration
-                    builtin_server = global_mcp_server_manager.resolve_builtin_server(builtin_name)
+                    builtin_server = global_mcp_server_manager.resolve_builtin_server(builtin_name, client_auth_token)
                     if builtin_server:
                         # Create a new tool dict with server_url="litellm_proxy" to use existing flow
                         expanded_tool = cast(Dict[str, Any], tool.copy()) if hasattr(tool, 'copy') else dict(tool)
@@ -80,12 +81,19 @@ class LiteLLM_Proxy_MCP_Handler:
                         # Store the builtin server info for later use
                         expanded_tool["_builtin_server_id"] = builtin_server.server_id
                         expanded_tool["_builtin_name"] = builtin_name
-                        # Remove the builtin field since we've expanded it
+                        
+                        # Pass client token if provided
+                        if client_auth_token:
+                            expanded_tool["_client_auth_token"] = client_auth_token
+                        
+                        # Remove builtin and auth fields since we've processed them
                         expanded_tool.pop("builtin", None)
+                        expanded_tool.pop("auth_token", None)
+                        expanded_tool.pop("authentication_token", None)
+                        
                         expanded_tools.append(expanded_tool)
-                        verbose_logger.debug(f"Expanded builtin '{builtin_name}' to server_id: {builtin_server.server_id}")
                     else:
-                        verbose_logger.warning(f"Builtin MCP server '{builtin_name}' not available, skipping tool")
+                        verbose_logger.warning(f"Builtin MCP server '{builtin_name}' not available")
             else:
                 expanded_tools.append(tool)
                 

@@ -21,7 +21,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._experimental.mcp_server.builtin_registry import (
-    global_builtin_registry,
+    get_builtin_registry,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_tool_name,
@@ -105,7 +105,7 @@ class MCPServerManager:
         all_servers = self.config_mcp_servers | self.registry
         
         # Add built-in servers that are available
-        builtin_servers = global_builtin_registry.get_available_builtins()
+        builtin_servers = get_builtin_registry().get_available_builtins()
         all_servers.update(builtin_servers)
         
         verbose_logger.debug(
@@ -547,21 +547,46 @@ class MCPServerManager:
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
 
-    def resolve_builtin_server(self, builtin_name: str) -> Optional[MCPServer]:
+    def resolve_builtin_server(self, builtin_name: str, client_auth_token: Optional[str] = None) -> Optional[MCPServer]:
         """
         Resolve a built-in server name to an MCPServer instance
         
         Args:
             builtin_name: Name of the built-in server (e.g., "zapier", "jira")
+            client_auth_token: Optional client-provided authentication token
             
         Returns:
             MCPServer instance if built-in is available, None otherwise
         """
-        if not global_builtin_registry.is_builtin_available(builtin_name):
+        if not get_builtin_registry().is_builtin_available(builtin_name):
             verbose_logger.warning(f"Built-in MCP server '{builtin_name}' is not available")
             return None
             
-        return global_builtin_registry.get_builtin_server(builtin_name)
+        server = get_builtin_registry().get_builtin_server(builtin_name)
+        
+        # If client provided a token, override the server's authentication token
+        if client_auth_token and server:
+            # Create a copy of the server with client token
+            server_dict = {
+                "server_id": server.server_id,
+                "name": server.name,
+                "url": server.url,
+                "transport": server.transport,
+                "auth_type": server.auth_type,
+                "spec_version": server.spec_version,
+                "authentication_token": client_auth_token,  # Use client token
+                "command": getattr(server, 'command', None),
+                "args": getattr(server, 'args', None),
+                "env": getattr(server, 'env', None)
+            }
+            
+            # Remove None values
+            server_dict = {k: v for k, v in server_dict.items() if v is not None}
+            
+            from litellm.types.mcp_server.mcp_server_manager import MCPServer
+            return MCPServer(**server_dict)
+            
+        return server
         
     def is_builtin_server(self, server_identifier: str) -> bool:
         """
@@ -574,13 +599,13 @@ class MCPServerManager:
             True if this is a built-in server
         """
         # Check if it's a built-in name directly
-        if global_builtin_registry.get_builtin_config(server_identifier):
+        if get_builtin_registry().get_builtin_config(server_identifier):
             return True
             
         # Check if it's a built-in server ID (format: builtin_<name>)
         if server_identifier.startswith("builtin_"):
             builtin_name = server_identifier[8:]  # Remove "builtin_" prefix
-            return global_builtin_registry.get_builtin_config(builtin_name) is not None
+            return get_builtin_registry().get_builtin_config(builtin_name) is not None
             
         return False
         
@@ -592,8 +617,8 @@ class MCPServerManager:
             List of available built-in server names
         """
         return [
-            name for name in global_builtin_registry.list_builtin_names()
-            if global_builtin_registry.is_builtin_available(name)
+            name for name in get_builtin_registry().list_builtin_names()
+            if get_builtin_registry().is_builtin_available(name)
         ]
 
 

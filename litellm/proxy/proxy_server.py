@@ -1701,6 +1701,9 @@ class ProxyConfig:
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
+        # Initialize builtin MCP servers from config
+        self._initialize_builtin_mcp_servers(config)
+
         self._load_environment_variables(config=config)
 
         ## Callback settings
@@ -3015,6 +3018,27 @@ class ProxyConfig:
                 )
             )
             return []
+    
+    def _initialize_builtin_mcp_servers(self, config: dict):
+        """Initialize builtin MCP servers from config"""
+        try:
+            from litellm.proxy._experimental.mcp_server.builtin_registry import (
+                initialize_builtin_registry,
+            )
+            
+            # Get builtin MCP servers from config
+            builtin_servers = config.get("mcp_builtin_servers", {})
+            
+            if builtin_servers:
+                verbose_proxy_logger.info(f"Initializing {len(builtin_servers)} builtin MCP servers from config")
+                initialize_builtin_registry(builtin_servers)
+            else:
+                verbose_proxy_logger.debug("No builtin MCP servers configured, using defaults")
+                initialize_builtin_registry()  # Initialize with defaults
+                
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error initializing builtin MCP servers: {str(e)}")
+            # Don't fail startup if MCP initialization fails
 
 
 proxy_config = ProxyConfig()

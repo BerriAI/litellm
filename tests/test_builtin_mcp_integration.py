@@ -12,14 +12,10 @@ def test_builtin_registry_initialization():
     
     registry = BuiltinMCPRegistry()
     
-    # Check that default servers are loaded
+    # Check that default servers are loaded (only calculator in defaults)
     assert len(registry.list_builtin_names()) > 0
-    assert "zapier" in registry.list_builtin_names()
-    assert "jira" in registry.list_builtin_names()
-    assert "github" in registry.list_builtin_names()
-    assert "slack" in registry.list_builtin_names()
-    assert "calculator" in registry.list_builtin_names()  # New sample server
-    print("✓ Registry initialized with default servers including calculator")
+    assert "calculator" in registry.list_builtin_names()
+    print("✓ Registry initialized with default calculator server")
 
 
 def test_builtin_server_config_creation():
@@ -69,9 +65,9 @@ def test_mcp_server_manager_builtin_methods():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
     
     # Test builtin server identification
-    assert global_mcp_server_manager.is_builtin_server("zapier") == True
+    assert global_mcp_server_manager.is_builtin_server("calculator") == True
     assert global_mcp_server_manager.is_builtin_server("nonexistent") == False
-    assert global_mcp_server_manager.is_builtin_server("builtin_zapier") == True
+    assert global_mcp_server_manager.is_builtin_server("builtin_calculator") == True
     assert global_mcp_server_manager.is_builtin_server("regular_server_id") == False
     print("✓ Builtin server identification works")
 
@@ -80,7 +76,7 @@ def test_mcp_handler_builtin_detection():
     """Test MCP handler builtin tool detection"""
     from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
     
-    tools_with_builtin = [{"type": "mcp", "builtin": "zapier"}]
+    tools_with_builtin = [{"type": "mcp", "builtin": "calculator"}]
     tools_without_builtin = [{"type": "function", "function": {"name": "test"}}]
     
     assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools_with_builtin) == True
@@ -93,7 +89,7 @@ def test_mcp_handler_tool_parsing():
     from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
     
     tools = [
-        {"type": "mcp", "builtin": "zapier"},
+        {"type": "mcp", "builtin": "calculator"},
         {"type": "mcp", "server_url": "litellm_proxy"},
         {"type": "function", "function": {"name": "test"}}
     ]
@@ -104,7 +100,7 @@ def test_mcp_handler_tool_parsing():
     assert len(other_tools) == 1  # The function tool
     
     # Check that builtin tool is included
-    builtin_tool = next((t for t in mcp_tools if t.get("builtin") == "zapier"), None)
+    builtin_tool = next((t for t in mcp_tools if t.get("builtin") == "calculator"), None)
     assert builtin_tool is not None
     print("✓ MCP tool parsing with builtins works")
 

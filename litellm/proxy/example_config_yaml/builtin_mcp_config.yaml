@@ -1,0 +1,56 @@
+# Builtin MCP Server Configuration Example
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+# Builtin MCP Servers Configuration
+mcp_builtin_servers:
+  # HTTP/SSE-based builtin servers
+  zapier:
+    url: "https://mcp.zapier.com/api/mcp"
+    transport: "sse"
+    auth_type: "bearer_token"
+    env_key: "ZAPIER_TOKEN"
+    description: "Zapier automation platform integration"
+    enabled: true
+    
+  jira:
+    url: "https://mcp.atlassian.com/v1/sse"
+    transport: "sse"
+    auth_type: "bearer_token"
+    env_key: "JIRA_TOKEN"
+    description: "Atlassian Jira project management integration"
+    enabled: false  # Disabled example
+    
+  github:
+    url: "https://mcp.github.com/mcp"
+    transport: "http"
+    auth_type: "bearer_token"
+    env_key: "GITHUB_TOKEN"
+    description: "GitHub repository and issue management"
+    enabled: true
+    
+  # Stdio-based builtin servers  
+  calculator:
+    transport: "stdio"
+    command: "python"
+    args: ["examples/sample_calculator_mcp_server.py"]
+    description: "Sample calculator MCP server for basic math operations"
+    enabled: true
+    
+  # Custom local server
+  custom_tool:
+    transport: "stdio"
+    command: "node"
+    args: ["./my-custom-mcp-server.js"]
+    env:
+      NODE_ENV: "production"
+      DEBUG: "true"
+    description: "Custom local MCP server"
+    enabled: false
+
+general_settings:
+  master_key: sk-1234
+  debug: true

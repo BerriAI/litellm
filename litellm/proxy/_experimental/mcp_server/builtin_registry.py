@@ -110,65 +110,61 @@ class BuiltinMCPServerConfig:
 class BuiltinMCPRegistry:
     """Registry for built-in MCP server configurations"""
     
-    def __init__(self):
+    def __init__(self, config_builtin_servers: Optional[Dict[str, Dict]] = None):
         self._builtin_configs: Dict[str, Union[BuiltinMCPServerConfig, BuiltinStdioMCPServerConfig]] = {}
-        self._initialize_default_servers()
+        self._config_builtin_servers = config_builtin_servers or {}
+        self._initialize_servers()
     
-    def _initialize_default_servers(self):
-        """Initialize the default set of built-in MCP servers"""
+    def _initialize_servers(self):
+        """Initialize built-in MCP servers from config and defaults"""
         
-        # Zapier MCP Server
-        self.register_builtin(
-            BuiltinMCPServerConfig(
-                name="zapier",
-                url="https://mcp.zapier.com/api/mcp",
-                transport="sse",
-                auth_type="bearer_token",
-                env_key="ZAPIER_TOKEN",
-                description="Zapier automation platform integration"
+        # Load servers from config first
+        if self._config_builtin_servers:
+            for name, config in self._config_builtin_servers.items():
+                # Only register if enabled (default: True)
+                if config.get('enabled', True):
+                    self._register_server_from_config(name, config)
+        
+        # If no config servers, load defaults
+        if not self._builtin_configs:
+            self._initialize_default_fallback_servers()
+            
+        verbose_logger.debug(f"Initialized {len(self._builtin_configs)} built-in MCP servers")
+    
+    def _register_server_from_config(self, name: str, config: Dict):
+        """Register a server from config dictionary"""
+        transport = config.get('transport', 'sse')
+        
+        if transport == 'stdio':
+            # Stdio-based server
+            server_config = BuiltinStdioMCPServerConfig(
+                name=name,
+                command=config['command'],
+                args=config.get('args', []),
+                env=config.get('env', {}),
+                description=config.get('description', f'{name} MCP server'),
+                spec_version=config.get('spec_version', '2025-03-26')
             )
-        )
-        
-        # Jira MCP Server  
-        self.register_builtin(
-            BuiltinMCPServerConfig(
-                name="jira",
-                url="https://mcp.atlassian.com/v1/sse", 
-                transport="sse",
-                auth_type="bearer_token",
-                env_key="JIRA_TOKEN",
-                description="Atlassian Jira project management integration"
+        else:
+            # HTTP/SSE-based server
+            server_config = BuiltinMCPServerConfig(
+                name=name,
+                url=config['url'],
+                transport=transport,
+                auth_type=config.get('auth_type'),
+                env_key=config.get('env_key'),
+                description=config.get('description', f'{name} MCP server'),
+                spec_version=config.get('spec_version', '2025-03-26')
             )
-        )
         
-        # GitHub MCP Server
-        self.register_builtin(
-            BuiltinMCPServerConfig(
-                name="github",
-                url="https://mcp.github.com/mcp",
-                transport="http", 
-                auth_type="bearer_token",
-                env_key="GITHUB_TOKEN",
-                description="GitHub repository and issue management"
-            )
-        )
+        self.register_builtin(server_config)
+    
+    def _initialize_default_fallback_servers(self):
+        """Initialize the default set of built-in MCP servers (fallback only)"""
         
-        # Slack MCP Server
-        self.register_builtin(
-            BuiltinMCPServerConfig(
-                name="slack",
-                url="https://mcp.slack.com/api/mcp",
-                transport="http",
-                auth_type="bearer_token", 
-                env_key="SLACK_BOT_TOKEN",
-                description="Slack team communication platform"
-            )
-        )
-        
-        # Sample Calculator MCP Server (Example)
-        # This demonstrates how to add a custom stdio-based MCP server as a builtin
+        # Only basic calculator as fallback
         import os
-        calc_server_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples", "sample_calculator_mcp_server.py")
+        calc_server_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "examples", "sample_calculator_mcp_server.py"))
         self.register_builtin(
             BuiltinStdioMCPServerConfig(
                 name="calculator",
@@ -178,12 +174,11 @@ class BuiltinMCPRegistry:
             )
         )
         
-        verbose_logger.debug(f"Initialized {len(self._builtin_configs)} built-in MCP servers")
+        verbose_logger.debug("Using default builtin MCP servers")
     
     def register_builtin(self, config: Union[BuiltinMCPServerConfig, BuiltinStdioMCPServerConfig]):
         """Register a new built-in MCP server configuration"""
         self._builtin_configs[config.name] = config
-        verbose_logger.debug(f"Registered built-in MCP server: {config.name}")
     
     def get_builtin_config(self, name: str) -> Optional[Union[BuiltinMCPServerConfig, BuiltinStdioMCPServerConfig]]:
         """Get built-in server configuration by name"""
@@ -238,5 +233,18 @@ class BuiltinMCPRegistry:
         return available
 
 
-# Global registry instance
-global_builtin_registry = BuiltinMCPRegistry()
+# Global registry instance - will be initialized with config during proxy startup
+global_builtin_registry: Optional[BuiltinMCPRegistry] = None
+
+def initialize_builtin_registry(config_builtin_servers: Optional[Dict[str, Dict]] = None) -> BuiltinMCPRegistry:
+    """Initialize the global builtin registry with config"""
+    global global_builtin_registry
+    global_builtin_registry = BuiltinMCPRegistry(config_builtin_servers)
+    return global_builtin_registry
+
+def get_builtin_registry() -> BuiltinMCPRegistry:
+    """Get the global builtin registry, initializing with defaults if needed"""
+    global global_builtin_registry
+    if global_builtin_registry is None:
+        global_builtin_registry = BuiltinMCPRegistry()  # Initialize with defaults
+    return global_builtin_registry
