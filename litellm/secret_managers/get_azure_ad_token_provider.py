@@ -6,7 +6,10 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 )
 
 
-def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[], str]:
+def get_azure_ad_token_provider(
+    azure_scope: Optional[str] = None,
+    azure_credential: Optional[AzureCredentialType] = None,
+) -> Callable[[], str]:
     """
     Get Azure AD token provider based on Service Principal with Secret workflow.
 
@@ -38,8 +41,9 @@ def get_azure_ad_token_provider(azure_scope: Optional[str] = None) -> Callable[[
             or "https://cognitiveservices.azure.com/.default"
         )
 
-    cred: str = os.environ.get(
-        "AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential
+    cred: str = (
+        azure_credential.value if azure_credential else None
+        or os.environ.get("AZURE_CREDENTIAL", AzureCredentialType.ClientSecretCredential)
     )
     credential: Optional[
         Union[
