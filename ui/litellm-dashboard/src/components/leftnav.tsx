@@ -64,10 +64,24 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
     { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
-    { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
+    { 
+      key: "16", 
+      page: "model-hub-table", 
+      label: "Model Hub", 
+      icon: <AppstoreOutlined />
+    },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
+    {
+      key: "26",
+      page: "tools",
+      label: "Tools",
+      icon: <ToolOutlined />,
+      children: [
+        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },
+        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
+      ]
+    },
     { 
       key: "experimental", 
       page: "experimental",
@@ -78,7 +92,6 @@ const Sidebar: React.FC<SidebarProps> = ({
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
         { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
         { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
-        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
       ]
     },
@@ -116,6 +129,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   const filteredMenuItems = menuItems.filter(item => {
     // Check if parent item has roles and user has access
     const hasParentAccess = !item.roles || item.roles.includes(userRole);
+    
+    console.log(`Menu item ${item.label}: roles=${item.roles}, userRole=${userRole}, hasAccess=${hasParentAccess}`);
     
     if (!hasParentAccess) return false;
 

@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Get free 7-day trial key](https://www.litellm.ai/#trial)
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -277,4 +277,90 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 
 ```
 - Deploy LiteLLM Proxy Server
+
+## Troubleshooting
+
+### "The 'redirect_uri' parameter must be a Login redirect URI in the client app settings" Error
+
+This error commonly occurs with Okta and other SSO providers when the redirect URI configuration is incorrect.
+
+#### Issue
+```
+Your request resulted in an error. The 'redirect_uri' parameter must be a Login redirect URI in the client app settings
+```
+
+#### Solution
+
+**1. Ensure you have set PROXY_BASE_URL in your .env and it includes protocol**
+
+Make sure your `PROXY_BASE_URL` includes the complete URL with protocol (`http://` or `https://`):
+
+```bash
+# ✅ Correct - includes https://
+PROXY_BASE_URL=https://litellm.platform.com
+
+# ✅ Correct - includes http://
+PROXY_BASE_URL=http://litellm.platform.com
+
+# ❌ Incorrect - missing protocol
+PROXY_BASE_URL=litellm.platform.com
+```
+
+**2. For Okta specifically, ensure GENERIC_CLIENT_STATE is set**
+
+Okta requires the `GENERIC_CLIENT_STATE` parameter:
+
+```bash
+GENERIC_CLIENT_STATE="random-string" # Required for Okta
+```
+
+### Common Configuration Issues
+
+#### Missing Protocol in Base URL
+```bash
+# This will cause redirect_uri errors
+PROXY_BASE_URL=mydomain.com
+
+# Fix: Add the protocol
+PROXY_BASE_URL=https://mydomain.com
+```
+
+### Fallback Login
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
+<Image img={require('../../img/fallback_login.png')} />
+
+
+### Debugging SSO JWT fields 
+
+If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
+
+
+<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
+<br />
+
+1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
+
+  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
+
+  ```bash showLineNumbers title="Redirect URL"
+  http://<proxy_base_url>/sso/debug/callback
+  ```
+
+
+2. Navigate to the debug login page on your browser 
+
+    Navigate to the following URL on your browser:
+
+    ```bash showLineNumbers title="URL to navigate to"
+    https://<proxy_base_url>/sso/debug/login
+    ```
+
+    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
+
+
+3. View the JWT fields 
+
+Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
 

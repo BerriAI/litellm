@@ -93,6 +93,7 @@ export interface Organization {
   object_permission?: {
     object_permission_id: string;
     mcp_servers: string[];
+    mcp_access_groups?: string[];
     vector_stores: string[];
   };
 }
@@ -105,6 +106,13 @@ export interface CredentialItem {
     description?: string;
     required?: boolean;
   };
+}
+
+export interface PublicModelHubInfo {
+  docs_title: string;
+  custom_docs_description: string | null;
+  litellm_version: string;
+  useful_links: Record<string, string>;
 }
 
 export interface LiteLLMWellKnownUiConfig {
@@ -147,6 +155,21 @@ export function setGlobalLitellmHeaderName(
   globalLitellmHeaderName = headerName;
 }
 
+export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model_groups: modelGroups,
+    }),
+  });
+  return response.json();
+};
+
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
@@ -160,6 +183,15 @@ export const getUiConfig = async () => {
    */
   console.log("jsonData in getUiConfig:", jsonData);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
+};
+
+export const getPublicModelHubInfo = async () => {
+  const url = defaultProxyBaseUrl
+    ? `${defaultProxyBaseUrl}/public/model_hub/info`
+    : `/public/model_hub/info`;
+  const response = await fetch(url);
+  const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
 };
 
@@ -1768,6 +1800,17 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
   }
 };
 
+export const modelHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
+};
+
 export const modelHubCall = async (accessToken: String) => {
   /**
    * Get all models on proxy
@@ -2055,6 +2098,29 @@ export const modelExceptionsCall = async (
     // message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const updateUsefulLinksCall = async (accessToken: String, useful_links: Record<string, string>) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ useful_links: useful_links }),
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+    return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2358,6 +2424,7 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
+  end_user?: string,
   status_filter?: string,
   model?: string
 ) => {
@@ -2375,6 +2442,7 @@ export const uiSpendLogsCall = async (
     if (page) queryParams.append("page", page.toString());
     if (page_size) queryParams.append("page_size", page_size.toString());
     if (user_id) queryParams.append("user_id", user_id);
+    if (end_user) queryParams.append("end_user", end_user);
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
     // Append query parameters to URL if any exist
@@ -3629,6 +3697,64 @@ export const teamMemberAddCall = async (
   }
 };
 
+export const teamBulkMemberAddCall = async (
+  accessToken: string,
+  teamId: string,
+  members: Member[],
+  maxBudgetInTeam?: number
+) => {
+  try {
+    console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/bulk_member_add`
+      : `/team/bulk_member_add`;
+
+    const requestBody: any = {
+      team_id: teamId,
+      members: members,
+    };
+
+    if (maxBudgetInTeam !== undefined && maxBudgetInTeam !== null) {
+      requestBody.max_budget_in_team = maxBudgetInTeam;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage =
+        parsedError?.detail?.error || "Failed to bulk add team members";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
+    }
+
+    const data = await response.json();
+    console.log("Bulk team member add API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to bulk add team members:", error);
+    throw error;
+  }
+};
+
 export const teamMemberUpdateCall = async (
   accessToken: string,
   teamId: string,
@@ -3865,6 +3991,57 @@ export const userUpdateUserCall = async (
         "Content-Type": "application/json",
       },
       body: response_body,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = (await response.json()) as {
+      user_id: string;
+      data: UserInfo;
+    };
+    console.log("API Response:", data);
+    //message.success("User role updated");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const userBulkUpdateUserCall = async (
+  accessToken: string,
+  formValues: any, // Assuming formValues is an object
+  userIds: string[]
+) => {
+  try {
+    console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/bulk_update`
+      : `/user/bulk_update`;
+    let request_body = [] 
+    for (const user_id of userIds) {
+      request_body.push({
+        user_id: user_id,
+        ...formValues,
+      });
+    }
+    let request_body_json = JSON.stringify({
+      users: request_body,
+    });
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: request_body_json,
     });
 
     if (!response.ok) {
@@ -4576,6 +4753,7 @@ export const healthCheckHistoryCall = async (
   }
 };
 
+
 export const latestHealthChecksCall = async (accessToken: String) => {
   /**
    * Get the latest health check status for all models
@@ -4792,7 +4970,7 @@ export const updateInternalUserSettings = async (
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
 
     const data = await response.json();
@@ -4833,6 +5011,38 @@ export const fetchMCPServers = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPAccessGroups = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/access_groups`
+      : `/v1/mcp/access_groups`;
+
+    console.log("Fetching MCP access groups from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP access groups:", data);
+    return data.access_groups || [];
+  } catch (error) {
+    console.error("Failed to fetch MCP access groups:", error);
     throw error;
   }
 };
@@ -5458,6 +5668,36 @@ export const vectorStoreInfoCall = async (
   }
 };
 
+export const vectorStoreUpdateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/update`
+      : `/vector_store/update`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to update vector store");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating vector store:", error);
+    throw error;
+  }
+};
+
 export const getEmailEventSettings = async (
   accessToken: string
 ): Promise<EmailEventSettingsResponse> => {
@@ -5980,3 +6220,175 @@ export const deleteCallback = async (
     throw error;
   }
 };
+
+export const mcpToolsCall = async (accessToken: string) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const response = await fetch(`${proxyBaseUrl}/v1/mcp/tools`, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return await response.json();
+};
+
+export const testMCPConnectionRequest = async (
+  accessToken: string,
+  mcpServerConfig: Record<string, any>
+) => {
+  try {
+    console.log(
+      "Testing MCP connection with config:",
+      JSON.stringify(mcpServerConfig)
+    );
+
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/mcp-rest/test/connection`
+      : `/mcp-rest/test/connection`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mcpServerConfig),
+    });
+
+    // Check for non-JSON responses first
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Received non-JSON response:", text);
+      throw new Error(
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+      );
+    }
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.status === "error") {
+        return data; // Return the full error response
+      } else {
+        return {
+          status: "error",
+          message:
+            data.error?.message ||
+            `MCP connection test failed: ${response.status} ${response.statusText}`,
+        };
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error("MCP connection test error:", error);
+    // For network errors or other exceptions, still throw
+    throw error;
+  }
+};
+
+export const testMCPToolsListRequest = async (
+  accessToken: string,
+  mcpServerConfig: Record<string, any>
+) => {
+  try {
+    console.log(
+      "Testing MCP tools list with config:",
+      JSON.stringify(mcpServerConfig)
+    );
+
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/mcp-rest/test/tools/list`
+      : `/mcp-rest/test/tools/list`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mcpServerConfig),
+    });
+
+    // Check for non-JSON responses first
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Received non-JSON response:", text);
+      throw new Error(
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+      );
+    }
+
+    const data = await response.json();
+
+    if (!response.ok || data.error) {
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.error) {
+        return data; // Return the full error response
+      } else {
+        return {
+          tools: [],
+          error: "request_failed",
+          message:
+            data.message ||
+            `MCP tools list failed: ${response.status} ${response.statusText}`,
+        };
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error("MCP tools list test error:", error);
+    // For network errors or other exceptions, still throw
+    throw error;
+  }
+};
+
+export const vectorStoreSearchCall = async (
+  accessToken: string,
+  vectorStoreId: string,
+  query: string
+): Promise<any> => {
+  try {
+    const url = `${getProxyBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: query
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error testing vector store search:", error);
+    throw error;
+  }
+};
+
+

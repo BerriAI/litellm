@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, all_litellm_params
 
+from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
 from .dual_cache import DualCache  # noqa
@@ -78,6 +79,8 @@ class Cache:
             "rerank",
         ],
         # s3 Bucket, boto3 configuration
+        azure_account_url: Optional[str] = None,
+        azure_blob_container: Optional[str] = None,
         s3_bucket_name: Optional[str] = None,
         s3_region_name: Optional[str] = None,
         s3_api_version: Optional[str] = None,
@@ -200,6 +203,11 @@ class Cache:
                 s3_config=s3_config,
                 s3_path=s3_path,
                 **kwargs,
+            )
+        elif type == LiteLLMCacheType.AZURE_BLOB:
+            self.cache = AzureBlobCache(
+                account_url=azure_account_url,
+                container=azure_blob_container,
             )
         elif type == LiteLLMCacheType.DISK:
             self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
@@ -582,6 +590,38 @@ class Cache:
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
+    def _convert_to_cached_embedding(self, embedding_response: Any, model: Optional[str]) -> CachedEmbedding:
+        """
+        Convert any embedding response into the standardized CachedEmbedding TypedDict format.
+        """
+        try:
+            if isinstance(embedding_response, dict):
+                return {
+                    "embedding": embedding_response.get("embedding"),
+                    "index": embedding_response.get("index"),
+                    "object": embedding_response.get("object"),
+                    "model": model,
+                }
+            elif hasattr(embedding_response, 'model_dump'):
+                data = embedding_response.model_dump()
+                return {
+                    "embedding": data.get("embedding"),
+                    "index": data.get("index"),
+                    "object": data.get("object"),
+                    "model": model,
+                }
+            else:
+                data = vars(embedding_response)
+                return {
+                    "embedding": data.get("embedding"),
+                    "index": data.get("index"),
+                    "object": data.get("object"),
+                    "model": model,
+                }
+        except KeyError as e:
+            raise ValueError(f"Missing expected key in embedding response: {e}")
+
+
     def add_embedding_response_to_cache(
         self,
         result: EmbeddingResponse,
@@ -592,8 +632,13 @@ class Cache:
         preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
         embedding_response = result.data[idx_in_result_data]
+        
+        # Always convert to properly typed CachedEmbedding
+        model_name = result.model
+        embedding_dict: CachedEmbedding = self._convert_to_cached_embedding(embedding_response, model_name)
+            
         cache_key, cached_data, kwargs = self._add_cache_logic(
-            result=embedding_response,
+            result=embedding_dict,
             **kwargs,
         )
         return cache_key, cached_data, kwargs

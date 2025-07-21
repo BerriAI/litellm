@@ -1,17 +1,28 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Grid, Icon } from "@tremor/react";
-import { Tooltip } from "antd";
+import { Tooltip, Checkbox } from "antd";
 import { UserInfo } from "./types";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+
+interface SelectionOptions {
+  selectedUsers: UserInfo[];
+  onSelectUser: (user: UserInfo, isSelected: boolean) => void;
+  onSelectAll: (isSelected: boolean) => void;
+  isUserSelected: (user: UserInfo) => boolean;
+  isAllSelected: boolean;
+  isIndeterminate: boolean;
+}
 
 export const columns = (
   possibleUIRoles: Record<string, Record<string, string>>,
   handleEdit: (user: UserInfo) => void,
   handleDelete: (userId: string) => void,
   handleResetPassword: (userId: string) => void,
-  handleUserClick: (userId: string, openInEditMode?: boolean) => void
-): ColumnDef<UserInfo>[] => [
+  handleUserClick: (userId: string, openInEditMode?: boolean) => void,
+  selectionOptions?: SelectionOptions
+): ColumnDef<UserInfo>[] => {
+  const baseColumns: ColumnDef<UserInfo>[] = [
   {
     header: "User ID",
     accessorKey: "user_id",
@@ -137,4 +148,34 @@ export const columns = (
       </div>
     ),
   },
-]; 
+];
+
+  // Add selection column if selection is enabled
+  if (selectionOptions) {
+    const { onSelectUser, onSelectAll, isUserSelected, isAllSelected, isIndeterminate } = selectionOptions;
+    
+    return [
+      {
+        id: "select",
+        header: () => (
+          <Checkbox
+            indeterminate={isIndeterminate}
+            checked={isAllSelected}
+            onChange={(e) => onSelectAll(e.target.checked)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={isUserSelected(row.original)}
+            onChange={(e) => onSelectUser(row.original, e.target.checked)}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ),
+      },
+      ...baseColumns,
+    ];
+  }
+
+  return baseColumns;
+}; 

@@ -111,6 +111,7 @@ def image_generation(  # noqa: PLR0915
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
     timeout=600,  # default to 10 minutes
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -168,6 +169,7 @@ def image_generation(  # noqa: PLR0915
             "quality",
             "size",
             "style",
+            "input_fidelity",
         ]
         litellm_params = all_litellm_params
         default_params = openai_params + litellm_params
@@ -195,6 +197,7 @@ def image_generation(  # noqa: PLR0915
             size=size,
             style=style,
             user=user,
+            input_fidelity=input_fidelity,
             custom_llm_provider=custom_llm_provider,
             provider_config=image_generation_config,
             **non_default_params,
@@ -302,6 +305,8 @@ def image_generation(  # noqa: PLR0915
                 model_response=model_response,
                 aimg_generation=aimg_generation,
                 client=client,
+                api_base=api_base,
+                api_key=api_key
             )
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
