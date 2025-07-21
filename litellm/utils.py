@@ -6684,6 +6684,8 @@ class ProviderConfigManager:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
+        elif litellm.LlmProviders.LAMBDA_AI == provider:
+            return litellm.LambdaAIChatConfig()
         elif litellm.LlmProviders.LLAMA == provider:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
