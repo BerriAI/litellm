@@ -7149,6 +7149,12 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_generation import (
+                get_recraft_image_generation_config,
+            )
+
+            return get_recraft_image_generation_config(model)
         return None
 
     @staticmethod
