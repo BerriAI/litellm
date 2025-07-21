@@ -14472,7 +14472,8 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "source": "https://fireworks.ai/models/fireworks/kimi-k2-instruct"
     },
     "fireworks_ai/accounts/fireworks/models/llama-v3p1-405b-instruct": {
         "max_tokens": 16384,
