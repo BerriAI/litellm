@@ -279,6 +279,7 @@ LITELLM_CHAT_PROVIDERS = [
     "dashscope",
     "moonshot",
     "v0",
+    "morph",
     "lambda_ai",
 ]
 
@@ -409,6 +410,7 @@ openai_compatible_endpoints: List = [
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
     "https://api.v0.dev/v1",
+    "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
 ]
 
@@ -448,6 +450,7 @@ openai_compatible_providers: List = [
     "dashscope",
     "moonshot",
     "v0",
+    "morph",
     "lambda_ai",
 ]
 openai_text_completion_compatible_providers: List = (

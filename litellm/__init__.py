@@ -503,6 +503,7 @@ elevenlabs_models: List = []
 dashscope_models: List = []
 moonshot_models: List = []
 v0_models: List = []
+morph_models: List = []
 lambda_ai_models: List = []
 recraft_models: List = []
 
@@ -685,6 +686,8 @@ def add_known_models():
             moonshot_models.append(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.append(key)
+        elif value.get("litellm_provider") == "morph":
+            morph_models.append(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.append(key)
         elif value.get("litellm_provider") == "recraft":
@@ -774,6 +777,7 @@ model_list = (
     + dashscope_models
     + moonshot_models
     + v0_models
+    + morph_models
     + lambda_ai_models
     + recraft_models
 )
@@ -844,6 +848,7 @@ models_by_provider: dict = {
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
     "v0": v0_models,
+    "morph": morph_models,
     "lambda_ai": lambda_ai_models,
     "recraft": recraft_models,
 }
@@ -1166,6 +1171,7 @@ from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
+from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .main import *  # type: ignore
 from .integrations import *
