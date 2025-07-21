@@ -311,7 +311,7 @@ def get_all_fallbacks(
         return []
     
     # Get the appropriate fallback list based on type
-    fallbacks_config = []
+    fallbacks_config: list = []
     if fallback_type == "general":
         fallbacks_config = getattr(llm_router, "fallbacks", [])
     elif fallback_type == "context_window":
