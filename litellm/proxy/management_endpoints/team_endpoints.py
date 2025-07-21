@@ -209,7 +209,6 @@ async def _upsert_team_member_budget_table(
         if updated_kv.get("metadata") is None:
             updated_kv["metadata"] = {}
         updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
-        updated_kv.pop("team_member_budget", None)
     else:  # budget does not exist
         updated_kv = await _create_team_member_budget_table(
             data=team_table,
@@ -217,6 +216,8 @@ async def _upsert_team_member_budget_table(
             user_api_key_dict=user_api_key_dict,
             team_member_budget=team_member_budget,
         )
+
+    updated_kv.pop("team_member_budget", None)
     return updated_kv
 
 
@@ -405,7 +406,6 @@ async def new_team(  # noqa: PLR0915
             )  # type: ignore
 
             _model_id = model_dict.id
-
 
         ## Handle Object Permission - MCP, Vector Stores etc.
         object_permission_id = await _set_object_permission(
