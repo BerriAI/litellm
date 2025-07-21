@@ -2711,7 +2711,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = image_generation_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
+            api_key=litellm_params.get("api_key", None),
             headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
             messages=[],
@@ -2724,8 +2724,8 @@ class BaseLLMHTTPHandler:
 
         api_base = image_generation_provider_config.get_complete_url(
             model=model,
-            api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
+            api_base=litellm_params.get("api_base", None),
+            api_key=litellm_params.get("api_key", None),
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
         )
@@ -2806,7 +2806,7 @@ class BaseLLMHTTPHandler:
 
 
         headers = image_generation_provider_config.validate_environment(
-            api_key=litellm_params.api_key,
+            api_key=litellm_params.get("api_key", None),
             headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
             messages=[],
@@ -2819,8 +2819,8 @@ class BaseLLMHTTPHandler:
 
         api_base = image_generation_provider_config.get_complete_url(
             model=model,
-            api_base=litellm_params.api_base,
-            api_key=litellm_params.api_key,
+            api_base=litellm_params.get("api_base", None),
+            api_key=litellm_params.get("api_key", None),
             optional_params=image_generation_optional_request_params,
             litellm_params=dict(litellm_params),
         )
