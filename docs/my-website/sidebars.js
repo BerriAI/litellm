@@ -447,6 +447,7 @@ const sidebars = {
         "providers/replicate",
         "providers/togetherai",
         "providers/v0",
+        "providers/morph",
         "providers/lambda_ai",
         "providers/novita",
         "providers/voyage",
