@@ -37,11 +37,6 @@ class MorphChatConfig(OpenAILikeChatConfig):
             "messages",
             "model",
             "stream",
-            "temperature",
-            "max_tokens",
-            "tools",
-            "tool_choice",
-            "response_format",
         ]
 
     def pre_call(self, messages: list, model: str, api_key: str, api_base: str):
