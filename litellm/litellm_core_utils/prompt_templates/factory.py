@@ -634,7 +634,14 @@ def anthropic_pt(
         elif message["role"] == "system":
             prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}<admin>{message['content']}</admin>"
         else:
-            prompt += f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
+            # if this is an assistant message, we'll need to check if there's reasoning content. 
+            # if there's reasoning content, the reasoning ("thinking") needs to be the first message
+            # and the content needs to be the second message
+            if message.get("reasoning_content"):
+                prompt += f"{AnthropicConstants.AI_PROMPT.value}{message['reasoning_content']}"
+                prompt += f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
+            else:   
+                prompt += f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
         if (
             idx == 0 and message["role"] == "assistant"
         ):  # ensure the prompt always starts with `\n\nHuman: `
@@ -1649,7 +1656,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]  # type: ignore
 
+            if assistant_content_block.get("reasoning_content"):
+                reasoning_content = assistant_content_block.get("reasoning_content")
+                block = AnthropicMessagesTextParam(
+                    type="thinking",
+                    thinking=reasoning_content,
+                )
+                assistant_content.append(block)
+
             thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+
+            if thinking_blocks is None:
+                thinking_blocks = assistant_content_block.get("reasoning_content", None)
             if (
                 thinking_blocks is not None
             ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
