@@ -130,12 +130,17 @@ async def common_checks(
             user_object=user_object,
         )
 
-    # 3. If team is in budget
-    await _team_max_budget_check(
-        team_object=team_object,
-        proxy_logging_obj=proxy_logging_obj,
-        valid_token=valid_token,
-    )
+    # Fix bug:
+    # [Bug]: In Batch, there is no max_budget checking in team budget max limitation.
+    # https://github.com/BerriAI/litellm/issues/12794
+    # tonny.huang@navercorp.com, yea.hb@navercorp.com
+    if route in LiteLLMRoutes.llm_api_routes.value:
+        # 3. If team is in budget
+        await _team_max_budget_check(
+            team_object=team_object,
+            proxy_logging_obj=proxy_logging_obj,
+            valid_token=valid_token,
+        )
 
     # 4. If user is in budget
     ## 4.1 check personal budget, if personal key
