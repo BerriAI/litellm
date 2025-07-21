@@ -6,7 +6,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
-from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import get_valid_models
 
@@ -75,16 +74,13 @@ async def get_mcp_server_ids(
     if prisma_client is None:
         return []
 
-
     if user_api_key_dict.object_permission_id is None:
         return []
 
-
     # Make a direct SQL query to get just the mcp_servers
     try:
-
         result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": user_api_key_dict.object_permission_id},
+            where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
             return result.mcp_servers
@@ -298,25 +294,25 @@ def get_next_fallback(
 ) -> Optional[str]:
     """
     Returns the next immediate fallback for a specific model.
-    
+
     Args:
         model: The current model to find fallback for
         user_api_key_dict: User API key authentication info
         llm_router: Router instance containing fallback configurations
         fallback_type: Type of fallback ("general", "context_window", "content_policy")
-    
+
     Returns:
         The next fallback model name, or None if no fallback exists
-        
+
     Example:
         For fallback config: {"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}
         get_next_fallback("claude-4-sonnet") -> "bedrock-claude-sonnet-4"
-        get_next_fallback("bedrock-claude-sonnet-4") -> "google-claude-sonnet-4" 
+        get_next_fallback("bedrock-claude-sonnet-4") -> "google-claude-sonnet-4"
         get_next_fallback("google-claude-sonnet-4") -> None
     """
     if llm_router is None:
         return None
-    
+
     # Get the appropriate fallback configuration based on type
     fallbacks = None
     if fallback_type == "context_window":
@@ -325,22 +321,24 @@ def get_next_fallback(
         fallbacks = llm_router.content_policy_fallbacks
     else:  # general or default
         fallbacks = llm_router.fallbacks
-        
+
     if not fallbacks:
         return None
-    
+
     # Search through all fallback configurations to find where this model appears
     for fallback_dict in fallbacks:
         if isinstance(fallback_dict, dict):
             primary_model = list(fallback_dict.keys())[0]
             fallback_list = fallback_dict[primary_model]
-            
+
             # Check if this model is the primary model in this fallback configuration
-            if primary_model == model or _check_stripped_model_group(model, primary_model):
+            if primary_model == model or _check_stripped_model_group(
+                model, primary_model
+            ):
                 # This is a primary model, return the first fallback
                 if fallback_list and len(fallback_list) > 0:
                     return fallback_list[0]
-            
+
             # Check if this model appears anywhere in the fallback list
             elif model in fallback_list:
                 # This model is in the fallback chain, find its position and return the next one
@@ -349,22 +347,26 @@ def get_next_fallback(
                     return fallback_list[current_index + 1]
                 # If we're at the end of the chain, no more fallbacks
                 return None
-            
+
             # Also check with stripped model names for provider prefixes
             else:
                 # Check if model matches primary with stripped names
-                if _check_stripped_model_group(model, primary_model) or _check_stripped_model_group(primary_model, model):
+                if _check_stripped_model_group(
+                    model, primary_model
+                ) or _check_stripped_model_group(primary_model, model):
                     if fallback_list and len(fallback_list) > 0:
                         return fallback_list[0]
-                
+
                 # Check if model matches any fallback with stripped names
                 for idx, fallback_model in enumerate(fallback_list):
-                    if _check_stripped_model_group(model, fallback_model) or _check_stripped_model_group(fallback_model, model):
+                    if _check_stripped_model_group(
+                        model, fallback_model
+                    ) or _check_stripped_model_group(fallback_model, model):
                         # Found current model in fallback chain, return next one
                         if idx + 1 < len(fallback_list):
                             return fallback_list[idx + 1]
                         return None
-    
+
     # Check for generic wildcard fallbacks
     for fallback_dict in fallbacks:
         if isinstance(fallback_dict, dict):
@@ -373,25 +375,26 @@ def get_next_fallback(
                 fallback_list = fallback_dict["*"]
                 if fallback_list and len(fallback_list) > 0:
                     return fallback_list[0]
-    
+
     return None
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario - reused from router_utils for consistency
-    
+
     where fallbacks set like:
     [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
-    
+
     but model_group is like:
     "openai/gpt-3.5-turbo"
-    
+
     Returns:
     - True if the stripped model group == fallback_key
     """
     for provider in litellm.provider_list:
         from enum import Enum
+
         if isinstance(provider, Enum):
             _provider = provider.value
         else:
