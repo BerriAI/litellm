@@ -15,3 +15,21 @@ class RecraftImageGenerationRequestParams(TypedDict, total=False):
     size: Optional[str]
     negative_prompt: Optional[str]
     controls: Optional[Dict]
+
+
+class RecraftImageEditRequestParams(TypedDict, total=False):
+    """
+    TypedDict for Recraft image edit request parameters.
+    
+    Based on Recraft API docs: https://www.recraft.ai/docs#image-to-image
+    """
+    prompt: str  # required - A text description of areas to change. Max 1000 bytes
+    strength: float  # required - Defines difference with original image, [0, 1]
+    n: Optional[int]  # The number of images to generate, must be between 1 and 6
+    style_id: Optional[str]  # Use a previously uploaded style as reference
+    style: Optional[str]  # The style of generated images, default is realistic_image
+    substyle: Optional[str]  # Additional style specification
+    model: Optional[str]  # The model to use, default is recraftv3
+    response_format: Optional[str]  # Format of returned images: url or b64_json
+    negative_prompt: Optional[str]  # Description of undesired elements
+    controls: Optional[Dict]  # Custom parameters to tweak generation process
