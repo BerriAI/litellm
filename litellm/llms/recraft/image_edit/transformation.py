@@ -109,35 +109,53 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     ) -> Tuple[Dict, RequestFiles]:
         """
         Transform the image edit request to Recraft's multipart form format.
-        Direct implementation for Recraft API.
+        Reuses OpenAI file handling logic but adapts for Recraft API structure.
 
         https://www.recraft.ai/docs#image-to-image
         """
-    
-        # Build Recraft form data directly
-        #########################################################
-        data: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
+        
+        request_body: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
             model=model,
             prompt=prompt,
-            strength=image_edit_optional_request_params.get("strength", self.DEFAULT_STRENGTH),
+            strength=image_edit_optional_request_params.pop("strength", self.DEFAULT_STRENGTH),
             **image_edit_optional_request_params,
         )
-        data_dict: Dict = dict(data)
+        request_dict = cast(Dict, request_body)
         #########################################################
-        # Prepare image file for multipart upload
+        # Reuse OpenAI logic: Separate images as `files` and send other parameters as `data`
         #########################################################
-        files = []
-        if image:
-            image_content_type: str = ImageEditRequestUtils.get_image_content_type(image)
-            if isinstance(image, BufferedReader):
-                files.append(("image", (image.name, image, image_content_type)))
-            else:
-                files.append(("image", ("image.png", image, image_content_type)))
+        files_list = self._get_image_files_for_request(image=image)
+        data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
         
-        #########################################################
-        # Return the data and files
-        #########################################################
-        return data_dict, files
+        return data_without_images, files_list
+    
+
+    def _get_image_files_for_request(
+        self,
+        image: FileTypes,
+    ) -> List[Tuple[str, Any]]:
+        files_list: List[Tuple[str, Any]] = []
+        
+        # Handle single image (Recraft expects single image, not array)
+        if image:
+            # OpenAI wraps images in arrays, but for Recraft we need single image
+            if isinstance(image, list):
+                _image = image[0] if image else None  # Take first image for Recraft
+            else:
+                _image = image
+                
+            if _image is not None:
+                image_content_type: str = ImageEditRequestUtils.get_image_content_type(_image)
+                if isinstance(_image, BufferedReader):
+                    files_list.append(
+                        ("image", (_image.name, _image, image_content_type))
+                    )
+                else:
+                    files_list.append(
+                        ("image", ("image.png", _image, image_content_type))
+                    )
+
+        return files_list
     
     def transform_image_edit_response(
         self,
