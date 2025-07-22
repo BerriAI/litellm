@@ -265,7 +265,7 @@ Or [watch on Loom](https://www.loom.com/share/b08be303331246b88fdc053940d03281?s
 
 ### High Level Architecture
 
-<Image alt="Separate Health App Architecture" img={require('./separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
+<Image alt="Separate Health App Architecture" img={require('../../img/separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
 
 
 ## Extras
