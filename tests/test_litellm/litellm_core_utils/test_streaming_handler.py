@@ -725,3 +725,203 @@ def test_streaming_handler_with_stream_options(
     mr_dict = mr.model_dump()
     print(mr_dict)
     assert "stream_options" not in mr_dict
+
+
+def test_parse_thinking_block(initialized_custom_stream_wrapper: CustomStreamWrapper):
+    """Test the _parse_thinking_block method for different scenarios"""
+    
+    # Test case 1: Start of thinking block - should skip chunk
+    response_obj = {"text": "<think>Starting to think about this problem"}
+    model_response = ModelResponseStream(
+        id="test-1",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="<think>Starting to think about this problem"),
+                finish_reason=None,
+            )
+        ],
+    )
+    
+    should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+        response_obj=response_obj, model_response=model_response
+    )
+    assert should_skip is True
+    assert initialized_custom_stream_wrapper.sent_first_thinking_block_parsed is True
+    
+    # Test case 2: Middle of thinking block - should move content to reasoning_content
+    response_obj = {"text": "Let me analyze this step by step"}
+    model_response = ModelResponseStream(
+        id="test-2",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Let me analyze this step by step"),
+                finish_reason=None,
+            )
+        ],
+    )
+    
+    should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+        response_obj=response_obj, model_response=model_response
+    )
+    assert should_skip is False
+    assert model_response.choices[0].delta.reasoning_content == "Let me analyze this step by step"
+    assert model_response.choices[0].delta.content is None
+    
+    # Test case 3: End of thinking block - should skip chunk and reset state
+    response_obj = {"text": "So the answer is 42</think>"}
+    model_response = ModelResponseStream(
+        id="test-3",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="So the answer is 42</think>"),
+                finish_reason=None,
+            )
+        ],
+    )
+    
+    should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+        response_obj=response_obj, model_response=model_response
+    )
+    assert should_skip is True
+    assert initialized_custom_stream_wrapper.sent_first_thinking_block_parsed is False
+    
+    # Test case 4: Normal content (not in thinking block) - should not skip
+    response_obj = {"text": "This is regular content"}
+    model_response = ModelResponseStream(
+        id="test-4",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="This is regular content"),
+                finish_reason=None,
+            )
+        ],
+    )
+    
+    should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+        response_obj=response_obj, model_response=model_response
+    )
+    assert should_skip is False
+    assert model_response.choices[0].delta.content == "This is regular content"
+    
+    # Test case 5: Content with both start and end tags in same chunk - should skip
+    response_obj = {"text": "<think>Quick thought</think>"}
+    model_response = ModelResponseStream(
+        id="test-5",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="<think>Quick thought</think>"),
+                finish_reason=None,
+            )
+        ],
+    )
+    
+    # Reset state for this test
+    initialized_custom_stream_wrapper.sent_first_thinking_block_parsed = False
+    
+    should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+        response_obj=response_obj, model_response=model_response
+    )
+    # Should detect start tag first and skip
+    assert should_skip is True
+    assert initialized_custom_stream_wrapper.sent_first_thinking_block_parsed is True
+    
+    # Test case 6: Partial thinking tags (edge cases)
+    response_obj = {"text": "This contains <think but not complete tag"}
+    model_response = ModelResponseStream(
+        id="test-6",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="This contains <think but not complete tag"),
+                finish_reason=None,
+            )
+        ],
+    )
+    
+    # Reset state
+    initialized_custom_stream_wrapper.sent_first_thinking_block_parsed = False
+    
+    should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+        response_obj=response_obj, model_response=model_response
+    )
+    assert should_skip is False  # Should not match partial tag
+    assert model_response.choices[0].delta.content == "This contains <think but not complete tag"
+
+
+def test_parse_thinking_block_sequential_flow(initialized_custom_stream_wrapper: CustomStreamWrapper):
+    """Test the _parse_thinking_block method with a complete sequential flow"""
+    
+    # Reset state
+    initialized_custom_stream_wrapper.sent_first_thinking_block_parsed = False
+    
+    # Sequence of chunks simulating a complete thinking block flow
+    test_sequence = [
+        # Start of thinking
+        {
+            "response_obj": {"text": "<think>I need to solve this problem"},
+            "expected_skip": True,
+            "expected_state": True,
+        },
+        # Middle of thinking block
+        {
+            "response_obj": {"text": " by breaking it down into steps"},
+            "expected_skip": False,
+            "expected_state": True,
+        },
+        # More thinking content
+        {
+            "response_obj": {"text": ". First, let me understand the requirements"},
+            "expected_skip": False,
+            "expected_state": True,
+        },
+        # End of thinking
+        {
+            "response_obj": {"text": ". Now I have the solution.</think>"},
+            "expected_skip": True,
+            "expected_state": False,
+        },
+        # Normal content after thinking
+        {
+            "response_obj": {"text": "The answer to your question is"},
+            "expected_skip": False,
+            "expected_state": False,
+        },
+        # More normal content
+        {
+            "response_obj": {"text": " that we need to use a different approach."},
+            "expected_skip": False,
+            "expected_state": False,
+        },
+    ]
+    
+    for i, test_case in enumerate(test_sequence):
+        model_response = ModelResponseStream(
+            id=f"test-seq-{i}",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=test_case["response_obj"]["text"]),
+                    finish_reason=None,
+                )
+            ],
+        )
+        
+        should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+            response_obj=test_case["response_obj"], model_response=model_response
+        )
+        
+        assert should_skip == test_case["expected_skip"], f"Step {i}: Expected skip={test_case['expected_skip']}, got {should_skip}"
+        assert initialized_custom_stream_wrapper.sent_first_thinking_block_parsed == test_case["expected_state"], f"Step {i}: Expected state={test_case['expected_state']}, got {initialized_custom_stream_wrapper.sent_first_thinking_block_parsed}"
+        
+        # For middle chunks (not skipped), verify reasoning_content is set correctly
+        if not should_skip and test_case["expected_state"]:
+            assert model_response.choices[0].delta.reasoning_content == test_case["response_obj"]["text"], f"Step {i}: reasoning_content not set correctly"
+            assert model_response.choices[0].delta.content is None, f"Step {i}: content should be None for thinking blocks"
+        elif not should_skip and not test_case["expected_state"]:
+            # Normal content should remain in content field
+            assert model_response.choices[0].delta.content == test_case["response_obj"]["text"], f"Step {i}: content should remain for normal text"
