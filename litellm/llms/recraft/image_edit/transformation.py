@@ -109,45 +109,35 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     ) -> Tuple[Dict, RequestFiles]:
         """
         Transform the image edit request to Recraft's multipart form format.
-        Reuses OpenAI file handling logic but adapts for Recraft API structure.
+        Direct implementation for Recraft API.
 
         https://www.recraft.ai/docs#image-to-image
         """
-        
-
-        # Build request like OpenAI does
-        request_body: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
+    
+        # Build Recraft form data directly
+        #########################################################
+        data: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
             model=model,
             prompt=prompt,
-            strength=image_edit_optional_request_params.get("strength", self.DEFAULT_STRENGTH), 
+            strength=image_edit_optional_request_params.get("strength", self.DEFAULT_STRENGTH),
             **image_edit_optional_request_params,
         )
-        request_dict = cast(Dict, request_body)
+        data_dict: Dict = dict(data)
         #########################################################
-        # Reuse OpenAI logic: Separate images as `files` and send other parameters as `data`
+        # Prepare image file for multipart upload
         #########################################################
-        _images = request_dict.get("image") or []
-        data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
-        files_list: List[Tuple[str, Any]] = []
-        
-        # Handle single image (Recraft expects single image, not array)
-        if _images:
-            if isinstance(_images, list):
-                _image = _images[0]  # Take first image for Recraft
+        files = []
+        if image:
+            image_content_type: str = ImageEditRequestUtils.get_image_content_type(image)
+            if isinstance(image, BufferedReader):
+                files.append(("image", (image.name, image, image_content_type)))
             else:
-                _image = _images
-                
-            image_content_type: str = ImageEditRequestUtils.get_image_content_type(_image)
-            if isinstance(_image, BufferedReader):
-                files_list.append(
-                    ("image", (_image.name, _image, image_content_type))
-                )
-            else:
-                files_list.append(
-                    ("image", ("image.png", _image, image_content_type))
-                )
+                files.append(("image", ("image.png", image, image_content_type)))
         
-        return data_without_images, files_list
+        #########################################################
+        # Return the data and files
+        #########################################################
+        return data_dict, files
     
     def transform_image_edit_response(
         self,
