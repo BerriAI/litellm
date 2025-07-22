@@ -125,7 +125,6 @@ async def test_router_provider_wildcard_routing():
 
     print("response 3 = ", response3)
 
-
 @pytest.mark.asyncio()
 async def test_router_provider_wildcard_routing_regex():
     """

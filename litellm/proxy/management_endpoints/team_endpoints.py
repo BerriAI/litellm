@@ -212,7 +212,7 @@ async def _upsert_team_member_budget_table(
         if updated_kv.get("metadata") is None:
             updated_kv["metadata"] = {}
         updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
-        updated_kv.pop("team_member_budget", None)
+
     else:  # budget does not exist
         updated_kv = await _create_team_member_budget_table(
             data=team_table,
@@ -220,6 +220,7 @@ async def _upsert_team_member_budget_table(
             user_api_key_dict=user_api_key_dict,
             team_member_budget=team_member_budget,
         )
+    updated_kv.pop("team_member_budget", None)
     return updated_kv
 
 
@@ -798,6 +799,8 @@ async def update_team(
             team_member_budget=data.team_member_budget,
             user_api_key_dict=user_api_key_dict,
         )
+    else:
+        updated_kv.pop("team_member_budget", None)
 
     # Check object permission
     if data.object_permission is not None:
