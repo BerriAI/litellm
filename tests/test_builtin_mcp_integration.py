@@ -65,10 +65,10 @@ def test_mcp_server_manager_builtin_methods():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
     
     # Test builtin server identification
-    assert global_mcp_server_manager.is_builtin_server("calculator") == True
-    assert global_mcp_server_manager.is_builtin_server("nonexistent") == False
-    assert global_mcp_server_manager.is_builtin_server("builtin_calculator") == True
-    assert global_mcp_server_manager.is_builtin_server("regular_server_id") == False
+    assert global_mcp_server_manager.is_builtin_server("calculator")
+    assert not global_mcp_server_manager.is_builtin_server("nonexistent")
+    assert global_mcp_server_manager.is_builtin_server("builtin_calculator")
+    assert not global_mcp_server_manager.is_builtin_server("regular_server_id")
     print("✓ Builtin server identification works")
 
 
@@ -79,8 +79,8 @@ def test_mcp_handler_builtin_detection():
     tools_with_builtin = [{"type": "mcp", "builtin": "calculator"}]
     tools_without_builtin = [{"type": "function", "function": {"name": "test"}}]
     
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools_with_builtin) == True
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools_without_builtin) == False
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools_with_builtin)
+    assert not LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools_without_builtin)
     print("✓ MCP gateway detection for builtin tools works")
 
 
@@ -111,8 +111,8 @@ def test_calculator_builtin_server():
     
     registry = BuiltinMCPRegistry()
     
-    # Test calculator server availability  
-    assert registry.is_builtin_available("calculator") == True
+    # Test calculator server availability
+    assert registry.is_builtin_available("calculator")
     
     # Test getting calculator server
     calc_server = registry.get_builtin_server("calculator")
@@ -208,7 +208,7 @@ def test_hybrid_mcp_usage():
     regular_tool = next((t for t in expanded if isinstance(t, dict) and t.get("type") == "function"), None)
     
     assert builtin_tool is not None
-    assert remote_tool is not None  
+    assert remote_tool is not None
     assert regular_tool is not None
     print("✓ Hybrid MCP usage (builtin + remote + regular) works")
 
@@ -282,7 +282,7 @@ def test_approval_response_processing():
             "approval_request_id": "mcpr_123"
         },
         {
-            "type": "mcp_approval_response", 
+            "type": "mcp_approval_response",
             "approve": False,
             "approval_request_id": "mcpr_456"
         },
@@ -308,11 +308,11 @@ def test_tool_approval_checking():
     
     # Test simple "never" approval
     config_never = {"_require_approval": "never"}
-    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("test_tool", config_never) == False
+    assert not LiteLLM_Proxy_MCP_Handler._check_tool_approval("test_tool", config_never)
     
     # Test default (always require approval)
     config_default = {}
-    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("test_tool", config_default) == True
+    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("test_tool", config_default)
     
     # Test granular approval - tool allowed
     config_granular = {
@@ -322,8 +322,8 @@ def test_tool_approval_checking():
             }
         }
     }
-    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("safe_tool", config_granular) == False
-    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("dangerous_tool", config_granular) == True
+    assert not LiteLLM_Proxy_MCP_Handler._check_tool_approval("safe_tool", config_granular)
+    assert LiteLLM_Proxy_MCP_Handler._check_tool_approval("dangerous_tool", config_granular)
     
     print("✓ Tool approval checking works")
 
@@ -333,7 +333,7 @@ if __name__ == "__main__":
     
     try:
         test_builtin_registry_initialization()
-        test_builtin_server_config_creation() 
+        test_builtin_server_config_creation()
         test_builtin_config_to_mcp_server_with_auth()
         
         # Skip MCP server manager tests for now (requires mcp module)
