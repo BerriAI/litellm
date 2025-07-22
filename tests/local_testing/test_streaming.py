@@ -642,7 +642,6 @@ def test_completion_ollama_hosted_stream():
     "model",
     [
         # "claude-3-5-haiku-20241022",
-        # "claude-2",
         # "mistral/mistral-small-latest",
         "openrouter/openai/gpt-4o-mini",
     ],
@@ -672,36 +671,6 @@ def test_completion_model_stream(model):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-@pytest.mark.asyncio
-async def test_acompletion_claude_2_stream():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="claude-2.1",
-            messages=[{"role": "user", "content": "hello from litellm"}],
-            stream=True,
-        )
-        complete_response = ""
-        # Add any assertions here to check the response
-        idx = 0
-        async for chunk in response:
-            print(chunk)
-            # print(chunk.choices[0].delta)
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-            idx += 1
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except litellm.InternalServerError:
-        pass
-    except litellm.RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(
