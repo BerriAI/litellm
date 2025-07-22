@@ -14,7 +14,7 @@ from litellm.utils import ProviderConfigManager
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
-from ..llms.openai.realtime.handler import OpenAIRealtime
+from ..llms.openai.realtime.handler import OpenAIRealtime, RealtimeQueryParams
 from ..utils import client as wrapper_client
 
 azure_realtime = AzureOpenAIRealtime()
@@ -125,7 +125,7 @@ async def _arealtime(
         )
 
         # Forward all query params if present
-        query_params = kwargs.get("query_params")
+        query_params: Optional[RealtimeQueryParams] = kwargs.get("query_params")
 
         await openai_realtime.async_realtime(
             model=model,

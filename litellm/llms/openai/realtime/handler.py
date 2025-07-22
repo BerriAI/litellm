@@ -4,15 +4,21 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Optional, cast
+from typing import Any, Optional, cast, TypedDict
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ..openai import OpenAIChatCompletion
 
 
+class RealtimeQueryParams(TypedDict, total=False):
+    model: str
+    intent: Optional[str]
+    # Add more fields as needed
+
+
 class OpenAIRealtime(OpenAIChatCompletion):
-    def _construct_url(self, api_base: str, query_params: dict) -> str:
+    def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
         Construct the backend websocket URL with all query parameters (excluding 'model' if present).
         """
@@ -37,7 +43,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: Optional[str] = None,
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
-        query_params: Optional[dict] = None,
+        query_params: Optional[RealtimeQueryParams] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
