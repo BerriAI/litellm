@@ -381,6 +381,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
             createClicked={createClicked}
+            setAccessToken={setAccessToken}
           />
         </Col>
       </Grid>
