@@ -329,7 +329,7 @@ While adding `mcp_servers` using the config:
 - Pass in a list of strings inside `access_groups`
 - These groups can then be used for segregating access using keys, teams and MCP clients using headers
 
-##### B. Using UI
+##### B. Creating Access Groups using UI
 
 To create an access group:
 - Go to MCP Servers in the LiteLLM UI
