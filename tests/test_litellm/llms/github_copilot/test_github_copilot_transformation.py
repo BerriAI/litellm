@@ -40,8 +40,6 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     mock_api_key = "gh.test-key-123456789"
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = mock_api_key
-    # Test with dynamic endpoint
-    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
 
     # Test with default values
     model = "github_copilot/gpt-4"
@@ -56,23 +54,9 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
         custom_llm_provider="github_copilot",
     )
 
-    assert api_base == "https://api.enterprise.githubcopilot.com"
+    assert api_base == "https://api.githubcopilot.com/"
     assert dynamic_api_key == mock_api_key
     assert custom_llm_provider == "github_copilot"
-
-    # Test fallback to default if no dynamic endpoint
-    config.authenticator.get_api_base.return_value = None
-    (
-        api_base,
-        dynamic_api_key,
-        custom_llm_provider,
-    ) = config._get_openai_compatible_provider_info(
-        model=model,
-        api_base=None,
-        api_key=None,
-        custom_llm_provider="github_copilot",
-    )
-    assert api_base == "https://api.githubcopilot.com/"
 
     # Test with authentication failure
     config.authenticator.get_api_key.side_effect = GetAPIKeyError(

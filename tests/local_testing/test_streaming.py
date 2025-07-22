@@ -642,6 +642,7 @@ def test_completion_ollama_hosted_stream():
     "model",
     [
         # "claude-3-5-haiku-20241022",
+        # "claude-2",
         # "mistral/mistral-small-latest",
         "openrouter/openai/gpt-4o-mini",
     ],
@@ -670,7 +671,6 @@ def test_completion_model_stream(model):
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 
 @pytest.mark.parametrize(
@@ -888,6 +888,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
         # if "429 Resource has been exhausted":
         #     return
         pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.flaky(retries=3, delay=1)
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():

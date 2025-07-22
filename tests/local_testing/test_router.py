@@ -125,12 +125,6 @@ async def test_router_provider_wildcard_routing():
 
     print("response 3 = ", response3)
 
-    response4 = await router.acompletion(
-        model="claude-3-5-sonnet-latest",
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-
 @pytest.mark.asyncio()
 async def test_router_provider_wildcard_routing_regex():
     """
@@ -1136,7 +1130,7 @@ async def test_aimg_gen_on_router():
                     "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
                     "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
                 },
-            }
+            },
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(

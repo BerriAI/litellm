@@ -165,11 +165,6 @@ class TestOpenAIGPTImage1(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gpt-image-1"}
 
-class TestRecraftImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "recraft/recraftv3"}
-
-
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.set_verbose = True

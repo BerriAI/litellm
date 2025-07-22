@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 | Description | Moonshot AI provides large language models including the moonshot-v1 series and kimi models. |
 | Provider Route on LiteLLM | `moonshot/` |
 | Link to Provider Doc | [Moonshot AI ↗](https://platform.moonshot.ai/) |
-| Base URL | `https://api.moonshot.ai/` |
+| Base URL | `https://api.moonshot.cn/` |
 | Supported Operations | [`/chat/completions`](#sample-usage) |
 
 <br />
@@ -24,18 +24,6 @@ https://platform.moonshot.ai/
 
 ```python showLineNumbers title="Environment Variables"
 os.environ["MOONSHOT_API_KEY"] = ""  # your Moonshot AI API key
-```
-
-**ATTENTION:**
-
-Moonshot AI offers two distinct API endpoints: a global one and a China-specific one.
-- Global API Base URL: `https://api.moonshot.ai/v1` (This is the one currently implemented)
-- China API Base URL: `https://api.moonshot.cn/v1`
-
-You can overwrite the base url with:
-
-```
-os.environ["MOONSHOT_API_BASE"] = "https://api.moonshot.cn/v1"
 ```
 
 ## Usage - LiteLLM Python SDK

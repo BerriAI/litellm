@@ -6684,8 +6684,6 @@ class ProviderConfigManager:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
-        elif litellm.LlmProviders.LAMBDA_AI == provider:
-            return litellm.LambdaAIChatConfig()
         elif litellm.LlmProviders.LLAMA == provider:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
@@ -6834,8 +6832,6 @@ class ProviderConfigManager:
             return litellm.MoonshotChatConfig()
         elif litellm.LlmProviders.V0 == provider:
             return litellm.V0ChatConfig()
-        elif litellm.LlmProviders.MORPH == provider:
-            return litellm.MorphChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -6884,8 +6880,6 @@ class ProviderConfigManager:
             return litellm.OpenAIGPTConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
-        elif litellm.LlmProviders.HYPERBOLIC == provider:
-            return litellm.HyperbolicChatConfig()
         return None
 
     @staticmethod
@@ -7153,12 +7147,6 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
-        elif LlmProviders.RECRAFT == provider:
-            from litellm.llms.recraft.image_generation import (
-                get_recraft_image_generation_config,
-            )
-
-            return get_recraft_image_generation_config(model)
         return None
 
     @staticmethod
