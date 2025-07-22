@@ -138,6 +138,7 @@ class BuiltinMCPRegistry:
         """Register a server from config dictionary"""
         transport = config.get('transport', 'sse')
 
+        server_config: Union[BuiltinMCPServerConfig, BuiltinStdioMCPServerConfig]
         if transport == 'stdio':
             # Stdio-based server
             server_config = BuiltinStdioMCPServerConfig(

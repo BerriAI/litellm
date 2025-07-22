@@ -19,7 +19,7 @@ Tools provided:
 import asyncio
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 # MCP Protocol Messages
 class MCPMessage:
@@ -289,7 +289,7 @@ async def run_stdio_server():
 
         except EOFError:
             break
-        except Exception as e:
+        except Exception:
             pass  # Error processing message - logging could be added here
 
 
