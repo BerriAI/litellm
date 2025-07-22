@@ -3495,13 +3495,13 @@ async def acompletion_with_retries(*args, **kwargs):
     retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
-        retryer = tenacity.Retrying(
+        retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(
+        retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries), reraise=True
         )
     return await retryer(original_function, *args, **kwargs)
