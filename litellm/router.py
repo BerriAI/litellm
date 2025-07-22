@@ -1233,7 +1233,6 @@ class Router:
     # Fix bug:
     # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
     # https://github.com/BerriAI/litellm/issues/12800
-    # tonny.huang@navercorp.com, yea.hb@navercorp.com
     def _update_kwargs_with_default_litellm_params(
         self, model: str, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
     ) -> None:
@@ -1258,7 +1257,6 @@ class Router:
         # Fix bug:
         # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
         # https://github.com/BerriAI/litellm/issues/12800
-        # tonny.huang@navercorp.com, yea.hb@navercorp.com
         kwargs.setdefault(metadata_variable_name, {}).update({"model_group": model})
 
     def _handle_clientside_credential(
@@ -1309,7 +1307,6 @@ class Router:
         # Fix bug:
         # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
         # https://github.com/BerriAI/litellm/issues/12800
-        # tonny.huang@navercorp.com, yea.hb@navercorp.com
         model_group_name = deployment["model_name"]
         
         if is_clientside_credential(request_kwargs=kwargs):
@@ -1345,7 +1342,6 @@ class Router:
         # Fix bug:
         # [Bug]: There is no model_group information in responses, image edit API, but chat/completions
         # https://github.com/BerriAI/litellm/issues/12800
-        # tonny.huang@navercorp.com, yea.hb@navercorp.com
         self._update_kwargs_with_default_litellm_params(model=model_group_name,
             kwargs=kwargs, metadata_variable_name="metadata"
         )
