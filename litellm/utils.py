@@ -7177,12 +7177,18 @@ class ProviderConfigManager:
             )
 
             return OpenAIImageEditConfig()
-        if LlmProviders.AZURE == provider:
+        elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
             )
 
             return AzureImageEditConfig()
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_edit.transformation import (
+                RecraftImageEditConfig,
+            )
+
+            return RecraftImageEditConfig()
         return None
 
     @staticmethod
