@@ -127,8 +127,6 @@ def test_azure_o3_streaming():
         assert "stream" in mock_create.call_args.kwargs
 
 
-
-
 def test_azure_o_series_routing():
     """
     Allows user to pass model="azure/o_series/<any-deployment-name>" for explicit o_series model routing.
