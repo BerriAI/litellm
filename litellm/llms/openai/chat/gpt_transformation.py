@@ -386,6 +386,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
+        model: str,  # allows overrides to selectively run this
         messages: List[AllMessageValues],
         tools: Optional[List["ChatCompletionToolParam"]] = None,
     ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
@@ -421,7 +422,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         messages = self._transform_messages(messages=messages, model=model)
         messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
-            messages=messages, tools=optional_params.get("tools", [])
+            model=model, messages=messages, tools=optional_params.get("tools", [])
         )
         optional_params["tools"] = tools
         return {
@@ -443,7 +444,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         transformed_messages, tools = (
             self.remove_cache_control_flag_from_messages_and_tools(
-                messages=transformed_messages, tools=optional_params.get("tools", [])
+                model=model,
+                messages=transformed_messages,
+                tools=optional_params.get("tools", []),
             )
         )
         optional_params["tools"] = tools
