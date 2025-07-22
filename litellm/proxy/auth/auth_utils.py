@@ -456,31 +456,6 @@ def is_pass_through_provider_route(route: str) -> bool:
     return False
 
 
-def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
-    """
-    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on /vertex-ai/{endpoint} routes
-    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on provider pass through routes
-    ex /vertex-ai/{endpoint} routes
-    Run virtual key auth if the following is try:
-    - User is premium_user
-    - User has enabled litellm_setting.use_client_credentials_pass_through_routes
-    """
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    if premium_user is not True:
-        return False
-
-    # premium use has opted into using client credentials
-    if (
-        general_settings.get("use_client_credentials_pass_through_routes", False)
-        is True
-    ):
-        return False
-
-    # only enabled for LiteLLM Enterprise
-    return True
-
-
 def _has_user_setup_sso():
     """
     Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID and UI username environment variables.
@@ -499,7 +474,9 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_end_user_id_from_request_body(request_body: dict, request_headers: Optional[dict] = None) -> Optional[str]:
+def get_end_user_id_from_request_body(
+    request_body: dict, request_headers: Optional[dict] = None
+) -> Optional[str]:
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
@@ -508,10 +485,10 @@ def get_end_user_id_from_request_body(request_body: dict, request_headers: Optio
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        user_id_header_config_key = "user_header_name" 
-        
-        custom_header_name_to_check = general_settings.get(user_id_header_config_key) 
-        
+        user_id_header_config_key = "user_header_name"
+
+        custom_header_name_to_check = general_settings.get(user_id_header_config_key)
+
         if custom_header_name_to_check and isinstance(custom_header_name_to_check, str):
             user_id_from_header = request_headers.get(custom_header_name_to_check)
             if user_id_from_header is not None and user_id_from_header.strip():
@@ -530,12 +507,12 @@ def get_end_user_id_from_request_body(request_body: dict, request_headers: Optio
             return str(user_from_litellm_metadata)
 
     # Check 4: 'metadata.user_id' in request_body (another common pattern)
-    metadata_dict = request_body.get("metadata") 
-    if isinstance(metadata_dict, dict): 
+    metadata_dict = request_body.get("metadata")
+    if isinstance(metadata_dict, dict):
         user_id_from_metadata_field = metadata_dict.get("user_id")
         if user_id_from_metadata_field is not None:
             return str(user_id_from_metadata_field)
-    
+
     return None
 
 

@@ -21,7 +21,6 @@ Features:
     - ✅ [[BETA] AWS Key Manager v2 - Key Decryption](#beta-aws-key-manager---key-decryption)
     - ✅ IP address‑based access control lists
     - ✅ Track Request IP Address
-    - ✅ [Use LiteLLM keys/authentication on Pass Through Endpoints](pass_through#✨-enterprise---use-litellm-keysauthentication-on-pass-through-endpoints)
     - ✅ [Set Max Request Size / File Size on Requests](#set-max-request--response-size-on-litellm-proxy)
     - ✅ [Enforce Required Params for LLM Requests (ex. Reject requests missing ["metadata"]["generation_name"])](#enforce-required-params-for-llm-requests)
     - ✅ [Key Rotations](./virtual_keys.md#-key-rotations)
