@@ -47,6 +47,7 @@ pip install litellm==1.74.7rc1
 
 
 - **Vector Stores** - Support for Vertex RAG Engine, PG Vector, OpenAI & Azure OpenAI Vector Stores.
+- **Bulk Editing Users** - Bulk editing users on the UI.
 - **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
 - **New LLM Providers** - Added Moonshot API `moonshot` and `v0` provider support.
 
