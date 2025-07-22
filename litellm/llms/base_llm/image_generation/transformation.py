@@ -3,12 +3,12 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import httpx
 
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -18,23 +18,12 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class BaseImageGenerationConfig(ABC):
+class BaseImageGenerationConfig(BaseConfig, ABC):
     @abstractmethod
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         pass
-    
-    @abstractmethod
-    def map_openai_params(
-        self,
-        non_default_params: dict,
-        optional_params: dict,
-        model: str,
-        drop_params: bool,
-    ) -> dict:
-        pass
-
 
     def get_complete_url(
         self,
@@ -75,10 +64,10 @@ class BaseImageGenerationConfig(ABC):
             headers=headers,
         )
 
-    def transform_image_generation_request(
+    def transform_request(
         self,
         model: str,
-        prompt: str,
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -87,19 +76,20 @@ class BaseImageGenerationConfig(ABC):
             "ImageVariationConfig implementa 'transform_request_image_variation' for image variation models"
         )
 
-    def transform_image_generation_response(
+    def transform_response(
         self,
         model: str,
         raw_response: httpx.Response,
-        model_response: ImageResponse,
+        model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
+        messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> ImageResponse:
+    ) -> ModelResponse:
         raise NotImplementedError(
             "ImageVariationConfig implements 'transform_response_image_variation' for image variation models"
         )

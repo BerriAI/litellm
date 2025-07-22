@@ -2276,8 +2276,6 @@ class LlmProviders(str, Enum):
     DASHSCOPE = "dashscope"
     MOONSHOT = "moonshot"
     V0 = "v0"
-    MORPH = "morph"
-    LAMBDA_AI = "lambda_ai"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -2316,10 +2314,13 @@ class LlmProviders(str, Enum):
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
 <<<<<<< HEAD
+<<<<<<< HEAD
     RECRAFT = "recraft"
 =======
     HYPERBOLIC = "hyperbolic"
 >>>>>>> 6040c329a (feat: add Hyperbolic provider support)
+=======
+>>>>>>> e4e10aa4e (Litellm dev 07 21 2025 p1 (#12848))
 
 
 # Create a set of all provider values for quick lookup

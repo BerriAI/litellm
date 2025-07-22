@@ -279,8 +279,6 @@ LITELLM_CHAT_PROVIDERS = [
     "dashscope",
     "moonshot",
     "v0",
-    "morph",
-    "lambda_ai",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -410,9 +408,6 @@ openai_compatible_endpoints: List = [
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
     "https://api.v0.dev/v1",
-    "https://api.morphllm.com/v1",
-    "https://api.lambda.ai/v1",
-    "https://api.hyperbolic.xyz/v1",
 ]
 
 
@@ -451,9 +446,6 @@ openai_compatible_providers: List = [
     "dashscope",
     "moonshot",
     "v0",
-    "morph",
-    "lambda_ai",
-    "hyperbolic",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -466,9 +458,6 @@ openai_text_completion_compatible_providers: List = (
         "nebius",
         "dashscope",
         "moonshot",
-        "v0",
-        "lambda_ai",
-        "hyperbolic",
     ]
 )
 _openai_like_providers: List = [
@@ -820,7 +809,6 @@ DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
 PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 )
-PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )

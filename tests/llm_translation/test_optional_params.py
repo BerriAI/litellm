@@ -985,7 +985,7 @@ def test_watsonx_tool_choice():
         model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto"
     )
     print(optional_params)
-    assert optional_params["tool_choice_option"] == "auto"
+    assert optional_params["tool_choice_options"] == "auto"
 
 
 def test_watsonx_text_top_k():
