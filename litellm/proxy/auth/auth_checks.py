@@ -133,7 +133,6 @@ async def common_checks(
     # Fix bug:
     # [Bug]: In Batch, there is no max_budget checking in team budget max limitation.
     # https://github.com/BerriAI/litellm/issues/12794
-    # tonny.huang@navercorp.com, yea.hb@navercorp.com
     if route in LiteLLMRoutes.llm_api_routes.value:
         # 3. If team is in budget
         await _team_max_budget_check(
