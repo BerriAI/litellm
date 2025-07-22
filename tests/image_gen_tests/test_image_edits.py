@@ -411,3 +411,34 @@ async def test_azure_image_edit_cost_tracking():
         # check response_cost
         assert test_custom_logger.standard_logging_payload["response_cost"] is not None
         assert test_custom_logger.standard_logging_payload["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_recraft_image_edit_api():
+    from litellm import aimage_edit
+    import requests
+    litellm._turn_on_debug()
+    global TEST_IMAGES
+    try:
+        prompt = """
+        Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
+        """
+        result = await aimage_edit(
+            prompt=prompt,
+            model="recraft/image-edit",
+            image=TEST_IMAGES,
+        )
+        print("result from image edit", result)
+
+        # Validate the response meets expected schema
+        ImageResponse.model_validate(result)
+        
+        if isinstance(result, ImageResponse) and result.data:
+            image_url = result.data[0].url
+            
+            # download the image
+            image_bytes = requests.get(image_url).content
+            with open("test_image_edit.png", "wb") as f:
+                f.write(image_bytes)
+    except litellm.ContentPolicyViolationError as e:
+        pass
