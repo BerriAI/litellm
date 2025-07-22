@@ -3186,7 +3186,7 @@ async def async_assistants_data_generator(
         yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.py::async_assistants_data_generator(): Exception occured - {}".format(
+            "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - {}".format(
                 str(e)
             )
         )
