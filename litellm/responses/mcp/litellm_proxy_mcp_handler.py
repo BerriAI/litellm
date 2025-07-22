@@ -131,9 +131,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 if isinstance(builtin_name, str):
                     # Get client-provided auth token if available
                     client_auth_token = tool.get("auth_token") or tool.get("authentication_token")
+                    client_auth_token_str = client_auth_token if isinstance(client_auth_token, str) else None
 
                     # Resolve builtin to actual server configuration
-                    builtin_server = global_mcp_server_manager.resolve_builtin_server(builtin_name, client_auth_token)
+                    builtin_server = global_mcp_server_manager.resolve_builtin_server(builtin_name, client_auth_token_str)
                     if builtin_server:
                         # Create a new tool dict with server_url="litellm_proxy" to use existing flow
                         expanded_tool = cast(Dict[str, Any], tool.copy()) if hasattr(tool, 'copy') else dict(tool)
@@ -308,7 +309,9 @@ class LiteLLM_Proxy_MCP_Handler:
             if (isinstance(item, dict) and
                 item.get("type") == "mcp_approval_response" and
                 item.get("approve") is True):
-                approved_request_ids.append(item.get("approval_request_id"))
+                approval_id = item.get("approval_request_id")
+                if isinstance(approval_id, str):
+                    approved_request_ids.append(approval_id)
 
         return approved_request_ids
 
