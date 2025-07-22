@@ -30,6 +30,7 @@ python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 # for azure content safety
+azure-keyvault==4.2.0 # for azure KMS integration
 azure-storage-file-datalake==12.20.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
