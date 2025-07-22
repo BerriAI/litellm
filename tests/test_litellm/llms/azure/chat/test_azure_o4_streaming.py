@@ -45,12 +45,12 @@ def test_should_fake_stream_for_o4_models():
     Test that should_fake_stream returns False for o4 models.
     """
     config = litellm.AzureOpenAIO1Config()
-    
+
     # Test o4-mini
     assert config.should_fake_stream(model="azure/o4-mini", stream=True) is False
-    
+
     # Test o4 model
     assert config.should_fake_stream(model="azure/o4", stream=True) is False
-    
+
     # Test that o1 still uses fake streaming
     assert config.should_fake_stream(model="azure/o1", stream=True) is True
