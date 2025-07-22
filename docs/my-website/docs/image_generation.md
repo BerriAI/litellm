@@ -207,7 +207,26 @@ Use this for Stable Diffusion models hosted on Xinference
 
 See Xinference usage with LiteLLM [here](./providers/xinference.md#image-generation)
 
+## Recraft Image Generation Models
 
+Use this for AI-powered design and image generation with Recraft
+
+#### Usage
+
+```python showLineNumbers
+from litellm import image_generation
+import os
+
+os.environ['RECRAFT_API_KEY'] = "your-api-key"
+
+response = image_generation(
+    model="recraft/recraftv3",
+    prompt="A beautiful sunset over a calm ocean",
+)
+print(response)
+```
+
+See Recraft usage with LiteLLM [here](./providers/recraft.md#image-generation)
 
 ## OpenAI Compatible Image Generation Models
 Use this for calling `/image_generation` endpoints on OpenAI Compatible Servers, example https://github.com/xorbitsai/inference

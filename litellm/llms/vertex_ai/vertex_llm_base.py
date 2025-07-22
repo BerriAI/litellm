@@ -36,7 +36,7 @@ class VertexBase:
         self._credentials: Optional[GoogleCredentialsObject] = None
         self._credentials_project_mapping: Dict[
             Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
-            GoogleCredentialsObject,
+            Tuple[GoogleCredentialsObject, str],
         ] = {}
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
@@ -405,10 +405,20 @@ class VertexBase:
             verbose_logger.debug(
                 f"Cached credentials found for project_id: {project_id}."
             )
-            _credentials = self._credentials_project_mapping[credential_cache_key]
-            verbose_logger.debug("Using cached credentials")
-            credential_project_id = _credentials.quota_project_id or getattr(
-                _credentials, "project_id", None
+            # Retrieve both credentials and cached project_id
+            cached_entry = self._credentials_project_mapping[credential_cache_key]
+            verbose_logger.debug("cached_entry: %s", cached_entry)
+            if isinstance(cached_entry, tuple):
+                _credentials, credential_project_id = cached_entry
+            else:
+                # Backward compatibility with old cache format
+                _credentials = cached_entry
+                credential_project_id = _credentials.quota_project_id or getattr(
+                    _credentials, "project_id", None
+                )
+            verbose_logger.debug(
+                "Using cached credentials for project_id: %s",
+                credential_project_id,
             )
 
         else:
@@ -432,8 +442,11 @@ class VertexBase:
                         project_id
                     )
                 )
-
-            self._credentials_project_mapping[credential_cache_key] = _credentials
+            # Cache the project_id and credentials from load_auth result (resolved project_id)
+            self._credentials_project_mapping[credential_cache_key] = (
+                _credentials,
+                credential_project_id,
+            )
 
         ## VALIDATE CREDENTIALS
         verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
@@ -443,9 +456,27 @@ class VertexBase:
             and isinstance(credential_project_id, str)
         ):
             project_id = credential_project_id
+            # Update cache with resolved project_id for future lookups
+            resolved_cache_key = (cache_credentials, project_id)
+            if resolved_cache_key not in self._credentials_project_mapping:
+                self._credentials_project_mapping[resolved_cache_key] = (
+                    _credentials,
+                    credential_project_id,
+                )
+
+        # Check if credentials are None before accessing attributes
+        if _credentials is None:
+            raise ValueError("Credentials are None after loading")
 
         if _credentials.expired:
+            verbose_logger.debug(
+                f"Credentials expired, refreshing for project_id: {project_id}"
+            )
             self.refresh_auth(_credentials)
+            self._credentials_project_mapping[credential_cache_key] = (
+                _credentials,
+                credential_project_id,
+            )
 
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):

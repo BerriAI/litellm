@@ -7,6 +7,7 @@ import { modelHubColumns } from "./model_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
 import MakeModelPublicForm from "./make_model_public_form";
 import ModelFilters from "./model_filters";
+import UsefulLinksManagement from "./useful_links_management";
 import {
   Card,
   Text,
@@ -236,30 +237,46 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           </div>
           </div>
 
-          {/* Filters */}
-          <ModelFilters
-            modelHubData={modelHubData || []}
-            onFilteredDataChange={handleFilteredDataChange}
-          />
 
-          {/* Model Table */}
-          <ModelDataTable
-            columns={modelHubColumns(
-              showModal,
-              copyToClipboard,
-              publicPage,
-            )}
-            data={filteredData}
-            isLoading={loading}
-            table={tableRef}
-            defaultSorting={[{ id: "model_group", desc: false }]}
-          />
+          {/* Useful Links Management Section for Admins */}
+          {isAdminRole(userRole || "") && (
+            <div className="mt-8 mb-2">
+              <UsefulLinksManagement 
+                accessToken={accessToken}
+                userRole={userRole}
+              />
+            </div>
+          )}
+
+          {/* Model Filters and Table */}
+          <Card>
+            {/* Filters */}
+            <ModelFilters
+              modelHubData={modelHubData || []}
+              onFilteredDataChange={handleFilteredDataChange}
+            />
+
+            {/* Model Table */}
+            <ModelDataTable
+              columns={modelHubColumns(
+                showModal,
+                copyToClipboard,
+                publicPage,
+              )}
+              data={filteredData}
+              isLoading={loading}
+              table={tableRef}
+              defaultSorting={[{ id: "model_group", desc: false }]}
+            />
+          </Card>
 
           <div className="mt-4 text-center space-y-2">
             <Text className="text-sm text-gray-600">
               Showing {filteredData.length} of {modelHubData?.length || 0} models
             </Text>
           </div>
+
+          
         </div>
       ) : (
         <Card className="mx-auto max-w-xl mt-10">

@@ -760,7 +760,7 @@ def test_completion_base64(model):
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-@pytest.mark.parametrize("model", ["claude-3-sonnet-20240229"])
+@pytest.mark.parametrize("model", ["claude-3-5-sonnet-latest"])
 def test_completion_function_plus_image(model):
     litellm.set_verbose = True
 

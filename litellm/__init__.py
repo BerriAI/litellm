@@ -280,6 +280,7 @@ default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
+model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
@@ -327,6 +328,9 @@ custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
+)
+disable_copilot_system_to_assistant: bool = (
+    False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 )
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
@@ -498,7 +502,10 @@ deepgram_models: List = []
 elevenlabs_models: List = []
 dashscope_models: List = []
 moonshot_models: List = []
-
+v0_models: List = []
+morph_models: List = []
+lambda_ai_models: List = []
+recraft_models: List = []
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
@@ -677,6 +684,14 @@ def add_known_models():
             dashscope_models.append(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.append(key)
+        elif value.get("litellm_provider") == "v0":
+            v0_models.append(key)
+        elif value.get("litellm_provider") == "morph":
+            morph_models.append(key)
+        elif value.get("litellm_provider") == "lambda_ai":
+            lambda_ai_models.append(key)
+        elif value.get("litellm_provider") == "recraft":
+            recraft_models.append(key)
 
 
 add_known_models()
@@ -705,7 +720,6 @@ petals_models = [
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
-
 
 model_list = (
     open_ai_chat_completion_models
@@ -762,6 +776,10 @@ model_list = (
     + elevenlabs_models
     + dashscope_models
     + moonshot_models
+    + v0_models
+    + morph_models
+    + lambda_ai_models
+    + recraft_models
 )
 
 model_list_set = set(model_list)
@@ -829,6 +847,10 @@ models_by_provider: dict = {
     "elevenlabs": elevenlabs_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
+    "v0": v0_models,
+    "morph": morph_models,
+    "lambda_ai": lambda_ai_models,
+    "recraft": recraft_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1148,6 +1170,7 @@ from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
+from .llms.v0.chat.transformation import V0ChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients

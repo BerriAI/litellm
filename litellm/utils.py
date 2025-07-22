@@ -902,7 +902,9 @@ def client(original_function):  # noqa: PLR0915
             typed_call_type = None  # unknown call type
 
         modified_kwargs = kwargs.copy()
+
         for callback in litellm.callbacks:
+
             if isinstance(callback, CustomLogger):
                 result = await callback.async_pre_call_deployment_hook(
                     modified_kwargs, typed_call_type
@@ -1332,6 +1334,7 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -6740,6 +6743,8 @@ class ProviderConfigManager:
             return litellm.EmpowerChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
@@ -6834,6 +6839,8 @@ class ProviderConfigManager:
             return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.MOONSHOT == provider:
             return litellm.MoonshotChatConfig()
+        elif litellm.LlmProviders.V0 == provider:
+            return litellm.V0ChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -7149,6 +7156,12 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_generation import (
+                get_recraft_image_generation_config,
+            )
+
+            return get_recraft_image_generation_config(model)
         return None
 
     @staticmethod
