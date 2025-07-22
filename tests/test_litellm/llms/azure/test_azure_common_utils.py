@@ -1421,3 +1421,66 @@ def test_get_azure_ad_token_provider_with_default_azure_credential():
         # Verify the returned token provider works
         token = token_provider()
         assert token == "test-default-azure-token"
+
+
+def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, monkeypatch):
+    """
+    Test that get_azure_ad_token falls back to DefaultAzureCredential when the 
+    service principal method fails but token refresh is enabled. This tests the 
+    complete fallback flow from service principal to DefaultAzureCredential.
+    """
+    # Clear environment variables that might interfere
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    # Reset mocks to ensure clean state
+    setup_mocks["token_provider"].reset_mock()
+
+    # Enable token refresh
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    # Configure get_azure_ad_token_provider to fail first (service principal) 
+    # but succeed on second call (DefaultAzureCredential)
+    def mock_token_provider_side_effect(*args, **kwargs):
+        # If called with azure_credential=DefaultAzureCredential, return a working provider
+        if kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential:
+            return lambda: "mock-default-azure-credential-token"
+        # Otherwise (service principal call), return None to simulate failure
+        return None
+
+    setup_mocks["token_provider"].side_effect = mock_token_provider_side_effect
+
+    # Create test parameters with no other auth methods available
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the success debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Successfully obtained Azure AD token provider using DefaultAzureCredential"
+    )
+
+    # Verify get_azure_ad_token_provider was called twice:
+    # 1. First with just azure_scope (service principal attempt)
+    # 2. Second with azure_credential=DefaultAzureCredential (fallback)
+    assert setup_mocks["token_provider"].call_count == 2
+    
+    # Verify the calls were made with expected parameters
+    calls = setup_mocks["token_provider"].call_args_list
+    
+    # First call should be service principal attempt (no azure_credential)
+    first_call_kwargs = calls[0][1]
+    assert "azure_scope" in first_call_kwargs
+    assert first_call_kwargs.get("azure_credential") is None
+    
+    # Second call should be DefaultAzureCredential attempt
+    second_call_kwargs = calls[1][1]
+    assert "azure_scope" in second_call_kwargs
+    assert second_call_kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential
+
+    # Verify the token is what we expect from our DefaultAzureCredential mock
+    assert token == "mock-default-azure-credential-token"
