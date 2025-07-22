@@ -132,7 +132,6 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_PROXY_ADMIN_NAME,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
-    PROXY_BATCH_POLLING_INTERVAL,
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -539,7 +538,7 @@ async def proxy_shutdown_event():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
     import json
 
     init_verbose_loggers()
@@ -941,7 +940,6 @@ litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Union[Literal["admin", "all"], Dict] = "all"
 proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
 proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
-proxy_batch_polling_interval = PROXY_BATCH_POLLING_INTERVAL
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
 litellm_master_key_hash = None
 disable_spend_logs = False
@@ -1699,7 +1697,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2041,10 +2039,6 @@ class ProxyConfig:
             )
             proxy_budget_rescheduler_max_time = general_settings.get(
                 "proxy_budget_rescheduler_max_time", proxy_budget_rescheduler_max_time
-            )
-            ## BATCH POLLING INTERVAL ##
-            proxy_batch_polling_interval = general_settings.get(
-                "proxy_batch_polling_interval", proxy_batch_polling_interval
             )
             ## BATCH WRITER ##
             proxy_batch_write_at = general_settings.get(
@@ -3570,7 +3564,7 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
                     "interval",
-                    seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
+                    seconds=3600,  # these can run infrequently, as batch jobs take time to complete
                 )
 
             except Exception:
