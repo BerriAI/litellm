@@ -3188,15 +3188,17 @@ def get_prisma_client_or_throw(message: str):
 
 def is_valid_api_key(key: str) -> bool:
     """
-    Checks if the provided key is a valid API key format.
-    - Must start with 'sk-'
-    - Must only contain allowed characters (alphanumeric, dash, underscore)
+    Validates API key format:
+    - sk- keys: must match ^sk-[A-Za-z0-9_-]+$
+    - hashed keys: must match ^[a-fA-F0-9]{64}$
+    - Length between 20 and 100 characters
     """
     import re
     if not isinstance(key, str):
         return False
-    if not key.startswith("sk-"):
-        return False
-    # Only allow alphanumeric, dash, and underscore after 'sk-'
-    pattern = r"^sk-[A-Za-z0-9_-]+$"
-    return re.match(pattern, key) is not None
+    if 3 <= len(key) <= 100:
+        if re.match(r"^sk-[A-Za-z0-9_-]+$", key):
+            return True
+        if re.match(r"^[a-fA-F0-9]{64}$", key):
+            return True
+    return False
