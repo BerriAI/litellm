@@ -567,24 +567,21 @@ class MCPServerManager:
         # If client provided a token, override the server's authentication token
         if client_auth_token and server:
             # Create a copy of the server with client token
-            server_dict = {
-                "server_id": server.server_id,
-                "name": server.name,
-                "url": server.url,
-                "transport": server.transport,
-                "auth_type": server.auth_type,
-                "spec_version": server.spec_version,
-                "authentication_token": client_auth_token,  # Use client token
-                "command": getattr(server, 'command', None),
-                "args": getattr(server, 'args', None),
-                "env": getattr(server, 'env', None)
-            }
-            
-            # Remove None values
-            server_dict = {k: v for k, v in server_dict.items() if v is not None}
-            
             from litellm.types.mcp_server.mcp_server_manager import MCPServer
-            return MCPServer(**server_dict)
+            return MCPServer(
+                server_id=server.server_id,
+                name=server.name,
+                url=server.url,
+                transport=server.transport,
+                auth_type=server.auth_type,
+                spec_version=server.spec_version,
+                authentication_token=client_auth_token,  # Use client token
+                command=getattr(server, 'command', None),
+                args=getattr(server, 'args', None),
+                env=getattr(server, 'env', None),
+                mcp_info=getattr(server, 'mcp_info', None),
+                access_groups=getattr(server, 'access_groups', None)
+            )
             
         return server
         
