@@ -9023,7 +9023,10 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "source": "https://console.cloud.google.com/vertex-ai/publishers/meta/model-garden/llama-3.2-90b-vision-instruct-maas",
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "metadata": {
+            "notes": "VertexAI states that The Llama 3.2 API service is at no cost during public preview, and will be priced as per dollar-per-1M-tokens at GA."
+        }
     },
     "vertex_ai/mistral-large@latest": {
         "max_tokens": 8191,
