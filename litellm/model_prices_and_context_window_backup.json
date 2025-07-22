@@ -10907,7 +10907,7 @@
         "litellm_provider": "qwen",
         "mode": "chat",
         "supports_tool_choice": false
-    },    
+    },      
     "openrouter/switchpoint/router": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
