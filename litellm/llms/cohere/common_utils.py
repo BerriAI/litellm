@@ -55,6 +55,7 @@ class ModelResponseIterator:
         self.content_blocks: List = []
         self.tool_index = -1
         self.json_mode = json_mode
+        self.has_tool_calls = False  # Track if we've seen any tool calls
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -72,6 +73,7 @@ class ModelResponseIterator:
             
             # Handle tool call deltas
             if "tool_call_delta" in chunk:
+                self.has_tool_calls = True  # Mark that we've seen tool calls
                 tool_delta = chunk["tool_call_delta"]
                 tool_index = tool_delta.get("index", 0)
                 
@@ -92,7 +94,8 @@ class ModelResponseIterator:
                 finish_reason = chunk["finish_reason"]
                 
                 # Check if this is a tool call completion
-                if "tool_calls" in chunk and chunk["tool_calls"]:
+                # Either tool_calls are in the final chunk OR we've seen tool calls earlier
+                if ("tool_calls" in chunk and chunk["tool_calls"]) or self.has_tool_calls:
                     finish_reason = "tool_calls"
                     
                 # Handle usage data for final chunk
