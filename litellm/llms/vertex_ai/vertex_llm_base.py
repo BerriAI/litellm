@@ -36,7 +36,7 @@ class VertexBase:
         self._credentials: Optional[GoogleCredentialsObject] = None
         self._credentials_project_mapping: Dict[
             Tuple[Optional[VERTEX_CREDENTIALS_TYPES], Optional[str]],
-            GoogleCredentialsObject,
+            Tuple[GoogleCredentialsObject, str],
         ] = {}
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
@@ -463,6 +463,10 @@ class VertexBase:
                     _credentials,
                     credential_project_id,
                 )
+
+        # Check if credentials are None before accessing attributes
+        if _credentials is None:
+            raise ValueError("Credentials are None after loading")
 
         if _credentials.expired:
             verbose_logger.debug(

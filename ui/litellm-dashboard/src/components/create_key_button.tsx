@@ -48,7 +48,7 @@ import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-
+import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
 
 
 const { Option } = Select;
@@ -181,11 +181,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   const handleCancel = () => {
@@ -194,6 +196,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setSelectedCreateKeyTeam(null);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   useEffect(() => {
@@ -303,6 +306,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         metadata = {
           ...metadata,
           logging: loggingSettings.filter(config => config.callback_name)
+        };
+      }
+      
+      // Add disabled callbacks to the metadata
+      if (disabledCallbacks.length > 0) {
+        // Map display names to internal callback values
+        const mappedDisabledCallbacks = mapDisplayToInternalNames(disabledCallbacks);
+        metadata = {
+          ...metadata,
+          litellm_disabled_callbacks: mappedDisabledCallbacks
         };
       }
       
@@ -866,6 +879,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           value={loggingSettings}
                           onChange={setLoggingSettings}
                           premiumUser={premiumUser}
+                          disabledCallbacks={disabledCallbacks}
+                          onDisabledCallbacksChange={setDisabledCallbacks}
                         />
                       </div>
                     </AccordionBody>

@@ -3951,3 +3951,35 @@ async def test_vertex_ai_deepseek():
         print(f"mock_post.call_args: {mock_post.call_args[0][0]}")
         assert "v1beta1" not in mock_post.call_args[0][0]
         assert "v1" in mock_post.call_args[0][0]
+
+
+def test_gemini_grounding_on_streaming():
+    from litellm import completion
+
+    load_vertex_ai_credentials()
+    # litellm._turn_on_debug()
+    args = {
+        "model": "vertex_ai/gemini-2.0-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What is the weather like on San Francisco today ?",
+                    }
+                ],
+            }
+        ],
+        "stream": True,
+        "tools": [{"googleSearch": {}}],
+        "fallbacks": [],
+    }
+
+    result = completion(**args)
+    vertex_ai_grounding_metadata_shows_up = False
+    for chunk in result:
+        if hasattr(chunk, "vertex_ai_grounding_metadata"):
+            vertex_ai_grounding_metadata_shows_up = True
+        print(chunk)
+    assert vertex_ai_grounding_metadata_shows_up

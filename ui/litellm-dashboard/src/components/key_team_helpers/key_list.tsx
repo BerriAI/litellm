@@ -18,6 +18,7 @@ export interface Team {
 
 export interface KeyResponse {
     token: string;
+    token_id: string;
     key_name: string;
     key_alias: string;
     spend: number;
