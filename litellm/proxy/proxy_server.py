@@ -146,7 +146,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.openai.realtime.handler import RealtimeQueryParams
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
