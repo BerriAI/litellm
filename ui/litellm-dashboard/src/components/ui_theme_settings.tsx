@@ -15,9 +15,8 @@ import {
   message,
   ColorPicker,
   Space,
-  Divider,
 } from "antd";
-import { UploadOutlined, EyeOutlined, ReloadOutlined } from "@ant-design/icons";
+import { UploadOutlined, EyeOutlined } from "@ant-design/icons";
 import type { UploadProps } from 'antd';
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -42,11 +41,12 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
   userRole,
   accessToken,
 }) => {
-  const { colors, updateColors, resetColors } = useTheme();
+  const { colors, updateColors } = useTheme();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [themeConfig, setThemeConfig] = useState<UIThemeConfig>({});
-  const [serverSaveLoading, setServerSaveLoading] = useState(false);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [logoUrlInput, setLogoUrlInput] = useState<string>("");
 
   // Load current theme settings
   useEffect(() => {
@@ -78,6 +78,11 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
         // Update theme context with server values
         if (data.values) {
           updateColors(data.values);
+          // Set logo preview if URL exists
+          if (data.values.logo_url) {
+            setLogoPreview(null); // Clear any file preview
+            setLogoUrlInput(data.values.logo_url);
+          }
         }
         form.setFieldsValue(data.values || {});
       }
@@ -97,30 +102,26 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
     const { file, onSuccess, onError } = options;
     
     try {
-      const formData = new FormData();
-      formData.append('file', file as File);
+      // Convert file to data URL for preview
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        setLogoPreview(dataUrl);
+        form.setFieldsValue({ logo_url: dataUrl });
+        setLogoUrlInput(dataUrl);
+      };
+      reader.readAsDataURL(file as File);
       
-      const proxyBaseUrl = getProxyBaseUrl();
-      const url = proxyBaseUrl ? `${proxyBaseUrl}/upload/logo` : "/upload/logo";
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: formData,
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        form.setFieldsValue({ logo_url: result.file_path });
-        message.success('Logo uploaded successfully');
-        onSuccess?.(result);
-      } else {
-        throw new Error('Upload failed');
-      }
+      // For production scaling, you would typically:
+      // 1. Upload to a CDN (e.g., AWS S3, Cloudinary) and get a public URL
+      // 2. Store only the URL in the database
+      // 3. Use the CDN URL for display
+      // For now, we'll use the data URL for preview
+      message.success('Logo loaded successfully');
+      onSuccess?.({ url: 'data-url' });
     } catch (error) {
-      console.error('Error uploading logo:', error);
-      message.error('Failed to upload logo');
+      console.error('Error loading logo:', error);
+      message.error('Failed to load logo');
       onError?.(error as Error);
     }
   };
@@ -140,7 +141,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       });
 
       if (response.ok) {
-        const result = await response.json();
+        await response.json();
         message.success("UI theme settings updated successfully!");
         setThemeConfig(values);
         updateColors(values);
@@ -176,20 +177,26 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
   }
 
   return (
-    <div className="w-full mx-4 p-4">
-      <Title>UI Theme Customization</Title>
-      <Text className="text-gray-600 mb-4">
-        Customize the appearance of your LiteLLM admin dashboard with custom colors and logo.
-      </Text>
+    <div className="w-full mx-auto max-w-6xl px-6 py-8">
+      <div className="mb-8">
+        <Title className="text-2xl font-bold mb-2">UI Theme Customization</Title>
+        <Text className="text-gray-600">
+          Customize the appearance of your LiteLLM admin dashboard with custom colors and logo.
+        </Text>
+      </div>
 
       {/* Logo Upload Section */}
-      <Card className="mb-4">
-        <Title className="text-lg mb-4">Custom Logo</Title>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <Card className="mb-6 shadow-sm p-6">
+        <div className="mb-6">
+          <Title className="text-xl font-semibold mb-2">Custom Logo</Title>
+          <Text className="text-gray-600">
+            Upload a custom logo or provide a URL to personalize your dashboard.
+          </Text>
+        </div>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div>
-            <Text className="text-gray-600 mb-3">
-              Upload a custom logo or provide a URL to personalize your dashboard.
-            </Text>
+            <Text className="text-sm font-medium text-gray-700 mb-3 block">Upload Options</Text>
             <div className="space-y-3">
               <Upload
                 customRequest={handleLogoUpload}
@@ -197,46 +204,66 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
                 maxCount={1}
                 showUploadList={false}
               >
-                <AntButton icon={<UploadOutlined />} size="large">
+                <AntButton 
+                  icon={<UploadOutlined />} 
+                  size="large"
+                  className="w-full"
+                  style={{ width: '100%' }}
+                >
                   Upload Logo
                 </AntButton>
               </Upload>
               
-              <TextInput
-                placeholder="Or enter logo URL"
-                value={form.getFieldValue('logo_url')}
-                onValueChange={(value) => form.setFieldsValue({ logo_url: value })}
-              />
+              <div>
+                <Text className="text-xs text-gray-500 mb-1 block">Or enter logo URL:</Text>
+                <TextInput
+                  placeholder="https://example.com/logo.png"
+                  value={logoUrlInput}
+                  onValueChange={(value) => {
+                    setLogoUrlInput(value);
+                    form.setFieldsValue({ logo_url: value });
+                    // Clear file preview when URL is entered
+                    if (value && logoPreview) {
+                      setLogoPreview(null);
+                    }
+                  }}
+                  className="w-full"
+                />
+              </div>
             </div>
           </div>
           
           {/* Logo Preview */}
           <div>
-            {form.getFieldValue('logo_url') ? (
-              <div>
-                <Text className="block mb-2 font-medium">Logo Preview:</Text>
+            <Text className="text-sm font-medium text-gray-700 mb-3 block">Preview</Text>
+            {(logoPreview || form.getFieldValue('logo_url')) ? (
+              <div className="bg-gray-50 rounded-lg p-6 min-h-[120px] flex items-center justify-center">
                 <img 
-                  src={form.getFieldValue('logo_url')} 
+                  src={logoPreview || form.getFieldValue('logo_url')} 
                   alt="Logo preview"
-                  className="max-w-full max-h-24 object-contain border border-gray-200 rounded p-2 bg-white"
+                  className="max-w-full max-h-24 object-contain"
                   onError={(e) => {
                     (e.target as HTMLImageElement).style.display = 'none';
+                    setLogoPreview(null);
                   }}
                 />
               </div>
             ) : (
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-                <Text className="text-gray-500">Logo preview will appear here</Text>
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 min-h-[120px] flex items-center justify-center text-center bg-gray-50">
+                <Text className="text-gray-500 text-sm">Logo preview will appear here</Text>
               </div>
             )}
           </div>
         </div>
       </Card>
 
-      <Grid numItems={1} numItemsLg={2} className="gap-4">
+      <Grid numItems={1} numItemsLg={2} className="gap-6">
         {/* Settings Form */}
-        <Card>
-          <Title className="text-lg mb-4">Theme Settings</Title>
+        <Card className="shadow-sm p-6">
+          <div className="mb-6">
+            <Title className="text-xl font-semibold mb-2">Theme Settings</Title>
+            <Text className="text-gray-600">Configure your brand colors</Text>
+          </div>
           
           <Form
             form={form}
@@ -244,91 +271,141 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
             onFinish={handleSave}
             initialValues={themeConfig}
           >
-            <Divider>Brand Colors</Divider>
-            
-            <Form.Item 
-              label="Primary Color"
-              name="brand_color_primary"
-              tooltip="Main brand color used for buttons and accents"
-            >
-              <ColorPicker
-                size="large"
-                value={colors.brand_color_primary}
-                onChange={(color) => handleColorChange('brand_color_primary', color)}
-                showText
-                format="hex"
-              />
-            </Form.Item>
+            <div className="space-y-6">
+              <div className="border-b border-gray-200 pb-4 mb-4">
+                <Text className="text-lg font-medium text-gray-800">Brand Colors</Text>
+              </div>
+              
+              <div className="space-y-5">
+                <Form.Item 
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      Primary Color
+                      <Text className="text-xs text-gray-500 font-normal ml-2">
+                        Main brand color for buttons and accents
+                      </Text>
+                    </span>
+                  }
+                  name="brand_color_primary"
+                  className="mb-0"
+                >
+                  <ColorPicker
+                    size="large"
+                    value={colors.brand_color_primary}
+                    onChange={(color) => handleColorChange('brand_color_primary', color)}
+                    showText
+                    format="hex"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
 
-            <Form.Item 
-              label="Muted Color" 
-              name="brand_color_muted"
-              tooltip="Muted version of the primary color"
-            >
-              <ColorPicker
-                size="large"
-                value={colors.brand_color_muted}
-                onChange={(color) => handleColorChange('brand_color_muted', color)}
-                showText
-                format="hex"
-              />
-            </Form.Item>
+                <Form.Item 
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      Muted Color
+                      <Text className="text-xs text-gray-500 font-normal ml-2">
+                        Softer version of primary
+                      </Text>
+                    </span>
+                  }
+                  name="brand_color_muted"
+                  className="mb-0"
+                >
+                  <ColorPicker
+                    size="large"
+                    value={colors.brand_color_muted}
+                    onChange={(color) => handleColorChange('brand_color_muted', color)}
+                    showText
+                    format="hex"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
 
-            <Form.Item 
-              label="Subtle Color" 
-              name="brand_color_subtle"
-              tooltip="Subtle version of the primary color"
-            >
-              <ColorPicker
-                size="large"
-                value={colors.brand_color_subtle}
-                onChange={(color) => handleColorChange('brand_color_subtle', color)}
-                showText
-                format="hex"
-              />
-            </Form.Item>
+                <Form.Item 
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      Subtle Color
+                      <Text className="text-xs text-gray-500 font-normal ml-2">
+                        Light accent color
+                      </Text>
+                    </span>
+                  }
+                  name="brand_color_subtle"
+                  className="mb-0"
+                >
+                  <ColorPicker
+                    size="large"
+                    value={colors.brand_color_subtle}
+                    onChange={(color) => handleColorChange('brand_color_subtle', color)}
+                    showText
+                    format="hex"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
 
-            <Form.Item 
-              label="Faint Color" 
-              name="brand_color_faint"
-              tooltip="Very light version of the primary color"
-            >
-              <ColorPicker
-                size="large"
-                value={colors.brand_color_faint}
-                onChange={(color) => handleColorChange('brand_color_faint', color)}
-                showText
-                format="hex"
-              />
-            </Form.Item>
+                <Form.Item 
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      Faint Color
+                      <Text className="text-xs text-gray-500 font-normal ml-2">
+                        Very light background color
+                      </Text>
+                    </span>
+                  }
+                  name="brand_color_faint"
+                  className="mb-0"
+                >
+                  <ColorPicker
+                    size="large"
+                    value={colors.brand_color_faint}
+                    onChange={(color) => handleColorChange('brand_color_faint', color)}
+                    showText
+                    format="hex"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
 
-            <Form.Item 
-              label="Emphasis Color" 
-              name="brand_color_emphasis"
-              tooltip="Strong emphasis version of the primary color"
-            >
-              <ColorPicker
-                size="large"
-                value={colors.brand_color_emphasis}
-                onChange={(color) => handleColorChange('brand_color_emphasis', color)}
-                showText
-                format="hex"
-              />
-            </Form.Item>
+                <Form.Item 
+                  label={
+                    <span className="text-sm font-medium text-gray-700">
+                      Emphasis Color
+                      <Text className="text-xs text-gray-500 font-normal ml-2">
+                        Strong emphasis version
+                      </Text>
+                    </span>
+                  }
+                  name="brand_color_emphasis"
+                  className="mb-0"
+                >
+                  <ColorPicker
+                    size="large"
+                    value={colors.brand_color_emphasis}
+                    onChange={(color) => handleColorChange('brand_color_emphasis', color)}
+                    showText
+                    format="hex"
+                    style={{ width: '100%' }}
+                  />
+                </Form.Item>
+              </div>
+            </div>
 
-
-
-            <div className="flex space-x-4">
+            <div className="flex gap-3 mt-8 pt-6 border-t border-gray-200">
               <AntButton
                 type="primary"
                 htmlType="submit"
                 loading={loading}
                 size="large"
+                className="px-6"
+                style={{ backgroundColor: '#1890ff', borderColor: '#1890ff' }}
               >
                 Save Changes
               </AntButton>
               
-              <AntButton onClick={resetToDefaults} size="large">
+              <AntButton 
+                onClick={resetToDefaults} 
+                size="large"
+                className="px-6"
+              >
                 Reset to Defaults
               </AntButton>
             </div>
@@ -336,73 +413,75 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
         </Card>
 
         {/* Live Theme Demo */}
-        <Card>
-          <Title className="text-lg mb-4">
-            <EyeOutlined className="mr-2" />
-            Live Theme Demo
-          </Title>
-          <Text className="text-gray-600 mb-3">
-            See your brand colors in action across various UI components. Changes are applied in real-time!
-          </Text>
+        <Card className="shadow-sm p-6">
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              <EyeOutlined className="text-gray-700" />
+              <Title className="text-xl font-semibold">Live Theme Demo</Title>
+            </div>
+            <Text className="text-gray-600">
+              See your brand colors in action across various UI components. Changes are applied in real-time!
+            </Text>
+          </div>
           
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Demo Buttons & Navigation */}
-            <div className="space-y-4">
-              <div>
-                <Text className="font-medium text-gray-800 mb-2">Buttons</Text>
-                <div className="space-y-2">
-                  <button className="w-full px-3 py-1.5 bg-brand-primary text-white rounded text-sm font-medium hover:opacity-90 transition-opacity">
-                    Primary Button
-                  </button>
-                  <button className="w-full px-3 py-1.5 bg-brand-muted text-white rounded text-sm font-medium hover:opacity-90 transition-opacity">
-                    Secondary Button
-                  </button>
-                  <button className="w-full px-3 py-1.5 border border-brand-primary text-brand-primary rounded text-sm font-medium hover:bg-brand-faint transition-colors">
-                    Outline Button
-                  </button>
-                </div>
+          <div className="space-y-6">
+            {/* Buttons Section */}
+            <div className="bg-gray-50 rounded-lg p-4">
+              <Text className="text-sm font-semibold text-gray-800 mb-3 block">Buttons</Text>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button className="px-4 py-2 bg-brand-primary text-white rounded-md text-sm font-medium hover:opacity-90 transition-opacity shadow-sm">
+                  Primary Button
+                </button>
+                <button className="px-4 py-2 bg-brand-muted text-white rounded-md text-sm font-medium hover:opacity-90 transition-opacity shadow-sm">
+                  Secondary Button
+                </button>
+                <button className="px-4 py-2 border-2 border-brand-primary text-brand-primary rounded-md text-sm font-medium hover:bg-brand-faint transition-colors">
+                  Outline Button
+                </button>
               </div>
-              
-              <div>
-                <Text className="font-medium text-gray-800 mb-2">Navigation Elements</Text>
-                <div className="space-y-1">
-                  <div className="bg-brand-primary text-white px-3 py-1.5 rounded text-sm">
-                    Active Navigation Item
-                  </div>
-                  <div className="text-brand-primary px-3 py-1.5 rounded text-sm border border-brand-subtle">
-                    Navigation Link
-                  </div>
-                  <div className="bg-brand-faint text-brand-emphasis px-3 py-1.5 rounded text-sm">
-                    Highlighted Item
-                  </div>
+            </div>
+            
+            {/* Navigation Elements */}
+            <div className="bg-gray-50 rounded-lg p-4">
+              <Text className="text-sm font-semibold text-gray-800 mb-3 block">Navigation Elements</Text>
+              <div className="space-y-2">
+                <div className="bg-brand-primary text-white px-4 py-2 rounded-md text-sm font-medium shadow-sm">
+                  Active Navigation Item
+                </div>
+                <div className="text-brand-primary px-4 py-2 rounded-md text-sm font-medium border border-brand-subtle hover:bg-brand-faint transition-colors cursor-pointer">
+                  Navigation Link
+                </div>
+                <div className="bg-brand-faint text-brand-emphasis px-4 py-2 rounded-md text-sm font-medium">
+                  Highlighted Item
                 </div>
               </div>
             </div>
             
-            {/* Demo Cards */}
-            <div className="space-y-3">
-              <Text className="font-medium text-gray-800">Cards & Accents</Text>
-              <div className="border-l-4 border-brand-primary bg-brand-faint p-3 rounded-md">
-                <div className="text-brand-emphasis font-medium text-sm">Featured Card</div>
-                <div className="text-gray-600 text-xs mt-1">This card uses your brand colors for accents</div>
-              </div>
-              <div className="bg-brand-subtle text-white p-3 rounded-md">
-                <div className="font-medium text-sm">Branded Section</div>
-                <div className="text-xs opacity-90">Content with brand background</div>
+            {/* Cards & Accents */}
+            <div className="bg-gray-50 rounded-lg p-4">
+              <Text className="text-sm font-semibold text-gray-800 mb-3 block">Cards & Accents</Text>
+              <div className="space-y-3">
+                <div className="border-l-4 border-brand-primary bg-white p-4 rounded-md shadow-sm">
+                  <div className="text-brand-emphasis font-semibold text-sm mb-1">Featured Card</div>
+                  <div className="text-gray-600 text-sm">This card uses your brand colors for accents</div>
+                </div>
+                <div className="bg-brand-subtle text-white p-4 rounded-md shadow-sm">
+                  <div className="font-semibold text-sm mb-1">Branded Section</div>
+                  <div className="text-sm opacity-90">Content with brand background</div>
+                </div>
               </div>
             </div>
           </div>
-
-
           
-          <div className="mt-4 p-3 bg-brand-faint border-l-4 border-brand-emphasis rounded-md">
-            <div className="flex items-center">
-              <div className="w-2 h-2 bg-brand-primary rounded-full mr-2"></div>
-              <Text className="text-brand-emphasis font-medium text-sm">
+          {/* Real-time Preview Indicator */}
+          <div className="mt-6 p-4 bg-brand-faint border-l-4 border-brand-emphasis rounded-md">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-brand-primary rounded-full animate-pulse"></div>
+              <Text className="text-brand-emphasis font-semibold text-sm">
                 Real-time Preview Active
               </Text>
             </div>
-            <Text className="text-gray-600 text-xs mt-1">
+            <Text className="text-gray-600 text-sm mt-1">
               Changes are immediately reflected in this demo and throughout the dashboard.
             </Text>
           </div>
