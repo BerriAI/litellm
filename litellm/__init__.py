@@ -216,6 +216,7 @@ nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 nebius_key: Optional[str] = None
+heroku_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -1151,6 +1152,7 @@ from .llms.azure.azure import (
     AzureOpenAIAssistantsAPIConfig,
 )
 
+from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
