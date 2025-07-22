@@ -425,7 +425,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
             model=model, messages=messages, tools=optional_params.get("tools", [])
         )
-        optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
+
         return {
             "model": model,
             "messages": messages,
@@ -450,7 +452,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 tools=optional_params.get("tools", []),
             )
         )
-        optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
         if self.__class__._is_base_class:
             return {
                 "model": model,
