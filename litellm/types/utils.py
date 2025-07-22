@@ -2315,6 +2315,7 @@ class LlmProviders(str, Enum):
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
+    HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
 
 

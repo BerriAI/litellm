@@ -243,6 +243,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
+                    elif endpoint == "https://api.hyperbolic.xyz/v1":
+                        custom_llm_provider = "hyperbolic"
+                        dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -533,7 +536,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         # DataRobot is OpenAI compatible.
         (
             api_base,
-            dynamic_api_key
+            dynamic_api_key,
         ) = litellm.DataRobotConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
@@ -706,6 +709,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "hyperbolic":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.HyperbolicChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 
