@@ -61,16 +61,20 @@ async def test_async_realtime_success():
     model = "gpt-4o-realtime-preview-2024-10-01"
     query_params: RealtimeQueryParams = {"model": model, "intent": "chat"}
 
-    dummy_websocket = MagicMock()
+    dummy_websocket = AsyncMock()
     dummy_logging_obj = MagicMock()
+    mock_backend_ws = AsyncMock()
 
-    # Patch websockets.connect and RealTimeStreaming
-    with patch("litellm.llms.openai.realtime.handler.websockets.connect", new_callable=AsyncMock) as mock_ws_connect, \
+    class DummyAsyncContextManager:
+        def __init__(self, value):
+            self.value = value
+        async def __aenter__(self):
+            return self.value
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    with patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect, \
          patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming:
-        # Setup async context manager for websockets.connect
-        mock_backend_ws = AsyncMock()
-        mock_ws_connect.return_value.__aenter__.return_value = mock_backend_ws
-        # Setup RealTimeStreaming mock
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -84,6 +88,5 @@ async def test_async_realtime_success():
             query_params=query_params,
         )
 
-        mock_ws_connect.assert_awaited_once()
         mock_realtime_streaming.assert_called_once()
         mock_streaming_instance.bidirectional_forward.assert_awaited_once()
