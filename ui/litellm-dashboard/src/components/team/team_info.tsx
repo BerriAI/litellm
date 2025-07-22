@@ -502,6 +502,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
+                disabledCallbacks={[]}
                 variant="card"
               />
             </Grid>
@@ -803,6 +804,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <LoggingSettingsView
                     loggingConfigs={info.metadata?.logging || []}
+                    disabledCallbacks={[]}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />

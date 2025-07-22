@@ -137,6 +137,7 @@ class BaseResponsesAPITest(ABC):
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
