@@ -1777,6 +1777,8 @@ class UserAPIKeyAuth(
         """
         from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
         return cls(
+            api_key=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+            team_id=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
         )
