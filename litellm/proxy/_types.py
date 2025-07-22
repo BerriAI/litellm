@@ -303,6 +303,11 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
+        # vector stores
+        "/vector_stores",
+        "/v1/vector_stores",
+        "/vector_stores/{vector_store_id}/search",
+        "/v1/vector_stores/{vector_store_id}/search",
     ]
 
     mapped_pass_through_routes = [
@@ -854,7 +859,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
-    
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
@@ -869,7 +874,6 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url"):
                     raise ValueError("url is required for HTTP/SSE transport")
         return values
-
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -886,7 +890,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
-    
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
@@ -901,7 +905,6 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("url"):
                     raise ValueError("url is required for HTTP/SSE transport")
         return values
-
 
 
 class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
@@ -1762,11 +1765,15 @@ class UserAPIKeyAuth(
     @classmethod
     def check_api_key(cls, values):
         if values.get("api_key") is not None:
-            values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+            values.update(
+                {"token": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+            )
             if isinstance(values.get("api_key"), str):
-                values.update({"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))})
+                values.update(
+                    {"api_key": cls._safe_hash_litellm_api_key(values.get("api_key"))}
+                )
         return values
-    
+
     @classmethod
     def _safe_hash_litellm_api_key(cls, api_key: str) -> str:
         """
@@ -1778,6 +1785,7 @@ class UserAPIKeyAuth(
         if api_key.startswith("sk-"):
             return hash_token(api_key)
         from litellm.proxy.auth.handle_jwt import JWTHandler
+
         if JWTHandler.is_jwt(token=api_key):
             return f"hashed-jwt-{hash_token(token=api_key)}"
         return api_key
