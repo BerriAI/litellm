@@ -393,6 +393,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             filter_value_from_dict,
         )
+        from litellm.types.llms.openai import ChatCompletionToolParam
 
         for message in messages:
             message = cast(
