@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -27,14 +28,18 @@ from litellm.types.utils import (
     TranscriptionResponse,
 )
 
+SENSITIVE_DATA_MASKER = SensitiveDataMasker()
+
 if TYPE_CHECKING:
     from langfuse.client import Langfuse, StatefulTraceClient
 
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
+    from litellm.types.utils import StandardCallbackDynamicParams
 else:
     DynamicLoggingCache = Any
     StatefulTraceClient = Any
     Langfuse = Any
+    StandardCallbackDynamicParams = Any
 
 
 class LangFuseLogger:
@@ -524,6 +529,10 @@ class LangFuseLogger:
             tags = self.add_default_langfuse_tags(
                 tags=tags, kwargs=kwargs, metadata=metadata
             )
+            clean_metadata = self._add_standard_callback_dynamic_params_to_metadata(
+                kwargs=kwargs,
+                clean_metadata=clean_metadata,
+            )
 
             session_id = clean_metadata.pop("session_id", None)
             trace_name = cast(Optional[str], clean_metadata.pop("trace_name", None))
@@ -875,6 +884,39 @@ class LangFuseLogger:
 
         verbose_logger.debug(f"Logged guardrail information as span: {span}")
         span.end()
+    
+
+    @staticmethod
+    def _add_standard_callback_dynamic_params_to_metadata(
+        kwargs: dict,
+        clean_metadata: dict
+    ) -> dict:
+        """
+        Add standard callback dynamic params to metadata
+        """
+        from litellm.types.utils import StandardCallbackDynamicParams
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
+        if not standard_callback_dynamic_params:
+            return clean_metadata
+
+        if standard_callback_dynamic_params.get("debug_dynamic_params", False) is True:
+            clean_metadata["standard_callback_dynamic_params"] = LangFuseLogger._get_masked_copy_of_standard_callback_dynamic_params(
+                standard_callback_dynamic_params=standard_callback_dynamic_params
+            )
+
+        return clean_metadata
+    
+    @staticmethod
+    def _get_masked_copy_of_standard_callback_dynamic_params(
+        standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> dict:
+        """
+        Get a masked copy of standard callback dynamic params
+        """
+        copied_standard_callback_dynamic_params: Dict[str, Any] = copy.deepcopy(dict(standard_callback_dynamic_params))
+        return SENSITIVE_DATA_MASKER.mask_dict(copied_standard_callback_dynamic_params)
 
 
 def _add_prompt_to_generation_params(
