@@ -5433,33 +5433,64 @@ def speech(  # noqa: PLR0915
 
 ##### Health Endpoints #######################
 
+class HealthCheckHelpers:
 
-async def ahealth_check_wildcard_models(
-    model: str,
-    custom_llm_provider: str,
-    model_params: dict,
-    litellm_logging_obj: Logging,
-) -> dict:
-    # this is a wildcard model, we need to pick a random model from the provider
-    cheapest_models = pick_cheapest_chat_models_from_llm_provider(
-        custom_llm_provider=custom_llm_provider, n=3
-    )
-    if len(cheapest_models) == 0:
-        raise Exception(
-            f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+    @staticmethod
+    async def ahealth_check_wildcard_models(
+        model: str,
+        custom_llm_provider: str,
+        model_params: dict,
+        litellm_logging_obj: Logging,
+    ) -> dict:
+        # this is a wildcard model, we need to pick a random model from the provider
+        cheapest_models = pick_cheapest_chat_models_from_llm_provider(
+            custom_llm_provider=custom_llm_provider, n=3
         )
-    if len(cheapest_models) > 1:
-        fallback_models = cheapest_models[
-            1:
-        ]  # Pick the last 2 models from the shuffled list
-    else:
-        fallback_models = None
-    model_params["model"] = cheapest_models[0]
-    model_params["litellm_logging_obj"] = litellm_logging_obj
-    model_params["fallbacks"] = fallback_models
-    model_params["max_tokens"] = 1
-    await acompletion(**model_params)
-    return {}
+        if len(cheapest_models) == 0:
+            raise Exception(
+                f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+            )
+        if len(cheapest_models) > 1:
+            fallback_models = cheapest_models[
+                1:
+            ]  # Pick the last 2 models from the shuffled list
+        else:
+            fallback_models = None
+        model_params["model"] = cheapest_models[0]
+        model_params["litellm_logging_obj"] = litellm_logging_obj
+        model_params["fallbacks"] = fallback_models
+        model_params["max_tokens"] = 1
+        await acompletion(**model_params)
+        return {}
+    
+
+    @staticmethod
+    def _update_model_params_with_health_check_tracking_information(
+        model_params: dict,
+    ) -> dict:
+        """
+        Updates the health check model params with tracking information.
+
+        The following is added at this stage:
+            1. `tags`: This helps identify health check calls in the DB.
+            2. `user_api_key_auth`: This helps identify health check calls in the DB.
+                We need this since the DB requires an API Key to track a log in the SpendLogs Table
+        """
+        from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+        _metadata_variable_name = "litellm_metadata"
+        litellm_metadata = {
+            "tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME]
+        }
+        model_params[_metadata_variable_name] = litellm_metadata
+        model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+            data=model_params,
+            user_api_key_dict=UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth(),
+            _metadata_variable_name=_metadata_variable_name,
+        )
+        return model_params
+        
 
 
 async def ahealth_check(
@@ -5491,6 +5522,9 @@ async def ahealth_check(
         }
     """
     # Map modes to their corresponding health check calls
+    #########################################################
+    # Init request with tracking information
+    #########################################################
     litellm_logging_obj = Logging(
         model="",
         messages=[],
@@ -5501,6 +5535,9 @@ async def ahealth_check(
         function_id="1234",
         log_raw_request_response=True,
     )
+    model_params["litellm_logging_obj"] = litellm_logging_obj
+    model_params = HealthCheckHelpers._update_model_params_with_health_check_tracking_information(model_params=model_params)
+    #########################################################
     try:
         model: Optional[str] = model_params.get("model", None)
         if model is None:
@@ -5518,13 +5555,12 @@ async def ahealth_check(
         }  # don't used cached responses for making health check calls
         mode = mode or "chat"
         if "*" in model:
-            return await ahealth_check_wildcard_models(
+            return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
                 litellm_logging_obj=litellm_logging_obj,
             )
-        model_params["litellm_logging_obj"] = litellm_logging_obj
 
         mode_handlers = {
             "chat": lambda: litellm.acompletion(

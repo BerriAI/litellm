@@ -16,18 +16,3 @@ guardrails:
       guardrailVersion: "DRAFT"
       default_on: true
 
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
-  cache: true
-
-  - model_name: gemini/*
-    litellm_params:
-      model: gemini/*
-
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
-
-mcp_servers:
-  # HTTP Streamable Server
-  deepwiki_mcp:
-    url: "https://mcp.deepwiki.com/mcp"
