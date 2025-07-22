@@ -7,32 +7,7 @@ model_list:
 
 # Builtin MCP Servers Configuration
 mcp_builtin_servers:
-  # HTTP/SSE-based builtin servers
-  zapier:
-    url: "https://mcp.zapier.com/api/mcp"
-    transport: "sse"
-    auth_type: "bearer_token"
-    env_key: "ZAPIER_TOKEN"
-    description: "Zapier automation platform integration"
-    enabled: true
-    
-  jira:
-    url: "https://mcp.atlassian.com/v1/sse"
-    transport: "sse"
-    auth_type: "bearer_token"
-    env_key: "JIRA_TOKEN"
-    description: "Atlassian Jira project management integration"
-    enabled: false  # Disabled example
-    
-  github:
-    url: "https://mcp.github.com/mcp"
-    transport: "http"
-    auth_type: "bearer_token"
-    env_key: "GITHUB_TOKEN"
-    description: "GitHub repository and issue management"
-    enabled: true
-    
-  # Stdio-based builtin servers  
+  # Stdio-based builtin servers (working examples)
   calculator:
     transport: "stdio"
     command: "python"
@@ -40,7 +15,33 @@ mcp_builtin_servers:
     description: "Sample calculator MCP server for basic math operations"
     enabled: true
     
-  # Custom local server
+  # HTTP/SSE-based builtin servers (example configuration)
+  # Note: These URLs are examples - replace with actual MCP server endpoints
+  zapier:
+    url: "https://your-mcp-server.com/zapier"
+    transport: "sse"
+    auth_type: "bearer_token"
+    env_key: "ZAPIER_TOKEN"
+    description: "Zapier automation platform integration"
+    enabled: false  # Disabled by default - enable when you have actual server
+    
+  jira:
+    url: "https://your-mcp-server.com/jira"
+    transport: "sse"
+    auth_type: "bearer_token"
+    env_key: "JIRA_TOKEN"
+    description: "Atlassian Jira project management integration"
+    enabled: false  # Disabled by default
+    
+  github:
+    url: "https://your-mcp-server.com/github"
+    transport: "http"
+    auth_type: "bearer_token"
+    env_key: "GITHUB_TOKEN"
+    description: "GitHub repository and issue management"
+    enabled: false  # Disabled by default
+    
+  # Custom local server example
   custom_tool:
     transport: "stdio"
     command: "node"
