@@ -14,7 +14,6 @@ from litellm.integrations.custom_logger import CustomLogger
 
 
 class CustomBatchLogger(CustomLogger):
-
     def __init__(
         self,
         flush_lock: Optional[asyncio.Lock] = None,

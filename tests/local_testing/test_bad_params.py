@@ -44,7 +44,7 @@ def test_completion_invalid_param_cohere():
     except Exception as e:
         assert isinstance(e, litellm.UnsupportedParamsError)
         print("got an exception=", str(e))
-        if " cohere does not support parameters: {'seed': 12}" in str(e):
+        if "cohere does not support parameters: ['seed']" in str(e):
             pass
         else:
             pytest.fail(f"An error occurred {e}")

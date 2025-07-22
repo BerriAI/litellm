@@ -130,9 +130,44 @@ class TestBedrockSd1(BaseImageGenTest):
         return {"model": "bedrock/stability.sd3-large-v1:0"}
 
 
+class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {
+            "model": "bedrock/amazon.nova-canvas-v1:0",
+            "n": 1,
+            "size": "320x320",
+            "imageGenerationConfig": {"cfgScale": 6.5, "seed": 12},
+            "taskType": "TEXT_IMAGE",
+            "aws_region_name": "us-east-1",
+        }
+
+
+class TestBedrockNovaCanvasColorGuidedGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.in_memory_llm_clients_cache = InMemoryCache()
+        return {
+                "model": "bedrock/amazon.nova-canvas-v1:0",
+                "n": 1,
+                "size": "320x320",
+                "imageGenerationConfig": {"cfgScale":6.5,"seed":12},
+                "taskType": "COLOR_GUIDED_GENERATION",
+                "colorGuidedGenerationParams":{"colors":["#FFFFFF"]},
+                "aws_region_name": "us-east-1",
+        }
+
+
 class TestOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "dall-e-3"}
+
+class TestOpenAIGPTImage1(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "gpt-image-1"}
+
+class TestRecraftImageGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "recraft/recraftv3"}
 
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
@@ -140,7 +175,9 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
         litellm.set_verbose = True
         return {
             "model": "azure/dall-e-3-test",
-            "api_version": "2023-09-01-preview",
+            "api_version": "2023-12-01-preview",
+            "api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
+            "api_key": os.getenv("AZURE_SWEDEN_API_KEY"),
             "metadata": {
                 "model_info": {
                     "base_model": "azure/dall-e-3",
@@ -175,6 +212,8 @@ def test_image_generation_azure_dall_e_3():
         pass  # OpenAI randomly raises these errors - skip when they occur
     except litellm.InternalServerError:
         pass
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
             pass
@@ -187,6 +226,7 @@ def test_image_generation_azure_dall_e_3():
 # asyncio.run(test_async_image_generation_openai())
 
 
+@pytest.mark.skip(reason="model EOL")
 @pytest.mark.asyncio
 async def test_aimage_generation_bedrock_with_optional_params():
     try:
@@ -206,3 +246,67 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_gpt_image_1_with_input_fidelity():
+    """Test gpt-image-1 with input_fidelity parameter (mocked)"""
+    from unittest.mock import AsyncMock, patch
+    
+    # Mock OpenAI response
+    mock_openai_response = {
+        "created": 1703658209,
+        "data": [
+            {
+                "url": "https://example.com/generated_image.png"
+            }
+        ]
+    }
+    
+    # Create a proper mock response object
+    class MockResponse:
+        def model_dump(self):
+            return mock_openai_response
+    
+    # Create a mock client with the images.generate method
+    mock_client = AsyncMock()
+    mock_client.images.generate = AsyncMock(return_value=MockResponse())
+    
+    # Capture the actual arguments sent to OpenAI client
+    captured_args = None
+    captured_kwargs = None
+    
+    async def capture_generate_call(*args, **kwargs):
+        nonlocal captured_args, captured_kwargs
+        captured_args = args
+        captured_kwargs = kwargs
+        return MockResponse()
+    
+    mock_client.images.generate.side_effect = capture_generate_call
+    
+    # Mock the _get_openai_client method to return our mock client
+    with patch.object(litellm.main.openai_chat_completions, '_get_openai_client', return_value=mock_client):
+        response = await litellm.aimage_generation(
+            prompt="A cute baby sea otter",
+            model="gpt-image-1",
+            input_fidelity="high",
+            quality="medium",
+            size="1024x1024",
+        )
+        
+        # Validate the response
+        assert response is not None
+        assert response.created == 1703658209
+        assert response.data is not None
+        assert len(response.data) == 1
+        assert response.data[0].url == "https://example.com/generated_image.png"
+        
+        # Validate that the OpenAI client was called with correct parameters
+        mock_client.images.generate.assert_called_once()
+        assert captured_kwargs is not None
+        assert captured_kwargs["model"] == "gpt-image-1"
+        assert captured_kwargs["prompt"] == "A cute baby sea otter"
+        assert captured_kwargs["input_fidelity"] == "high"
+        assert captured_kwargs["quality"] == "medium"
+        assert captured_kwargs["size"] == "1024x1024"
+

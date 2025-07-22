@@ -1,4 +1,4 @@
-# Rerank
+# /rerank
 
 :::tip
 
@@ -111,9 +111,11 @@ curl http://0.0.0.0:4000/rerank \
 
 | Provider    | Link to Usage      |
 |-------------|--------------------|
-| Cohere      |   [Usage](#quick-start)                 |
+| Cohere (v1 + v2 clients)      |   [Usage](#quick-start)                 |
 | Together AI|   [Usage](../docs/providers/togetherai)                 |  
-| Azure AI|   [Usage](../docs/providers/azure_ai)                 |  
+| Azure AI|   [Usage](../docs/providers/azure_ai#rerank-endpoint)                 |  
 | Jina AI|   [Usage](../docs/providers/jina_ai)                 |  
 | AWS Bedrock|   [Usage](../docs/providers/bedrock#rerank-api)                 |  
+| HuggingFace|   [Usage](../docs/providers/huggingface_rerank)                 |  
 | Infinity|   [Usage](../docs/providers/infinity)                 |  
+| vLLM|   [Usage](../docs/providers/vllm#rerank-endpoint)                 |  

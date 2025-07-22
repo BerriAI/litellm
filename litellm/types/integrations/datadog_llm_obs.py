@@ -8,7 +8,9 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 
 class InputMeta(TypedDict):
-    messages: List[Any]
+    messages: List[
+        Dict[str, str]
+    ]  # Relevant Issue: https://github.com/BerriAI/litellm/issues/9494
 
 
 class OutputMeta(TypedDict):
@@ -29,6 +31,7 @@ class LLMMetrics(TypedDict, total=False):
     total_tokens: float
     time_to_first_token: float
     time_per_output_token: float
+    total_cost: float
 
 
 class LLMObsPayload(TypedDict):

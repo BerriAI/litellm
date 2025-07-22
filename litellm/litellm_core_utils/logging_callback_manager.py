@@ -1,8 +1,10 @@
-from typing import Callable, List, Union
+from typing import Callable, List, Set, Type, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import CallbacksByType
 
 
 class LoggingCallbackManager:
@@ -84,6 +86,25 @@ class LoggingCallbackManager:
         self._safe_add_callback_to_list(
             callback=callback, parent_list=litellm._async_failure_callback
         )
+
+    def remove_callback_from_list_by_object(
+        self, callback_list, obj, require_self=True
+    ):
+        """
+        Remove callbacks that are methods of a particular object (e.g., router cleanup)
+        """
+        if not isinstance(callback_list, list):  # Not list -> do nothing
+            return
+
+        if require_self:
+            remove_list = [
+                c for c in callback_list if hasattr(c, "__self__") and c.__self__ == obj
+            ]
+        else:
+            remove_list = [c for c in callback_list if c == obj]
+
+        for c in remove_list:
+            callback_list.remove(c)
 
     def _add_string_callback_to_list(
         self, callback: str, parent_list: List[Union[CustomLogger, Callable, str]]
@@ -205,3 +226,120 @@ class LoggingCallbackManager:
         litellm._async_success_callback = []
         litellm._async_failure_callback = []
         litellm.callbacks = []
+
+    def _get_all_callbacks(self) -> List[Union[CustomLogger, Callable, str]]:
+        """
+        Get all callbacks from litellm.callbacks, litellm.success_callback, litellm.failure_callback, litellm._async_success_callback, litellm._async_failure_callback
+        """
+        return (
+            litellm.callbacks
+            + litellm.success_callback
+            + litellm.failure_callback
+            + litellm._async_success_callback
+            + litellm._async_failure_callback
+        )
+
+    def get_active_additional_logging_utils_from_custom_logger(
+        self,
+    ) -> Set[AdditionalLoggingUtils]:
+        """
+        Get all custom loggers that are instances of the given class type
+
+        Args:
+            class_type: The class type to match against (e.g., AdditionalLoggingUtils)
+
+        Returns:
+            Set[CustomLogger]: Set of custom loggers that are instances of the given class type
+        """
+        all_callbacks = self._get_all_callbacks()
+        matched_callbacks: Set[AdditionalLoggingUtils] = set()
+        for callback in all_callbacks:
+            if isinstance(callback, CustomLogger) and isinstance(
+                callback, AdditionalLoggingUtils
+            ):
+                matched_callbacks.add(callback)
+        return matched_callbacks
+
+    def get_custom_loggers_for_type(
+        self, callback_type: Type[CustomLogger]
+    ) -> List[CustomLogger]:
+        """
+        Get all custom loggers that are instances of the given class type
+        """
+        # ensure we don't have duplicate instances
+        all_callbacks = []
+        for callback in self._get_all_callbacks():
+            if isinstance(callback, callback_type) and callback not in all_callbacks:
+                all_callbacks.append(callback)
+        return all_callbacks
+
+    def callback_is_active(self, callback_type: Type[CustomLogger]) -> bool:
+        """
+        Returns True if any of the active callbacks are of the given type
+        """
+        return any(
+            isinstance(callback, callback_type)
+            for callback in self._get_all_callbacks()
+        )
+
+    def get_callbacks_by_type(self) -> CallbacksByType:
+        """
+        Get all active callbacks categorized by their type (success, failure, success_and_failure).
+
+        Returns:
+            CallbacksByType: Dict with keys 'success', 'failure', 'success_and_failure' containing lists of callback strings
+        """
+        # Get callback lists
+        success_callbacks = set(
+            litellm.success_callback + litellm._async_success_callback
+        )
+        failure_callbacks = set(
+            litellm.failure_callback + litellm._async_failure_callback
+        )
+        general_callbacks = set(litellm.callbacks)
+
+        # Get all unique callbacks
+        all_callbacks = success_callbacks | failure_callbacks | general_callbacks
+
+        result: CallbacksByType = CallbacksByType(
+            success=[], failure=[], success_and_failure=[]
+        )
+
+        for callback in all_callbacks:
+            callback_str = self._get_callback_string(callback)
+
+            is_in_success = callback in success_callbacks
+            is_in_failure = callback in failure_callbacks
+            is_in_general = callback in general_callbacks
+
+            if is_in_general or (is_in_success and is_in_failure):
+                result["success_and_failure"].append(callback_str)
+            elif is_in_success:
+                result["success"].append(callback_str)
+            elif is_in_failure:
+                result["failure"].append(callback_str)
+
+        # final de-duplication
+        result["success"] = list(set(result["success"]))
+        result["failure"] = list(set(result["failure"]))
+        result["success_and_failure"] = list(set(result["success_and_failure"]))
+
+        return result
+
+    def _get_callback_string(self, callback: Union[CustomLogger, Callable, str]) -> str:
+        from litellm.litellm_core_utils.custom_logger_registry import (
+            CustomLoggerRegistry,
+        )
+
+        """Convert a callback to its string representation"""
+        if isinstance(callback, str):
+            return callback
+        elif isinstance(callback, CustomLogger):
+            # Try to get the string representation from the registry
+            callback_str = CustomLoggerRegistry.get_callback_str_from_class_type(
+                type(callback)
+            )
+            return callback_str if callback_str is not None else type(callback).__name__
+        elif callable(callback):
+            return getattr(callback, "__name__", str(callback))
+        return str(callback)

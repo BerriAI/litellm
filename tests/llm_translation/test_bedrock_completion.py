@@ -14,6 +14,7 @@ import litellm.types
 load_dotenv()
 import io
 import os
+import json
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -34,7 +35,7 @@ from litellm import (
 from litellm.llms.bedrock.chat import BedrockLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
-from base_llm_unit_tests import BaseLLMChatTest
+from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 from base_rerank_unit_tests import BaseLLMRerankTest
 from base_embedding_unit_tests import BaseLLMEmbeddingTest
 
@@ -130,7 +131,7 @@ def test_completion_bedrock_guardrails(streaming):
 
             print("TRACE=", response.trace)
         else:
-
+            litellm.set_verbose = True
             response = completion(
                 model="anthropic.claude-v2",
                 messages=[
@@ -955,7 +956,7 @@ def test_bedrock_ptu():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_extra_headers():
+async def test_bedrock_custom_api_base():
     """
     Check if a url with 'modelId' passed in, is created correctly
 
@@ -982,8 +983,46 @@ async def test_bedrock_extra_headers():
         print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
         assert (
             mock_client_post.call_args.kwargs["url"]
-            == "https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
+            == "https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1%3A0/converse"
         )
+        assert "test" in mock_client_post.call_args.kwargs["headers"]
+        assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
+        assert (
+            mock_client_post.call_args.kwargs["headers"]["Authorization"]
+            == "my-test-key"
+        )
+        mock_client_post.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_extra_headers(model):
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/9106
+    """
+    client = AsyncHTTPHandler()
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
+        litellm.set_verbose = True
+        from openai.types.chat import ChatCompletion
+
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                client=client,
+                extra_headers={"test": "hello world", "Authorization": "my-test-key"},
+            )
+        except Exception as e:
+            print(f"error: {e}")
+
+        print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
         assert (
@@ -1031,7 +1070,7 @@ async def test_bedrock_custom_prompt_template():
             pass
 
         print(f"mock_client_post.call_args: {mock_client_post.call_args}")
-        assert "prompt" in mock_client_post.call_args.kwargs["data"]
+        assert "prompt" in json.loads(mock_client_post.call_args.kwargs["data"])
 
         prompt = json.loads(mock_client_post.call_args.kwargs["data"])["prompt"]
         assert prompt == "<|im_start|>user\nWhat's AWS?<|im_end|>"
@@ -1225,6 +1264,56 @@ def test_bedrock_tools_pt_invalid_names():
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
+def test_bedrock_tools_transformation_valid_params():
+    from litellm.types.llms.bedrock import ToolJsonSchemaBlock
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "123-invalid@name",
+                "description": "Invalid name test",
+                "parameters": {
+                    "$id": "https://some/internal/name",
+                    "type": "object",
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+    # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
+    toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert toolJsonSchema is not None
+    print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
+    print(
+        "allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys()
+    )
+    assert set(toolJsonSchema.keys()).issubset(
+        set(ToolJsonSchemaBlock.__annotations__.keys())
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "toolSpec" in result[0]
+    assert result[0]["toolSpec"]["name"] == "a123_invalid_name"
+    assert result[0]["toolSpec"]["description"] == "Invalid name test"
+    assert "inputSchema" in result[0]["toolSpec"]
+    assert "json" in result[0]["toolSpec"]["inputSchema"]
+    assert (
+        result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"]
+        == "string"
+    )
+    assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
+
+
 def test_not_found_error():
     with pytest.raises(litellm.NotFoundError):
         completion(
@@ -1265,7 +1354,9 @@ def test_bedrock_cross_region_inference(model):
     ],
 )
 def test_bedrock_get_base_model(model, expected_base_model):
-    assert litellm.AmazonConverseConfig()._get_base_model(model) == expected_base_model
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    assert BedrockModelInfo.get_base_model(model) == expected_base_model
 
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1982,9 +2073,49 @@ def test_bedrock_mapped_converse_models():
 
 
 def test_bedrock_base_model_helper():
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
     model = "us.amazon.nova-pro-v1:0"
-    litellm.AmazonConverseConfig()._get_base_model(model)
-    assert model == "us.amazon.nova-pro-v1:0"
+    base_model = BedrockModelInfo.get_base_model(model)
+    assert base_model == "amazon.nova-pro-v1:0"
+
+    assert (
+        BedrockModelInfo.get_base_model(
+            "invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+        )
+        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+
+@pytest.mark.parametrize(
+    "model,expected_route",
+    [
+        # Test explicit route prefixes
+        ("invoke/anthropic.claude-3-sonnet-20240229-v1:0", "invoke"),
+        ("converse/anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("converse_like/anthropic.claude-3-sonnet-20240229-v1:0", "converse_like"),
+        # Test models in BEDROCK_CONVERSE_MODELS list
+        ("anthropic.claude-3-5-haiku-20241022-v1:0", "converse"),
+        ("anthropic.claude-v2", "converse"),
+        ("meta.llama3-70b-instruct-v1:0", "converse"),
+        ("mistral.mistral-large-2407-v1:0", "converse"),
+        # Test models with region prefixes
+        ("us.anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("us.meta.llama3-70b-instruct-v1:0", "converse"),
+        # Test default case (should return "invoke")
+        ("amazon.titan-text-express-v1", "invoke"),
+        ("cohere.command-text-v14", "invoke"),
+        ("cohere.command-r-v1:0", "invoke"),
+    ],
+)
+def test_bedrock_route_detection(model, expected_route):
+    """Test all scenarios for BedrockModelInfo.get_bedrock_route"""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    route = BedrockModelInfo.get_bedrock_route(model)
+    assert (
+        route == expected_route
+    ), f"Expected route '{expected_route}' for model '{model}', but got '{route}'"
 
 
 @pytest.mark.parametrize(
@@ -2049,6 +2180,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
         ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
         ("bedrock/meta.llama3-1-8b-instruct:0", True),
         ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/meta.llama3-3-70b-instruct-v1:0", True),
         ("bedrock/amazon.titan-embed-text-v1:0", False),
     ],
 )
@@ -2073,14 +2205,6 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
-    def test_multilingual_requests(self):
-        """
-        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
-
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
         pass
 
     def test_prompt_caching(self):
@@ -2109,6 +2233,19 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         assert cost > 0
 
 
+class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        return {
+            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        }
+
+    def get_base_completion_call_args_with_thinking(self) -> dict:
+        return {
+            "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "thinking": {"type": "enabled", "budget_tokens": 16000},
+        }
+
+
 class TestBedrockConverseChatNormal(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -2123,13 +2260,25 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    def test_multilingual_requests(self):
-        """
-        Bedrock API raises a 400 BadRequest error when the request contains invalid utf-8 sequences.
 
-        Todo: if litellm.modify_params is True ensure it's a valid utf-8 sequence
-        """
+class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
+    def get_base_completion_call_args(self) -> dict:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.add_known_models()
+        return {
+            "model": "bedrock/us.amazon.nova-lite-v1:0",
+            "aws_region_name": "us-east-1",
+        }
+
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
+
+    def test_prompt_caching(self):
+        """
+        TODO: Ensure this test passes our base llm test suite
+        """
 
 
 class TestBedrockRerank(BaseLLMRerankTest):
@@ -2139,6 +2288,16 @@ class TestBedrockRerank(BaseLLMRerankTest):
     def get_base_rerank_call_args(self) -> dict:
         return {
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+        }
+
+
+class TestBedrockCohereRerank(BaseLLMRerankTest):
+    def get_custom_llm_provider(self) -> litellm.LlmProviders:
+        return litellm.LlmProviders.BEDROCK
+
+    def get_base_rerank_call_args(self) -> dict:
+        return {
+            "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/cohere.rerank-v3-5:0",
         }
 
 
@@ -2290,7 +2449,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
         assert (
             mock_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1:0/converse"
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1%3A0/converse"
         )
 
 
@@ -2325,62 +2484,85 @@ def test_bedrock_process_empty_text_blocks():
     assert modified_message["content"][0]["text"] == "Please continue."
 
 
+@pytest.mark.skip(
+    reason="Skipping test due to bedrock changing their response schema support. Come back to this."
+)
 def test_nova_optional_params_tool_choice():
-    litellm.drop_params = True
-    litellm.set_verbose = True
-    litellm.completion(
-        messages=[
-            {"role": "user", "content": "A WWII competitive game for 4-8 players"}
-        ],
-        model="bedrock/us.amazon.nova-pro-v1:0",
-        temperature=0.3,
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "GameDefinition",
-                    "description": "Correctly extracted `GameDefinition` with all the required parameters with correct types",
-                    "parameters": {
-                        "$defs": {
-                            "TurnDurationEnum": {
-                                "enum": ["action", "encounter", "battle", "operation"],
-                                "title": "TurnDurationEnum",
-                                "type": "string",
-                            }
-                        },
-                        "properties": {
-                            "id": {
-                                "anyOf": [{"type": "integer"}, {"type": "null"}],
-                                "default": None,
-                                "title": "Id",
+    try:
+        litellm.drop_params = True
+        litellm.set_verbose = True
+        litellm.completion(
+            messages=[
+                {"role": "user", "content": "A WWII competitive game for 4-8 players"}
+            ],
+            model="bedrock/us.amazon.nova-pro-v1:0",
+            temperature=0.3,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "GameDefinition",
+                        "description": "Correctly extracted `GameDefinition` with all the required parameters with correct types",
+                        "parameters": {
+                            "$defs": {
+                                "TurnDurationEnum": {
+                                    "enum": [
+                                        "action",
+                                        "encounter",
+                                        "battle",
+                                        "operation",
+                                    ],
+                                    "title": "TurnDurationEnum",
+                                    "type": "string",
+                                }
                             },
-                            "prompt": {"title": "Prompt", "type": "string"},
-                            "name": {"title": "Name", "type": "string"},
-                            "description": {"title": "Description", "type": "string"},
-                            "competitve": {"title": "Competitve", "type": "boolean"},
-                            "players_min": {"title": "Players Min", "type": "integer"},
-                            "players_max": {"title": "Players Max", "type": "integer"},
-                            "turn_duration": {
-                                "$ref": "#/$defs/TurnDurationEnum",
-                                "description": "how long the passing of a turn should represent for a game at this scale",
+                            "properties": {
+                                "id": {
+                                    "anyOf": [{"type": "integer"}, {"type": "null"}],
+                                    "default": None,
+                                    "title": "Id",
+                                },
+                                "prompt": {"title": "Prompt", "type": "string"},
+                                "name": {"title": "Name", "type": "string"},
+                                "description": {
+                                    "title": "Description",
+                                    "type": "string",
+                                },
+                                "competitve": {
+                                    "title": "Competitve",
+                                    "type": "boolean",
+                                },
+                                "players_min": {
+                                    "title": "Players Min",
+                                    "type": "integer",
+                                },
+                                "players_max": {
+                                    "title": "Players Max",
+                                    "type": "integer",
+                                },
+                                "turn_duration": {
+                                    "$ref": "#/$defs/TurnDurationEnum",
+                                    "description": "how long the passing of a turn should represent for a game at this scale",
+                                },
                             },
+                            "required": [
+                                "competitve",
+                                "description",
+                                "name",
+                                "players_max",
+                                "players_min",
+                                "prompt",
+                                "turn_duration",
+                            ],
+                            "type": "object",
                         },
-                        "required": [
-                            "competitve",
-                            "description",
-                            "name",
-                            "players_max",
-                            "players_min",
-                            "prompt",
-                            "turn_duration",
-                        ],
-                        "type": "object",
                     },
-                },
-            }
-        ],
-        tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
-    )
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": "GameDefinition"}},
+        )
+    except litellm.APIConnectionError:
+        pass
 
 
 class TestBedrockEmbedding(BaseLLMEmbeddingTest):
@@ -2505,12 +2687,15 @@ async def test_bedrock_document_understanding(image_url):
         },
     ]
 
-    response = await acompletion(
-        model=model,
-        messages=[{"role": "user", "content": image_content}],
-    )
-    assert response is not None
-    assert response.choices[0].message.content != ""
+    try:
+        response = await acompletion(
+            model=model,
+            messages=[{"role": "user", "content": image_content}],
+        )
+        assert response is not None
+        assert response.choices[0].message.content != ""
+    except litellm.ServiceUnavailableError as e:
+        pytest.skip("Skipping test due to ServiceUnavailableError")
 
 
 def test_bedrock_custom_proxy():
@@ -2570,7 +2755,7 @@ def test_bedrock_custom_deepseek():
             # Verify the URL
             assert (
                 mock_post.call_args.kwargs["url"]
-                == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+                == "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
             )
 
             # Verify the request body format
@@ -2658,3 +2843,569 @@ def test_bedrock_top_k_param(model, expected_params):
             assert data["top_k"] == 2
         else:
             assert data["additionalModelRequestFields"] == expected_params
+
+
+def test_bedrock_invoke_provider():
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n"
+        )
+        == "llama"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "us.amazon.nova-pro-v1:0"
+        )
+        == "nova"
+    )
+
+
+def test_bedrock_description_param():
+    from litellm import completion
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/us.amazon.nova-pro-v1:0",
+                messages=[
+                    {"role": "user", "content": "What is the meaning of this poem?"}
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "meaning_reasoning",
+                        "description": "Find the meaning inside a poem",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"meaning": {"type": "string"}},
+                        },
+                    },
+                },
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called_once()
+
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body_str = json.dumps(request_body, indent=4, default=str)
+        print("request_body=", request_body_str)
+
+        assert (
+            "Find the meaning inside a poem" in request_body_str
+        )  # assert description is passed
+
+
+@pytest.mark.parametrize(
+    "sync_mode",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_thinking_in_assistant_message(sync_mode):
+    litellm._turn_on_debug()
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    if sync_mode:
+        client = HTTPHandler()
+    else:
+        client = AsyncHTTPHandler()
+
+    params = {
+        "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Alright, let's get started with resolving this issue about implementing `__len__` for the Pipeline class in scikit-learn.\n\n### Step 1: Explore the repository structure to understand it better\n\nLet's first explore the repository structure to get a better understanding of the codebase:\n\n\nls -la /workspace/scikit-learn__scikit-learn__0.21\n\n\nThis will give us an overview of the top-level directories and files. From there, we can delve deeper into relevant parts of the code.\n\nLet's look at the main organization of the repository first, then we'll locate the Pipeline class, understand how it's currently implemented, and then add the `__len__` method to it.\n\nNext, let's look at the pipeline module, as the issue mentions `pipe[:len(pipe)]`, indicating that there is indexing support for Pipeline, but it lacks a `__len__` method.\n\nSince the issue mentions that Pipeline supports indexing but not `__len__`, I'll check the Pipeline class to understand its implementation.\n\nThe Pipeline class is likely to be in sklearn/pipeline.py or within a pipeline directory. Let's look for it:\n\n\nfind /workspace/scikit-learn__scikit-learn__0.21 -name \"*pipeline*\" -type f | grep -v __pycache__ | grep -v \"\\.pyc$\"\n\n\nThis will help us locate the file containing the Pipeline class.\n\nOnce we've located the file, we'll examine it to understand:\n1. How indexing is currently implemented\n2. Where we need to add the `__len__` method\n3. How the length of a pipeline should be determined\n\nThen, we'll implement the `__len__` method, test our changes to ensure they fix the issue, and verify that our changes don't break existing functionality.\n\nLet's begin by exploring the repository.\n\n### Step 2: Reproduce the error\n\nAfter exploring the repository, I'll create a script to reproduce the error described in the issue. This script will use the code provided in the \"Steps/Code to Reproduce\" section of the issue description.\n\nThen I'll run the script to confirm the error occurs as described, which will help us understand what needs to be fixed.\n\n### Step 3: Fix the issue\n\nOnce I've understood the problem and located the relevant files, I'll modify the code to add the `__len__` method to the Pipeline class. This method should return the number of steps in the pipeline, which is consistent with what a user would expect when calling `len(pipe)`.\n\n### Step 4: Test the fix\n\nAfter implementing the fix, I'll rerun the reproduction script to verify that the error is resolved and `len(pipe)` works correctly.\n\n### Step 5: Consider edge cases\n\nI'll think about potential edge cases like:\n- Empty pipelines\n- Very long pipelines\n- Any other special cases where the `__len__` implementation might behave unexpectedly\n\nI'll add tests for these cases to ensure our implementation handles them correctly.\n\n### Step 6: Comprehensive testing\n\nI'll run the existing tests to ensure our changes don't break any existing functionality, and I'll also write additional tests to specifically test our new `__len__` method.\n\nLet's start with exploring the repository.\n\nLet's start by exploring the repository structure:\n\n\nls -la /workspace/scikit-learn__scikit-learn__0.21\n\n\nNow, let's find the Pipeline class:\n\n\nfind /workspace/scikit-learn__scikit-learn__0.21 -name \"*pipeline*\" -type f | grep -v __pycache__ | grep -v \"\\.pyc$\"\n\n\nBased on the repository structure, let's look at the pipeline implementation:\n\n\ncat /workspace/scikit-learn__scikit-learn__0.21/sklearn/pipeline.py\n\n\nLet's check if there are tests for the Pipeline class:\n\n\nfind /workspace/scikit-learn__scikit-learn__0.21 -name \"*pipeline*test*\" -type f | grep -v __pycache__ | grep -v \"\\.pyc$\"\n\n\nNow, let's create a script to reproduce the error. I'll create a file in the workspace directory and add the code from the issue description:\n\n\ncat > /workspace/reproduce_pipeline_len_error.py << 'EOF'\nfrom sklearn import svm\nfrom sklearn.datasets import samples_generator\nfrom sklearn.feature_selection import SelectKBest\nfrom sklearn.feature_selection import f_regression\nfrom sklearn.pipeline import Pipeline\n\n# generate some data to play with\nX, y = samples_generator.make_classification(\n    n_informative=5, n_redundant=0, random_state=42)\n\nanova_filter = SelectKBest(f_regression, k=5)\nclf = svm.SVC(kernel='linear')\npipe = Pipeline([('anova', anova_filter), ('svc', clf)])\n\nprint(\"Trying to get length of pipeline...\")\ntry:\n    length = len(pipe)\n    print(f\"Length of pipeline: {length}\")\nexcept Exception as e:\n    print(f\"Error: {type(e).__name__}: {e}\")\nEOF\n\n\nLet's run this to confirm the error:\n\n\npython /workspace/reproduce_pipeline_len_error.py\n\n\nNow, let's implement the `__len__` method in the Pipeline class. First, I'll examine the Pipeline class to understand how it's structured and where to add the `__len__` method.\n\nFrom the error we saw above and looking at the pipeline.py file, we should add a `__len__` method to the Pipeline class.\n\nLet's modify the pipeline.py file:\n\n\ncp /workspace/scikit-learn__scikit-learn__0.21/sklearn/pipeline.py /workspace/pipeline.py.backup\n\n\nNow, let's edit the file to add the `__len__` method:\n\n\nsed -n -e '/class Pipeline/,/^class /p' /workspace/scikit-learn__scikit-learn__0.21/sklearn/pipeline.py\n\n\nThis will show us the Pipeline class definition so we can understand where to add the `__len__` method.\n\nBased on what we see, I'll add the `__len__` method to the Pipeline class:\n\n\nsed -i -e '/def __getitem__.*:/a\\\n    def __len__(self):\\\n        \"\"\"Returns the length of the Pipeline.\\\n\\\n        Returns\\\n        -------\\\n        length : int\\\n            The number of steps in the pipeline.\\\n        \"\"\"\\\n        return len(self.steps)\n' /workspace/scikit-learn__scikit-learn__0.21/sklearn/pipeline.py\n\n\nLet's verify that the changes were applied correctly:\n\n\ngrep -A 10 \"__len__\" /workspace/scikit-learn__scikit-learn__0.21/sklearn/pipeline.py\n\n\nNow, let's run our script again to see if the error is fixed:\n\n\npython /workspace/reproduce_pipeline_len_error.py\n\n\nIf the error is fixed, let's test some edge cases by modifying our script:\n\n\ncat > /workspace/test_pipeline_len.py << 'EOF'\nfrom sklearn.pipeline import Pipeline\nfrom sklearn import svm\nfrom sklearn.feature_selection import SelectKBest, f_regression\nfrom sklearn.datasets import samples_generator\nfrom sklearn.preprocessing import StandardScaler\n\n# Test case 1: Normal pipeline\nanova_filter = SelectKBest(f_regression, k=5)\nclf = svm.SVC(kernel='linear')\npipe = Pipeline([('anova', anova_filter), ('svc', clf)])\nprint(f\"Length of normal pipeline: {len(pipe)}\")\n\n# Test case 2: Empty pipeline\nempty_pipe = Pipeline([])\nprint(f\"Length of empty pipeline: {len(empty_pipe)}\")\n\n# Test case 3: Long pipeline\nX, y = samples_generator.make_classification(\n    n_informative=5, n_redundant=0, random_state=42)\n\nsteps = []\nfor i in range(10):\n    steps.append((f'scaler_{i}', StandardScaler()))\nlong_pipe = Pipeline(steps)\nprint(f\"Length of long pipeline: {len(long_pipe)}\")\n\n# Test case 4: Slicing with len\npipe = Pipeline([('anova', anova_filter), ('svc', clf)])\nsliced_pipe = pipe[:len(pipe)]\nprint(f\"Original pipe steps: {[name for name, _ in pipe.steps]}\")\nprint(f\"Sliced pipe steps: {[name for name, _ in sliced_pipe.steps]}\")\nEOF\n\n\nLet's run this test script:\n\n\npython /workspace/test_pipeline_len.py\n\n\nLet's also run the tests for the pipeline module to make sure we haven't broken anything:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest sklearn/tests/test_pipeline.py -v\n\n\nAfter testing the changes, let's update our script once more to test the edge case where we use `len(pipe)` in slicing:\n\n\ncat >> /workspace/test_pipeline_len.py << 'EOF'\n\n# Test case 5: Various slicing operations with len\npipe = Pipeline([\n    ('step1', StandardScaler()),\n    ('step2', SelectKBest(f_regression, k=5)),\n    ('step3', svm.SVC(kernel='linear'))\n])\nprint(f\"\\nOriginal pipe length: {len(pipe)}\")\n\n# Slice from beginning to end\nslice1 = pipe[:len(pipe)]\nprint(f\"pipe[:len(pipe)] steps: {[name for name, _ in slice1.steps]}\")\n\n# Slice from beginning to middle\nslice2 = pipe[:len(pipe)//2]\nprint(f\"pipe[:len(pipe)//2] steps: {[name for name, _ in slice2.steps]}\")\n\n# Slice from middle to end\nslice3 = pipe[len(pipe)//2:]\nprint(f\"pipe[len(pipe)//2:] steps: {[name for name, _ in slice3.steps]}\")\n\n# Slice a subset in the middle\nif len(pipe) >= 3:\n    slice4 = pipe[1:len(pipe)-1]\n    print(f\"pipe[1:len(pipe)-1] steps: {[name for name, _ in slice4.steps]}\")\nEOF\n\n\nLet's run this updated script:\n\n\npython /workspace/test_pipeline_len.py\n\n\nLet's also check all the tests in the sklearn directory to ensure our changes don't break anything:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_pipeline.py\n\n\nBefore we conclude, let's verify that our changes to scikit-learn match the expected functionality:\n\n1. We have implemented the `__len__` method in the Pipeline class\n2. The method returns the number of steps in the pipeline\n3. We have tested that it works for normal, empty, and long pipelines\n4. We have also tested that slicing operations using `len(pipe)` work correctly\n\nSince the issue description mentioned that the repository already supports indexing but not `__len__`, we didn't have to implement indexing. We only needed to add the `__len__` method to make `len(pipe)` work, which we've done.\n\nOur changes are minimal and focused on solving the specific issue described.\n\nFurthermore, to ensure we've done a thorough job, let's run all sklearn tests to make sure we haven't broken anything:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest sklearn/tests/\n\n\nLet's check the full implementation of the Pipeline to understand where `__len__` fits in compared to other methods like `__getitem__`:\n\n\nhead -n 300 /workspace/scikit-learn__scikit-learn__0.21/sklearn/pipeline.py\n\n\nLet's more specifically check the surrounding methods to ensure our addition fits well with the rest of the class:\n\n\ngrep -A 20 \"__getitem__\" /workspace/scikit-learn__scikit-learn__0.21/sklearn/pipeline.py\n\n\nNow, let's also test our changes against the base commit a62775e99f2a5ea3d51db7160fad783f6cd8a4c5, as mentioned in the requirements:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\ngit status\n\n\nHmm, we don't have access to the git repository directly. Let's focus on thoroughly testing our changes then.\n\nLet's run the full test suite for the sklearn module to make sure our changes don't break any existing functionality:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_pipeline.py\n\n\nGreat, now let's create a more comprehensive test script to ensure our `__len__` implementation works in various scenarios:\n\n\ncat > /workspace/comprehensive_pipeline_len_test.py << 'EOF'\n\"\"\"\nComprehensive tests for the __len__ method of Pipeline.\n\"\"\"\nfrom sklearn.pipeline import Pipeline, FeatureUnion\nfrom sklearn import svm\nfrom sklearn.feature_selection import SelectKBest, f_regression\nfrom sklearn.datasets import samples_generator\nfrom sklearn.preprocessing import StandardScaler\nfrom sklearn.decomposition import PCA\n\n# Test case 1: Normal pipeline\nprint(\"Test case 1: Normal pipeline\")\nanova_filter = SelectKBest(f_regression, k=5)\nclf = svm.SVC(kernel='linear')\npipe = Pipeline([('anova', anova_filter), ('svc', clf)])\nprint(f\"Length of normal pipeline: {len(pipe)}\")\nassert len(pipe) == 2, \"Length of normal pipeline should be 2\"\n\n# Test case 2: Empty pipeline\nprint(\"\\nTest case 2: Empty pipeline\")\nempty_pipe = Pipeline([])\nprint(f\"Length of empty pipeline: {len(empty_pipe)}\")\nassert len(empty_pipe) == 0, \"Length of empty pipeline should be 0\"\n\n# Test case 3: Long pipeline\nprint(\"\\nTest case 3: Long pipeline\")\nX, y = samples_generator.make_classification(\n    n_informative=5, n_redundant=0, random_state=42)\n\nsteps = []\nfor i in range(10):\n    steps.append((f'scaler_{i}', StandardScaler()))\nlong_pipe = Pipeline(steps)\nprint(f\"Length of long pipeline: {len(long_pipe)}\")\nassert len(long_pipe) == 10, \"Length of long pipeline should be 10\"\n\n# Test case 4: Pipeline with FeatureUnion\nprint(\"\\nTest case 4: Pipeline with FeatureUnion\")\nunion = FeatureUnion([\n    ('pca', PCA(n_components=1)),\n    ('select', SelectKBest(k=1))\n])\npipe_with_union = Pipeline([\n    ('scaler', StandardScaler()),\n    ('union', union),\n    ('svc', svm.SVC(kernel='linear'))\n])\nprint(f\"Length of pipeline with FeatureUnion: {len(pipe_with_union)}\")\nassert len(pipe_with_union) == 3, \"Length of pipeline with FeatureUnion should be 3\"\n\n# Test case 5: Various slicing operations with len\nprint(\"\\nTest case 5: Various slicing operations with len\")\npipe = Pipeline([\n    ('step1', StandardScaler()),\n    ('step2', SelectKBest(f_regression, k=5)),\n    ('step3', svm.SVC(kernel='linear'))\n])\nprint(f\"Original pipe length: {len(pipe)}\")\nassert len(pipe) == 3, \"Original pipe length should be 3\"\n\n# Slice from beginning to end\nslice1 = pipe[:len(pipe)]\nprint(f\"pipe[:len(pipe)] steps: {[name for name, _ in slice1.steps]}\")\nassert len(slice1) == 3, \"Length of pipe[:len(pipe)] should be 3\"\n\n# Slice from beginning to middle\nslice2 = pipe[:len(pipe)//2]\nprint(f\"pipe[:len(pipe)//2] steps: {[name for name, _ in slice2.steps]}\")\nassert len(slice2) == 1, \"Length of pipe[:len(pipe)//2] should be 1\"\n\n# Slice from middle to end\nslice3 = pipe[len(pipe)//2:]\nprint(f\"pipe[len(pipe)//2:] steps: {[name for name, _ in slice3.steps]}\")\nassert len(slice3) == 2, \"Length of pipe[len(pipe)//2:] should be 2\"\n\n# Slice a subset in the middle\nslice4 = pipe[1:len(pipe)-1]\nprint(f\"pipe[1:len(pipe)-1] steps: {[name for name, _ in slice4.steps]}\")\nassert len(slice4) == 1, \"Length of pipe[1:len(pipe)-1] should be 1\"\n\nprint(\"\\nAll tests passed!\")\nEOF\n\n\nLet's run this comprehensive test:\n\n\npython /workspace/comprehensive_pipeline_len_test.py\n\n\nLet's also run specific tests from the scikit-learn test suite that relate to Pipeline indexing to ensure our changes integrate well:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_pipeline.py::test_pipeline_indexing\n\n\nOh, there might not be a specific test named `test_pipeline_indexing`. Let's look at the available tests in the test_pipeline.py file:\n\n\ngrep -r \"def test_\" /workspace/scikit-learn__scikit-learn__0.21/sklearn/tests/test_pipeline.py\n\n\nLet's run the tests that seem related to pipeline indexing or slicing:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_pipeline.py::test_pipeline_indexing || python -m pytest -xvs sklearn/tests/test_pipeline.py | grep -i \"index\"\n\n\nSince we might not have direct access to specific test names, let's examine the pipeline test file to identify relevant tests:\n\n\ncat /workspace/scikit-learn__scikit-learn__0.21/sklearn/tests/test_pipeline.py | grep -i \"index\\|slicing\\|getitem\"\n\n\nBased on our findings, let's run specific tests that are relevant to our changes:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_pipeline.py::test_pipeline_indexing || python -m pytest -xvs sklearn/tests/test_pipeline.py\n\n\nLet's check if the test_pipeline.py file contains any tests for slicing functionality:\n\n\ncat /workspace/scikit-learn__scikit-learn__0.21/sklearn/tests/test_pipeline.py | grep -A 20 -B 20 \"slicing\\|__getitem__\"\n\n\nLet's modify our comprehensive test script to include more edge cases and ensure it aligns with any existing tests:\n\n\ncat >> /workspace/comprehensive_pipeline_len_test.py << 'EOF'\n\n# Test case 6: Testing on pipeline with make_pipeline\nprint(\"\\nTest case 6: Testing on pipeline with make_pipeline\")\nfrom sklearn.pipeline import make_pipeline\n\npipe = make_pipeline(StandardScaler(), PCA(n_components=2), SelectKBest(k=1))\nprint(f\"Length of make_pipeline: {len(pipe)}\")\nassert len(pipe) == 3, \"Length of make_pipeline should be 3\"\n\n# Test case 7: Testing on nested pipelines\nprint(\"\\nTest case 7: Testing on nested pipelines\")\ninner_pipe = Pipeline([('scaler', StandardScaler()), ('pca', PCA(n_components=2))])\nouter_pipe = Pipeline([('inner', inner_pipe), ('svc', svm.SVC())])\nprint(f\"Length of outer pipeline: {len(outer_pipe)}\")\nassert len(outer_pipe) == 2, \"Length of outer pipeline should be 2\"\n\n# Test case 8: Testing __len__ with negative indexing\nprint(\"\\nTest case 8: Testing __len__ with negative indexing\")\npipe = Pipeline([\n    ('step1', StandardScaler()),\n    ('step2', PCA(n_components=2)),\n    ('step3', SelectKBest(k=1))\n])\nneg_slice = pipe[-len(pipe):]\nprint(f\"pipe[-len(pipe):] steps: {[name for name, _ in neg_slice.steps]}\")\nassert len(neg_slice) == 3, \"Length of pipe[-len(pipe):] should be 3\"\n\nneg_slice2 = pipe[:-len(pipe)]\nprint(f\"pipe[:-len(pipe)] steps: {[name for name, _ in neg_slice2.steps]}\")\nassert len(neg_slice2) == 0, \"Length of pipe[:-len(pipe)] should be 0\"\n\n# Test case 9: Testing complex slicing expressions with len\nprint(\"\\nTest case 9: Testing complex slicing expressions with len\")\npipe = Pipeline([\n    ('step1', StandardScaler()),\n    ('step2', PCA(n_components=2)),\n    ('step3', SelectKBest(k=1)),\n    ('step4', svm.SVC())\n])\ncomplex_slice = pipe[len(pipe)//4:len(pipe)//4*3]\nprint(f\"pipe[len(pipe)//4:len(pipe)//4*3] steps: {[name for name, _ in complex_slice.steps]}\")\nassert len(complex_slice) == 2, \"Length of complex slice should be 2\"\n\nprint(\"\\nAll additional tests passed!\")\nEOF\n\n\nLet's run the updated comprehensive test:\n\n\npython /workspace/comprehensive_pipeline_len_test.py\n\n\nLet's also verify that our implementation doesn't cause any regressions in the scikit-learn test suite:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_pipeline.py\n\n\nNow, let's also run another specific test related to pipeline functionality:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_metaestimators.py | grep -i \"pipeline\"\n\n\nLet's get a deeper understanding of how the Pipeline class is used in tests by examining test files containing pipeline tests:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\ngrep -r \"Pipeline\" --include=\"*.py\" sklearn/tests/ | head -n 20\n\n\nLet's also look for any tests related to pipeline length or slicing:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\ngrep -r \"len(\" --include=\"*.py\" sklearn/tests/ | grep -i \"pipeline\" | head -n 20\n\n\nWith all our tests passing, it appears we've successfully implemented the `__len__` method for the Pipeline class, and it behaves as expected in various scenarios.\n\nLet's summarize what we've done:\n\n1. We located the Pipeline class in sklearn/pipeline.py\n2. We identified that it was missing a `__len__` method, which was causing the error described in the issue\n3. We implemented the `__len__` method to return the length of the pipeline's steps list\n4. We verified our fix with a reproduction script and comprehensive tests\n5. We confirmed that existing scikit-learn tests still pass with our changes\n\nOur implementation is minimal and focused on the specific issue, adding only the `__len__` method without changing any existing functionality.\n\nAt this point we can conclude that the issue has been successfully resolved. The Pipeline class now supports `len(pipe)`, which allows expressions like `pipe[:len(pipe)]` to work correctly.\n\nLet's make sure we've run the specific test for pipeline indexing:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\npython -m pytest -xvs sklearn/tests/test_pipeline.py | grep -i \"indexing\"\n\n\nLet's also check if there are any tests related to `__len__` or length in the pipeline tests:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\ngrep -r \"__len__\\|len(\" --include=\"*.py\" sklearn/tests/test_pipeline.py\n\n\nWith all our checks and tests, we're confident that our implementation of the `__len__` method in the Pipeline class correctly resolves the issue described. The method returns the number of steps in the pipeline, which is the expected behavior for `len(pipe)`.\n\nI believe our solution is complete and correct. The changes we made are minimal and focused on the specific issue, and we've thoroughly tested them to ensure they work as expected in various scenarios.\n\nLet's complete the task by running our comprehensive test one more time:\n\n\npython /workspace/comprehensive_pipeline_len_test.py\n\n\nI think we're good to go. Our implementation of the `__len__` method in the Pipeline class resolves the issue described, allowing expressions like `pipe[:len(pipe)]` to work correctly.\n\nLet's do a final check on the changes we made. The diff should show just the addition of the `__len__` method to the Pipeline class:\n\n\ncd /workspace/scikit-learn__scikit-learn__0.21\ndiff /workspace/pipeline.py.backup sklearn/pipeline.py\n\n\nWith all our checks and tests passing, we've successfully resolved the issue described in the problem statement.\n\nAlright, let's summarize our solution once more:\n\nThe issue was that Pipeline in scikit-learn didn't implement the `__len__` method, which was causing `pipe[:len(pipe)]` to raise an error, even though Pipeline supported indexing.\n\nTo resolve this, we added a `__len__` method to the Pipeline class that returns the number of steps in the pipeline. This allows expressions like `len(pipe)` and `pipe[:len(pipe)]` to work correctly, providing a more consistent and intuitive API for users.\n\nWe thoroughly tested our solution with:\n1. A script to reproduce the original error and confirm our fix\n2. Comprehensive tests for various scenarios, including edge cases\n3. Running the existing scikit-learn test suite to ensure no regressions\n\nThese tests confirm that our solution correctly resolves the issue while maintaining compatibility with the rest of the codebase.\n\nAnd that concludes our implementation.",
+                        "signature": "ErUBCkYIARgCIkDnKEqW20HOxB9jS85ReLznKuKSV88wnAJf/M+y9ge7U+GOWAHd/trgmvpgHpJmOBkeUWUftR5g+81TNmAsDd2EEgxQHv0uMQBMvelCR+saDFvnSSfaNOj3NTVYpyIwG1ddKj5AVnXe382HERyVchmOTdn1ebogEFpXlRE66Mckq57xLSygusq6MwAV/6RvKh28HEuwcXNQn+BPIxQDVCwGGUh5g4fpZ6IgGk3mRg==",
+                    },
+                    {
+                        "type": "text",
+                        "text": "I'll help you implement the `__len__` method for Pipeline in scikit-learn to fix the issue described. Let's start by exploring the repository and understanding the problem better.\n\n## Step 1: Explore the repository structure\n\nLet's first look at the repository structure:",
+                    },
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "Who do you know?"}]},
+        ],
+        "max_tokens": 32768,
+        "thinking": {"type": "enabled", "budget_tokens": 30720},
+    }
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            if sync_mode:
+                response = litellm.completion(**params, client=client)
+            else:
+                response = await litellm.acompletion(**params, client=client)
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+
+        print(mock_post.call_args.kwargs)
+        json_data = mock_post.call_args.kwargs["data"]
+
+        assert (
+            "Alright, let's get started with resolving this issue about implementing"
+            in json_data
+        )
+
+
+@pytest.mark.asyncio
+async def test_bedrock_stream_thinking_content_openwebui():
+    """
+    When merge_reasoning_content_in_choices=True
+
+    The content should be collected as
+
+    ```
+    <think>
+    I am a helpful assistant, the user wants to know who I am
+    </think>
+
+    Hi I am Anthropic, I am a helpful assistant
+
+    ```
+    """
+    response = await litellm.acompletion(
+        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        messages=[{"role": "user", "content": "Hello who is this?"}],
+        stream=True,
+        max_tokens=1080,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        merge_reasoning_content_in_choices=True,
+    )
+    content = ""
+    async for chunk in response:
+        content += chunk.choices[0].delta.content or ""
+
+        # OpenWebUI expects the reasoning_content to be removed, otherwise this will appear as duplicate thinking blocks
+        assert getattr(chunk.choices[0].delta, "reasoning_content", None) is None
+        print(chunk)
+
+    print("collected content", content)
+
+    # Assert that the content follows the expected format with exactly one thinking section
+    think_open_pos = content.find("<think>")
+    think_close_pos = content.find("</think>")
+
+    # Assert there's exactly one opening and closing tag
+    assert think_open_pos >= 0, "Opening <think> tag not found"
+    assert think_close_pos > 0, "Closing </think> tag not found"
+    assert (
+        content.count("<think>") == 1
+    ), "There should be exactly one opening <think> tag"
+    assert (
+        content.count("</think>") == 1
+    ), "There should be exactly one closing </think> tag"
+
+    # Assert the opening tag comes before the closing tag
+    assert (
+        think_open_pos < think_close_pos
+    ), "Opening tag should come before closing tag"
+
+    # Assert there's content between the tags
+    thinking_content = content[think_open_pos + 7 : think_close_pos]
+    assert (
+        len(thinking_content.strip()) > 0
+    ), "There should be content between thinking tags"
+
+    # Assert there's content after the closing tag
+    assert (
+        len(content) > think_close_pos + 8
+    ), "There should be content after the thinking tags"
+    response_content = content[think_close_pos + 8 :].strip()
+    assert (
+        len(response_content) > 0
+    ), "There should be non-empty content after thinking tags"
+
+
+def test_bedrock_application_inference_profile():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    client = HTTPHandler()
+    client2 = HTTPHandler()
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    with patch.object(client, "post") as mock_post, patch.object(
+        client2, "post"
+    ) as mock_post2:
+        try:
+            resp = completion(
+                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                client=client,
+                tools=tools,
+            )
+        except Exception as e:
+            print(e)
+
+        try:
+            resp = completion(
+                model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                client=client2,
+                tools=tools,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        mock_post2.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        json_data = mock_post.call_args.kwargs["data"]
+        assert mock_post.call_args.kwargs["url"].startswith(
+            "https://bedrock-runtime.eu-central-1.amazonaws.com/"
+        )
+        assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
+
+
+def return_mocked_response(model: str):
+    if model == "bedrock/mistral.mistral-large-2407-v1:0":
+        return {
+            "metrics": {"latencyMs": 316},
+            "output": {
+                "message": {
+                    "content": [{"text": "Hello! How are you doing today? How can"}],
+                    "role": "assistant",
+                }
+            },
+            "stopReason": "max_tokens",
+            "usage": {"inputTokens": 5, "outputTokens": 10, "totalTokens": 15},
+        }
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/mistral.mistral-large-2407-v1:0",
+    ],
+)
+@pytest.mark.asyncio()
+async def test_bedrock_max_completion_tokens(model: str):
+    """
+    Tests that:
+    - max_completion_tokens is passed as max_tokens to bedrock models
+    """
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    litellm.set_verbose = True
+
+    client = AsyncHTTPHandler()
+
+    mock_response = return_mocked_response(model)
+    _model = model.split("/")[1]
+    print("\n\nmock_response: ", mock_response)
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+
+        mock_client.assert_called_once()
+        request_body = json.loads(mock_client.call_args.kwargs["data"])
+
+        print("request_body: ", request_body)
+
+        assert request_body == {
+            "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
+            "additionalModelRequestFields": {},
+            "system": [],
+            "inferenceConfig": {"maxTokens": 10},
+        }
+
+
+def test_bedrock_meta_llama_function_calling():
+    """
+    Tests that:
+    - meta llama models support function calling
+    """
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
+    request_args = {
+        "messages": messages,
+        "tools": tools,
+        "model": "bedrock/us.meta.llama4-scout-17b-instruct-v1:0",
+    }
+
+    response = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs=request_args,
+    )
+
+    print(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_bedrock_passthrough(sync_mode: bool):
+    import litellm
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    if sync_mode:
+        response = litellm.llm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
+    else:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
+
+    print(response.text)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse__streaming_passthrough(monkeypatch):
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    import asyncio
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": "Write an article about impact of high inflation to GDP of a country"
+                    }
+                ],
+            }
+        ],
+        "system": [{"text": "You are an economist with access to lots of data"}],
+        "inferenceConfig": {"maxTokens": 100, "temperature": 0.5},
+    }
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        print(mock_callback.call_args.kwargs.keys())
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+        assert mock_callback.call_args.kwargs["kwargs"]["response_cost"] > 0
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_streaming_passthrough(monkeypatch):
+    import litellm
+    import time
+    import asyncio
+    from unittest.mock import MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        # check standard logging payload created
+        print(mock_callback.call_args.kwargs.keys())
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_streaming_passthrough(monkeypatch):
+    import litellm
+    import time
+    import asyncio
+    from unittest.mock import MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        # check standard logging payload created
+        print(mock_callback.call_args.kwargs.keys())
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]

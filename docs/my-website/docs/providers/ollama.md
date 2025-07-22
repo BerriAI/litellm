@@ -202,6 +202,67 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+
+## Using Ollama FIM on `/v1/completions`
+
+LiteLLM supports calling Ollama's `/api/generate` endpoint on `/v1/completions` requests. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm 
+litellm._turn_on_debug() # turn on debug to see the request
+from litellm import completion
+
+response = completion(
+    model="ollama/llama3.1",
+    prompt="Hello, world!",
+    api_base="http://localhost:11434"
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml 
+
+```yaml
+model_list:
+  - model_name: "llama3.1"             
+    litellm_params:
+      model: "ollama/llama3.1"
+      api_base: "http://localhost:11434"
+```
+
+2. Start proxy 
+
+```bash
+litellm --config /path/to/config.yaml --detailed_debug
+
+# RUNNING ON http://0.0.0.0:4000 
+```
+
+3. Test it! 
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="anything", # 👈 PROXY KEY (can be anything, if master_key not set)
+    base_url="http://0.0.0.0:4000" # 👈 PROXY BASE URL
+)
+
+response = client.completions.create(
+    model="ollama/llama3.1",
+    prompt="Hello, world!",
+    api_base="http://localhost:11434"
+)
+print(response)
+```
+</TabItem>
+</Tabs>
+
 ## Using ollama `api/chat` 
 In order to send ollama requests to `POST /api/chat` on your ollama server, set the model prefix to `ollama_chat`
 

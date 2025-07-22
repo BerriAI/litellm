@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Assistants API 
+# /assistants
 
 Covers Threads, Messages, Assistants. 
 
@@ -279,7 +279,7 @@ with run as run:
 curl -X POST 'http://0.0.0.0:4000/threads/{thread_id}/runs' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
+-d '{
       "assistant_id": "asst_6xVZQFFy1Kw87NbnYeNebxTf",
       "stream": true
 }'

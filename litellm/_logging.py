@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import sys
 from datetime import datetime
 from logging import Formatter
 
@@ -40,9 +41,56 @@ class JsonFormatter(Formatter):
         return json.dumps(json_record)
 
 
+# Function to set up exception handlers for JSON logging
+def _setup_json_exception_handlers(formatter):
+    # Create a handler with JSON formatting for exceptions
+    error_handler = logging.StreamHandler()
+    error_handler.setFormatter(formatter)
+
+    # Setup excepthook for uncaught exceptions
+    def json_excepthook(exc_type, exc_value, exc_traceback):
+        record = logging.LogRecord(
+            name="LiteLLM",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg=str(exc_value),
+            args=(),
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+        error_handler.handle(record)
+
+    sys.excepthook = json_excepthook
+
+    # Configure asyncio exception handler if possible
+    try:
+        import asyncio
+
+        def async_json_exception_handler(loop, context):
+            exception = context.get("exception")
+            if exception:
+                record = logging.LogRecord(
+                    name="LiteLLM",
+                    level=logging.ERROR,
+                    pathname="",
+                    lineno=0,
+                    msg=str(exception),
+                    args=(),
+                    exc_info=None,
+                )
+                error_handler.handle(record)
+            else:
+                loop.default_exception_handler(context)
+
+        asyncio.get_event_loop().set_exception_handler(async_json_exception_handler)
+    except Exception:
+        pass
+
+
 # Create a formatter and set it for the handler
 if json_logs:
     handler.setFormatter(JsonFormatter())
+    _setup_json_exception_handlers(JsonFormatter())
 else:
     formatter = logging.Formatter(
         "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
@@ -60,22 +108,38 @@ verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
+ALL_LOGGERS = [
+    logging.getLogger(),
+    verbose_logger,
+    verbose_router_logger,
+    verbose_proxy_logger,
+]
+
+
+def _initialize_loggers_with_handler(handler: logging.Handler):
+    """
+    Initialize all loggers with a handler
+
+    - Adds a handler to each logger
+    - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
+    """
+    for lg in ALL_LOGGERS:
+        lg.handlers.clear()  # remove any existing handlers
+        lg.addHandler(handler)  # add JSON formatter handler
+        lg.propagate = False  # prevent bubbling to parent/root
+
 
 def _turn_on_json():
+    """
+    Turn on JSON logging
+
+    - Adds a JSON formatter to all loggers
+    """
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
-
-    # Define a list of the loggers to update
-    loggers = [verbose_router_logger, verbose_proxy_logger, verbose_logger]
-
-    # Iterate through each logger and update its handlers
-    for logger in loggers:
-        # Remove all existing handlers
-        for h in logger.handlers[:]:
-            logger.removeHandler(h)
-
-        # Add the new handler
-        logger.addHandler(handler)
+    _initialize_loggers_with_handler(handler)
+    # Set up exception handlers
+    _setup_json_exception_handlers(JsonFormatter())
 
 
 def _turn_on_debug():

@@ -17,6 +17,14 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 guardrails:
+  - guardrail_name: general-guard
+    litellm_params:
+      guardrail: aim
+      mode: [pre_call, post_call]
+      api_key: os.environ/AIM_API_KEY
+      api_base: os.environ/AIM_API_BASE
+      default_on: true # Optional
+  
   - guardrail_name: "aporia-pre-guard"
     litellm_params:
       guardrail: aporia  # supported values: "aporia", "lakera"
@@ -45,6 +53,7 @@ guardrails:
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
+- A list of the above values to run multiple modes, e.g. `mode: [pre_call, post_call]`
 
 
 ## 2. Start LiteLLM Gateway 
@@ -155,7 +164,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 **Expected response**
 
-Your response headers will incude `x-litellm-applied-guardrails` with the guardrail applied 
+Your response headers will include `x-litellm-applied-guardrails` with the guardrail applied 
 
 ```
 x-litellm-applied-guardrails: aporia-pre-guard
@@ -192,7 +201,7 @@ Follow this simple workflow to implement and tune guardrails:
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -286,7 +295,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -371,7 +380,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -396,7 +405,7 @@ Monitor which guardrails were executed and whether they passed or failed. e.g. g
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -412,7 +421,7 @@ Use this to control what guardrails run per API Key. In this tutorial we only wa
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
-    -D '{
+    -d '{
             "guardrails": ["aporia-pre-guard", "aporia-post-guard"]
         }
     }'
@@ -452,13 +461,41 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
+### ✨ Tag-based Guardrail Modes
 
+:::info
+
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
+
+:::
+
+Run guardrails based on the user-agent header. This is useful for running pre-call checks on OpenWebUI but only masking in logs for Claude CLI.
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "guardrails_ai-guard"
+    litellm_params:
+      guardrail: guardrails_ai
+      guard_name: "pii_detect" # 👈 Guardrail AI guard name
+      mode:
+        tags:
+            "User-Agent: claude-cli": "logging_only"                 # Claude CLI - only mask in logs
+        default: "pre_call"               # Default mode when no tags match
+      api_base: os.environ/GUARDRAILS_AI_API_BASE # 👈 Guardrails AI API Base. Defaults to "http://0.0.0.0:8000"
+      default_on: true # run on every request
+```
 
 ### ✨ Disable team from turning on/off guardrails
 
 :::info
 
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/#trial)
+✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -524,12 +561,23 @@ guardrails:
   - guardrail_name: string     # Required: Name of the guardrail
     litellm_params:            # Required: Configuration parameters
       guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "presidio", "hide-secrets"
-      mode: Union[string, List[string]]             # Required: One or more of "pre_call", "post_call", "during_call", "logging_only"
+      mode: Union[string, List[string], Mode]             # Required: One or more of "pre_call", "post_call", "during_call", "logging_only"
       api_key: string          # Required: API key for the guardrail service
       api_base: string         # Optional: Base URL for the guardrail service
       default_on: boolean      # Optional: Default False. When set to True, will run on every request, does not need client to specify guardrail in request
     guardrail_info:            # Optional[Dict]: Additional information about the guardrail
       
+```
+
+Mode Specification
+
+```python
+from litellm.types.guardrails import Mode
+
+mode = Mode(
+    tags={"User-Agent: claude-cli": "logging_only"},
+    default="logging_only"
+)
 ```
 
 ### `guardrails` Request Parameter

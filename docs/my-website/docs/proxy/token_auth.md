@@ -102,7 +102,19 @@ curl --location 'http://0.0.0.0:4000/v1/chat/completions' \
 </TabItem>
 </Tabs>
 
-## Advanced - Set Accepted JWT Scope Names 
+## Advanced
+
+### Multiple OIDC providers
+
+Use this if you want LiteLLM to validate your JWT against multiple OIDC providers (e.g. Google Cloud, GitHub Auth)
+
+Set `JWT_PUBLIC_KEY_URL` in your environment to a comma-separated list of URLs for your OIDC providers.
+
+```bash
+export JWT_PUBLIC_KEY_URL="https://demo.duendesoftware.com/.well-known/openid-configuration/jwks,https://accounts.google.com/.well-known/openid-configuration/jwks"
+```
+
+### Set Accepted JWT Scope Names 
 
 Change the string in JWT 'scopes', that litellm evaluates to see if a user has admin access.
 
@@ -114,7 +126,7 @@ general_settings:
     admin_jwt_scope: "litellm-proxy-admin"
 ```
 
-## Tracking End-Users / Internal Users / Team / Org
+### Tracking End-Users / Internal Users / Team / Org
 
 Set the field in the jwt token, which corresponds to a litellm user / team / org.
 
@@ -156,17 +168,19 @@ scope: ["litellm-proxy-admin",...]
 scope: "litellm-proxy-admin ..."
 ```
 
-## Control model access with Teams
+### Control model access with Teams
 
 
 1. Specify the JWT field that contains the team ids, that the user belongs to. 
 
 ```yaml
 general_settings:
-  master_key: sk-1234
+  enable_jwt_auth: True
   litellm_jwtauth:
     user_id_jwt_field: "sub"
     team_ids_jwt_field: "groups" 
+    user_id_upsert: true # add user_id to the db if they don't exist
+    enforce_team_based_model_access: true # don't allow users to access models unless the team has access
 ```
 
 This is assuming your token looks like this:
@@ -205,7 +219,65 @@ OIDC Auth for API: [**See Walkthrough**](https://www.loom.com/share/00fe2deab59a
 - If all checks pass, allow the request
 
 
-## Advanced - Allowed Routes 
+### Custom JWT Validate
+
+Validate a JWT Token using custom logic, if you need an extra way to verify if tokens are valid for LiteLLM Proxy.
+
+#### 1. Setup custom validate function
+
+```python
+from typing import Literal
+
+def my_custom_validate(token: str) -> Literal[True]:
+  """
+  Only allow tokens with tenant-id == "my-unique-tenant", and claims == ["proxy-admin"]
+  """
+  allowed_tenants = ["my-unique-tenant"]
+  allowed_claims = ["proxy-admin"]
+
+  if token["tenant_id"] not in allowed_tenants:
+    raise Exception("Invalid JWT token")
+  if token["claims"] not in allowed_claims:
+    raise Exception("Invalid JWT token")
+  return True
+```
+
+#### 2. Setup config.yaml
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    team_id_jwt_field: "tenant_id"
+    user_id_upsert: True
+    custom_validate: custom_validate.my_custom_validate # 👈 custom validate function
+```
+
+#### 3. Test the flow
+
+**Expected JWT**
+
+```
+{
+  "sub": "my-unique-user",
+  "tenant_id": "INVALID_TENANT",
+  "claims": ["proxy-admin"]
+}
+```
+
+**Expected Response**
+
+```
+{
+  "error": "Invalid JWT token"
+}
+```
+
+
+
+### Allowed Routes 
 
 Configure which routes a JWT can access via the config.
 
@@ -237,7 +309,7 @@ general_settings:
     team_allowed_routes: ["/v1/chat/completions"] # 👈 Set accepted routes
 ```
 
-## Advanced - Caching Public Keys 
+### Caching Public Keys 
 
 Control how long public keys are cached for (in seconds).
 
@@ -251,7 +323,7 @@ general_settings:
     public_key_ttl: 600 # 👈 KEY CHANGE
 ```
 
-## Advanced - Custom JWT Field 
+### Custom JWT Field 
 
 Set a custom field in which the team_id exists. By default, the 'client_id' field is checked. 
 
@@ -263,14 +335,7 @@ general_settings:
     team_id_jwt_field: "client_id" # 👈 KEY CHANGE
 ```
 
-## All Params
-
-[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
-
-
-
-
-## Advanced - Block Teams 
+### Block Teams 
 
 To block all requests for a certain team id, use `/team/block`
 
@@ -297,7 +362,7 @@ curl --location 'http://0.0.0.0:4000/team/unblock' \
 ```
 
 
-## Advanced - Upsert Users + Allowed Email Domains 
+### Upsert Users + Allowed Email Domains 
 
 Allow users who belong to a specific email domain, automatic access to the proxy.
  
@@ -352,11 +417,11 @@ environment_variables:
 
 ### Example Token 
 
-```
+```bash
 {
   "aud": "api://LiteLLM_Proxy",
   "oid": "eec236bd-0135-4b28-9354-8fc4032d543e",
-  "roles": ["litellm.api.consumer"]
+  "roles": ["litellm.api.consumer"] 
 }
 ```
 
@@ -413,9 +478,9 @@ general_settings:
 
 Expected Token:
 
-```
+```bash
 {
-  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"]
+  "scope": ["litellm.api.consumer", "litellm.api.gpt_3_5_turbo"] # can be a list or a space-separated string
 }
 ```
 
@@ -435,3 +500,148 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
   ]
 }'
 ```
+
+## [BETA] Sync User Roles and Teams with IDP
+
+Automatically sync user roles and team memberships from your Identity Provider (IDP) to LiteLLM's database. This ensures that user permissions and team memberships in LiteLLM stay in sync with your IDP.
+
+**Note:** This is in beta and might change unexpectedly.
+
+### Use Cases
+
+- **Role Synchronization**: Automatically update user roles in LiteLLM when they change in your IDP
+- **Team Membership Sync**: Keep team memberships in sync between your IDP and LiteLLM
+- **Centralized Access Management**: Manage all user permissions through your IDP while maintaining LiteLLM functionality
+
+### Setup
+
+#### 1. Configure JWT Role Mapping
+
+Map roles from your JWT token to LiteLLM user roles:
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    team_ids_jwt_field: "groups"
+    roles_jwt_field: "roles"
+    user_id_upsert: true
+    sync_user_role_and_teams: true # 👈 Enable sync functionality
+    jwt_litellm_role_map: # 👈 Map JWT roles to LiteLLM roles
+      - jwt_role: "ADMIN"
+        litellm_role: "proxy_admin"
+      - jwt_role: "USER"
+        litellm_role: "internal_user"
+      - jwt_role: "VIEWER"
+        litellm_role: "internal_user"
+```
+
+#### 2. JWT Role Mapping Spec
+
+- `jwt_role`: The role name as it appears in your JWT token. Supports wildcard patterns using `fnmatch` (e.g., `"ADMIN_*"` matches `"ADMIN_READ"`, `"ADMIN_WRITE"`, etc.)
+- `litellm_role`: The corresponding LiteLLM user role
+
+**Supported LiteLLM Roles:**
+- `proxy_admin`: Full administrative access
+- `internal_user`: Standard user access
+- `internal_user_view_only`: Read-only access
+
+#### 3. Example JWT Token
+
+```json
+{
+  "sub": "user-123",
+  "roles": ["ADMIN"],
+  "groups": ["team-alpha", "team-beta"],
+  "iat": 1234567890,
+  "exp": 1234567890
+}
+```
+
+### How It Works
+
+When a user makes a request with a JWT token:
+
+1. **Role Sync**: 
+   - LiteLLM checks if the user's role in the JWT matches their role in the database
+   - If different, the user's role is updated in LiteLLM's database
+   - Uses the `jwt_litellm_role_map` to convert JWT roles to LiteLLM roles
+
+2. **Team Membership Sync**:
+   - Compares team memberships from the JWT token with the user's current teams in LiteLLM
+   - Adds the user to new teams found in the JWT
+   - Removes the user from teams not present in the JWT
+
+3. **Database Updates**:
+   - Updates happen automatically during the authentication process
+   - No manual intervention required
+
+### Configuration Options
+
+```yaml
+general_settings:
+  enable_jwt_auth: True
+  litellm_jwtauth:
+    # Required fields
+    user_id_jwt_field: "sub"
+    team_ids_jwt_field: "groups"
+    roles_jwt_field: "roles"
+    
+    # Sync configuration
+    sync_user_role_and_teams: true
+    user_id_upsert: true
+    
+    # Role mapping
+    jwt_litellm_role_map:
+      - jwt_role: "AI_ADMIN_*"  # Wildcard pattern
+        litellm_role: "proxy_admin"
+      - jwt_role: "AI_USER"
+        litellm_role: "internal_user"
+```
+
+### Important Notes
+
+- **Performance**: Sync operations happen during authentication, which may add slight latency
+- **Database Access**: Requires database access for user and team updates
+- **Team Creation**: Teams mentioned in JWT tokens must exist in LiteLLM before sync can assign users to them
+- **Wildcard Support**: JWT role patterns support wildcard matching using `fnmatch`
+
+### Testing the Sync Feature
+
+1. **Create a test user with initial role**:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/user/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-d '{
+    "user_id": "user-123",
+    "user_role": "internal_user"
+}'
+```
+
+2. **Make a request with JWT containing different role**:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <JWT_WITH_ADMIN_ROLE>' \
+-d '{
+  "model": "claude-sonnet-4-20250514",
+  "messages": [{"role": "user", "content": "Hello"}]
+}'
+```
+
+3. **Verify the role was updated**:
+
+```bash
+curl -X GET 'http://0.0.0.0:4000/user/info?user_id=user-123' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>'
+```
+
+## All JWT Params
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
+
+

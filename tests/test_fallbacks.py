@@ -3,7 +3,7 @@
 import pytest
 import asyncio
 import aiohttp
-from large_text import text
+from tests.large_text import text
 import time
 from typing import Optional
 
@@ -154,6 +154,29 @@ async def test_chat_completion_with_retries():
         print(f"headers: {headers}")
         assert headers["x-litellm-attempted-retries"] == "1"
         assert headers["x-litellm-max-retries"] == "50"
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_with_fallbacks():
+    """
+    make chat completion call with prompt > context window. expect it to work with fallback
+    """
+    async with aiohttp.ClientSession() as session:
+        model = "badly-configured-openai-endpoint"
+        messages = [
+            {"role": "system", "content": text},
+            {"role": "user", "content": "Who was Alexander?"},
+        ]
+        response, headers = await chat_completion(
+            session=session,
+            key="sk-1234",
+            model=model,
+            messages=messages,
+            fallbacks=["fake-openai-endpoint-5"],
+            return_headers=True,
+        )
+        print(f"headers: {headers}")
+        assert headers["x-litellm-attempted-fallbacks"] == "1"
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,5 @@
 "use client";
-
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
 import {
   Card,
@@ -18,30 +17,63 @@ import {
   Modal,
   Form,
   Input,
-  InputNumber,
   Select,
   message,
   Radio,
 } from "antd";
+import NumericalInput from "./shared/numerical_input";
 import { unfurlWildcardModelsInList, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import SchemaFormFields from './common_components/check_openapi_schema';
 import {
   keyCreateCall,
   slackBudgetAlertsHealthCheck,
   modelAvailableCall,
   getGuardrailsList,
+  proxyBaseUrl,
+  getPossibleUserRoles,
+  userFilterUICall,
+  keyCreateServiceAccountCall,
+  fetchMCPAccessGroups,
 } from "./networking";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
+import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
+import { Team } from "./key_team_helpers/key_list";
+import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Tooltip } from 'antd';
+import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
+import Createuser from "./create_user_button";
+import debounce from 'lodash/debounce';
+import { rolesWithWriteAccess } from '../utils/roles';
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
+
 
 const { Option } = Select;
 
 interface CreateKeyProps {
   userID: string;
-  team: any | null;
+  team: Team | null;
   userRole: string | null;
   accessToken: string;
   data: any[] | null;
-  setData: React.Dispatch<React.SetStateAction<any[] | null>>;
+  teams: Team[] | null;
+  addKey: (data: any) => void;
+  premiumUser?: boolean;
+}
+
+interface User {
+  user_id: string;
+  user_email: string;
+  role?: string;
+}
+
+interface UserOption {
+  label: string;
+  value: string;
+  user: User;
 }
 
 const getPredefinedTags = (data: any[] | null) => {
@@ -68,14 +100,66 @@ const getPredefinedTags = (data: any[] | null) => {
   return uniqueTags;
 }
 
+export const fetchTeamModels = async (userID: string, userRole: string, accessToken: string, teamID: string | null): Promise<string[]> => {
+  try {
+    if (userID === null || userRole === null) {
+      return [];
+    }
+
+    if (accessToken !== null) {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole,
+        true,
+        teamID,
+        true
+      );
+      let available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      console.log("available_model_names:", available_model_names);
+      return available_model_names;
+    }
+    return [];
+  } catch (error) {
+    console.error("Error fetching user models:", error);
+    return [];
+  }
+};
+
+export const fetchUserModels = async (userID: string, userRole: string, accessToken: string, setUserModels: (models: string[]) => void) => {
+  try {
+    if (userID === null || userRole === null) {
+      return;
+    }
+
+    if (accessToken !== null) {
+      const model_available = await modelAvailableCall(
+        accessToken,
+        userID,
+        userRole
+      );
+      let available_model_names = model_available["data"].map(
+        (element: { id: string }) => element.id
+      );
+      console.log("available_model_names:", available_model_names);
+      setUserModels(available_model_names);
+    }
+  } catch (error) {
+    console.error("Error fetching user models:", error);
+  }
+};
 
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   team,
+  teams,
   userRole,
   accessToken,
   data,
-  setData,
+  addKey,
+  premiumUser = false,
 }) => {
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -86,44 +170,57 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
+  const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
+  const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
+  const [newlyCreatedUserId, setNewlyCreatedUserId] = useState<string | null>(null);
+  const [possibleUIRoles, setPossibleUIRoles] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
+    setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiKey(null);
+    setSelectedCreateKeyTeam(null);
     form.resetFields();
+    setLoggingSettings([]);
+    setDisabledCallbacks([]);
   };
 
   useEffect(() => {
-    const fetchUserModels = async () => {
-      try {
-        if (userID === null || userRole === null) {
-          return;
-        }
-
-        if (accessToken !== null) {
-          const model_available = await modelAvailableCall(
-            accessToken,
-            userID,
-            userRole
-          );
-          let available_model_names = model_available["data"].map(
-            (element: { id: string }) => element.id
-          );
-          console.log("available_model_names:", available_model_names);
-          setUserModels(available_model_names);
-        }
-      } catch (error) {
-        console.error("Error fetching user models:", error);
-      }
-    };
-
-    fetchUserModels();
+    if (userID && userRole && accessToken) {
+      fetchUserModels(userID, userRole, accessToken, setUserModels);
+    }
   }, [accessToken, userID, userRole]);
+
+  const fetchMcpAccessGroups = async () => {
+    try {
+      if (accessToken == null) {
+        return;
+      }
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchMcpAccessGroups();
+  }, [accessToken]);
+
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -140,6 +237,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
     fetchGuardrails();
   }, [accessToken]);
+
+  // Fetch possible user roles when component mounts
+  useEffect(() => {
+    const fetchPossibleRoles = async () => {
+      try {
+        if (accessToken) {
+          // Check if roles are cached in session storage
+          const cachedRoles = sessionStorage.getItem('possibleUserRoles');
+          if (cachedRoles) {
+            setPossibleUIRoles(JSON.parse(cachedRoles));
+          } else {
+            const availableUserRoles = await getPossibleUserRoles(accessToken);
+            sessionStorage.setItem('possibleUserRoles', JSON.stringify(availableUserRoles));
+            setPossibleUIRoles(availableUserRoles);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching possible user roles:", error);
+      }
+    };
+    
+    fetchPossibleRoles();
+  }, [accessToken]);
+
+  // Check if team selection is required
+  const isTeamSelectionRequired = modelsToPick.includes('no-default-models');
+  const isFormDisabled = isTeamSelectionRequired && !selectedCreateKeyTeam;
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
@@ -161,31 +285,97 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setIsModalVisible(true);
       
       if(keyOwner === "you"){
-        formValues.user_id = userID 
+        formValues.user_id = userID
       }
+      
+      // Handle metadata for all key types
+      let metadata: Record<string, any> = {};
+      try {
+        metadata = JSON.parse(formValues.metadata || "{}");
+      } catch (error) {
+        console.error("Error parsing metadata:", error);
+      }
+      
       // If it's a service account, add the service_account_id to the metadata
       if (keyOwner === "service_account") {
-        // Parse existing metadata or create an empty object
-        let metadata: Record<string, any> = {};
-        try {
-          metadata = JSON.parse(formValues.metadata || "{}");
-        } catch (error) {
-          console.error("Error parsing metadata:", error);
-        }
         metadata["service_account_id"] = formValues.key_alias;
-        // Update the formValues with the new metadata
-        formValues.metadata = JSON.stringify(metadata);
       }
 
-      const response = await keyCreateCall(accessToken, userID, formValues);
+      // Add logging settings to the metadata
+      if (loggingSettings.length > 0) {
+        metadata = {
+          ...metadata,
+          logging: loggingSettings.filter(config => config.callback_name)
+        };
+      }
+      
+      // Add disabled callbacks to the metadata
+      if (disabledCallbacks.length > 0) {
+        // Map display names to internal callback values
+        const mappedDisabledCallbacks = mapDisplayToInternalNames(disabledCallbacks);
+        metadata = {
+          ...metadata,
+          litellm_disabled_callbacks: mappedDisabledCallbacks
+        };
+      }
+      
+      // Update the formValues with the final metadata
+      formValues.metadata = JSON.stringify(metadata);
+
+
+      // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
+      if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
+        formValues.object_permission = {
+          vector_stores: formValues.allowed_vector_store_ids
+        };
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_vector_store_ids;
+      }
+
+      // Transform allowed_mcp_servers_and_groups into object_permission format
+      if (formValues.allowed_mcp_servers_and_groups && (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 || formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0)) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+        if (servers && servers.length > 0) {
+          formValues.object_permission.mcp_servers = servers;
+        }
+        if (accessGroups && accessGroups.length > 0) {
+          formValues.object_permission.mcp_access_groups = accessGroups;
+        }
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_mcp_servers_and_groups;
+      }
+
+      // Transform allowed_mcp_access_groups into object_permission format
+      if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_mcp_access_groups;
+      }
+      let response;
+      if (keyOwner === "service_account") {
+        response = await keyCreateServiceAccountCall(accessToken, formValues);
+      } else {
+        response = await keyCreateCall(accessToken, userID, formValues);
+      }
 
       console.log("key create Response:", response);
-      setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
+      
+      // Add the data to the state in the parent component
+      // Also directly update the keys list in AllKeysTable without an API call
+      addKey(response)
+      
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
       message.success("API Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
+
     } catch (error) {
       console.log("error in create key:", error);
       message.error(`Error creating the key: ${error}`);
@@ -197,40 +387,80 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   };
 
   useEffect(() => {
-    let tempModelsToPick = [];
+    if (userID && userRole && accessToken) {
+      fetchTeamModels(userID, userRole, accessToken, selectedCreateKeyTeam?.team_id ?? null).then((models) => {
+        let allModels = Array.from(new Set([...(selectedCreateKeyTeam?.models ?? []), ...models]));
+        setModelsToPick(allModels);
+      });
+    }
+    form.setFieldValue('models', []);
+  }, [selectedCreateKeyTeam, accessToken, userID, userRole]);
 
-    if (team) {
-      if (team.models.length > 0) {
-        if (team.models.includes("all-proxy-models")) {
-          // if the team has all-proxy-models show all available models
-          tempModelsToPick = userModels;
-        } else {
-          // show team models
-          tempModelsToPick = team.models;
-        }
-      } else {
-        // show all available models if the team has no models set
-        tempModelsToPick = userModels;
-      }
-    } else {
-      // no team set, show all available models
-      tempModelsToPick = userModels;
+  // Add a callback function to handle user creation
+  const handleUserCreated = (userId: string) => {
+    setNewlyCreatedUserId(userId);
+    form.setFieldsValue({ user_id: userId });
+    setIsCreateUserModalVisible(false);
+  };
+
+  const fetchUsers = async (searchText: string): Promise<void> => {
+    if (!searchText) {
+      setUserOptions([]);
+      return;
     }
 
-    tempModelsToPick = unfurlWildcardModelsInList(tempModelsToPick, userModels);
+    setUserSearchLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.append('user_email', searchText); // Always search by email
+      if (accessToken == null) {
+        return;
+      }
+      const response = await userFilterUICall(accessToken, params);
+      
+      const data: User[] = response;
+      const options: UserOption[] = data.map(user => ({
+        label: `${user.user_email} (${user.user_id})`,
+        value: user.user_id,
+        user
+      }));
+      
+      setUserOptions(options);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      message.error('Failed to search for users');
+    } finally {
+      setUserSearchLoading(false);
+    }
+  };
 
-    setModelsToPick(tempModelsToPick);
-  }, [team, userModels]);
+  const debouncedSearch = useCallback(
+    debounce((text: string) => fetchUsers(text), 300),
+    [accessToken]
+  );
+
+  const handleUserSearch = (value: string): void => {
+    debouncedSearch(value);
+  };
+
+  const handleUserSelect = (_value: string, option: UserOption): void => {
+    const selectedUser = option.user;
+    form.setFieldsValue({
+      user_id: selectedUser.user_id
+    });
+  };
 
   return (
     <div>
-      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
-        + Create New Key
-      </Button>
+      {userRole && rolesWithWriteAccess.includes(userRole) && (
+        <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+          + Create New Key
+        </Button>
+      )}
       <Modal
-        title="Create Key"
+        // title="Create Key"
         visible={isModalVisible}
-        width={800}
+        width={1000}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
@@ -242,8 +472,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           wrapperCol={{ span: 16 }}
           labelAlign="left"
         >
-          <>
-            <Form.Item label="Owned By" className="mb-4">
+          {/* Section 1: Key Ownership */}
+          <div className="mb-8">
+            <Title className="mb-4">Key Ownership</Title>
+            <Form.Item 
+              label={
+                <span>
+                  Owned By{' '}
+                  <Tooltip title="Select who will own this API key">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              } 
+              className="mb-4"
+            >
               <Radio.Group
                 onChange={(e) => setKeyOwner(e.target.value)}
                 value={keyOwner}
@@ -254,60 +496,123 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               </Radio.Group>
             </Form.Item>
 
+            {keyOwner === "another_user" && (
+              <Form.Item
+                label={
+                  <span>
+                    User ID{' '}
+                    <Tooltip title="The user who will own this key and be responsible for its usage">
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="user_id"
+                className="mt-4"
+                rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
+              >
+                <div>
+                  <div style={{ display: 'flex', marginBottom: '8px' }}>
+                    <Select
+                      showSearch
+                      placeholder="Type email to search for users"
+                      filterOption={false}
+                      onSearch={handleUserSearch}
+                      onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
+                      options={userOptions}
+                      loading={userSearchLoading}
+                      allowClear
+                      style={{ width: '100%' }}
+                      notFoundContent={userSearchLoading ? 'Searching...' : 'No users found'}
+                    />
+                    <Button2 
+                      onClick={() => setIsCreateUserModalVisible(true)}
+                      style={{ marginLeft: '8px' }}
+                    >
+                      Create User
+                    </Button2>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Search by email to find users
+                  </div>
+                </div>
+              </Form.Item>
+            )}
             <Form.Item
-              label="User ID"
-              name="user_id"
-              hidden={keyOwner !== "another_user"}
-              valuePropName="user_id"
-              className="mt-8"
-              rules={[{ required: keyOwner === "another_user", message: `Please input the user ID of the user you are assigning the key to` }]}
-              help={"Get User ID - Click on the 'Users' tab in the sidebar."}
+              label={
+                <span>
+                  Team{' '}
+                  <Tooltip title="The team this key belongs to, which determines available models and budget limits">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
+              name="team_id"
+              initialValue={team ? team.team_id : null}
+              className="mt-4"
             >
-              <TextInput 
-                placeholder="User ID" 
-                onChange={(e) => form.setFieldValue('user_id', e.target.value)}
+              <TeamDropdown 
+                teams={teams} 
+                onChange={(teamId) => {
+                  const selectedTeam = teams?.find(t => t.team_id === teamId) || null;
+                  setSelectedCreateKeyTeam(selectedTeam);
+                }}
               />
             </Form.Item>
 
+          </div>
+
+          {/* Show message when team selection is required */}
+          {isFormDisabled && (
+            <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
+              <Text className="text-blue-800 text-sm">
+                Please select a team to continue configuring your API key. If you do not see any teams, please contact your Proxy Admin to either provide you with access to models or to add you to a team.
+              </Text>
+            </div>
+          )}
+
+          {/* Section 2: Key Details */}
+          {!isFormDisabled && (
+            <div className="mb-8">
+              <Title className="mb-4">Key Details</Title>
             <Form.Item
-              label={keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}
+              label={
+                <span>
+                  {keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}{' '}
+                  <Tooltip title={keyOwner === "you" || keyOwner === "another_user" ? 
+                    "A descriptive name to identify this key" : 
+                    "Unique identifier for this service account"}>
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="key_alias"
               rules={[{ required: true, message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}` }]}
-              help={keyOwner === "you" ? "required" : "IDs can include letters, numbers, and hyphens"}
+              help="required"
             >
               <TextInput placeholder="" />
             </Form.Item>
+            
             <Form.Item
-              label="Team ID"
-              name="team_id"
-              hidden={keyOwner !== "another_user"}
-              initialValue={team ? team["team_id"] : null}
-              valuePropName="team_id"
-              className="mt-8"
-            >
-              <TextInput defaultValue={team ? team["team_id"] : null} onChange={(e) => form.setFieldValue('team_id', e.target.value)}/>
-            </Form.Item>
-
-            <Form.Item
-              label="Models"
+              label={
+                <span>
+                  Models{' '}
+                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
               name="models"
               rules={[{ required: true, message: "Please select a model" }]}
               help="required"
+              className="mt-4"
             >
               <Select
                 mode="multiple"
                 placeholder="Select models"
                 style={{ width: "100%" }}
                 onChange={(values) => {
-                  // Check if "All Team Models" is selected
-                  const isAllTeamModelsSelected =
-                    values.includes("all-team-models");
-
-                  // If "All Team Models" is selected, deselect all other models
-                  if (isAllTeamModelsSelected) {
-                    const newValues = ["all-team-models"];
-                    // You can call the form's setFieldsValue method to update the value
-                    form.setFieldsValue({ models: newValues });
+                  if (values.includes("all-team-models")) {
+                    form.setFieldsValue({ models: ["all-team-models"] });
                   }
                 }}
               >
@@ -321,154 +626,332 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 ))}
               </Select>
             </Form.Item>
-            <Accordion className="mt-20 mb-8">
-              <AccordionHeader>
-                <b>Optional Settings</b>
-              </AccordionHeader>
-              <AccordionBody>
-                <Form.Item
-                  className="mt-8"
-                  label="Max Budget (USD)"
-                  name="max_budget"
-                  help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
-                  rules={[
-                    {
-                      validator: async (_, value) => {
-                        if (
-                          value &&
-                          team &&
-                          team.max_budget !== null &&
-                          value > team.max_budget
-                        ) {
-                          throw new Error(
-                            `Budget cannot exceed team max budget: $${team.max_budget}`
-                          );
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <InputNumber step={0.01} precision={2} width={200} />
-                </Form.Item>
-                <Form.Item
-                  className="mt-8"
-                  label="Reset Budget"
-                  name="budget_duration"
-                  help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
-                >
-                  <Select defaultValue={null} placeholder="n/a">
-                    <Select.Option value="24h">daily</Select.Option>
-                    <Select.Option value="7d">weekly</Select.Option>
-                    <Select.Option value="30d">monthly</Select.Option>
-                  </Select>
-                </Form.Item>
-                <Form.Item
-                  className="mt-8"
-                  label="Tokens per minute Limit (TPM)"
-                  name="tpm_limit"
-                  help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
-                  rules={[
-                    {
-                      validator: async (_, value) => {
-                        if (
-                          value &&
-                          team &&
-                          team.tpm_limit !== null &&
-                          value > team.tpm_limit
-                        ) {
-                          throw new Error(
-                            `TPM limit cannot exceed team TPM limit: ${team.tpm_limit}`
-                          );
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <InputNumber step={1} width={400} />
-                </Form.Item>
-                <Form.Item
-                  className="mt-8"
-                  label="Requests per minute Limit (RPM)"
-                  name="rpm_limit"
-                  help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
-                  rules={[
-                    {
-                      validator: async (_, value) => {
-                        if (
-                          value &&
-                          team &&
-                          team.rpm_limit !== null &&
-                          value > team.rpm_limit
-                        ) {
-                          throw new Error(
-                            `RPM limit cannot exceed team RPM limit: ${team.rpm_limit}`
-                          );
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <InputNumber step={1} width={400} />
-                </Form.Item>
-                <Form.Item
-                  label="Expire Key (eg: 30s, 30h, 30d)"
-                  name="duration"
-                  className="mt-8"
-                >
-                  <TextInput placeholder="" />
-                </Form.Item>
-                <Form.Item 
-                  label={
-                    <span>
-                      Guardrails{' '}
-                      <Tooltip title="Setup your first guardrail">
-                        <a 
-                          href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                        >
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                        </a>
-                      </Tooltip>
-                    </span>
-                  }
-                  name="guardrails" 
-                  className="mt-8"
-                  help="Select existing guardrails or enter new ones"
-                >
-                  <Select
-                    mode="tags"
-                    style={{ width: '100%' }}
-                    placeholder="Select or enter guardrails"
-                    options={guardrailsList.map(name => ({ value: name, label: name }))}
-                  />
-                </Form.Item>
+          </div>
+          )}
 
-                <Form.Item label="Metadata" name="metadata" className="mt-8">
-                  <Input.TextArea
-                    rows={4}
-                    placeholder="Enter metadata as JSON"
-                  />
-                </Form.Item>
-                <Form.Item label="Tags" name="tags" className="mt-8" help={`Tags for tracking spend and/or doing tag-based routing.`}>
-                <Select
-                    mode="tags"
-                    style={{ width: '100%' }}
-                    placeholder="Enter tags"
-                    tokenSeparators={[',']}
-                    options={predefinedTags}
-                  />
-                </Form.Item>
-              </AccordionBody>
-            </Accordion>
-          </>
+          {/* Section 3: Optional Settings */}
+          {!isFormDisabled && (
+            <div className="mb-8">
+              <Accordion className="mt-4 mb-4" onClick={() => { if (!mcpAccessGroupsLoaded) { fetchMcpAccessGroups(); setMcpAccessGroupsLoaded(true); } }}>
+                <AccordionHeader>
+                  <Title className="m-0">Optional Settings</Title>
+                </AccordionHeader>
+                <AccordionBody>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Max Budget (USD){' '}
+                        <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="max_budget"
+                    help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
+                    rules={[
+                      {
+                        validator: async (_, value) => {
+                          if (
+                            value &&
+                            team &&
+                            team.max_budget !== null &&
+                            value > team.max_budget
+                          ) {
+                            throw new Error(
+                              `Budget cannot exceed team max budget: $${formatNumberWithCommas(team.max_budget, 4)}`
+                            );
+                          }
+                        },
+                      },
+                    ]}
+                  >
+                    <NumericalInput step={0.01} precision={2} width={200} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Reset Budget{' '}
+                        <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="budget_duration"
+                    help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
+                  >
+                    <BudgetDurationDropdown onChange={(value) => form.setFieldValue('budget_duration', value)} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Tokens per minute Limit (TPM){' '}
+                        <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="tpm_limit"
+                    help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
+                    rules={[
+                      {
+                        validator: async (_, value) => {
+                          if (
+                            value &&
+                            team &&
+                            team.tpm_limit !== null &&
+                            value > team.tpm_limit
+                          ) {
+                            throw new Error(
+                              `TPM limit cannot exceed team TPM limit: ${team.tpm_limit}`
+                            );
+                          }
+                        },
+                      },
+                    ]}
+                  >
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Requests per minute Limit (RPM){' '}
+                        <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="rpm_limit"
+                    help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
+                    rules={[
+                      {
+                        validator: async (_, value) => {
+                          if (
+                            value &&
+                            team &&
+                            team.rpm_limit !== null &&
+                            value > team.rpm_limit
+                          ) {
+                            throw new Error(
+                              `RPM limit cannot exceed team RPM limit: ${team.rpm_limit}`
+                            );
+                          }
+                        },
+                      },
+                    ]}
+                  >
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Expire Key{' '}
+                        <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="duration"
+                    className="mt-4"
+                  >
+                    <TextInput placeholder="e.g., 30d" />
+                  </Form.Item>
+                  <Form.Item 
+                    label={
+                      <span>
+                        Guardrails{' '}
+                        <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="guardrails" 
+                    className="mt-4"
+                    help="Select existing guardrails or enter new ones"
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: '100%' }}
+                      placeholder="Select or enter guardrails"
+                      options={guardrailsList.map(name => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item 
+                        label={
+                          <span>
+                            Allowed Vector Stores{' '}
+                            <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </Tooltip>
+                          </span>
+                        } 
+                        name="allowed_vector_store_ids" 
+                        className="mt-4"
+                        help="Select vector stores this key can access. Leave empty for access to all vector stores"
+                      >
+                        <PremiumVectorStoreSelector
+                          onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                          value={form.getFieldValue('allowed_vector_store_ids')}
+                          accessToken={accessToken}
+                          placeholder="Select vector stores (optional)"
+                          premiumUser={premiumUser}
+                        />
+                      </Form.Item>
+
+                  <Form.Item 
+                        label={
+                          <span>
+                            Allowed MCP Servers{' '}
+                            <Tooltip title="Select which MCP servers or access groups this key can access. ">
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </Tooltip>
+                          </span>
+                        } 
+                        name="allowed_mcp_servers_and_groups" 
+                        className="mt-4"
+                        help="Select MCP servers or access groups this key can access. "
+                      >
+                        <PremiumMCPSelector
+                          onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
+                          value={form.getFieldValue('allowed_mcp_servers_and_groups')}
+                          accessToken={accessToken}
+                          placeholder="Select MCP servers or access groups (optional)"
+                          premiumUser={premiumUser}
+                        />
+                      </Form.Item>
+
+                  <Form.Item 
+                    label={
+                      <span>
+                        Metadata{' '}
+                        <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    } 
+                    name="metadata" 
+                    className="mt-4"
+                  >
+                    <Input.TextArea
+                      rows={4}
+                      placeholder="Enter metadata as JSON"
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Tags{' '}
+                        <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="tags"
+                    className="mt-4"
+                    help={`Tags for tracking spend and/or doing tag-based routing.`}
+                  >
+                  <Select
+                      mode="tags"
+                      style={{ width: '100%' }}
+                      placeholder="Enter tags"
+                      tokenSeparators={[',']}
+                      options={predefinedTags}
+                    />
+                  </Form.Item>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Logging Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <PremiumLoggingSettings
+                          value={loggingSettings}
+                          onChange={setLoggingSettings}
+                          premiumUser={premiumUser}
+                          disabledCallbacks={disabledCallbacks}
+                          onDisabledCallbacksChange={setDisabledCallbacks}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                    <div className="flex items-center gap-2">
+
+                      <b>Advanced Settings</b>
+                      <Tooltip title={ 
+                        <span>
+                          Learn more about advanced settings in our{' '}
+                          <a 
+                            href={proxyBaseUrl ? `${proxyBaseUrl}/#/key%20management/generate_key_fn_key_generate_post`: `/#/key%20management/generate_key_fn_key_generate_post`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300"
+                          >
+                            documentation
+                          </a>
+                        </span>
+                      }>
+                        <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
+                      </Tooltip>
+                      </div>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <SchemaFormFields 
+                        schemaComponent="GenerateKeyRequest"
+                        form={form}
+                        excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}
+                      />
+                    </AccordionBody>
+                  </Accordion>
+                </AccordionBody>
+              </Accordion>
+            </div>
+          )}
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit">Create Key</Button2>
+            <Button2 
+              htmlType="submit" 
+              disabled={isFormDisabled}
+              style={{ opacity: isFormDisabled ? 0.5 : 1 }}
+            >
+              Create Key
+            </Button2>
           </div>
         </Form>
       </Modal>
+
+      {/* Add the Create User Modal */}
+      {isCreateUserModalVisible && (
+        <Modal
+          title="Create New User"
+          visible={isCreateUserModalVisible}
+          onCancel={() => setIsCreateUserModalVisible(false)}
+          footer={null}
+          width={800}
+        >
+          <Createuser 
+            userID={userID}
+            accessToken={accessToken}
+            teams={teams}
+            possibleUIRoles={possibleUIRoles}
+            onUserCreated={handleUserCreated}
+            isEmbedded={true}
+          />
+        </Modal>
+      )}
+
       {apiKey && (
         <Modal
           visible={isModalVisible}

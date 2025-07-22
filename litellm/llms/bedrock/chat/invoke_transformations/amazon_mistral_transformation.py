@@ -1,10 +1,14 @@
 import types
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.llms.bedrock.common_utils import BedrockError
+
+if TYPE_CHECKING:
+    from litellm.types.utils import ModelResponse
 
 
 class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
@@ -81,3 +85,27 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
             if k == "stream":
                 optional_params["stream"] = v
         return optional_params
+
+    @staticmethod
+    def get_outputText(completion_response: dict, model_response: "ModelResponse") -> str:
+        """This function extracts the output text from a bedrock mistral completion.
+        As a side effect, it updates the finish reason for a model response.
+
+        Args:
+            completion_response: JSON from the completion.
+            model_response: ModelResponse
+
+        Returns:
+            A string with the response of the LLM
+
+        """
+        if "choices" in completion_response:
+            outputText = completion_response["choices"][0]["message"]["content"]
+            model_response.choices[0].finish_reason = completion_response["choices"][0]["finish_reason"]
+        elif "outputs" in completion_response:
+            outputText = completion_response["outputs"][0]["text"]
+            model_response.choices[0].finish_reason = completion_response["outputs"][0]["stop_reason"]
+        else:
+            raise BedrockError(message="Unexpected mistral completion response", status_code=400)
+
+        return outputText

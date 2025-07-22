@@ -111,8 +111,8 @@ from litellm import completion
 import os
 
 # auth: run 'gcloud auth application-default'
-os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
-os.environ["VERTEX_LOCATION"] = "us-central1"
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
 
 response = completion(
   model="vertex_ai/gemini-1.5-pro",
@@ -205,6 +205,22 @@ os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key"
 response = completion(
   model="openrouter/google/palm-2-chat-bison",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
+)
+```
+
+</TabItem>
+<TabItem value="novita" label="Novita AI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://novita.ai/settings/key-management to get your API key
+os.environ["NOVITA_API_KEY"] = "novita-api-key"
+
+response = completion(
+  model="novita/deepseek/deepseek-r1",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
 
@@ -406,6 +422,23 @@ os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key"
 
 response = completion(
   model="openrouter/google/palm-2-chat-bison",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+<TabItem value="novita" label="Novita AI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://novita.ai/settings/key-management to get your API key
+os.environ["NOVITA_API_KEY"] = "novita_api_key"
+
+response = completion(
+  model="novita/deepseek/deepseek-r1",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )

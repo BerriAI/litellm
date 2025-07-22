@@ -51,7 +51,7 @@ print("Testing proxy custom logger")
 def test_embedding(client):
     try:
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
@@ -97,10 +97,10 @@ def test_embedding(client):
             "headers": {
                 "host": "testserver",
                 "accept": "*/*",
-                "accept-encoding": "gzip, deflate",
+                "accept-encoding": "gzip, deflate, zstd",
                 "connection": "keep-alive",
                 "user-agent": "testclient",
-                "content-length": "54",
+                "content-length": "51",
                 "content-type": "application/json",
             },
             "body": {"model": "azure-embedding-model", "input": ["hello"]},
@@ -122,7 +122,7 @@ def test_chat_completion(client):
     try:
         # Your test data
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path
@@ -164,7 +164,7 @@ def test_chat_completion(client):
             my_custom_logger.async_success == True
         )  # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert (
-            my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2"
+            my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-3"
         )  # checks if kwargs passed to async_log_success_event are correct
         print(
             "\n\n Custom Logger Async Completion args",
@@ -194,10 +194,10 @@ def test_chat_completion(client):
             "headers": {
                 "host": "testserver",
                 "accept": "*/*",
-                "accept-encoding": "gzip, deflate",
+                "accept-encoding": "gzip, deflate, zstd",
                 "connection": "keep-alive",
                 "user-agent": "testclient",
-                "content-length": "123",
+                "content-length": "115",
                 "content-type": "application/json",
             },
             "body": {
@@ -217,7 +217,7 @@ def test_chat_completion_stream(client):
     try:
         # Your test data
         litellm.set_verbose = False
-        from litellm.proxy.utils import get_instance_fn
+        from litellm.proxy.types_utils.utils import get_instance_fn
 
         my_custom_logger = get_instance_fn(
             value="custom_callbacks.my_custom_logger", config_file_path=python_file_path

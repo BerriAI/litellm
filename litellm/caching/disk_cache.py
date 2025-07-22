@@ -1,19 +1,24 @@
 import json
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
 
 class DiskCache(BaseCache):
     def __init__(self, disk_cache_dir: Optional[str] = None):
-        import diskcache as dc
+        try:
+            import diskcache as dc
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "Please install litellm with `litellm[caching]` to use disk caching."
+            ) from e
 
         # if users don't provider one, use the default litellm cache
         if disk_cache_dir is None:

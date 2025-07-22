@@ -5,6 +5,7 @@ from typing import Optional
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
+from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
@@ -13,7 +14,7 @@ from litellm.proxy._types import CommonProxyErrors, KeyManagementSystem
 class GoogleSecretManager(GCSBucketBase):
     def __init__(
         self,
-        refresh_interval: Optional[int] = 86400,
+        refresh_interval: Optional[int] = SECRET_MANAGER_REFRESH_INTERVAL,
         always_read_secret_manager: Optional[bool] = False,
     ) -> None:
         """

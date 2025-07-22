@@ -27,6 +27,9 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template
   name: ""
 
+# annotations for litellm deployment
+deploymentAnnotations: {}
+# annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
 
@@ -56,6 +59,9 @@ environmentConfigMaps: []
 service:
   type: ClusterIP
   port: 4000
+  # If service type is `LoadBalancer` you can
+  # optionally specify loadBalancerClass
+  # loadBalancerClass: tailscale
 
 ingress:
   enabled: false
@@ -74,6 +80,12 @@ ingress:
   #      - chart-example.local
 
 # masterkey: changeit
+
+# if set, use this secret for the master key; otherwise, autogenerate a new one
+masterkeySecretName: ""
+
+# if set, use this secret key for the master key; otherwise, use the default key
+masterkeySecretKey: ""
 
 # The elements within proxy_config are rendered as config.yaml for the proxy
 #  Examples: https://github.com/BerriAI/litellm/tree/main/litellm/proxy/example_config_yaml
@@ -187,10 +199,18 @@ migrationJob:
   backoffLimit: 4 # Backoff limit for Job restarts
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
+  ttlSecondsAfterFinished: 120
+  extraContainers: []
 
-# Additional environment variables to be added to the deployment
+# Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {
     # USE_DDTRACE: "true"
+}
+
+# Additional environment variables to be added to the deployment as a list of k8s env vars
+extraEnvVars: {
+    # - name: EXTRA_ENV_VAR
+    #   value: EXTRA_ENV_VAR_VALUE
 }
 
 

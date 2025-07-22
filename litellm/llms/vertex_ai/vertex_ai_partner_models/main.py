@@ -1,22 +1,18 @@
 # What is this?
 ## API Handler for calling Vertex AI Partner Models
-from enum import Enum
 from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
 import litellm
 from litellm import LlmProviders
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
+from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from ..vertex_llm_base import VertexBase
 
-
-class VertexPartnerProvider(str, Enum):
-    mistralai = "mistralai"
-    llama = "llama"
-    ai21 = "ai21"
-    claude = "claude"
+base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 class VertexAIError(Exception):
@@ -32,37 +28,29 @@ class VertexAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-def create_vertex_url(
-    vertex_location: str,
-    vertex_project: str,
-    partner: VertexPartnerProvider,
-    stream: Optional[bool],
-    model: str,
-    api_base: Optional[str] = None,
-) -> str:
-    """Return the base url for the vertex partner models"""
-    if partner == VertexPartnerProvider.llama:
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
-    elif partner == VertexPartnerProvider.mistralai:
-        if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
-        else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
-    elif partner == VertexPartnerProvider.ai21:
-        if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
-        else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
-    elif partner == VertexPartnerProvider.claude:
-        if stream:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
-        else:
-            return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
-
-
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
+
+    @staticmethod
+    def is_vertex_partner_model(model: str):
+        """
+        Check if the model string is a Vertex AI Partner Model
+        Only use this once you have confirmed that custom_llm_provider is vertex_ai
+
+        Returns:
+            bool: True if the model string is a Vertex AI Partner Model, False otherwise
+        """
+        if (
+            model.startswith("meta/")
+            or model.startswith("deepseek-ai")
+            or model.startswith("mistral")
+            or model.startswith("codestral")
+            or model.startswith("jamba")
+            or model.startswith("claude")
+        ):
+            return True
+        return False
 
     def completion(
         self,
@@ -110,7 +98,6 @@ class VertexAIPartnerModels(VertexBase):
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-
             vertex_httpx_logic = VertexLLM()
 
             access_token, project_id = vertex_httpx_logic._ensure_access_token(
@@ -128,7 +115,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model:
+            if "llama" in model or "deepseek-ai" in model:
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
@@ -136,31 +123,21 @@ class VertexAIPartnerModels(VertexBase):
                 partner = VertexPartnerProvider.ai21
             elif "claude" in model:
                 partner = VertexPartnerProvider.claude
+            else:
+                raise ValueError(f"Unknown partner model: {model}")
 
-            default_api_base = create_vertex_url(
-                vertex_location=vertex_location or "us-central1",
-                vertex_project=vertex_project or project_id,
-                partner=partner,  # type: ignore
+            api_base = self.get_complete_vertex_url(
+                custom_api_base=api_base,
+                vertex_location=vertex_location,
+                vertex_project=vertex_project,
+                project_id=project_id,
+                partner=partner,
                 stream=stream,
                 model=model,
             )
 
-            if len(default_api_base.split(":")) > 1:
-                endpoint = default_api_base.split(":")[-1]
-            else:
-                endpoint = ""
-
-            _, api_base = self._check_custom_proxy(
-                api_base=api_base,
-                custom_llm_provider="vertex_ai",
-                gemini_api_key=None,
-                endpoint=endpoint,
-                stream=stream,
-                auth_header=None,
-                url=default_api_base,
-            )
-
-            model = model.split("@")[0]
+            if "codestral" in model or "mistral" in model:
+                model = model.split("@")[0]
 
             if "codestral" in model and litellm_params.get("text_completion") is True:
                 optional_params["model"] = model
@@ -214,7 +191,24 @@ class VertexAIPartnerModels(VertexBase):
                     client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
-
+            elif "llama" in model:
+                return base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    custom_llm_provider="vertex_ai",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=encoding,
+                    api_key=access_token,
+                    logging_obj=logging_obj,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                    client=client,
+                )
             return openai_like_chat_completions.completion(
                 model=model,
                 messages=messages,

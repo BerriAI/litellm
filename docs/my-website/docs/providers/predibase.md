@@ -230,7 +230,7 @@ response = completion(
     model="predibase/llama-3-8b-instruct", 
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     adapter_id="my_repo/3",
-    adapter_soruce="pbase",
+    adapter_source="pbase",
 )
 ```
 

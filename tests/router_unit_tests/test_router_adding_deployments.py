@@ -9,23 +9,48 @@ from litellm.router import Deployment, LiteLLM_Params
 from unittest.mock import patch
 import json
 
-
-def test_initialize_deployment_for_pass_through_success():
+@pytest.mark.parametrize("reusable_credentials", [True, False])
+def test_initialize_deployment_for_pass_through_success(reusable_credentials):
     """
     Test successful initialization of a Vertex AI pass-through deployment
     """
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.types.utils import CredentialItem
+
+    vertex_project="test-project"
+    vertex_location="us-central1"
+    vertex_credentials=json.dumps({"type": "service_account", "project_id": "test"})
+
+    if not reusable_credentials:
+        litellm_params = LiteLLM_Params(
+            model="vertex_ai/test-model",
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_credentials=vertex_credentials,
+            use_in_pass_through=True,
+        )
+    else:
+        # add credentials to the credential accessor
+        CredentialAccessor.upsert_credentials([
+            CredentialItem(
+                credential_name="vertex_credentials",
+                credential_values={
+                    "vertex_project": vertex_project,
+                    "vertex_location": vertex_location,
+                    "vertex_credentials": vertex_credentials,
+                },
+                credential_info={}
+            )
+        ])
+        litellm_params = LiteLLM_Params(
+            model="vertex_ai/test-model",
+            litellm_credential_name="vertex_credentials",
+            use_in_pass_through=True,
+        )
     router = Router(model_list=[])
     deployment = Deployment(
         model_name="vertex-test",
-        litellm_params=LiteLLM_Params(
-            model="vertex_ai/test-model",
-            vertex_project="test-project",
-            vertex_location="us-central1",
-            vertex_credentials=json.dumps(
-                {"type": "service_account", "project_id": "test"}
-            ),
-            use_in_pass_through=True,
-        ),
+        litellm_params=litellm_params,
     )
 
     # Test the initialization
@@ -36,11 +61,11 @@ def test_initialize_deployment_for_pass_through_success():
     )
 
     # Verify the credentials were properly set
-    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-        vertex_pass_through_router,
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        passthrough_endpoint_router,
     )
 
-    vertex_creds = vertex_pass_through_router.get_vertex_credentials(
+    vertex_creds = passthrough_endpoint_router.get_vertex_credentials(
         project_id="test-project", location="us-central1"
     )
     assert vertex_creds.vertex_project == "test-project"
@@ -67,7 +92,7 @@ def test_initialize_deployment_for_pass_through_missing_params():
     # Test that initialization raises ValueError
     with pytest.raises(
         ValueError,
-        match="vertex_project, vertex_location, and vertex_credentials must be set",
+        match="vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints",
     ):
         router._initialize_deployment_for_pass_through(
             deployment=deployment,
@@ -123,21 +148,21 @@ def test_add_vertex_pass_through_deployment():
     router.add_deployment(deployment)
 
     # Get the vertex credentials from the router
-    from litellm.proxy.vertex_ai_endpoints.vertex_endpoints import (
-        vertex_pass_through_router,
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        passthrough_endpoint_router,
     )
 
     # current state of pass-through vertex router
     print("\n vertex_pass_through_router.deployment_key_to_vertex_credentials\n\n")
     print(
         json.dumps(
-            vertex_pass_through_router.deployment_key_to_vertex_credentials,
+            passthrough_endpoint_router.deployment_key_to_vertex_credentials,
             indent=4,
             default=str,
         )
     )
 
-    vertex_creds = vertex_pass_through_router.get_vertex_credentials(
+    vertex_creds = passthrough_endpoint_router.get_vertex_credentials(
         project_id="test-project", location="us-central1"
     )
 

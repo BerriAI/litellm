@@ -34,7 +34,7 @@ from litellm import Router, mock_completion
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.enterprise.enterprise_hooks.secret_detection import (
+from litellm_enterprise.enterprise_callbacks.secret_detection import (
     _ENTERPRISE_SecretDetection,
 )
 from litellm.proxy.proxy_server import (
@@ -163,7 +163,10 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await chat_completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0
+                    api_key="sk-12345", 
+                    token="hashed_sk-12345", 
+                    rpm_limit=0,
+                    request_route=route,
                 ),
                 fastapi_response=Response(),
             )
@@ -171,7 +174,7 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await completion(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0
+                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0, request_route=route
                 ),
                 fastapi_response=Response(),
             )
@@ -179,7 +182,7 @@ async def test_chat_completion_request_with_redaction(route, body):
             response = await embeddings(
                 request=request,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0
+                    api_key="sk-12345", token="hashed_sk-12345", rpm_limit=0, request_route=route
                 ),
                 fastapi_response=Response(),
             )

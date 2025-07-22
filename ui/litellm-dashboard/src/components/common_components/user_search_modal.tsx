@@ -1,8 +1,8 @@
 import { useState, useCallback } from 'react';
-import { Modal, Form, Button, Select } from 'antd';
+import { Modal, Form, Button, Select, Tooltip } from 'antd';
 import debounce from 'lodash/debounce';
 import { userFilterUICall } from "@/components/networking";
-
+import { InfoCircleOutlined } from '@ant-design/icons';
 interface User {
   user_id: string;
   user_email: string;
@@ -15,10 +15,17 @@ interface UserOption {
   user: User;
 }
 
+interface Role {
+  label: string;
+  value: string;
+  description: string;
+}
+
+
 interface FormValues {
   user_email: string;
   user_id: string;
-  role: 'admin' | 'user';
+  role: string;
 }
 
 interface UserSearchModalProps {
@@ -26,13 +33,22 @@ interface UserSearchModalProps {
   onCancel: () => void;
   onSubmit: (values: FormValues) => void;
   accessToken: string | null;
+  title?: string;
+  roles?: Role[];
+  defaultRole?: string;
 }
 
 const UserSearchModal: React.FC<UserSearchModalProps> = ({ 
   isVisible, 
   onCancel, 
   onSubmit,
-  accessToken
+  accessToken,
+  title = "Add Team Member",
+  roles = [
+    { label: "admin", value: "admin", description: "Admin role. Can create team keys, add members, and manage settings." },
+    { label: "user", value: "user", description: "User role. Can view team info, but not manage it." }
+  ],
+  defaultRole = "user"
 }) => {
   const [form] = Form.useForm<FormValues>();
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -97,7 +113,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
   return (
     <Modal
-      title="Add Team Member" 
+      title={title}
       open={isVisible}
       onCancel={handleClose}
       footer={null}
@@ -110,7 +126,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
         wrapperCol={{ span: 16 }}
         labelAlign="left"
         initialValues={{
-          role: "user",
+          role: defaultRole,
         }}
       >
         <Form.Item
@@ -156,14 +172,20 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
           name="role"
           className="mb-4"
         >
-          <Select defaultValue="user">
-            <Select.Option value="admin">admin</Select.Option>
-            <Select.Option value="user">user</Select.Option>
+          <Select defaultValue={defaultRole}>
+            {roles.map(role => (
+              <Select.Option key={role.value} value={role.value}>
+                <Tooltip title={role.description}>
+                  <span className="font-medium">{role.label}</span>
+                  <span className="ml-2 text-gray-500 text-sm">- {role.description}</span>
+                </Tooltip>
+              </Select.Option>
+            ))}
           </Select>
         </Form.Item>
 
         <div className="text-right mt-4">
-          <Button type="primary" htmlType="submit">
+          <Button type="default" htmlType="submit">
             Add Member
           </Button>
         </div>

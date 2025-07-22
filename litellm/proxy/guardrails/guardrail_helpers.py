@@ -45,7 +45,6 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
 
             # v1 implementation of this
             if isinstance(request_guardrails, dict):
-
                 # get guardrail configs from `init_guardrails.py`
                 # for all requested guardrails -> get their associated callbacks
                 for _guardrail_name, should_run in request_guardrails.items():

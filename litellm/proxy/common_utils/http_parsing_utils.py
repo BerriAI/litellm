@@ -1,10 +1,11 @@
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import ProxyException
 from litellm.types.router import Deployment
 
 
@@ -42,15 +43,45 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             if not body:
                 parsed_body = {}
             else:
-                parsed_body = orjson.loads(body)
+                try:
+                    parsed_body = orjson.loads(body)
+                except orjson.JSONDecodeError as e:
+                    # First try the standard json module which is more forgiving
+                    # First decode bytes to string if needed
+                    body_str = body.decode("utf-8") if isinstance(body, bytes) else body
+
+                    # Replace invalid surrogate pairs
+                    import re
+
+                    # This regex finds incomplete surrogate pairs
+                    body_str = re.sub(
+                        r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
+                    )
+                    # This regex finds low surrogates without high surrogates
+                    body_str = re.sub(
+                        r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
+                    )
+
+                    try:
+                        parsed_body = json.loads(body_str)
+                    except json.JSONDecodeError:
+                        # If both orjson and json.loads fail, throw a proper error
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        raise ProxyException(
+                            message=f"Invalid JSON payload: {str(e)}",
+                            type="invalid_request_error",
+                            param="request_body",
+                            code=status.HTTP_400_BAD_REQUEST,
+                        )
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
-    except (json.JSONDecodeError, orjson.JSONDecodeError):
-        verbose_proxy_logger.exception("Invalid JSON payload received.")
-        return {}
+    except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
+        # Re-raise ProxyException as-is
+        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+        raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
@@ -62,8 +93,13 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if hasattr(request, "state") and hasattr(request.state, "parsed_body"):
-        return request.state.parsed_body
+    if (
+        hasattr(request, "scope")
+        and "parsed_body" in request.scope
+        and isinstance(request.scope["parsed_body"], tuple)
+    ):
+        accepted_keys, parsed_body = request.scope["parsed_body"]
+        return {key: parsed_body[key] for key in accepted_keys}
     return None
 
 
@@ -74,7 +110,7 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.state.parsed_body = parsed_body
+        request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
@@ -123,10 +159,10 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[Deployment] = (
-                llm_router.get_deployment_by_model_group_name(
-                    model_group_name=request_data["model"]
-                )
+            deployment: Optional[
+                Deployment
+            ] = llm_router.get_deployment_by_model_group_name(
+                model_group_name=request_data["model"]
             )
             if (
                 deployment
@@ -161,3 +197,39 @@ def check_file_size_under_limit(
             )
 
     return True
+
+
+async def get_form_data(request: Request) -> Dict[str, Any]:
+    """
+    Read form data from request
+
+    Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    """
+    form = await request.form()
+    form_data = dict(form)
+    parsed_form_data: dict[str, Any] = {}
+    for key, value in form_data.items():
+        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+        if key.endswith("[]"):
+            clean_key = key[:-2]
+            parsed_form_data.setdefault(clean_key, []).append(value)
+        else:
+            parsed_form_data[key] = value
+    return parsed_form_data
+
+
+async def get_request_body(request: Request) -> Dict[str, Any]:
+    """
+    Read the request body and parse it as JSON.
+    """
+    if request.headers.get("content-type") == "application/json":
+        return await _read_request_body(request)
+    elif (
+        request.headers.get("content-type") == "multipart/form-data"
+        or request.headers.get("content-type") == "application/x-www-form-urlencoded"
+    ):
+        return await get_form_data(request)
+    else:
+        raise ValueError(
+            f"Unsupported content type: {request.headers.get('content-type')}"
+        )

@@ -185,7 +185,6 @@ class OpikLogger(CustomBatchLogger):
     def _create_opik_payload(  # noqa: PLR0915
         self, kwargs, response_obj, start_time, end_time
     ) -> List[Dict]:
-
         # Get metadata
         _litellm_params = kwargs.get("litellm_params", {}) or {}
         litellm_params_metadata = _litellm_params.get("metadata", {}) or {}

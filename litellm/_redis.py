@@ -18,6 +18,8 @@ import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
 from litellm import get_secret, get_secret_str
+from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
 
@@ -182,9 +184,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
                 "REDIS_CLUSTER_NODES environment variable is not valid JSON. Please ensure it's properly formatted."
             )
 
-    verbose_logger.debug(
-        "init_redis_cluster: startup nodes: ", redis_kwargs["startup_nodes"]
-    )
+    verbose_logger.debug("init_redis_cluster: startup nodes are being initialized.")
     from redis.cluster import ClusterNode
 
     args = _get_redis_cluster_kwargs()
@@ -204,6 +204,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
 
 def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
+    sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
 
     if not sentinel_nodes or not service_name:
@@ -214,7 +215,11 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
     # Set up the Sentinel client
-    sentinel = redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
+    sentinel = redis.Sentinel(
+        sentinel_nodes,
+        socket_timeout=REDIS_SOCKET_TIMEOUT,
+        password=sentinel_password,
+    )
 
     # Return the master instance for the given service
 
@@ -236,7 +241,7 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     # Set up the Sentinel client
     sentinel = async_redis.Sentinel(
         sentinel_nodes,
-        socket_timeout=0.1,
+        socket_timeout=REDIS_SOCKET_TIMEOUT,
         password=sentinel_password,
     )
 
@@ -266,7 +271,9 @@ def get_redis_client(**env_overrides):
     return redis.Redis(**redis_kwargs)
 
 
-def get_redis_async_client(**env_overrides) -> async_redis.Redis:
+def get_redis_async_client(
+    **env_overrides,
+) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
@@ -303,9 +310,8 @@ def get_redis_async_client(**env_overrides) -> async_redis.Redis:
     # Check for Redis Sentinel
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
-
+    _pretty_print_redis_config(redis_kwargs=redis_kwargs)
     return async_redis.Redis(
-        socket_timeout=5,
         **redis_kwargs,
     )
 
@@ -315,7 +321,7 @@ def get_redis_connection_pool(**env_overrides):
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         return async_redis.BlockingConnectionPool.from_url(
-            timeout=5, url=redis_kwargs["url"]
+            timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=redis_kwargs["url"]
         )
     connection_class = async_redis.Connection
     if "ssl" in redis_kwargs:
@@ -323,4 +329,93 @@ def get_redis_connection_pool(**env_overrides):
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
     redis_kwargs.pop("startup_nodes", None)
-    return async_redis.BlockingConnectionPool(timeout=5, **redis_kwargs)
+    return async_redis.BlockingConnectionPool(
+        timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
+    )
+
+def _pretty_print_redis_config(redis_kwargs: dict) -> None:
+    """Pretty print the Redis configuration using rich with sensitive data masking"""
+    try:
+        import logging
+
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+        if not verbose_logger.isEnabledFor(logging.DEBUG):
+            return
+
+        console = Console()
+
+        # Initialize the sensitive data masker
+        masker = SensitiveDataMasker()
+        
+        # Mask sensitive data in redis_kwargs
+        masked_redis_kwargs = masker.mask_dict(redis_kwargs)
+
+        # Create main panel title
+        title = Text("Redis Configuration", style="bold blue")
+
+        # Create configuration table
+        config_table = Table(
+            title="🔧 Redis Connection Parameters",
+            show_header=True,
+            header_style="bold magenta",
+            title_justify="left",
+        )
+        config_table.add_column("Parameter", style="cyan", no_wrap=True)
+        config_table.add_column("Value", style="yellow")
+
+        # Add rows for each configuration parameter
+        for key, value in masked_redis_kwargs.items():
+            if value is not None:
+                # Special handling for complex objects
+                if isinstance(value, list):
+                    if key == "startup_nodes" and value:
+                        # Special handling for cluster nodes
+                        value_str = f"[{len(value)} cluster nodes]"
+                    elif key == "sentinel_nodes" and value:
+                        # Special handling for sentinel nodes
+                        value_str = f"[{len(value)} sentinel nodes]"
+                    else:
+                        value_str = str(value)
+                else:
+                    value_str = str(value)
+                
+                config_table.add_row(key, value_str)
+
+        # Determine connection type
+        connection_type = "Standard Redis"
+        if masked_redis_kwargs.get("startup_nodes"):
+            connection_type = "Redis Cluster"
+        elif masked_redis_kwargs.get("sentinel_nodes"):
+            connection_type = "Redis Sentinel"
+        elif masked_redis_kwargs.get("url"):
+            connection_type = "Redis (URL-based)"
+
+        # Create connection type info
+        info_table = Table(
+            title="📊 Connection Info",
+            show_header=True,
+            header_style="bold green",
+            title_justify="left",
+        )
+        info_table.add_column("Property", style="cyan", no_wrap=True)
+        info_table.add_column("Value", style="yellow")
+        info_table.add_row("Connection Type", connection_type)
+
+        # Print everything in a nice panel
+        console.print("\n")
+        console.print(Panel(title, border_style="blue"))
+        console.print(info_table)
+        console.print(config_table)
+        console.print("\n")
+
+    except ImportError:
+        # Fallback to simple logging if rich is not available
+        masker = SensitiveDataMasker()
+        masked_redis_kwargs = masker.mask_dict(redis_kwargs)
+        verbose_logger.info(f"Redis configuration: {masked_redis_kwargs}")
+    except Exception as e:
+        verbose_logger.error(f"Error pretty printing Redis configuration: {e}")
+

@@ -1,0 +1,57 @@
+name: LiteLLM Linting
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+
+    - name: Install dependencies
+      run: |
+        pip install openai==1.81.0
+        poetry install --with dev
+        pip install openai==1.81.0
+
+
+
+    - name: Run Black formatting
+      run: |
+        cd litellm
+        poetry run black .
+        cd ..
+
+    - name: Run Ruff linting
+      run: |
+        cd litellm
+        poetry run ruff check .
+        cd ..
+
+    - name: Run MyPy type checking
+      run: |
+        cd litellm
+        poetry run mypy . --ignore-missing-imports
+        cd ..
+
+    - name: Check for circular imports
+      run: |
+        cd litellm
+        poetry run python ../tests/documentation_tests/test_circular_imports.py
+        cd ..
+
+    - name: Check import safety
+      run: |
+        poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)

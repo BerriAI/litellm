@@ -1,85 +1,104 @@
-import types
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
+
+import httpx
+
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+    AmazonInvokeConfig,
+)
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3Config:
+class AmazonAnthropicClaude3Config(AmazonInvokeConfig, AnthropicConfig):
     """
     Reference:
         https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
         https://docs.anthropic.com/claude/docs/models-overview#model-comparison
 
     Supported Params for the Amazon / Anthropic Claude 3 models:
-
-    - `max_tokens` Required (integer) max tokens. Default is 4096
-    - `anthropic_version` Required (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
-    - `system` Optional (string) the system prompt, conversion from openai format to this is handled in factory.py
-    - `temperature` Optional (float) The amount of randomness injected into the response
-    - `top_p` Optional (float) Use nucleus sampling.
-    - `top_k` Optional (int) Only sample from the top K options for each subsequent token
-    - `stop_sequences` Optional (List[str]) Custom text sequences that cause the model to stop generating
     """
 
-    max_tokens: Optional[int] = 4096  # Opus, Sonnet, and Haiku default
-    anthropic_version: Optional[str] = "bedrock-2023-05-31"
-    system: Optional[str] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    stop_sequences: Optional[List[str]] = None
+    anthropic_version: str = "bedrock-2023-05-31"
 
-    def __init__(
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "bedrock"
+
+    def get_supported_openai_params(self, model: str) -> List[str]:
+        return AnthropicConfig.get_supported_openai_params(self, model)
+
+    def map_openai_params(
         self,
-        max_tokens: Optional[int] = None,
-        anthropic_version: Optional[str] = None,
-    ) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        return AnthropicConfig.map_openai_params(
+            self,
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+        )
 
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        _anthropic_request = AnthropicConfig.transform_request(
+            self,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
-    def get_supported_openai_params(self):
-        return [
-            "max_tokens",
-            "max_completion_tokens",
-            "tools",
-            "tool_choice",
-            "stream",
-            "stop",
-            "temperature",
-            "top_p",
-            "extra_headers",
-        ]
+        _anthropic_request.pop("model", None)
+        _anthropic_request.pop("stream", None)
+        if "anthropic_version" not in _anthropic_request:
+            _anthropic_request["anthropic_version"] = self.anthropic_version
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
-        for param, value in non_default_params.items():
-            if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            if param == "tools":
-                optional_params["tools"] = value
-            if param == "stream":
-                optional_params["stream"] = value
-            if param == "stop":
-                optional_params["stop_sequences"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-        return optional_params
+        return _anthropic_request
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        return AnthropicConfig.transform_response(
+            self,
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )

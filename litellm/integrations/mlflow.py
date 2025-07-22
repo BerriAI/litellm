@@ -48,14 +48,17 @@ class MlflowLogger(CustomLogger):
 
     def _extract_and_set_chat_attributes(self, span, kwargs, response_obj):
         try:
-            from mlflow.tracing.utils import set_span_chat_messages, set_span_chat_tools
+            from mlflow.tracing.utils import set_span_chat_messages  # type: ignore
+            from mlflow.tracing.utils import set_span_chat_tools  # type: ignore
         except ImportError:
             return
 
         inputs = self._construct_input(kwargs)
         input_messages = inputs.get("messages", [])
-        output_messages = [c.message.model_dump(exclude_none=True)
-                           for c in getattr(response_obj, "choices", [])]
+        output_messages = [
+            c.message.model_dump(exclude_none=True)
+            for c in getattr(response_obj, "choices", [])
+        ]
         if messages := [*input_messages, *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):

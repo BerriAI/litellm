@@ -1,5 +1,6 @@
 import base64
 import os
+from typing import Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
 
@@ -19,9 +20,8 @@ def _get_salt_key():
     return salt_key
 
 
-def encrypt_value_helper(value: str):
-
-    signing_key = _get_salt_key()
+def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
+    signing_key = new_encryption_key or _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -39,8 +39,9 @@ def encrypt_value_helper(value: str):
         raise e
 
 
-def decrypt_value_helper(value: str):
-
+def decrypt_value_helper(
+    value: str, exception_type: Literal["debug", "error"] = "error"
+):
     signing_key = _get_salt_key()
 
     try:
@@ -52,11 +53,14 @@ def decrypt_value_helper(value: str):
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error decrypting value, Did your master_key/salt key change recently? : {value}\nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
-        )
+        error_message = f"Error decrypting value, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+        if exception_type == "debug":
+            verbose_proxy_logger.debug(error_message)
+            return None
+
+        verbose_proxy_logger.exception(error_message)
         # [Non-Blocking Exception. - this should not block decrypting other values]
-        pass
+        return None
 
 
 def encrypt_value(value: str, signing_key: str):
@@ -94,7 +98,12 @@ def decrypt_value(value: bytes, signing_key: str) -> str:
     box = nacl.secret.SecretBox(hash_bytes)
 
     # Convert the bytes object to a string
-    plaintext = box.decrypt(value)
+    try:
+        if len(value) == 0:
+            return ""
 
-    plaintext = plaintext.decode("utf-8")  # type: ignore
-    return plaintext  # type: ignore
+        plaintext = box.decrypt(value)
+        plaintext = plaintext.decode("utf-8")  # type: ignore
+        return plaintext  # type: ignore
+    except Exception as e:
+        raise e

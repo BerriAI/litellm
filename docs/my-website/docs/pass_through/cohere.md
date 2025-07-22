@@ -4,7 +4,7 @@ Pass-through endpoints for Cohere - call provider-specific endpoint, in native f
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Cost Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
+| Cost Tracking | ✅ | Supported for `/v1/chat`, and `/v2/chat` |
 | Logging | ✅ | works across all integrations |
 | End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
 | Streaming | ✅ | |

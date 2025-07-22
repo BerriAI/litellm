@@ -209,22 +209,6 @@ async def test_router_schedule_factory(model_list):
         assert "priority" not in mock_atext_completion.call_args.kwargs
 
 
-@pytest.mark.asyncio
-async def test_router_arealtime(model_list):
-    """Test if the '_arealtime' function is working correctly"""
-    import litellm
-
-    router = Router(model_list=model_list)
-    with patch.object(litellm, "_arealtime", AsyncMock()) as mock_arealtime:
-        mock_arealtime.return_value = "I'm fine, thank you!"
-        await router._arealtime(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-        )
-
-        mock_arealtime.assert_awaited_once()
-
-
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_router_function_with_fallbacks(model_list, sync_mode):
@@ -336,18 +320,6 @@ def test_update_kwargs_with_default_litellm_params(model_list):
     assert kwargs["api_key"] == "test"
     assert kwargs["metadata"]["key"] == "value"
     assert kwargs["metadata"]["key2"] == "value2"
-
-
-def test_get_async_openai_model_client(model_list):
-    """Test if the '_get_async_openai_model_client' function is working correctly"""
-    router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
-    )
-    model_client = router._get_async_openai_model_client(
-        deployment=deployment, kwargs={}
-    )
-    assert model_client is not None
 
 
 def test_get_timeout(model_list):
@@ -472,6 +444,40 @@ async def test_deployment_callback_on_failure(model_list):
         start_time=time.time(),
         end_time=time.time(),
     )
+
+
+def test_deployment_callback_respects_cooldown_time(model_list):
+    """Ensure per-model cooldown_time is honored even when exception headers are present."""
+    import httpx
+    import time
+    from unittest.mock import patch
+
+    router = Router(model_list=model_list)
+
+    class FakeException(Exception):
+        def __init__(self):
+            self.status_code = 429
+            self.headers = httpx.Headers({"x-test": "1"})
+
+    kwargs = {
+        "exception": FakeException(),
+        "litellm_params": {
+            "metadata": {"model_group": "gpt-3.5-turbo"},
+            "model_info": {"id": 100},
+            "cooldown_time": 0,
+        },
+    }
+
+    with patch("litellm.router._set_cooldown_deployments") as mock_set:
+        router.deployment_callback_on_failure(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+        mock_set.assert_called_once()
+        assert mock_set.call_args.kwargs["time_to_cooldown"] == 0
 
 
 def test_log_retry(model_list):
@@ -918,6 +924,31 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") is None
 
 
+def test_discard(model_list):
+    """
+    Test that discard properly removes a Router from the callback lists
+    """
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm._async_failure_callback = []
+    litellm.input_callback = []
+    litellm.service_callback = []
+
+    router = Router(model_list=model_list)
+    router.discard()
+
+    # Verify all callback lists are empty
+    assert len(litellm.callbacks) == 0
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 0
+    assert len(litellm._async_success_callback) == 0
+    assert len(litellm._async_failure_callback) == 0
+    assert len(litellm.input_callback) == 0
+    assert len(litellm.service_callback) == 0
+
+
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""
     router = Router(model_list=model_list)
@@ -1144,3 +1175,68 @@ def test_cached_get_model_group_info(model_list):
     # Verify the cache info shows hits
     cache_info = router._cached_get_model_group_info.cache_info()
     assert cache_info.hits > 0  # Should have at least one cache hit
+
+
+def test_init_responses_api_endpoints(model_list):
+    """Test if the '_init_responses_api_endpoints' function is working correctly"""
+    from typing import Callable
+    router = Router(model_list=model_list)
+
+    assert router.aget_responses is not None
+    assert isinstance(router.aget_responses, Callable)
+    assert router.adelete_responses is not None
+    assert isinstance(router.adelete_responses, Callable)
+
+
+@pytest.mark.parametrize(
+    "mock_testing_fallbacks, mock_testing_context_fallbacks, mock_testing_content_policy_fallbacks, expected_fallbacks, expected_context, expected_content_policy",
+    [
+        # Test string to bool conversion
+        ("true", "false", "True", True, False, True),
+        ("TRUE", "FALSE", "False", True, False, False),
+        ("false", "true", "false", False, True, False),
+        # Test actual boolean values (should pass through unchanged)
+        (True, False, True, True, False, True),
+        (False, True, False, False, True, False),
+        # Test None values
+        (None, None, None, None, None, None),
+        # Test mixed types
+        ("true", False, None, True, False, None),
+    ],
+)
+def test_mock_router_testing_params_str_to_bool_conversion(
+    mock_testing_fallbacks,
+    mock_testing_context_fallbacks,
+    mock_testing_content_policy_fallbacks,
+    expected_fallbacks,
+    expected_context,
+    expected_content_policy,
+):
+    """Test if MockRouterTestingParams.from_kwargs correctly converts string values to booleans using str_to_bool"""
+    from litellm.types.router import MockRouterTestingParams
+    
+    kwargs = {
+        "mock_testing_fallbacks": mock_testing_fallbacks,
+        "mock_testing_context_fallbacks": mock_testing_context_fallbacks,
+        "mock_testing_content_policy_fallbacks": mock_testing_content_policy_fallbacks,
+        "other_param": "should_remain",  # This should not be affected
+    }
+    
+    # Make a copy to verify kwargs are properly popped
+    original_kwargs = kwargs.copy()
+    
+    mock_params = MockRouterTestingParams.from_kwargs(kwargs)
+    
+    # Verify the converted values
+    assert mock_params.mock_testing_fallbacks == expected_fallbacks
+    assert mock_params.mock_testing_context_fallbacks == expected_context
+    assert mock_params.mock_testing_content_policy_fallbacks == expected_content_policy
+    
+    # Verify that the mock testing params were popped from kwargs
+    assert "mock_testing_fallbacks" not in kwargs
+    assert "mock_testing_context_fallbacks" not in kwargs
+    assert "mock_testing_content_policy_fallbacks" not in kwargs
+    
+    # Verify other params remain unchanged
+    assert kwargs["other_param"] == "should_remain"
+

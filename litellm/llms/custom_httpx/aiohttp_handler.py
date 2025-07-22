@@ -32,7 +32,6 @@ DEFAULT_TIMEOUT = 600
 
 
 class BaseLLMAIOHTTPHandler:
-
     def __init__(self):
         self.client_session: Optional[aiohttp.ClientSession] = None
 
@@ -47,6 +46,11 @@ class BaseLLMAIOHTTPHandler:
             # init client session, and then return new session
             self.client_session = aiohttp.ClientSession()
             return self.client_session
+
+    async def close(self):
+        """Close the aiohttp client session if it exists."""
+        if self.client_session and not self.client_session.closed:
+            await self.client_session.close()
 
     async def _make_common_async_call(
         self,
@@ -103,14 +107,13 @@ class BaseLLMAIOHTTPHandler:
         api_base: str,
         headers: dict,
         data: dict,
-        timeout: Union[float, httpx.Timeout],
+        timeout: Optional[Union[float, httpx.Timeout]],
         litellm_params: dict,
         stream: bool = False,
         files: Optional[dict] = None,
         content: Any = None,
         params: Optional[dict] = None,
     ) -> httpx.Response:
-
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
         )
@@ -220,6 +223,10 @@ class BaseLLMAIOHTTPHandler:
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
         )
+        if provider_config is None:
+            raise ValueError(
+                f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
+            )
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
             api_key=api_key,
@@ -227,13 +234,16 @@ class BaseLLMAIOHTTPHandler:
             model=model,
             messages=messages,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_base=api_base,
         )
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             stream=stream,
         )
 
@@ -481,8 +491,10 @@ class BaseLLMAIOHTTPHandler:
 
         api_base = provider_config.get_complete_url(
             api_base=api_base,
+            api_key=api_key,
             model=model,
             optional_params=optional_params,
+            litellm_params=litellm_params,
             stream=False,
         )
 
@@ -492,6 +504,7 @@ class BaseLLMAIOHTTPHandler:
             model=model,
             messages=[{"role": "user", "content": "test"}],
             optional_params=optional_params,
+            litellm_params=litellm_params,
             api_base=api_base,
         )
 
@@ -519,7 +532,6 @@ class BaseLLMAIOHTTPHandler:
                 data=data,
                 headers=headers,
                 model_response=model_response,
-                api_key=api_key,
                 logging_obj=logging_obj,
                 model=model,
                 timeout=timeout,

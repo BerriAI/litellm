@@ -60,7 +60,7 @@ class AmazonStability3Config:
         if model:
             if "sd3" in model or "sd3.5" in model:
                 return True
-            if "stable-image-ultra-v1" in model:
+            if "stable-image" in model:
                 return True
         return False
 

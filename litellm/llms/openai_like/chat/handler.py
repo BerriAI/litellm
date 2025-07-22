@@ -230,7 +230,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         logging_obj,
         optional_params: dict,
         acompletion=None,
-        litellm_params=None,
+        litellm_params: dict = {},
         logger_fn=None,
         headers: Optional[dict] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
@@ -337,7 +337,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     timeout=timeout,
                     base_model=base_model,
                     client=client,
-                    json_mode=json_mode
+                    json_mode=json_mode,
                 )
         else:
             ## COMPLETION CALL

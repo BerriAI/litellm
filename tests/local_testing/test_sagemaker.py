@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import io
 import os
-
+import litellm
 from test_streaming import streaming_format_tests
 
 sys.path.insert(
@@ -96,26 +96,57 @@ async def test_completion_sagemaker_messages_api(sync_mode):
         litellm.set_verbose = True
         verbose_logger.setLevel(logging.DEBUG)
         print("testing sagemaker")
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
         if sync_mode is True:
-            resp = litellm.completion(
-                model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
-                messages=[
-                    {"role": "user", "content": "hi"},
-                ],
-                temperature=0.2,
-                max_tokens=80,
-            )
-            print(resp)
+            client = HTTPHandler()
+            with patch.object(client, "post") as mock_post:
+                try:
+                    resp = litellm.completion(
+                        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+                        messages=[
+                            {"role": "user", "content": "hi"},
+                        ],
+                        temperature=0.2,
+                        max_tokens=80,
+                        client=client,
+                    )
+                except Exception as e:
+                    print(e)
+                mock_post.assert_called_once()
+                json_data = json.loads(mock_post.call_args.kwargs["data"])
+                assert (
+                    json_data["model"]
+                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                )
+                assert json_data["messages"] == [{"role": "user", "content": "hi"}]
+                assert json_data["temperature"] == 0.2
+                assert json_data["max_tokens"] == 80
+
         else:
-            resp = await litellm.acompletion(
-                model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
-                messages=[
-                    {"role": "user", "content": "hi"},
-                ],
-                temperature=0.2,
-                max_tokens=80,
-            )
-            print(resp)
+            client = AsyncHTTPHandler()
+            with patch.object(client, "post") as mock_post:
+                try:
+                    resp = await litellm.acompletion(
+                        model="sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+                        messages=[
+                            {"role": "user", "content": "hi"},
+                        ],
+                        temperature=0.2,
+                        max_tokens=80,
+                        client=client,
+                    )
+                except Exception as e:
+                    print(e)
+                mock_post.assert_called_once()
+                json_data = json.loads(mock_post.call_args.kwargs["data"])
+                assert (
+                    json_data["model"]
+                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                )
+                assert json_data["messages"] == [{"role": "user", "content": "hi"}]
+                assert json_data["temperature"] == 0.2
+                assert json_data["max_tokens"] == 80
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -125,7 +156,7 @@ async def test_completion_sagemaker_messages_api(sync_mode):
 @pytest.mark.parametrize(
     "model",
     [
-        "sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+        # "sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
         "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
     ],
 )
@@ -185,7 +216,7 @@ async def test_completion_sagemaker_stream(sync_mode, model):
 @pytest.mark.parametrize(
     "model",
     [
-        "sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
+        # "sagemaker_chat/huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245",
         "sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
     ],
 )
@@ -265,7 +296,7 @@ async def test_acompletion_sagemaker_non_stream():
         # Assert
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         assert args_to_sagemaker == expected_payload
         assert (
@@ -325,7 +356,7 @@ async def test_completion_sagemaker_non_stream():
         # Assert
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         assert args_to_sagemaker == expected_payload
         assert (
@@ -386,7 +417,7 @@ async def test_completion_sagemaker_prompt_template_non_stream():
         # Assert
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         assert args_to_sagemaker == expected_payload
 
@@ -445,7 +476,7 @@ async def test_completion_sagemaker_non_stream_with_aws_params():
         # Assert
         mock_post.assert_called_once()
         _, kwargs = mock_post.call_args
-        args_to_sagemaker = kwargs["json"]
+        args_to_sagemaker = json.loads(kwargs["data"])
         print("Arguments passed to sagemaker=", args_to_sagemaker)
         assert args_to_sagemaker == expected_payload
         assert (

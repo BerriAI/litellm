@@ -143,6 +143,26 @@ Response
 }
 ```
 
+## Calling via Request Header
+
+You can also call via request header `x-litellm-tags`
+
+```shell
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'x-litellm-tags: free,my-custom-tag' \
+-d '{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how'\''s it going 123456?"
+    }
+  ]
+}'
+```
+
 ## Setting Default Tags 
 
 Use this if you want all untagged requests to be routed to specific deployments

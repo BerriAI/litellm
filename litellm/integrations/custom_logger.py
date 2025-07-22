@@ -1,19 +1,29 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import traceback
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from pydantic import BaseModel
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
-    EmbeddingResponse,
-    ImageResponse,
+    CallTypes,
+    LLMResponseTypes,
     ModelResponse,
+    ModelResponseStream,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
@@ -21,14 +31,21 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp import MCPPostCallResponseObject
+
+    Span = Union[_Span, Any]
 else:
     Span = Any
+    LiteLLMLoggingObj = Any
+    UserAPIKeyAuth = Any
+    MCPPostCallResponseObject = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self, message_logging: bool = True) -> None:
+    def __init__(self, message_logging: bool = True, **kwargs) -> None:
         self.message_logging = message_logging
         pass
 
@@ -68,9 +85,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -85,9 +106,11 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         model: str,
         messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str,
+        prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -111,6 +134,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         parent_otel_span: Optional[Span] = None,
     ) -> List[dict]:
         return healthy_deployments
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+    ) -> Optional[dict]:
+        """
+        Allow modifying the request just before it's sent to the deployment.
+
+        Use this instead of 'async_pre_call_hook' when you need to modify the request AFTER a deployment is selected, but BEFORE the request is sent.
+
+        Used in managed_files.py
+        """
+        pass
 
     async def async_pre_call_check(
         self, deployment: dict, parent_otel_span: Optional[Span]
@@ -206,6 +241,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         pass
 
@@ -213,7 +249,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
+        response: LLMResponseTypes,
     ) -> Any:
         pass
 
@@ -239,6 +275,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ) -> Any:
         pass
@@ -249,6 +286,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         response: str,
     ) -> Any:
         pass
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        async for item in response:
+            yield item
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 
@@ -309,6 +355,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
+    
+    #########################################################
+    # MCP TOOL CALL HOOKS
+    #########################################################
+    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
+        """
+        This log gets called after the MCP tool call is made.
+
+        Useful if you want to modiy the standard logging payload after the MCP tool call is made.
+        """
+        return None
+    
 
     # Useful helpers for custom logger classes
 
@@ -366,3 +424,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if len(text) > max_length
             else text
         )
+
+    def _select_metadata_field(
+        self, request_kwargs: Optional[Dict] = None
+    ) -> Optional[str]:
+        """
+        Select the metadata field to use for logging
+
+        1. If `litellm_metadata` is in the request kwargs, use it
+        2. Otherwise, use `metadata`
+        """
+        from litellm.constants import LITELLM_METADATA_FIELD, OLD_LITELLM_METADATA_FIELD
+
+        if request_kwargs is None:
+            return None
+        if LITELLM_METADATA_FIELD in request_kwargs:
+            return LITELLM_METADATA_FIELD
+        return OLD_LITELLM_METADATA_FIELD

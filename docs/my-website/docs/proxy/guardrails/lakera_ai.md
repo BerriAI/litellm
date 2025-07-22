@@ -8,7 +8,8 @@ import TabItem from '@theme/TabItem';
 ### 1. Define Guardrails on your LiteLLM config.yaml 
 
 Define your guardrails under the `guardrails` section
-```yaml
+
+```yaml showLineNumbers title="litellm config.yaml"
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
@@ -18,13 +19,13 @@ model_list:
 guardrails:
   - guardrail_name: "lakera-guard"
     litellm_params:
-      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
   - guardrail_name: "lakera-pre-guard"
     litellm_params:
-      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera"
       mode: "pre_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
@@ -53,7 +54,7 @@ litellm --config config.yaml --detailed_debug
 
 Expect this to fail since since `ishaan@berri.ai` in the request is PII
 
-```shell
+```shell showLineNumbers title="Curl Request"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
@@ -108,7 +109,7 @@ Expected response on failure
 
 <TabItem label="Successful Call " value = "allowed">
 
-```shell
+```shell showLineNumbers title="Curl Request"
 curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
@@ -126,30 +127,29 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 </Tabs>
 
-## Advanced 
-### Set category-based thresholds.
 
-Lakera has 2 categories for prompt_injection attacks:
-- jailbreak
-- prompt_injection
+## Supported Params 
 
 ```yaml
-model_list:
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
 guardrails:
   - guardrail_name: "lakera-guard"
     litellm_params:
-      guardrail: lakera  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
-      category_thresholds:
-        prompt_injection: 0.1
-        jailbreak: 0.1
-  
+      ### OPTIONAL ### 
+      # project_id: Optional[str] = None,
+      # payload: Optional[bool] = True,
+      # breakdown: Optional[bool] = True,
+      # metadata: Optional[Dict] = None,
+      # dev_info: Optional[bool] = True,
 ```
+
+- `api_base`: (Optional[str]) The base of the Lakera integration. Defaults to `https://api.lakera.ai` 
+- `api_key`: (str) The API Key for the Lakera integration.
+- `project_id`: (Optional[str]) ID of the relevant project
+- `payload`: (Optional[bool]) When true the response will return a payload object containing any PII, profanity or custom detector regex matches detected, along with their location within the contents. 
+- `breakdown`: (Optional[bool]) When true the response will return a breakdown list of the detectors that were run, as defined in the policy, and whether each of them detected something or not.
+- `metadata`: (Optional[Dict]) Metadata tags can be attached to screening requests as an object that can contain any arbitrary key-value pairs. 
+- `dev_info`: (Optional[bool]) When true the response will return an object with developer information about the build of Lakera Guard.

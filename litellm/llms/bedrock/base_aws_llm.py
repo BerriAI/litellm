@@ -2,13 +2,26 @@ import hashlib
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+    get_args,
+)
 
 import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
+from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
@@ -52,6 +65,7 @@ class BaseAWSLLM:
             "aws_role_name",
             "aws_web_identity_token",
             "aws_sts_endpoint",
+            "aws_bedrock_runtime_endpoint",
         ]
 
     def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
@@ -62,6 +76,7 @@ class BaseAWSLLM:
         credential_str = json.dumps(credential_args, sort_keys=True)
         return hashlib.sha256(credential_str.encode()).hexdigest()
 
+    @tracer.wrap()
     def get_credentials(
         self,
         aws_access_key_id: Optional[str] = None,
@@ -99,7 +114,7 @@ class BaseAWSLLM:
             elif param is None:  # check if uppercase value in env
                 key = self.aws_authentication_params[i]
                 if key.upper() in os.environ:
-                    params_to_check[i] = os.getenv(key)
+                    params_to_check[i] = os.getenv(key.upper())
 
         # Assign updated values back to parameters
         (
@@ -163,7 +178,10 @@ class BaseAWSLLM:
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
             )
-        elif aws_role_name is not None and aws_session_name is not None:
+        elif aws_role_name is not None:
+            # If aws_session_name is not provided, generate a default one
+            if aws_session_name is None:
+                aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
             credentials, _cache_ttl = self._auth_with_aws_role(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
@@ -199,6 +217,170 @@ class BaseAWSLLM:
         self.iam_cache.set_cache(cache_key, credentials, ttl=_cache_ttl)
         return credentials
 
+    def _get_aws_region_from_model_arn(self, model: Optional[str]) -> Optional[str]:
+        try:
+            # First check if the string contains the expected prefix
+            if not isinstance(model, str) or "arn:aws:bedrock" not in model:
+                return None
+
+            # Split the ARN and check if we have enough parts
+            parts = model.split(":")
+            if len(parts) < 4:
+                return None
+
+            # Get the region from the correct position
+            region = parts[3]
+            if not region:  # Check if region is empty
+                return None
+
+            return region
+        except Exception:
+            # Catch any unexpected errors and return None
+            return None
+
+    @staticmethod
+    def _get_provider_from_model_path(
+        model_path: str,
+    ) -> Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+        """
+        Helper function to get the provider from a model path with format: provider/model-name
+
+        Args:
+            model_path (str): The model path (e.g., 'llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n' or 'anthropic/model-name')
+
+        Returns:
+            Optional[str]: The provider name, or None if no valid provider found
+        """
+        parts = model_path.split("/")
+        if len(parts) >= 1:
+            provider = parts[0]
+            if provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, provider)
+        return None
+
+    @staticmethod
+    def get_bedrock_invoke_provider(
+        model: str,
+    ) -> Optional[BEDROCK_INVOKE_PROVIDERS_LITERAL]:
+        """
+        Helper function to get the bedrock provider from the model
+
+        handles 3 scenarions:
+        1. model=invoke/anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
+        2. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
+        3. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
+        4. model=us.amazon.nova-pro-v1:0 -> Returns `nova`
+        """
+        if model.startswith("invoke/"):
+            model = model.replace("invoke/", "", 1)
+
+        _split_model = model.split(".")[0]
+        if _split_model in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
+
+        # If not a known provider, check for pattern with two slashes
+        provider = BaseAWSLLM._get_provider_from_model_path(model)
+        if provider is not None:
+            return provider
+
+        # check if provider == "nova"
+        if "nova" in model:
+            return "nova"
+        else:
+            for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                if provider in model:
+                    return provider
+        return None
+
+    def _get_aws_region_name(
+        self,
+        optional_params: dict,
+        model: Optional[str] = None,
+        model_id: Optional[str] = None,
+    ) -> str:
+        """
+        Get the AWS region name from the environment variables.
+
+        Parameters:
+            optional_params (dict): Optional parameters for the model call
+            model (str): The model name
+            model_id (str): The model ID. This is the ARN of the model, if passed in as a separate param.
+
+        Returns:
+            str: The AWS region name
+        """
+        aws_region_name = optional_params.get("aws_region_name", None)
+        ### SET REGION NAME ###
+        if aws_region_name is None:
+            # check model arn #
+            if model_id is not None:
+                aws_region_name = self._get_aws_region_from_model_arn(model_id)
+            else:
+                aws_region_name = self._get_aws_region_from_model_arn(model)
+            # check env #
+            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+
+            if (
+                aws_region_name is None
+                and litellm_aws_region_name is not None
+                and isinstance(litellm_aws_region_name, str)
+            ):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name = get_secret("AWS_REGION", None)
+            if (
+                aws_region_name is None
+                and standard_aws_region_name is not None
+                and isinstance(standard_aws_region_name, str)
+            ):
+                aws_region_name = standard_aws_region_name
+        if aws_region_name is None:
+            try:
+                import boto3
+
+                with tracer.trace("boto3.Session()"):
+                    session = boto3.Session()
+                configured_region = session.region_name
+                if configured_region:
+                    aws_region_name = configured_region
+                else:
+                    aws_region_name = "us-west-2"
+            except Exception:
+                aws_region_name = "us-west-2"
+
+        return aws_region_name
+
+    def get_aws_region_name_for_non_llm_api_calls(
+        self,
+        aws_region_name: Optional[str] = None,
+    ):
+        """
+        Get the AWS region name for non-llm api calls.
+
+        LLM API calls check the model arn and end up using that as the region name.
+
+        For non-llm api calls eg. Guardrails, Vector Stores we just need to check the dynamic param or env vars.
+        """
+        if aws_region_name is None:
+            # check env #
+            litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+
+            if litellm_aws_region_name is not None and isinstance(
+                litellm_aws_region_name, str
+            ):
+                aws_region_name = litellm_aws_region_name
+
+            standard_aws_region_name = get_secret("AWS_REGION", None)
+            if standard_aws_region_name is not None and isinstance(
+                standard_aws_region_name, str
+            ):
+                aws_region_name = standard_aws_region_name
+
+            if aws_region_name is None:
+                aws_region_name = "us-west-2"
+        return aws_region_name
+
+    @tracer.wrap()
     def _auth_with_web_identity_token(
         self,
         aws_web_identity_token: str,
@@ -229,11 +411,12 @@ class BaseAWSLLM:
                 status_code=401,
             )
 
-        sts_client = boto3.client(
-            "sts",
-            region_name=aws_region_name,
-            endpoint_url=sts_endpoint,
-        )
+        with tracer.trace("boto3.client(sts)"):
+            sts_client = boto3.client(
+                "sts",
+                region_name=aws_region_name,
+                endpoint_url=sts_endpoint,
+            )
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
@@ -252,16 +435,18 @@ class BaseAWSLLM:
             "region_name": aws_region_name,
         }
 
-        if sts_response["PackedPolicySize"] > 75:
+        if sts_response["PackedPolicySize"] > BEDROCK_MAX_POLICY_SIZE:
             verbose_logger.warning(
                 f"The policy size is greater than 75% of the allowed size, PackedPolicySize: {sts_response['PackedPolicySize']}"
             )
 
-        session = boto3.Session(**iam_creds_dict)
+        with tracer.trace("boto3.Session(**iam_creds_dict)"):
+            session = boto3.Session(**iam_creds_dict)
 
         iam_creds = session.get_credentials()
         return iam_creds, self._get_default_ttl_for_boto3_credentials()
 
+    @tracer.wrap()
     def _auth_with_aws_role(
         self,
         aws_access_key_id: Optional[str],
@@ -275,11 +460,12 @@ class BaseAWSLLM:
         import boto3
         from botocore.credentials import Credentials
 
-        sts_client = boto3.client(
-            "sts",
-            aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
-            aws_secret_access_key=aws_secret_access_key,  # [OPTIONAL]
-        )
+        with tracer.trace("boto3.client(sts)"):
+            sts_client = boto3.client(
+                "sts",
+                aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
+                aws_secret_access_key=aws_secret_access_key,  # [OPTIONAL]
+            )
 
         sts_response = sts_client.assume_role(
             RoleArn=aws_role_name, RoleSessionName=aws_session_name
@@ -287,7 +473,6 @@ class BaseAWSLLM:
 
         # Extract the credentials from the response and convert to Session Credentials
         sts_credentials = sts_response["Credentials"]
-
         credentials = Credentials(
             access_key=sts_credentials["AccessKeyId"],
             secret_key=sts_credentials["SecretAccessKey"],
@@ -300,6 +485,7 @@ class BaseAWSLLM:
         sts_ttl = (sts_expiry - current_time).total_seconds() - 60
         return credentials, sts_ttl
 
+    @tracer.wrap()
     def _auth_with_aws_profile(
         self, aws_profile_name: str
     ) -> Tuple[Credentials, Optional[int]]:
@@ -309,9 +495,11 @@ class BaseAWSLLM:
         import boto3
 
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
-        client = boto3.Session(profile_name=aws_profile_name)
-        return client.get_credentials(), None
+        with tracer.trace("boto3.Session(profile_name=aws_profile_name)"):
+            client = boto3.Session(profile_name=aws_profile_name)
+            return client.get_credentials(), None
 
+    @tracer.wrap()
     def _auth_with_aws_session_token(
         self,
         aws_access_key_id: str,
@@ -332,6 +520,7 @@ class BaseAWSLLM:
 
         return credentials, None
 
+    @tracer.wrap()
     def _auth_with_access_key_and_secret_key(
         self,
         aws_access_key_id: str,
@@ -344,26 +533,31 @@ class BaseAWSLLM:
         import boto3
 
         # Check if credentials are already in cache. These credentials have no expiry time.
-
-        session = boto3.Session(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=aws_region_name,
-        )
+        with tracer.trace(
+            "boto3.Session(aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key, region_name=aws_region_name)"
+        ):
+            session = boto3.Session(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region_name=aws_region_name,
+            )
 
         credentials = session.get_credentials()
         return credentials, self._get_default_ttl_for_boto3_credentials()
 
+    @tracer.wrap()
     def _auth_with_env_vars(self) -> Tuple[Credentials, Optional[int]]:
         """
         Authenticate with AWS Environment Variables
         """
         import boto3
 
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        return credentials, None
+        with tracer.trace("boto3.Session()"):
+            session = boto3.Session()
+            credentials = session.get_credentials()
+            return credentials, None
 
+    @tracer.wrap()
     def _get_default_ttl_for_boto3_credentials(self) -> int:
         """
         Get the default TTL for boto3 credentials
@@ -377,6 +571,7 @@ class BaseAWSLLM:
         api_base: Optional[str],
         aws_bedrock_runtime_endpoint: Optional[str],
         aws_region_name: str,
+        endpoint_type: Optional[Literal["runtime", "agent"]] = "runtime",
     ) -> Tuple[str, str]:
         env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
         if api_base is not None:
@@ -390,7 +585,10 @@ class BaseAWSLLM:
         ):
             endpoint_url = env_aws_bedrock_runtime_endpoint
         else:
-            endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+            endpoint_url = self._select_default_endpoint_url(
+                endpoint_type=endpoint_type,
+                aws_region_name=aws_region_name,
+            )
 
         # Determine proxy_endpoint_url
         if env_aws_bedrock_runtime_endpoint and isinstance(
@@ -406,8 +604,21 @@ class BaseAWSLLM:
 
         return endpoint_url, proxy_endpoint_url
 
+    def _select_default_endpoint_url(
+        self, endpoint_type: Optional[Literal["runtime", "agent"]], aws_region_name: str
+    ) -> str:
+        """
+        Select the default endpoint url based on the endpoint type
+
+        Default endpoint url is https://bedrock-runtime.{aws_region_name}.amazonaws.com
+        """
+        if endpoint_type == "agent":
+            return f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+        else:
+            return f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
+
     def _get_boto_credentials_from_optional_params(
-        self, optional_params: dict
+        self, optional_params: dict, model: Optional[str] = None
     ) -> Boto3CredentialsInfo:
         """
         Get boto3 credentials from optional params
@@ -427,7 +638,8 @@ class BaseAWSLLM:
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_session_token = optional_params.pop("aws_session_token", None)
-        aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_region_name = self._get_aws_region_name(optional_params, model)
+        optional_params.pop("aws_region_name", None)
         aws_role_name = optional_params.pop("aws_role_name", None)
         aws_session_name = optional_params.pop("aws_session_name", None)
         aws_profile_name = optional_params.pop("aws_profile_name", None)
@@ -436,25 +648,6 @@ class BaseAWSLLM:
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
-
-        ### SET REGION NAME ###
-        if aws_region_name is None:
-            # check env #
-            litellm_aws_region_name = get_secret_str("AWS_REGION_NAME", None)
-
-            if litellm_aws_region_name is not None and isinstance(
-                litellm_aws_region_name, str
-            ):
-                aws_region_name = litellm_aws_region_name
-
-            standard_aws_region_name = get_secret_str("AWS_REGION", None)
-            if standard_aws_region_name is not None and isinstance(
-                standard_aws_region_name, str
-            ):
-                aws_region_name = standard_aws_region_name
-
-            if aws_region_name is None:
-                aws_region_name = "us-west-2"
 
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
@@ -474,31 +667,136 @@ class BaseAWSLLM:
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
         )
 
+    @tracer.wrap()
     def get_request_headers(
         self,
         credentials: Credentials,
         aws_region_name: str,
         extra_headers: Optional[dict],
         endpoint_url: str,
-        data: str,
+        data: Union[str, bytes],
         headers: dict,
+        api_key: Optional[str] = None,
     ) -> AWSPreparedRequest:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        if api_key is not None:
+            aws_bearer_token: Optional[str] = api_key
+        else:
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-
-        request = AWSRequest(
-            method="POST", url=endpoint_url, data=data, headers=headers
-        )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
+        if aws_bearer_token:
+            try:
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
+            headers["Authorization"] = f"Bearer {aws_bearer_token}"
+            request = AWSRequest(
+                method="POST", url=endpoint_url, data=data, headers=headers
+            )
+        else:
+            try:
+                from botocore.auth import SigV4Auth
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
+            sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+            request = AWSRequest(
+                method="POST", url=endpoint_url, data=data, headers=headers
+            )
+            sigv4.add_auth(request)
+            if (
+                extra_headers is not None and "Authorization" in extra_headers
+            ):  # prevent sigv4 from overwriting the auth header
+                request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
 
         return prepped
+
+    def _sign_request(
+        self,
+        service_name: Literal["bedrock", "sagemaker"],
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+        api_key: Optional[str] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """
+        Sign a request for Bedrock or Sagemaker
+
+        Returns:
+            Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
+        """
+        if api_key is not None:
+            aws_bearer_token: Optional[str] = api_key
+        else:
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+
+        # If aws bearer token is set, use it directly in the header
+        if aws_bearer_token:
+            headers = headers or {}
+            headers["Content-Type"] = "application/json"
+            headers["Authorization"] = f"Bearer {aws_bearer_token}"
+            return headers, json.dumps(request_data).encode()
+
+        # If no bearer token is set, proceed with the existing SigV4 authentication
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.credentials import Credentials
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+        ## CREDENTIALS ##
+        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
+        aws_secret_access_key = optional_params.get("aws_secret_access_key", None)
+        aws_access_key_id = optional_params.get("aws_access_key_id", None)
+        aws_session_token = optional_params.get("aws_session_token", None)
+        aws_role_name = optional_params.get("aws_role_name", None)
+        aws_session_name = optional_params.get("aws_session_name", None)
+        aws_profile_name = optional_params.get("aws_profile_name", None)
+        aws_web_identity_token = optional_params.get("aws_web_identity_token", None)
+        aws_sts_endpoint = optional_params.get("aws_sts_endpoint", None)
+        aws_region_name = self._get_aws_region_name(
+            optional_params=optional_params, model=model
+        )
+
+        credentials: Credentials = self.get_credentials(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=aws_session_name,
+            aws_profile_name=aws_profile_name,
+            aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
+            aws_sts_endpoint=aws_sts_endpoint,
+        )
+
+        sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
+        if headers is not None:
+            headers = {"Content-Type": "application/json", **headers}
+        else:
+            headers = {"Content-Type": "application/json"}
+
+        request = AWSRequest(
+            method="POST",
+            url=api_base,
+            data=json.dumps(request_data),
+            headers=headers,
+        )
+        sigv4.add_auth(request)
+
+        request_headers_dict = dict(request.headers)
+        if (
+            headers is not None and "Authorization" in headers
+        ):  # prevent sigv4 from overwriting the auth header
+            request_headers_dict["Authorization"] = headers["Authorization"]
+
+        return request_headers_dict, request.body

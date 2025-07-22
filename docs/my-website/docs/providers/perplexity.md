@@ -17,7 +17,7 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="perplexity/mistral-7b-instruct", 
+    model="perplexity/sonar-pro", 
     messages=messages
 )
 print(response)
@@ -30,7 +30,7 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="perplexity/mistral-7b-instruct", 
+    model="perplexity/sonar-pro", 
     messages=messages,
     stream=True
 )
@@ -39,41 +39,17 @@ for chunk in response:
     print(chunk)
 ```
 
+## Reasoning Effort
 
-## Supported Models
-All models listed here https://docs.perplexity.ai/docs/model-cards are supported.  Just do `model=perplexity/<model-name>`.
-
-| Model Name               | Function Call                                                                                                                                                      |
-|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| pplx-7b-chat | `completion(model="perplexity/pplx-7b-chat", messages)` | 
-| pplx-70b-chat | `completion(model="perplexity/pplx-70b-chat", messages)` | 
-| pplx-7b-online | `completion(model="perplexity/pplx-7b-online", messages)` | 
-| pplx-70b-online | `completion(model="perplexity/pplx-70b-online", messages)` | 
-| codellama-34b-instruct | `completion(model="perplexity/codellama-34b-instruct", messages)` | 
-| llama-2-13b-chat | `completion(model="perplexity/llama-2-13b-chat", messages)` | 
-| llama-2-70b-chat | `completion(model="perplexity/llama-2-70b-chat", messages)` | 
-| mistral-7b-instruct | `completion(model="perplexity/mistral-7b-instruct", messages)` | 
-| openhermes-2-mistral-7b | `completion(model="perplexity/openhermes-2-mistral-7b", messages)` | 
-| openhermes-2.5-mistral-7b | `completion(model="perplexity/openhermes-2.5-mistral-7b", messages)` | 
-| pplx-7b-chat-alpha | `completion(model="perplexity/pplx-7b-chat-alpha", messages)` | 
-| pplx-70b-chat-alpha | `completion(model="perplexity/pplx-70b-chat-alpha", messages)` | 
-
-
-
-
-
-
-
-## Return citations 
-
-Perplexity supports returning citations via `return_citations=True`. [Perplexity Docs](https://docs.perplexity.ai/reference/post_chat_completions). Note: Perplexity has this feature in **closed beta**, so you need them to grant you access to get citations from their API. 
-
-If perplexity returns citations, LiteLLM will pass it straight through. 
+Requires v1.72.6+
 
 :::info
 
-For passing more provider-specific, [go here](../completion/provider_specific_params.md)
+See full guide on Reasoning with LiteLLM [here](../reasoning_content)
+
 :::
+
+You can set the reasoning effort by setting the `reasoning_effort` parameter.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -84,27 +60,26 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="perplexity/mistral-7b-instruct", 
+    model="perplexity/sonar-reasoning", 
     messages=messages,
-    return_citations=True
+    reasoning_effort="high"
 )
 print(response)
 ```
-
 </TabItem>
-<TabItem value="proxy" label="PROXY">
+<TabItem value="proxy" label="Proxy">
 
-1. Add perplexity to config.yaml
+1. Setup config.yaml
 
 ```yaml
 model_list:
-  - model_name: "perplexity-model"
+  - model_name: perplexity-sonar-reasoning-model
     litellm_params:
-      model: "llama-3.1-sonar-small-128k-online"
-      api_key: os.environ/PERPLEXITY_API_KEY
+        model: perplexity/sonar-reasoning
+        api_key: os.environ/PERPLEXITYAI_API_KEY
 ```
 
-2. Start proxy 
+2. Start proxy
 
 ```bash
 litellm --config /path/to/config.yaml
@@ -112,23 +87,40 @@ litellm --config /path/to/config.yaml
 
 3. Test it! 
 
-```bash
-curl -L -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
--d '{
-    "model": "perplexity-model",
-    "messages": [
-      {
-        "role": "user",
-        "content": "Who won the world cup in 2022?"
-      }
-    ],
-    "return_citations": true
-}'
-```
+Replace `anything` with your LiteLLM Proxy Virtual Key, if [setup](../proxy/virtual_keys).
 
-[**Call w/ OpenAI SDK, Langchain, Instructor, etc.**](../proxy/user_keys.md#chatcompletions)
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer anything" \
+  -d '{
+    "model": "perplexity-sonar-reasoning-model",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "reasoning_effort": "high"
+  }'
+```
 
 </TabItem>
 </Tabs>
+
+## Supported Models
+All models listed here https://docs.perplexity.ai/docs/model-cards are supported.  Just do `model=perplexity/<model-name>`.
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| sonar-deep-research | `completion(model="perplexity/sonar-deep-research", messages)` | 
+| sonar-reasoning-pro | `completion(model="perplexity/sonar-reasoning-pro", messages)` | 
+| sonar-reasoning | `completion(model="perplexity/sonar-reasoning", messages)` | 
+| sonar-pro | `completion(model="perplexity/sonar-pro", messages)` | 
+| sonar | `completion(model="perplexity/sonar", messages)` | 
+| r1-1776 | `completion(model="perplexity/r1-1776", messages)` | 
+
+
+
+
+
+
+:::info
+
+For more information about passing provider-specific parameters, [go here](../completion/provider_specific_params.md)
+:::

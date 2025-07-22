@@ -1,5 +1,5 @@
 """
-Manages calling Bedrock's `/converse` API + `/invoke` API 
+TODO: DELETE FILE. Bedrock LLM is no longer used. Goto `litellm/llms/bedrock/chat/invoke_transformations/base_invoke_transformation.py`
 """
 
 import copy
@@ -26,7 +26,6 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import verbose_logger
-from litellm._logging import print_verbose
 from litellm.caching.caching import InMemoryCache
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -40,6 +39,9 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     parse_xml_params,
     prompt_factory,
 )
+from litellm.llms.anthropic.chat.handler import (
+    ModelResponseIterator as AnthropicModelResponseIterator,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -48,13 +50,20 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Choices
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import (
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
@@ -64,6 +73,9 @@ _response_stream_shape_cache = None
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
+from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+converse_config = AmazonConverseConfig()
 
 
 class AmazonCohereChatConfig:
@@ -177,6 +189,7 @@ async def make_call(
     logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
+    bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
 ):
     try:
         if client is None:
@@ -208,11 +221,27 @@ async def make_call(
                 api_key="",
                 data=data,
                 messages=messages,
-                print_verbose=print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
+            )
+        elif bedrock_invoke_provider == "anthropic":
+            decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
+                model=model,
+                sync_stream=False,
+                json_mode=json_mode,
+            )
+            completion_stream = decoder.aiter_bytes(
+                response.aiter_bytes(chunk_size=1024)
+            )
+        elif bedrock_invoke_provider == "deepseek_r1":
+            decoder = AmazonDeepSeekR1StreamDecoder(
+                model=model,
+                sync_stream=False,
+            )
+            completion_stream = decoder.aiter_bytes(
+                response.aiter_bytes(chunk_size=1024)
             )
         else:
             decoder = AWSEventStreamDecoder(model=model)
@@ -243,11 +272,13 @@ def make_sync_call(
     api_base: str,
     headers: dict,
     data: str,
+    signed_json_body: Optional[bytes],
     model: str,
     messages: list,
     logging_obj: Logging,
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
+    bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
 ):
     try:
         if client is None:
@@ -256,7 +287,7 @@ def make_sync_call(
         response = client.post(
             api_base,
             headers=headers,
-            data=data,
+            data=signed_json_body if signed_json_body is not None else data,
             stream=not fake_stream,
             logging_obj=logging_obj,
         )
@@ -277,12 +308,24 @@ def make_sync_call(
                 api_key="",
                 data=data,
                 messages=messages,
-                print_verbose=print_verbose,
                 encoding=litellm.encoding,
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
             )
+        elif bedrock_invoke_provider == "anthropic":
+            decoder: AWSEventStreamDecoder = AmazonAnthropicClaudeStreamDecoder(
+                model=model,
+                sync_stream=True,
+                json_mode=json_mode,
+            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
+        elif bedrock_invoke_provider == "deepseek_r1":
+            decoder = AmazonDeepSeekR1StreamDecoder(
+                model=model,
+                sync_stream=True,
+            )
+            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
         else:
             decoder = AWSEventStreamDecoder(model=model)
             completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=1024))
@@ -455,9 +498,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params["original_response"] = (
-                            outputText  # allow user to access raw anthropic tool calling response
-                        )
+                        model_response._hidden_params[
+                            "original_response"
+                        ] = outputText  # allow user to access raw anthropic tool calling response
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -492,7 +535,7 @@ class BedrockLLM(BaseAWSLLM):
                                 ].message.tool_calls:
                                     _tool_call = {**tool_call.dict(), "index": 0}
                                     _tool_calls.append(_tool_call)
-                            delta_obj = litellm.utils.Delta(
+                            delta_obj = Delta(
                                 content=getattr(
                                     model_response.choices[0].message, "content", None
                                 ),
@@ -765,9 +808,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params["stream"] = (
-                        True  # cohere requires stream = True in inference params
-                    )
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if model.startswith("anthropic.claude-3"):
@@ -1114,27 +1157,6 @@ class BedrockLLM(BaseAWSLLM):
         return streaming_response
 
     @staticmethod
-    def get_bedrock_invoke_provider(
-        model: str,
-    ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
-        """
-        Helper function to get the bedrock provider from the model
-
-        handles 2 scenarions:
-        1. model=anthropic.claude-3-5-sonnet-20240620-v1:0 -> Returns `anthropic`
-        2. model=llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n -> Returns `llama`
-        """
-        _split_model = model.split(".")[0]
-        if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
-            return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
-
-        # If not a known provider, check for pattern with two slashes
-        provider = BedrockLLM._get_provider_from_model_path(model)
-        if provider is not None:
-            return provider
-        return None
-
-    @staticmethod
     def _get_provider_from_model_path(
         model_path: str,
     ) -> Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL]:
@@ -1185,7 +1207,6 @@ class BedrockLLM(BaseAWSLLM):
 def get_response_stream_shape():
     global _response_stream_shape_cache
     if _response_stream_shape_cache is None:
-
         from botocore.loaders import Loader
         from botocore.model import ServiceModel
 
@@ -1204,6 +1225,7 @@ class AWSEventStreamDecoder:
         self.model = model
         self.parser = EventStreamJSONParser()
         self.content_blocks: List[ContentBlockDeltaEvent] = []
+        self.tool_calls_index: Optional[int] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1214,7 +1236,9 @@ class AWSEventStreamDecoder:
         if len(self.content_blocks) == 0:
             return False
 
-        if "text" in self.content_blocks[0]:
+        if (
+            "toolUse" not in self.content_blocks[0]
+        ):  # be explicit - only do this if tool use block, as this is to prevent json decoding errors
             return False
 
         for block in self.content_blocks:
@@ -1225,38 +1249,96 @@ class AWSEventStreamDecoder:
             return True
         return False
 
-    def converse_chunk_parser(self, chunk_data: dict) -> GChunk:
+    def extract_reasoning_content_str(
+        self, reasoning_content_block: BedrockConverseReasoningContentBlockDelta
+    ) -> Optional[str]:
+        if "text" in reasoning_content_block:
+            return reasoning_content_block["text"]
+        return None
+
+    def translate_thinking_blocks(
+        self, thinking_block: BedrockConverseReasoningContentBlockDelta
+    ) -> Optional[
+        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+    ]:
+        """
+        Translate the thinking blocks to a string
+        """
+
+        thinking_blocks_list: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
+        _thinking_block: Optional[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = None
+
+        if "text" in thinking_block:
+            _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+            _thinking_block["thinking"] = thinking_block["text"]
+        elif "signature" in thinking_block:
+            _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+            _thinking_block["signature"] = thinking_block["signature"]
+            _thinking_block["thinking"] = ""  # consistent with anthropic response
+        elif "redactedContent" in thinking_block:
+            _thinking_block = ChatCompletionRedactedThinkingBlock(
+                type="redacted_thinking", data=thinking_block["redactedContent"]
+            )
+        if _thinking_block is not None:
+            thinking_blocks_list.append(_thinking_block)
+        return thinking_blocks_list
+
+    def converse_chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
         try:
             verbose_logger.debug("\n\nRaw Chunk: {}\n\n".format(chunk_data))
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
-            is_finished = False
             finish_reason = ""
-            usage: Optional[ChatCompletionUsageBlock] = None
+            usage: Optional[Usage] = None
+            provider_specific_fields: dict = {}
+            reasoning_content: Optional[str] = None
+            thinking_blocks: Optional[
+                List[
+                    Union[
+                        ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
+                    ]
+                ]
+            ] = None
 
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
                 self.content_blocks = []  # reset
-                if (
-                    start_obj is not None
-                    and "toolUse" in start_obj
-                    and start_obj["toolUse"] is not None
-                ):
-                    ## check tool name was formatted by litellm
-                    _response_tool_name = start_obj["toolUse"]["name"]
-                    response_tool_name = get_bedrock_tool_name(
-                        response_tool_name=_response_tool_name
-                    )
-                    tool_use = {
-                        "id": start_obj["toolUse"]["toolUseId"],
-                        "type": "function",
-                        "function": {
-                            "name": response_tool_name,
-                            "arguments": "",
-                        },
-                        "index": index,
-                    }
+                if start_obj is not None:
+                    if "toolUse" in start_obj and start_obj["toolUse"] is not None:
+                        ## check tool name was formatted by litellm
+                        _response_tool_name = start_obj["toolUse"]["name"]
+                        response_tool_name = get_bedrock_tool_name(
+                            response_tool_name=_response_tool_name
+                        )
+                        self.tool_calls_index = (
+                            0
+                            if self.tool_calls_index is None
+                            else self.tool_calls_index + 1
+                        )
+                        tool_use = {
+                            "id": start_obj["toolUse"]["toolUseId"],
+                            "type": "function",
+                            "function": {
+                                "name": response_tool_name,
+                                "arguments": "",
+                            },
+                            "index": self.tool_calls_index,
+                        }
+                    elif (
+                        "reasoningContent" in start_obj
+                        and start_obj["reasoningContent"] is not None
+                    ):  # redacted thinking can be in start object
+                        thinking_blocks = self.translate_thinking_blocks(
+                            start_obj["reasoningContent"]
+                        )
+                        provider_specific_fields = {
+                            "reasoningContent": start_obj["reasoningContent"],
+                        }
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
                 self.content_blocks.append(delta_obj)
@@ -1270,8 +1352,26 @@ class AWSEventStreamDecoder:
                             "name": None,
                             "arguments": delta_obj["toolUse"]["input"],
                         },
-                        "index": index,
+                        "index": self.tool_calls_index
+                        if self.tool_calls_index is not None
+                        else index,
                     }
+                elif "reasoningContent" in delta_obj:
+                    provider_specific_fields = {
+                        "reasoningContent": delta_obj["reasoningContent"],
+                    }
+                    reasoning_content = self.extract_reasoning_content_str(
+                        delta_obj["reasoningContent"]
+                    )
+                    thinking_blocks = self.translate_thinking_blocks(
+                        delta_obj["reasoningContent"]
+                    )
+                    if (
+                        thinking_blocks
+                        and len(thinking_blocks) > 0
+                        and reasoning_content is None
+                    ):
+                        reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
@@ -1288,31 +1388,43 @@ class AWSEventStreamDecoder:
                     }
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
-                is_finished = True
             elif "usage" in chunk_data:
-                usage = ChatCompletionUsageBlock(
-                    prompt_tokens=chunk_data.get("inputTokens", 0),
-                    completion_tokens=chunk_data.get("outputTokens", 0),
-                    total_tokens=chunk_data.get("totalTokens", 0),
-                )
+                usage = converse_config._transform_usage(chunk_data.get("usage", {}))
 
-            response = GChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
-                usage=usage,
-                index=index,
-            )
-
+            model_response_provider_specific_fields = {}
             if "trace" in chunk_data:
                 trace = chunk_data.get("trace")
-                response["provider_specific_fields"] = {"trace": trace}
+                model_response_provider_specific_fields["trace"] = trace
+            response = ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        finish_reason=finish_reason,
+                        index=index,
+                        delta=Delta(
+                            content=text,
+                            role="assistant",
+                            tool_calls=[tool_use] if tool_use else None,
+                            provider_specific_fields=(
+                                provider_specific_fields
+                                if provider_specific_fields
+                                else None
+                            ),
+                            thinking_blocks=thinking_blocks,
+                            reasoning_content=reasoning_content,
+                        ),
+                    )
+                ],
+                usage=usage,
+                provider_specific_fields=model_response_provider_specific_fields,
+            )
+
             return response
         except Exception as e:
             raise Exception("Received streaming error - {}".format(str(e)))
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+    def _chunk_parser(
+        self, chunk_data: dict
+    ) -> Union[GChunk, ModelResponseStream, dict]:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -1323,7 +1435,7 @@ class AWSEventStreamDecoder:
             text = chunk_data.get("completions")[0].get("data").get("text")  # type: ignore
             is_finished = True
             finish_reason = "stop"
-        ######## bedrock.anthropic mappings ###############
+        ######## /bedrock/converse mappings ###############
         elif (
             "contentBlockIndex" in chunk_data
             or "stopReason" in chunk_data
@@ -1331,6 +1443,11 @@ class AWSEventStreamDecoder:
             or "trace" in chunk_data
         ):
             return self.converse_chunk_parser(chunk_data=chunk_data)
+        ######### /bedrock/invoke nova mappings ###############
+        elif "contentBlockDelta" in chunk_data:
+            # when using /bedrock/invoke/nova, the chunk_data is nested under "contentBlockDelta"
+            _chunk_data = chunk_data.get("contentBlockDelta", None)
+            return self.converse_chunk_parser(chunk_data=_chunk_data)
         ######## bedrock.mistral mappings ###############
         elif "outputs" in chunk_data:
             if (
@@ -1365,7 +1482,9 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
-    def iter_bytes(self, iterator: Iterator[bytes]) -> Iterator[GChunk]:
+    def iter_bytes(
+        self, iterator: Iterator[bytes]
+    ) -> Iterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -1381,7 +1500,7 @@ class AWSEventStreamDecoder:
 
     async def aiter_bytes(
         self, iterator: AsyncIterator[bytes]
-    ) -> AsyncIterator[GChunk]:
+    ) -> AsyncIterator[Union[GChunk, ModelResponseStream, dict]]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 
@@ -1427,6 +1546,51 @@ class AWSEventStreamDecoder:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
+
+
+class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+        sync_stream: bool,
+        json_mode: Optional[bool] = None,
+    ) -> None:
+        """
+        Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
+
+        The only difference between AWSEventStreamDecoder and AmazonAnthropicClaudeStreamDecoder is the `chunk_parser` method
+        """
+        super().__init__(model=model)
+        self.anthropic_model_response_iterator = AnthropicModelResponseIterator(
+            streaming_response=None,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+    def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
+        return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+
+
+class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
+    def __init__(
+        self,
+        model: str,
+        sync_stream: bool,
+    ) -> None:
+        super().__init__(model=model)
+        from litellm.llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
+            AmazonDeepseekR1ResponseIterator,
+        )
+
+        self.deepseek_model_response_iterator = AmazonDeepseekR1ResponseIterator(
+            streaming_response=None,
+            sync_stream=sync_stream,
+        )
+
+    def _chunk_parser(
+        self, chunk_data: dict
+    ) -> Union[GChunk, ModelResponseStream, dict]:
+        return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
 class MockResponseIterator:  # for returning ai21 streaming responses

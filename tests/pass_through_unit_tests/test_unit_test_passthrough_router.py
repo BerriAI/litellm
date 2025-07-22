@@ -11,6 +11,7 @@ from unittest.mock import patch
 from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
     PassthroughEndpointRouter,
 )
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 passthrough_endpoint_router = PassthroughEndpointRouter()
 
@@ -132,3 +133,185 @@ class TestPassthroughEndpointRouter(unittest.TestCase):
             ),
             "COHERE_API_KEY",
         )
+
+    def test_get_deployment_key(self):
+        """Test _get_deployment_key with various inputs"""
+        router = PassthroughEndpointRouter()
+
+        # Test with valid inputs
+        key = router._get_deployment_key("test-project", "us-central1")
+        assert key == "test-project-us-central1"
+
+        # Test with None values
+        key = router._get_deployment_key(None, "us-central1")
+        assert key is None
+
+        key = router._get_deployment_key("test-project", None)
+        assert key is None
+
+        key = router._get_deployment_key(None, None)
+        assert key is None
+
+    def test_add_vertex_credentials(self):
+        """Test add_vertex_credentials functionality"""
+        router = PassthroughEndpointRouter()
+
+        # Test adding valid credentials
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+
+        assert "test-project-us-central1" in router.deployment_key_to_vertex_credentials
+        creds = router.deployment_key_to_vertex_credentials["test-project-us-central1"]
+        assert creds.vertex_project == "test-project"
+        assert creds.vertex_location == "us-central1"
+        assert creds.vertex_credentials == '{"credentials": "test-creds"}'
+
+        # Test adding with None values
+        router.add_vertex_credentials(
+            project_id=None,
+            location=None,
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+        # Should not add None values
+        assert len(router.deployment_key_to_vertex_credentials) == 1
+
+    def test_default_credentials(self):
+        """
+        Test get_vertex_credentials with stored credentials.
+
+        Tests if default credentials are used if set.
+
+        Tests if no default credentials are used, if no default set
+        """
+        router = PassthroughEndpointRouter()
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+
+        creds = router.get_vertex_credentials(
+            project_id="test-project", location="us-central2"
+        )
+
+        assert creds is None
+
+    def test_get_vertex_env_vars(self):
+        """Test that _get_vertex_env_vars correctly reads environment variables"""
+        # Set environment variables for the test
+        os.environ["DEFAULT_VERTEXAI_PROJECT"] = "test-project-123"
+        os.environ["DEFAULT_VERTEXAI_LOCATION"] = "us-central1"
+        os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/creds"
+
+        try:
+            result = self.router._get_vertex_env_vars()
+            print(result)
+
+            # Verify the result
+            assert isinstance(result, VertexPassThroughCredentials)
+            assert result.vertex_project == "test-project-123"
+            assert result.vertex_location == "us-central1"
+            assert result.vertex_credentials == "/path/to/creds"
+
+        finally:
+            # Clean up environment variables
+            del os.environ["DEFAULT_VERTEXAI_PROJECT"]
+            del os.environ["DEFAULT_VERTEXAI_LOCATION"]
+            del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
+
+    def test_set_default_vertex_config(self):
+        """Test set_default_vertex_config with various inputs"""
+        # Test with None config - set environment variables first
+        os.environ["DEFAULT_VERTEXAI_PROJECT"] = "env-project"
+        os.environ["DEFAULT_VERTEXAI_LOCATION"] = "env-location"
+        os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"] = "env-creds"
+        os.environ["GOOGLE_CREDS"] = "secret-creds"
+
+        try:
+            # Test with None config
+            self.router.set_default_vertex_config()
+
+            assert self.router.default_vertex_config.vertex_project == "env-project"
+            assert self.router.default_vertex_config.vertex_location == "env-location"
+            assert self.router.default_vertex_config.vertex_credentials == "env-creds"
+
+            # Test with valid config.yaml settings on vertex_config
+            test_config = {
+                "vertex_project": "my-project-123",
+                "vertex_location": "us-central1",
+                "vertex_credentials": "path/to/creds",
+            }
+            self.router.set_default_vertex_config(test_config)
+
+            assert self.router.default_vertex_config.vertex_project == "my-project-123"
+            assert self.router.default_vertex_config.vertex_location == "us-central1"
+            assert (
+                self.router.default_vertex_config.vertex_credentials == "path/to/creds"
+            )
+
+            # Test with environment variable reference
+            test_config = {
+                "vertex_project": "my-project-123",
+                "vertex_location": "us-central1",
+                "vertex_credentials": "os.environ/GOOGLE_CREDS",
+            }
+            self.router.set_default_vertex_config(test_config)
+
+            assert (
+                self.router.default_vertex_config.vertex_credentials == "secret-creds"
+            )
+
+        finally:
+            # Clean up environment variables
+            del os.environ["DEFAULT_VERTEXAI_PROJECT"]
+            del os.environ["DEFAULT_VERTEXAI_LOCATION"]
+            del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
+            del os.environ["GOOGLE_CREDS"]
+
+    def test_vertex_passthrough_router_init(self):
+        """Test VertexPassThroughRouter initialization"""
+        router = PassthroughEndpointRouter()
+        assert isinstance(router.deployment_key_to_vertex_credentials, dict)
+        assert len(router.deployment_key_to_vertex_credentials) == 0
+
+    def test_get_vertex_credentials_none(self):
+        """Test get_vertex_credentials with various inputs"""
+        router = PassthroughEndpointRouter()
+
+        router.set_default_vertex_config(
+            config={
+                "vertex_project": None,
+                "vertex_location": None,
+                "vertex_credentials": None,
+            }
+        )
+
+        # Test with None project_id and location - should return default config
+        creds = router.get_vertex_credentials(None, None)
+        assert isinstance(creds, VertexPassThroughCredentials)
+
+        # Test with valid project_id and location but no stored credentials
+        creds = router.get_vertex_credentials("test-project", "us-central1")
+        assert isinstance(creds, VertexPassThroughCredentials)
+        assert creds.vertex_project is None
+        assert creds.vertex_location is None
+        assert creds.vertex_credentials is None
+
+    def test_get_vertex_credentials_stored(self):
+        """Test get_vertex_credentials with stored credentials"""
+        router = PassthroughEndpointRouter()
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+
+        creds = router.get_vertex_credentials(
+            project_id="test-project", location="us-central1"
+        )
+        assert creds.vertex_project == "test-project"
+        assert creds.vertex_location == "us-central1"
+        assert creds.vertex_credentials == '{"credentials": "test-creds"}'

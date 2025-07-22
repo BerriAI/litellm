@@ -70,6 +70,7 @@ class myCustomGuardrail(CustomGuardrail):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
         ],
     ):
         """

@@ -40,7 +40,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
 
     input_args: dict = {
         "kwargs": {
-            "model": "chatgpt-v-2",
+            "model": "chatgpt-v-3",
             "messages": [
                 {"role": "system", "content": "you are a helpful assistant.\n"},
                 {"role": "user", "content": "bom dia"},
@@ -89,14 +89,17 @@ def test_spend_logs_payload(model_id: Optional[str]):
                     },
                     "endpoint": "http://localhost:4000/chat/completions",
                     "model_group": "gpt-3.5-turbo",
-                    "deployment": "azure/chatgpt-v-2",
+                    "deployment": "azure/chatgpt-v-3",
                     "model_info": {
                         "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
                         "db_model": False,
                     },
                     "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
                     "caching_groups": None,
-                    "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-2', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+                    "error_information": None,
+                    "status": "success",
+                    "proxy_server_request": "{}",
+                    "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-3', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
                 },
                 "model_info": {
                     "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
@@ -155,7 +158,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 "api_base": "openai-gpt-4-test-v-1.openai.azure.com",
                 "acompletion": True,
                 "complete_input_dict": {
-                    "model": "chatgpt-v-2",
+                    "model": "chatgpt-v-3",
                     "messages": [
                         {"role": "system", "content": "you are a helpful assistant.\n"},
                         {"role": "user", "content": "bom dia"},
@@ -174,6 +177,10 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
                 "metadata": {
                     "user_api_key_end_user_id": "test-user",
+                },
+                "model_map_information": {
+                    "tpm": 1000,
+                    "rpm": 1000,
                 },
             },
         },
@@ -354,18 +361,33 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
             "user_api_key_end_user_id": "test-user",
         },
         "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+        "model_map_information": {
+            "tpm": 1000,
+            "rpm": 1000,
+        },
+    }
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello!"}],
+            }
+        }
     }
     input_args["kwargs"]["standard_logging_object"] = standard_logging_payload
+    input_args["kwargs"]["litellm_params"] = litellm_params
 
     payload: SpendLogsPayload = get_logging_payload(**input_args)
 
     print("json payload: ", json.dumps(payload, indent=4, default=str))
 
     # Verify messages and response are included in payload
-    assert payload["messages"] == json.dumps([{"role": "user", "content": "Hello!"}])
     assert payload["response"] == json.dumps(
         {"role": "assistant", "content": "Hi there!"}
     )
+    proxy_server_request = json.loads(payload["proxy_server_request"] or "{}")
+    assert proxy_server_request["model"] == "gpt-4"
+    assert proxy_server_request["messages"] == [{"role": "user", "content": "Hello!"}]
 
     # Clean up - reset general_settings
     general_settings["store_prompts_in_spend_logs"] = False

@@ -4,7 +4,11 @@ from typing import Literal, Optional, Tuple, Union
 
 import litellm
 from litellm import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.utils import _is_above_128k
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _is_above_128k,
+    generic_cost_per_token,
+)
+from litellm.types.utils import ModelInfo, Usage
 
 """
 Gemini pricing covers: 
@@ -20,7 +24,7 @@ Vertex AI -> character based pricing
 Google AI Studio -> token based pricing
 """
 
-models_without_dynamic_pricing = ["gemini-1.0-pro", "gemini-pro"]
+models_without_dynamic_pricing = ["gemini-1.0-pro", "gemini-pro", "gemini-2"]
 
 
 def cost_router(
@@ -46,14 +50,15 @@ def cost_router(
         call_type == "embedding" or call_type == "aembedding"
     ):
         return "cost_per_token"
+    elif custom_llm_provider == "vertex_ai" and ("gemini-2" in model):
+        return "cost_per_token"
     return "cost_per_character"
 
 
 def cost_per_character(
     model: str,
     custom_llm_provider: str,
-    prompt_tokens: float,
-    completion_tokens: float,
+    usage: Usage,
     prompt_characters: Optional[float] = None,
     completion_characters: Optional[float] = None,
 ) -> Tuple[float, float]:
@@ -86,8 +91,7 @@ def cost_per_character(
         prompt_cost, _ = cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            usage=usage,
         )
     else:
         try:
@@ -124,8 +128,7 @@ def cost_per_character(
             prompt_cost, _ = cost_per_token(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage,
             )
 
     ## CALCULATE OUTPUT COST
@@ -133,10 +136,10 @@ def cost_per_character(
         _, completion_cost = cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            usage=usage,
         )
     else:
+        completion_tokens = usage.completion_tokens
         try:
             if (
                 _is_above_128k(tokens=completion_characters * 4)  # 1 token = 4 char
@@ -172,9 +175,46 @@ def cost_per_character(
             _, completion_cost = cost_per_token(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
+                usage=usage,
             )
+
+    return prompt_cost, completion_cost
+
+
+def _handle_128k_pricing(
+    model_info: ModelInfo,
+    usage: Usage,
+) -> Tuple[float, float]:
+    ## CALCULATE INPUT COST
+    input_cost_per_token_above_128k_tokens = model_info.get(
+        "input_cost_per_token_above_128k_tokens"
+    )
+    output_cost_per_token_above_128k_tokens = model_info.get(
+        "output_cost_per_token_above_128k_tokens"
+    )
+
+    prompt_tokens = usage.prompt_tokens
+    completion_tokens = usage.completion_tokens
+
+    if (
+        _is_above_128k(tokens=prompt_tokens)
+        and input_cost_per_token_above_128k_tokens is not None
+    ):
+        prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
+    else:
+        prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
+
+    ## CALCULATE OUTPUT COST
+    output_cost_per_token_above_128k_tokens = model_info.get(
+        "output_cost_per_token_above_128k_tokens"
+    )
+    if (
+        _is_above_128k(tokens=completion_tokens)
+        and output_cost_per_token_above_128k_tokens is not None
+    ):
+        completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
+    else:
+        completion_cost = completion_tokens * model_info["output_cost_per_token"]
 
     return prompt_cost, completion_cost
 
@@ -182,8 +222,7 @@ def cost_per_character(
 def cost_per_token(
     model: str,
     custom_llm_provider: str,
-    prompt_tokens: float,
-    completion_tokens: float,
+    usage: Usage,
 ) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -200,43 +239,30 @@ def cost_per_token(
     Raises:
         Exception if model requires >128k pricing, but model cost not mapped
     """
+
     ## GET MODEL INFO
     model_info = litellm.get_model_info(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    ## CALCULATE INPUT COST
+    ## HANDLE 128k+ PRICING
+    input_cost_per_token_above_128k_tokens = model_info.get(
+        "input_cost_per_token_above_128k_tokens"
+    )
+    output_cost_per_token_above_128k_tokens = model_info.get(
+        "output_cost_per_token_above_128k_tokens"
+    )
     if (
-        _is_above_128k(tokens=prompt_tokens)
-        and model not in models_without_dynamic_pricing
+        input_cost_per_token_above_128k_tokens is not None
+        or output_cost_per_token_above_128k_tokens is not None
     ):
-        assert (
-            "input_cost_per_token_above_128k_tokens" in model_info
-            and model_info["input_cost_per_token_above_128k_tokens"] is not None
-        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
-            model, model_info
+        return _handle_128k_pricing(
+            model_info=model_info,
+            usage=usage,
         )
-        prompt_cost = (
-            prompt_tokens * model_info["input_cost_per_token_above_128k_tokens"]
-        )
-    else:
-        prompt_cost = prompt_tokens * model_info["input_cost_per_token"]
 
-    ## CALCULATE OUTPUT COST
-    if (
-        _is_above_128k(tokens=completion_tokens)
-        and model not in models_without_dynamic_pricing
-    ):
-        assert (
-            "output_cost_per_token_above_128k_tokens" in model_info
-            and model_info["output_cost_per_token_above_128k_tokens"] is not None
-        ), "model info for model={} does not have pricing for > 128k tokens\nmodel_info={}".format(
-            model, model_info
-        )
-        completion_cost = (
-            completion_tokens * model_info["output_cost_per_token_above_128k_tokens"]
-        )
-    else:
-        completion_cost = completion_tokens * model_info["output_cost_per_token"]
-
-    return prompt_cost, completion_cost
+    return generic_cost_per_token(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        usage=usage,
+    )

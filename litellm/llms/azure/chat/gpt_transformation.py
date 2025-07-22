@@ -7,8 +7,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.azure import (
+    API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT,
+    API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT,
+)
 from litellm.types.utils import ModelResponse
-from litellm.utils import supports_response_schema
 
 from ....exceptions import UnsupportedParamsError
 from ....types.llms.openai import AllMessageValues
@@ -98,20 +101,52 @@ class AzureOpenAIConfig(BaseConfig):
             "seed",
             "extra_headers",
             "parallel_tool_calls",
+            "prediction",
+            "modalities",
+            "audio",
+            "web_search_options",
         ]
 
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
-        - all 4o models are supported
-        - check if 'supports_response_format' is True from get_model_info
-        - [TODO] support smart retries for 3.5 models (some supported, some not)
+        Determines if the model supports response_format.
+        - Handles Azure deployment names (e.g., azure/gpt-4.1-suffix)
+        - Normalizes model names (e.g., gpt-4-1 -> gpt-4.1)
+        - Strips deployment-specific suffixes
+        - Passes provider to supports_response_schema
+        - Backwards compatible with previous model name patterns
         """
-        if "4o" in model:
-            return True
-        elif supports_response_schema(model):
-            return True
+        import re
 
-        return False
+        # Normalize model name: e.g., gpt-3-5-turbo -> gpt-3.5-turbo
+        normalized_model = re.sub(r"(\d)-(\d)", r"\1.\2", model)
+
+        if "gpt-3.5" in normalized_model or "gpt-35" in model:
+            return False
+
+        return True
+
+    def _is_response_format_supported_api_version(
+        self, api_version_year: str, api_version_month: str
+    ) -> bool:
+        """
+        - check if api_version is supported for response_format
+        - returns True if the API version is equal to or newer than the supported version
+        """
+        api_year = int(api_version_year)
+        api_month = int(api_version_month)
+        supported_year = int(API_VERSION_YEAR_SUPPORTED_RESPONSE_FORMAT)
+        supported_month = int(API_VERSION_MONTH_SUPPORTED_RESPONSE_FORMAT)
+
+        # If the year is greater than supported year, it's definitely supported
+        if api_year > supported_year:
+            return True
+        # If the year is less than supported year, it's not supported
+        elif api_year < supported_year:
+            return False
+        # If same year, check if month is >= supported month
+        else:
+            return api_month >= supported_month
 
     def map_openai_params(
         self,
@@ -171,13 +206,21 @@ class AzureOpenAIConfig(BaseConfig):
                 _is_response_format_supported_model = (
                     self._is_response_format_supported_model(model)
                 )
-                should_convert_response_format_to_tool = (
-                    api_version_year <= "2024" and api_version_month < "08"
-                ) or not _is_response_format_supported_model
+
+                is_response_format_supported_api_version = (
+                    self._is_response_format_supported_api_version(
+                        api_version_year, api_version_month
+                    )
+                )
+                is_response_format_supported = (
+                    is_response_format_supported_api_version
+                    and _is_response_format_supported_model
+                )
+
                 optional_params = self._add_response_format_to_tools(
                     optional_params=optional_params,
                     value=value,
-                    should_convert_response_format_to_tool=should_convert_response_format_to_tool,
+                    is_response_format_supported=is_response_format_supported,
                 )
             elif param == "tools" and isinstance(value, list):
                 optional_params.setdefault("tools", [])
@@ -265,6 +308,7 @@ class AzureOpenAIConfig(BaseConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:

@@ -16,6 +16,7 @@ import {
 } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Select, SelectItem, Subtitle } from "@tremor/react";
+import { Team } from "./key_team_helpers/key_list";
 import {
   Table,
   TableBody,
@@ -31,16 +32,30 @@ import {
   Grid,
   Callout,
   Divider,
+  TabGroup,
+  TabList,
+  Tab,
+  TabPanel,
+  TabPanels,
 } from "@tremor/react";
 import { PencilAltIcon } from "@heroicons/react/outline";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
+import SSOModals from "./SSOModals";
+import { ssoProviderConfigs } from './SSOModals';
+import SCIMConfig from "./SCIM";
+import UIAccessControlForm from "./UIAccessControlForm";
+import UsefulLinksManagement from "./useful_links_management";
+
 interface AdminPanelProps {
   searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Object[] | null>>;
+  userID: string | null;
+  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   showSSOBanner: boolean;
   premiumUser: boolean;
+  proxySettings?: any;
+  userRole?: string | null;
 }
 import { useBaseUrl } from "./constants";
 
@@ -50,19 +65,22 @@ import {
   Member,
   userGetAllUsersCall,
   User,
-  setCallbacksCall,
   invitationCreateCall,
   getPossibleUserRoles,
   addAllowedIP,
   getAllowedIPs,
   deleteAllowedIP,
+  getSSOSettings,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
   searchParams,
   accessToken,
+  userID,
   showSSOBanner,
   premiumUser,
+  proxySettings,
+  userRole,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -83,8 +101,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isAllowedIPModalVisible, setIsAllowedIPModalVisible] = useState(false);
   const [isAddIPModalVisible, setIsAddIPModalVisible] = useState(false);
   const [isDeleteIPModalVisible, setIsDeleteIPModalVisible] = useState(false);
+  const [isUIAccessControlModalVisible, setIsUIAccessControlModalVisible] = useState(false);
   const [allowedIPs, setAllowedIPs] = useState<string[]>([]);
   const [ipToDelete, setIPToDelete] = useState<string | null>(null);
+  const [ssoConfigured, setSsoConfigured] = useState<boolean>(false);
   const router = useRouter();
 
   const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<
@@ -102,6 +122,30 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   let nonSssoUrl = baseUrl;
   nonSssoUrl += "/fallback/login";
+
+  // Extract the SSO configuration check logic into a separate function for reuse
+  const checkSSOConfiguration = async () => {
+    if (accessToken && premiumUser) {
+      try {
+        const ssoData = await getSSOSettings(accessToken);
+        console.log("SSO data:", ssoData);
+        
+        // Check if any SSO provider is configured
+        if (ssoData && ssoData.values) {
+          const hasGoogleSSO = ssoData.values.google_client_id && ssoData.values.google_client_secret;
+          const hasMicrosoftSSO = ssoData.values.microsoft_client_id && ssoData.values.microsoft_client_secret;
+          const hasGenericSSO = ssoData.values.generic_client_id && ssoData.values.generic_client_secret;
+          
+          setSsoConfigured(hasGoogleSSO || hasMicrosoftSSO || hasGenericSSO);
+        } else {
+          setSsoConfigured(false);
+        }
+      } catch (error) {
+        console.error("Error checking SSO configuration:", error);
+        setSsoConfigured(false);
+      }
+    }
+  };
 
   const handleShowAllowedIPs = async () => {
     try {
@@ -172,6 +216,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleAddSSOOk = () => {
     setIsAddSSOModalVisible(false);
     form.resetFields();
+    // Refresh SSO configuration status
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const handleAddSSOCancel = () => {
@@ -180,19 +228,24 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleShowInstructions = (formValues: Record<string, any>) => {
-    handleAdminCreate(formValues);
-    handleSSOUpdate(formValues);
     setIsAddSSOModalVisible(false);
     setIsInstructionsModalVisible(true);
-    // Optionally, you can call handleSSOUpdate here with the formValues
   };
 
   const handleInstructionsOk = () => {
     setIsInstructionsModalVisible(false);
+    // Refresh SSO configuration status after instructions are closed
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const handleInstructionsCancel = () => {
     setIsInstructionsModalVisible(false);
+    // Refresh SSO configuration status after instructions are closed
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const roles = ["proxy_admin", "proxy_admin_viewer"];
@@ -253,6 +306,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
     fetchProxyAdminInfo();
   }, [accessToken]);
+
+  // Add new useEffect to check SSO configuration
+  useEffect(() => {
+    checkSSOConfiguration();
+  }, [accessToken, premiumUser]);
 
   const handleMemberUpdateOk = () => {
     setIsUpdateModalModalVisible(false);
@@ -479,259 +537,85 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const handleSSOUpdate = async (formValues: Record<string, any>) => {
-    if (accessToken == null) {
-      return;
-    }
-    let payload = {
-      environment_variables: {
-        PROXY_BASE_URL: formValues.proxy_base_url,
-        GOOGLE_CLIENT_ID: formValues.google_client_id,
-        GOOGLE_CLIENT_SECRET: formValues.google_client_secret,
-      },
-    };
-    setCallbacksCall(accessToken, payload);
+  const handleUIAccessControlOk = () => {
+    setIsUIAccessControlModalVisible(false);
   };
+
+  const handleUIAccessControlCancel = () => {
+    setIsUIAccessControlModalVisible(false);
+  };
+
   console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2 mt-2 p-8">
       <Title level={4}>Admin Access </Title>
-      <Paragraph>
-        {showSSOBanner && (
-          <a href="https://docs.litellm.ai/docs/proxy/ui#restrict-ui-access">
-            Requires SSO Setup
-          </a>
-        )}
-        <br />
-        <b>Proxy Admin: </b> Can create keys, teams, users, add models, etc.{" "}
-        <br />
-        <b>Proxy Admin Viewer: </b>Can just view spend. They cannot create keys,
-        teams or grant users access to new models.{" "}
-      </Paragraph>
-      <Grid numItems={1} className="gap-2 p-2 w-full">
-        <Col numColSpan={1}>
-          <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Member Name</TableHeaderCell>
-                  <TableHeaderCell>Role</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-
-              <TableBody>
-                {admins
-                  ? admins.map((member: any, index: number) => (
-                      <TableRow key={index}>
-                        <TableCell>
-                          {member["user_email"]
-                            ? member["user_email"]
-                            : member["user_id"]
-                              ? member["user_id"]
-                              : null}
-                        </TableCell>
-                        <TableCell>
-                          {" "}
-                          {possibleUIRoles?.[member?.user_role]?.ui_label ||
-                            "-"}
-                        </TableCell>
-                        <TableCell>
-                          <Icon
-                            icon={PencilAltIcon}
-                            size="sm"
-                            onClick={() => setIsUpdateModalModalVisible(true)}
-                          />
-                          <Modal
-                            title="Update role"
-                            visible={isUpdateMemberModalVisible}
-                            width={800}
-                            footer={null}
-                            onOk={handleMemberUpdateOk}
-                            onCancel={handleMemberUpdateCancel}
-                          >
-                            {modifyMemberForm(
-                              handleMemberUpdate,
-                              member["user_role"],
-                              member["user_id"]
-                            )}
-                          </Modal>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  : null}
-              </TableBody>
-            </Table>
-          </Card>
-        </Col>
-        <Col numColSpan={1}>
-          <div className="flex justify-start">
-            <Button
-              className="mr-4 mb-5"
-              onClick={() => setIsAddAdminModalVisible(true)}
-            >
-              + Add admin
-            </Button>
-            <Modal
-              title="Add admin"
-              visible={isAddAdminModalVisible}
-              width={800}
-              footer={null}
-              onOk={handleAdminOk}
-              onCancel={handleAdminCancel}
-            >
-              {addMemberForm(handleAdminCreate)}
-            </Modal>
-            <OnboardingModal
-              isInvitationLinkModalVisible={isInvitationLinkModalVisible}
-              setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
-              baseUrl={baseUrl}
-              invitationLinkData={invitationLinkData}
-            />
-            <Button
-              className="mb-5"
-              onClick={() => setIsAddMemberModalVisible(true)}
-            >
-              + Add viewer
-            </Button>
-            <Modal
-              title="Add viewer"
-              visible={isAddMemberModalVisible}
-              width={800}
-              footer={null}
-              onOk={handleMemberOk}
-              onCancel={handleMemberCancel}
-            >
-              {addMemberForm(handleMemberCreate)}
-            </Modal>
-          </div>
-        </Col>
-      </Grid>
-      <Grid >
-        <Card>
-        <Title level={4}> ✨ Security Settings</Title>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
-    <div>
-      <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
-    </div>
-    <div>
-      <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
-    </div>
-  </div>
-        </Card>
-       
-        <div className="flex justify-start mb-4">
-         
-          <Modal
-            title="Add SSO"
-            visible={isAddSSOModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleAddSSOOk}
-            onCancel={handleAddSSOCancel}
-          >
-            <Form
-              form={form}
-              onFinish={handleShowInstructions}
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              labelAlign="left"
-            >
-              <>
-                <Form.Item
-                  label="Admin Email"
-                  name="user_email"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the email of the proxy admin",
-                    },
-                  ]}
-                >
-                  <Input />
-                </Form.Item>
-                <Form.Item
-                  label="PROXY BASE URL"
-                  name="proxy_base_url"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the proxy base url",
-                    },
-                  ]}
-                >
-                  <Input />
-                </Form.Item>
-
-                <Form.Item
-                  label="GOOGLE CLIENT ID"
-                  name="google_client_id"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the google client id",
-                    },
-                  ]}
-                >
-                  <Input.Password />
-                </Form.Item>
-
-                <Form.Item
-                  label="GOOGLE CLIENT SECRET"
-                  name="google_client_secret"
-                  rules={[
-                    {
-                      required: true,
-                      message: "Please enter the google client secret",
-                    },
-                  ]}
-                >
-                  <Input.Password />
-                </Form.Item>
-              </>
-              <div style={{ textAlign: "right", marginTop: "10px" }}>
-                <Button2 htmlType="submit">Save</Button2>
+      <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
+      <TabGroup>
+        <TabList>
+          <Tab>Security Settings</Tab>
+          <Tab>SCIM</Tab>
+          <Tab>Useful Links</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Card>
+              <Title level={4}> ✨ Security Settings</Title>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', marginLeft: '0.5rem' }}>
+                <div>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}
+                  >
+                    {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
+                  </Button>
+                </div>
+                <div>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={handleShowAllowedIPs}
+                  >
+                    Allowed IPs
+                  </Button>
+                </div>
+                <div>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={() => premiumUser === true ? setIsUIAccessControlModalVisible(true) : message.error("Only premium users can configure UI access control")}
+                  >
+                    UI Access Control
+                  </Button>
+                </div>
               </div>
-            </Form>
-          </Modal>
-          <Modal
-            title="SSO Setup Instructions"
-            visible={isInstructionsModalVisible}
-            width={800}
-            footer={null}
-            onOk={handleInstructionsOk}
-            onCancel={handleInstructionsCancel}
-          >
-            <p>Follow these steps to complete the SSO setup:</p>
-            <Text className="mt-2">1. DO NOT Exit this TAB</Text>
-            <Text className="mt-2">
-              2. Open a new tab, visit your proxy base url
-            </Text>
-            <Text className="mt-2">
-              3. Confirm your SSO is configured correctly and you can login on
-              the new Tab
-            </Text>
-            <Text className="mt-2">
-              4. If Step 3 is successful, you can close this tab
-            </Text>
-            <div style={{ textAlign: "right", marginTop: "10px" }}>
-              <Button2 onClick={handleInstructionsOk}>Done</Button2>
-            </div>
-          </Modal>
-          <Modal
-          title="Manage Allowed IP Addresses"
-          width={800}
-          visible={isAllowedIPModalVisible}
-          onCancel={() => setIsAllowedIPModalVisible(false)}
-          footer={[
-            <Button className="mx-1"key="add" onClick={() => setIsAddIPModalVisible(true)}>
-              Add IP Address
-            </Button>,
-            <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
-              Close
-            </Button>
-          ]}
-        >
-          <Table>
+            </Card>
+           
+            <div className="flex justify-start mb-4">
+              <SSOModals
+                isAddSSOModalVisible={isAddSSOModalVisible}
+                isInstructionsModalVisible={isInstructionsModalVisible}
+                handleAddSSOOk={handleAddSSOOk}
+                handleAddSSOCancel={handleAddSSOCancel}
+                handleShowInstructions={handleShowInstructions}
+                handleInstructionsOk={handleInstructionsOk}
+                handleInstructionsCancel={handleInstructionsCancel}
+                form={form}
+                accessToken={accessToken}
+                ssoConfigured={ssoConfigured}
+              />
+              <Modal
+              title="Manage Allowed IP Addresses"
+              width={800}
+              visible={isAllowedIPModalVisible}
+              onCancel={() => setIsAllowedIPModalVisible(false)}
+              footer={[
+                <Button className="mx-1"key="add" onClick={() => setIsAddIPModalVisible(true)}>
+                  Add IP Address
+                </Button>,
+                <Button key="close" onClick={() => setIsAllowedIPModalVisible(false)}>
+                  Close
+                </Button>
+              ]}
+            >
+              <Table>
   <TableHead>
     <TableRow>
       <TableHeaderCell>IP Address</TableHeaderCell>
@@ -792,6 +676,24 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         >
           <p>Are you sure you want to delete the IP address: {ipToDelete}?</p>
         </Modal>
+
+        {/* UI Access Control Modal */}
+        <Modal
+          title="UI Access Control Settings"
+          visible={isUIAccessControlModalVisible}
+          width={600}
+          footer={null}
+          onOk={handleUIAccessControlOk}
+          onCancel={handleUIAccessControlCancel}
+        >
+          <UIAccessControlForm 
+            accessToken={accessToken} 
+            onSuccess={() => {
+              handleUIAccessControlOk();
+              message.success("UI Access Control settings updated successfully");
+            }} 
+          />
+        </Modal>
         </div>
         <Callout title="Login without SSO" color="teal">
           If you need to login without sso, you can access{" "}
@@ -799,7 +701,22 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
             <b>{nonSssoUrl}</b>{" "}
           </a>
         </Callout>
-      </Grid>
+          </TabPanel>
+          <TabPanel>
+            <SCIMConfig 
+              accessToken={accessToken} 
+              userID={userID}
+              proxySettings={proxySettings}
+            />
+          </TabPanel>
+          <TabPanel>
+            <UsefulLinksManagement 
+              accessToken={accessToken}
+              userRole={userRole || null}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 };

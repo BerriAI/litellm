@@ -9,7 +9,7 @@
 
 # chat = ChatOpenAI(
 #     openai_api_base="http://0.0.0.0:8000",
-#     model = "azure/chatgpt-v-2",
+#     model = "azure/chatgpt-v-3",
 #     temperature=0.1,
 #     extra_body={
 #         "metadata": {

@@ -14,7 +14,13 @@ from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.proxy.pass_through_endpoints.types import PassthroughStandardLoggingPayload
+from litellm.types.passthrough_endpoints.assembly_ai import (
+    ASSEMBLY_AI_MAX_POLLING_ATTEMPTS,
+    ASSEMBLY_AI_POLLING_INTERVAL,
+)
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    PassthroughStandardLoggingPayload,
+)
 
 
 class AssemblyAITranscriptResponse(TypedDict, total=False):
@@ -34,13 +40,13 @@ class AssemblyAIPassthroughLoggingHandler:
         The base URL for the AssemblyAI API
         """
 
-        self.polling_interval: float = 10
+        self.polling_interval: float = ASSEMBLY_AI_POLLING_INTERVAL
         """
         The polling interval for the AssemblyAI API. 
         litellm needs to poll the GET /transcript/{transcript_id} endpoint to get the status of the transcript.
         """
 
-        self.max_polling_attempts = 180
+        self.max_polling_attempts = ASSEMBLY_AI_MAX_POLLING_ATTEMPTS
         """
         The maximum number of polling attempts for the AssemblyAI API.
         """

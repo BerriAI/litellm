@@ -46,7 +46,7 @@ async def test_delete_deployment():
     import base64
 
     litellm_params = LiteLLM_Params(
-        model="azure/chatgpt-v-2",
+        model="azure/chatgpt-v-3",
         api_key=os.getenv("AZURE_API_KEY"),
         api_base=os.getenv("AZURE_API_BASE"),
         api_version=os.getenv("AZURE_API_VERSION"),
@@ -232,7 +232,7 @@ async def test_db_error_new_model_check():
 
 
 litellm_params = LiteLLM_Params(
-    model="azure/chatgpt-v-2",
+    model="azure/chatgpt-v-3",
     api_key=os.getenv("AZURE_API_KEY"),
     api_base=os.getenv("AZURE_API_BASE"),
     api_version=os.getenv("AZURE_API_VERSION"),
@@ -250,7 +250,7 @@ def _create_model_list(flag_value: Literal[0, 1], master_key: str):
     import base64
 
     new_litellm_params = LiteLLM_Params(
-        model="azure/chatgpt-v-2-3",
+        model="azure/chatgpt-v-3-3",
         api_key=os.getenv("AZURE_API_KEY"),
         api_base=os.getenv("AZURE_API_BASE"),
         api_version=os.getenv("AZURE_API_VERSION"),
