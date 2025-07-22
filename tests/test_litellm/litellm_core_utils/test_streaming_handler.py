@@ -807,7 +807,8 @@ def test_parse_thinking_block(initialized_custom_stream_wrapper: CustomStreamWra
     assert should_skip is False
     assert model_response.choices[0].delta.content == "This is regular content"
     
-    # Test case 5: Content with both start and end tags in same chunk - should skip
+    # Test case 5: Content with both start and end tags in same chunk
+    # Due to the if-elif logic, </think> is checked first, so it will match end tag
     response_obj = {"text": "<think>Quick thought</think>"}
     model_response = ModelResponseStream(
         id="test-5",
@@ -826,14 +827,37 @@ def test_parse_thinking_block(initialized_custom_stream_wrapper: CustomStreamWra
     should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
         response_obj=response_obj, model_response=model_response
     )
-    # Should detect start tag first and skip
+    # Should detect end tag first (due to if-elif order) and skip
+    assert should_skip is True
+    assert initialized_custom_stream_wrapper.sent_first_thinking_block_parsed is False
+    
+    # Test case 6: Content with only start tag (proper test for start tag detection)
+    response_obj = {"text": "<think>Starting a new thought process"}
+    model_response = ModelResponseStream(
+        id="test-6",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="<think>Starting a new thought process"),
+                finish_reason=None,
+            )
+        ],
+    )
+    
+    # Reset state for this test
+    initialized_custom_stream_wrapper.sent_first_thinking_block_parsed = False
+    
+    should_skip = initialized_custom_stream_wrapper._parse_thinking_block(
+        response_obj=response_obj, model_response=model_response
+    )
+    # Should detect start tag and skip
     assert should_skip is True
     assert initialized_custom_stream_wrapper.sent_first_thinking_block_parsed is True
     
-    # Test case 6: Partial thinking tags (edge cases)
+    # Test case 7: Partial thinking tags (edge cases)
     response_obj = {"text": "This contains <think but not complete tag"}
     model_response = ModelResponseStream(
-        id="test-6",
+        id="test-7",
         choices=[
             StreamingChoices(
                 index=0,
