@@ -6684,8 +6684,6 @@ class ProviderConfigManager:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
-        elif litellm.LlmProviders.LAMBDA_AI == provider:
-            return litellm.LambdaAIChatConfig()
         elif litellm.LlmProviders.LLAMA == provider:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
@@ -7149,6 +7147,12 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_generation import (
+                get_recraft_image_generation_config,
+            )
+
+            return get_recraft_image_generation_config(model)
         return None
 
     @staticmethod
