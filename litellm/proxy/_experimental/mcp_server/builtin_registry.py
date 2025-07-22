@@ -39,7 +39,6 @@ class BuiltinStdioMCPServerConfig:
         self.spec_version = spec_version
         self.transport = "stdio"
         self.auth_type = None
-        self.env_key = None
 
     def to_mcp_server(self, server_id: str) -> MCPServer:
         """Convert to MCPServer instance for stdio transport"""
@@ -167,7 +166,6 @@ class BuiltinMCPRegistry:
         """Initialize the default set of built-in MCP servers (fallback only)"""
 
         # Only basic calculator as fallback
-        import os
         calc_server_path = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__), 

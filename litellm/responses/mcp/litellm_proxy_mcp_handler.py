@@ -350,16 +350,16 @@ class LiteLLM_Proxy_MCP_Handler:
                     continue
 
                 # Find tool configuration
-                tool_config = next(
-                    (config for config in mcp_tools_config
-                     if config.get("_remote_server_label") == tool_name or
-                        config.get("_builtin_name") == tool_name),
-                    {}
-                )
-
-                server_label = (tool_config.get("_remote_server_label") or
-                              tool_config.get("_builtin_name") or
-                              "unknown")
+                tool_config = {}
+                server_label = "unknown"
+                
+                for config in mcp_tools_config:
+                    if (config.get("_remote_server_label") == tool_name or 
+                        config.get("_builtin_name") == tool_name):
+                        tool_config = config
+                        server_label = (config.get("_remote_server_label") or 
+                                      config.get("_builtin_name") or "unknown")
+                        break
 
                 # Check if approval is required
                 if LiteLLM_Proxy_MCP_Handler._check_tool_approval(tool_name, tool_config):

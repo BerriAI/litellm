@@ -10,7 +10,7 @@ Usage:
 
 Tools provided:
 - add: Add two numbers
-- subtract: Subtract two numbers  
+- subtract: Subtract two numbers
 - multiply: Multiply two numbers
 - divide: Divide two numbers (with zero division protection)
 - calculate: Evaluate a mathematical expression safely
@@ -36,7 +36,7 @@ class MCPResponse:
 
 class CalculatorMCPServer:
     """Simple Calculator MCP Server"""
-    
+
     def __init__(self):
         self.tools = [
             {
@@ -52,7 +52,7 @@ class CalculatorMCPServer:
                 }
             },
             {
-                "name": "subtract", 
+                "name": "subtract",
                 "description": "Subtract the second number from the first",
                 "inputSchema": {
                     "type": "object",
@@ -94,7 +94,7 @@ class CalculatorMCPServer:
                     "type": "object",
                     "properties": {
                         "expression": {
-                            "type": "string", 
+                            "type": "string",
                             "description": "Mathematical expression to evaluate (e.g., '2 + 3 * 4')"
                         }
                     },
@@ -102,7 +102,7 @@ class CalculatorMCPServer:
                 }
             }
         ]
-    
+
     async def handle_initialize(self, message: MCPMessage) -> MCPResponse:
         """Handle initialization request"""
         return MCPResponse(
@@ -119,19 +119,19 @@ class CalculatorMCPServer:
                 }
             }
         )
-    
+
     async def handle_list_tools(self, message: MCPMessage) -> MCPResponse:
         """Handle tools/list request"""
         return MCPResponse(
             id=message.id,
             result={"tools": self.tools}
         )
-    
+
     async def handle_call_tool(self, message: MCPMessage) -> MCPResponse:
         """Handle tools/call request"""
         tool_name = message.params.get("name")
         arguments = message.params.get("arguments", {})
-        
+
         try:
             if tool_name == "add":
                 result = self._add(arguments)
@@ -151,7 +151,7 @@ class CalculatorMCPServer:
                         "message": f"Unknown tool: {tool_name}"
                     }
                 )
-            
+
             return MCPResponse(
                 id=message.id,
                 result={
@@ -163,7 +163,7 @@ class CalculatorMCPServer:
                     ]
                 }
             )
-            
+
         except Exception as e:
             return MCPResponse(
                 id=message.id,
@@ -172,55 +172,55 @@ class CalculatorMCPServer:
                     "message": f"Tool execution error: {str(e)}"
                 }
             )
-    
+
     def _add(self, args: Dict[str, Any]) -> float:
         """Add two numbers"""
         a = float(args["a"])
         b = float(args["b"])
         result = a + b
         return f"{a} + {b} = {result}"
-    
+
     def _subtract(self, args: Dict[str, Any]) -> str:
         """Subtract two numbers"""
         a = float(args["a"])
         b = float(args["b"])
         result = a - b
         return f"{a} - {b} = {result}"
-    
+
     def _multiply(self, args: Dict[str, Any]) -> str:
         """Multiply two numbers"""
         a = float(args["a"])
         b = float(args["b"])
         result = a * b
         return f"{a} × {b} = {result}"
-    
+
     def _divide(self, args: Dict[str, Any]) -> str:
         """Divide two numbers"""
         a = float(args["a"])
         b = float(args["b"])
-        
+
         if b == 0:
             raise ValueError("Cannot divide by zero")
-        
+
         result = a / b
         return f"{a} ÷ {b} = {result}"
-    
+
     def _calculate(self, args: Dict[str, Any]) -> str:
         """Safely evaluate a mathematical expression"""
         expression = args["expression"].strip()
-        
+
         # Simple safety check - only allow basic math operations and numbers
-        allowed_chars = set("0123456789+-*/().\\ ")
+        allowed_chars = set("0123456789+-*/(). ")
         if not all(c in allowed_chars for c in expression):
             raise ValueError("Expression contains invalid characters")
-        
+
         try:
             # Use eval with restricted built-ins for safety
             result = eval(expression, {"__builtins__": {}}, {})
             return f"{expression} = {result}"
         except Exception as e:
             raise ValueError(f"Invalid expression: {str(e)}")
-    
+
     async def handle_message(self, message_data: str) -> str:
         """Handle incoming MCP message"""
         try:
@@ -230,7 +230,7 @@ class CalculatorMCPServer:
                 method=data.get("method", ""),
                 params=data.get("params", {})
             )
-            
+
             if message.method == "initialize":
                 response = await self.handle_initialize(message)
             elif message.method == "tools/list":
@@ -245,16 +245,16 @@ class CalculatorMCPServer:
                         "message": f"Method not found: {message.method}"
                     }
                 )
-            
+
             # Format response
             response_data = {"id": response.id}
             if response.result is not None:
                 response_data["result"] = response.result
             if response.error is not None:
                 response_data["error"] = response.error
-            
+
             return json.dumps(response_data)
-            
+
         except Exception as e:
             error_response = {
                 "id": "",
@@ -269,28 +269,28 @@ class CalculatorMCPServer:
 async def run_stdio_server():
     """Run the MCP server using stdio transport"""
     server = CalculatorMCPServer()
-    
-    print("Calculator MCP Server started (stdio mode)", file=sys.stderr)
-    print("Ready to accept requests...", file=sys.stderr)
-    
+
+    # Calculator MCP Server started (stdio mode)
+    # Ready to accept requests...
+
     while True:
         try:
             # Read JSON-RPC message from stdin
             line = sys.stdin.readline()
             if not line:
                 break
-                
+
             # Process message
             response = await server.handle_message(line.strip())
-            
+
             # Send response to stdout
             print(response)
             sys.stdout.flush()
-            
+
         except EOFError:
             break
         except Exception as e:
-            print(f"Error processing message: {e}", file=sys.stderr)
+            pass  # Error processing message - logging could be added here
 
 
 if __name__ == "__main__":
@@ -298,33 +298,34 @@ if __name__ == "__main__":
         # Test mode - demonstrate the server functionality
         async def test_server():
             server = CalculatorMCPServer()
-            
+
             print("🧮 Testing Calculator MCP Server...\n")
-            
+
             # Test initialization
             init_msg = '{"id": "1", "method": "initialize", "params": {}}'
             response = await server.handle_message(init_msg)
             print(f"Initialize: {response}\n")
-            
+
             # Test list tools
             list_msg = '{"id": "2", "method": "tools/list", "params": {}}'
             response = await server.handle_message(list_msg)
             print(f"List tools: {response}\n")
-            
+
             # Test tool calls
             test_calls = [
                 ('{"id": "3", "method": "tools/call", "params": {"name": "add", "arguments": {"a": 5, "b": 3}}}', "Addition"),
                 ('{"id": "4", "method": "tools/call", "params": {"name": "multiply", "arguments": {"a": 4, "b": 7}}}', "Multiplication"),
                 ('{"id": "5", "method": "tools/call", "params": {"name": "calculate", "arguments": {"expression": "2 + 3 * 4"}}}', "Expression")
             ]
-            
+
             for call_msg, description in test_calls:
                 response = await server.handle_message(call_msg)
                 print(f"{description}: {response}\n")
-            
+
             print("✅ Test completed!")
-        
+
         asyncio.run(test_server())
     else:
         # Normal stdio mode
         asyncio.run(run_stdio_server())
+
