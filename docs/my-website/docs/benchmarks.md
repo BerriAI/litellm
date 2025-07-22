@@ -20,26 +20,15 @@ model_list:
 
 In these tests the baseline latency characteristics are measured against a fake-openai-endpoint.
 
-#### Throughput
+#### Performance Metrics
+
 | Metric | Value |
 |--------|-------|
 | **Requests per Second (RPS)** | 475 |
-
-#### End-to-End Latency
-
-E2E latency of calling the fake-openai-endpoint through LiteLLM Proxy.
-
-| Metric | P50 | P90 | P99 |
-|--------|-----|-----|-----|
-| **E2E Latency (ms)** | 100 | - | - |
-
-#### LiteLLM Overhead
-
-Overhead latency added by LiteLLM Proxy.
-
-| Metric | P50 | P90 | P99 |
-|--------|-----|-----|-----|
-| **LiteLLM Overhead (ms)** | 3 | 17 | 31 |
+| **End-to-End Latency P50 (ms)** | 100 |
+| **LiteLLM Overhead P50 (ms)** | 3 |
+| **LiteLLM Overhead P90 (ms)** | 17 |
+| **LiteLLM Overhead P99 (ms)** | 31 |
 
 <!-- <Image img={require('../img/1_instance_proxy.png')} /> -->
 
