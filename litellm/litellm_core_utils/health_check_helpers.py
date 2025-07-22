@@ -14,7 +14,7 @@ class HealthCheckHelpers:
         model: str,
         custom_llm_provider: str,
         model_params: dict,
-        litellm_logging_obj: Logging,
+        litellm_logging_obj: "Logging",
     ) -> dict:
         from litellm import acompletion
         from litellm.litellm_core_utils.llm_request_utils import (
