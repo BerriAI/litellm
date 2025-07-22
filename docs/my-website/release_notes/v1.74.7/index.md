@@ -75,6 +75,29 @@ This brings the following benefits for LiteLLM users:
 
 ---
 
+## Bulk Editing Users
+
+<Image src="../../img/bulk_edit_graphic.png" alt="Bulk Editing Users" />
+
+v1.74.7-stable introduces Bulk Editing Users on the UI. This is useful for:
+- granting all existing users to a default team (useful for controlling access / tracking spend by team)
+- controlling personal model access for existing users
+
+[Read more](https://docs.litellm.ai/docs/proxy/ui/bulk_edit_users)
+
+---
+
+## Health Check Server
+
+v1.74.7-stable allows you to run a separate health check app using Docker
+- Allows health check probe to run even when server is under huge load
+- Even while running on a separate ASGI app, if the main app goes unhealthy, the pod goes down killing the health app and notifiying the orchestrator using supervisord
+
+[Read More](https://docs.litellm.ai/docs/proxy/prod#10-use-a-separate-health-check-app)
+
+
+---
+
 ## New Models / Updated Models
 
 #### Pricing / Context Window Updates
