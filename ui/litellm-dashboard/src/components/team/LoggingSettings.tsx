@@ -4,8 +4,8 @@ import React, { useState } from 'react';
 import { Form, Select, Space, Tooltip, Divider } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { Button, Card, TextInput } from '@tremor/react';
-import { PlusIcon, TrashIcon, CogIcon } from '@heroicons/react/outline';
-import { callbackInfo, Callbacks, callback_map } from '../callback_info_helpers';
+import { PlusIcon, TrashIcon, CogIcon, BanIcon } from '@heroicons/react/outline';
+import { callbackInfo, Callbacks, callback_map, mapDisplayToInternalNames } from '../callback_info_helpers';
 
 const { Option } = Select;
 
@@ -18,16 +18,32 @@ interface LoggingConfig {
 interface LoggingSettingsProps {
   value?: LoggingConfig[];
   onChange?: (value: LoggingConfig[]) => void;
+  disabledCallbacks?: string[];
+  onDisabledCallbacksChange?: (disabledCallbacks: string[]) => void;
 }
 
-const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange }) => {
+const LoggingSettings: React.FC<LoggingSettingsProps> = ({ 
+  value = [], 
+  onChange,
+  disabledCallbacks = [],
+  onDisabledCallbacksChange
+}) => {
   // Get callbacks that support team and key logging
   const supportedCallbacks = Object.entries(callbackInfo)
     .filter(([_, info]) => info.supports_key_team_logging)
     .map(([name, _]) => name);
 
+  // Get all available callbacks for disabled selection
+  const allCallbacks = Object.keys(callbackInfo);
+
   const handleChange = (newValue: LoggingConfig[]) => {
     onChange?.(newValue);
+  };
+
+  const handleDisabledCallbacksChange = (newDisabledCallbacks: string[]) => {
+    // Map display names to internal callback values
+    const mappedDisabledCallbacks = mapDisplayToInternalNames(newDisabledCallbacks);
+    onDisabledCallbacksChange?.(mappedDisabledCallbacks);
   };
 
   const addLoggingConfig = () => {
@@ -126,6 +142,53 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({ value = [], onChange 
 
   return (
     <div className="space-y-6">
+      {/* Disabled Callbacks Section */}
+      <div className="space-y-4">
+        <div className="flex items-center space-x-2">
+          <BanIcon className="w-5 h-5 text-red-500" />
+          <span className="text-base font-semibold text-gray-800">Disabled Callbacks</span>
+          <Tooltip title="Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.">
+            <InfoCircleOutlined className="text-gray-400 cursor-help" />
+          </Tooltip>
+        </div>
+        
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-gray-700">Disabled Callbacks</label>
+          <Select
+            mode="multiple"
+            placeholder="Select callbacks to disable"
+            value={disabledCallbacks}
+            onChange={handleDisabledCallbacksChange}
+            style={{ width: '100%' }}
+            optionLabelProp="label"
+          >
+            {allCallbacks.map((callbackName) => {
+              const logo = callbackInfo[callbackName]?.logo;
+              return (
+                <Option key={callbackName} value={callbackName} label={callbackName}>
+                  <div className="flex items-center space-x-2">
+                    {logo && (
+                      <img 
+                        src={logo} 
+                        alt={callbackName} 
+                        className="w-4 h-4 object-contain" 
+                      />
+                    )}
+                    <span>{callbackName}</span>
+                  </div>
+                </Option>
+              );
+            })}
+          </Select>
+          <div className="text-xs text-gray-500">
+            Select callbacks that should be disabled for this key. These callbacks will not receive any logging data.
+          </div>
+        </div>
+      </div>
+
+      <Divider />
+
+      {/* Logging Integrations Section */}
       <div className="flex justify-between items-center">
         <div className="flex items-center space-x-2">
           <CogIcon className="w-5 h-5 text-blue-500" />

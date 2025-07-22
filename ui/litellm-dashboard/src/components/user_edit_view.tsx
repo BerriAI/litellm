@@ -15,6 +15,7 @@ interface UserEditViewProps {
   userRole: string | null;
   userModels: string[];
   possibleUIRoles: Record<string, Record<string, string>> | null;
+  isBulkEdit?: boolean;
 }
 
 export function UserEditView({
@@ -27,6 +28,7 @@ export function UserEditView({
   userRole,
   userModels,
   possibleUIRoles,
+  isBulkEdit = false,
 }: UserEditViewProps) {
   const [form] = Form.useForm();
 
@@ -62,19 +64,23 @@ export function UserEditView({
       onFinish={handleSubmit}
       layout="vertical"
     >
-      <Form.Item
-        label="User ID"
-        name="user_id"
-      >
-        <TextInput disabled />
-      </Form.Item>
+      {!isBulkEdit && (
+        <Form.Item
+          label="User ID"
+          name="user_id"
+        >
+          <TextInput disabled />
+        </Form.Item>
+      )}
 
-      <Form.Item
-        label="Email"
-        name="user_email"
-      >
-        <TextInput />
-      </Form.Item>
+      {!isBulkEdit && (
+        <Form.Item
+          label="Email"
+          name="user_email"
+        >
+          <TextInput />
+        </Form.Item>
+      )}
 
       <Form.Item label={
                   <span>

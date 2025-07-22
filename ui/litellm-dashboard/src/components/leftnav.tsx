@@ -73,7 +73,16 @@ const Sidebar: React.FC<SidebarProps> = ({
     },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },
+    {
+      key: "26",
+      page: "tools",
+      label: "Tools",
+      icon: <ToolOutlined />,
+      children: [
+        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },
+        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
+      ]
+    },
     { 
       key: "experimental", 
       page: "experimental",
@@ -84,7 +93,6 @@ const Sidebar: React.FC<SidebarProps> = ({
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
         { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
         { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
-        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
       ]
     },

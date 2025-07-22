@@ -41,9 +41,9 @@ import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_t
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
-  keys: KeyResponse[];
-  setKeys: Setter<KeyResponse[]>;
-  isLoading?: boolean;
+  keys: KeyResponse[]
+  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void
+  isLoading?: boolean
   pagination: {
     currentPage: number;
     totalPages: number;
@@ -64,10 +64,11 @@ interface AllKeysTableProps {
   refresh?: () => void;
   onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
   currentSort?: {
-    sortBy: string;
-    sortOrder: 'asc' | 'desc';
-  };
-  premiumUser: boolean;
+    sortBy: string
+    sortOrder: "asc" | "desc"
+  }
+  premiumUser: boolean
+  setAccessToken?: (token: string) => void
 }
 
 // Define columns similar to our logs table
@@ -143,6 +144,7 @@ export function AllKeysTable({
   onSortChange,
   currentSort,
   premiumUser,
+  setAccessToken,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
@@ -614,15 +616,18 @@ export function AllKeysTable({
               }
               return key
             }))
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after an update
           }}
           onDelete={() => {
             setKeys(keys => keys.filter(key => key.token !== selectedKeyId))
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
           }}
           accessToken={accessToken}
           userID={userID}
           userRole={userRole}
           teams={allTeams}
           premiumUser={premiumUser}
+          setAccessToken={setAccessToken}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">

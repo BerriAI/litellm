@@ -73,6 +73,7 @@ const sidebars = {
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
         "tutorials/litellm_gemini_cli",
+        "tutorials/github_copilot_integration",
         "tutorials/claude_responses_api",
       ]
     },
@@ -172,6 +173,7 @@ const sidebars = {
             "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
+            "proxy/ui/bulk_edit_users",
             {
               type: "category",
               label: "UI Logs",
@@ -275,6 +277,13 @@ const sidebars = {
           "items": [
             "audio_transcription",
             "text_to_speech",
+          ]
+        },
+        {
+          type: "category",
+          label: "/vector_stores",
+          items: [
+            "vector_stores/search",
           ]
         },
         {
@@ -435,8 +444,10 @@ const sidebars = {
         "providers/github_copilot",
         "providers/ai21",
         "providers/nlp_cloud",
+        "providers/recraft",
         "providers/replicate",
         "providers/togetherai",
+        "providers/v0",
         "providers/novita",
         "providers/voyage",
         "providers/jina_ai",

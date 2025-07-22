@@ -165,6 +165,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -435,6 +436,7 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -472,6 +474,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -516,6 +519,7 @@ def test_openai_deployments_model_chat_completions_azure(
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -549,6 +553,7 @@ def test_embedding(mock_aembedding, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -576,6 +581,7 @@ def test_bedrock_embedding(mock_aembedding, client_no_auth):
             input=["good morning from litellm"],
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -633,6 +639,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             size="1024x1024",
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -735,6 +742,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()

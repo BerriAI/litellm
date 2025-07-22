@@ -501,7 +501,7 @@ async def test_async_vertexai_streaming_response():
     )
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models  # always test gemini-pro
-    test_models = ["gemini-2.5-flash-preview"]
+    test_models = ["gemini-2.5-flash"]
     for model in test_models:
         if model in VERTEX_MODELS_TO_NOT_TEST or (
             "gecko" in model
@@ -3773,7 +3773,7 @@ def test_vertex_schema_test():
     }
 
     response = litellm.completion(
-        model="vertex_ai/gemini-2.5-flash-preview",
+        model="vertex_ai/gemini-2.5-flash",
         messages=[{"role": "user", "content": "call the tool"}],
         tools=[tool],
         tool_choice="required",
@@ -3951,3 +3951,35 @@ async def test_vertex_ai_deepseek():
         print(f"mock_post.call_args: {mock_post.call_args[0][0]}")
         assert "v1beta1" not in mock_post.call_args[0][0]
         assert "v1" in mock_post.call_args[0][0]
+
+
+def test_gemini_grounding_on_streaming():
+    from litellm import completion
+
+    load_vertex_ai_credentials()
+    # litellm._turn_on_debug()
+    args = {
+        "model": "vertex_ai/gemini-2.0-flash",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What is the weather like on San Francisco today ?",
+                    }
+                ],
+            }
+        ],
+        "stream": True,
+        "tools": [{"googleSearch": {}}],
+        "fallbacks": [],
+    }
+
+    result = completion(**args)
+    vertex_ai_grounding_metadata_shows_up = False
+    for chunk in result:
+        if hasattr(chunk, "vertex_ai_grounding_metadata"):
+            vertex_ai_grounding_metadata_shows_up = True
+        print(chunk)
+    assert vertex_ai_grounding_metadata_shows_up

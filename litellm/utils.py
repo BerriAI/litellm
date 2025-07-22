@@ -902,7 +902,9 @@ def client(original_function):  # noqa: PLR0915
             typed_call_type = None  # unknown call type
 
         modified_kwargs = kwargs.copy()
+
         for callback in litellm.callbacks:
+
             if isinstance(callback, CustomLogger):
                 result = await callback.async_pre_call_deployment_hook(
                     modified_kwargs, typed_call_type
@@ -1332,6 +1334,7 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -2451,6 +2454,7 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[bool] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -2487,6 +2491,7 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
+        "input_fidelity": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -6005,6 +6010,7 @@ def trim_messages(
     """
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
+    original_messages = messages
     messages = copy.deepcopy(messages)
     try:
         if max_tokens is None:
@@ -6033,6 +6039,7 @@ def trim_messages(
             if message["role"] != "tool":
                 break
             tool_messages.append(message)
+        tool_messages.reverse()
         # # Remove the collected tool messages from the original list
         if len(tool_messages):
             messages = messages[: -len(tool_messages)]
@@ -6042,7 +6049,7 @@ def trim_messages(
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
-            return messages
+            return messages + tool_messages
 
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(
@@ -6087,7 +6094,7 @@ def trim_messages(
         verbose_logger.exception(
             "Got exception while token trimming - {}".format(str(e))
         )
-        return messages
+        return original_messages
 
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -6727,6 +6734,8 @@ class ProviderConfigManager:
             return litellm.EmpowerChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
@@ -6821,6 +6830,8 @@ class ProviderConfigManager:
             return litellm.DashScopeChatConfig()
         elif litellm.LlmProviders.MOONSHOT == provider:
             return litellm.MoonshotChatConfig()
+        elif litellm.LlmProviders.V0 == provider:
+            return litellm.V0ChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -7099,6 +7110,18 @@ class ProviderConfigManager:
             )
 
             return VertexVectorStoreConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.vector_stores.transformation import (
+                BedrockVectorStoreConfig,
+            )
+
+            return BedrockVectorStoreConfig()
+        elif litellm.LlmProviders.PG_VECTOR == provider:
+            from litellm.llms.pg_vector.vector_stores.transformation import (
+                PGVectorStoreConfig,
+            )
+
+            return PGVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7124,6 +7147,12 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_generation import (
+                get_recraft_image_generation_config,
+            )
+
+            return get_recraft_image_generation_config(model)
         return None
 
     @staticmethod
