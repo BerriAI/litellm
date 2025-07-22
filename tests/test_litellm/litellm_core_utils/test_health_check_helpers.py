@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 def test_update_model_params_with_health_check_tracking_information():
@@ -63,4 +64,18 @@ def test_get_metadata_for_health_check_call():
     assert result == expected_metadata
     assert isinstance(result["tags"], list)
     assert len(result["tags"]) == 1
-    assert result["tags"][0] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME 
+    assert result["tags"][0] == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
+
+def test_get_litellm_internal_health_check_user_api_key_auth():
+    """Test get_litellm_internal_health_check_user_api_key_auth returns properly configured UserAPIKeyAuth object."""
+    result = UserAPIKeyAuth.get_litellm_internal_health_check_user_api_key_auth()
+    
+    # Verify the returned object is of correct type
+    assert isinstance(result, UserAPIKeyAuth)
+    
+    # Verify all fields are set to the expected constant value
+    assert result.api_key == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    assert result.team_id == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    assert result.key_alias == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+    assert result.team_alias == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME 
