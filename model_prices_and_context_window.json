@@ -7370,7 +7370,7 @@
         "supports_vision": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_audio_output": false,
+        "supports_audio_output": true,
         "supports_tool_choice": true,
         "supported_endpoints": [
             "/v1/chat/completions",
