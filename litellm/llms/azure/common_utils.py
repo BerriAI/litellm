@@ -20,22 +20,6 @@ from litellm.utils import _add_path_to_api_base
 azure_ad_cache = DualCache()
 
 
-def does_o_series_support_native_streaming(model: Optional[str]) -> bool:
-    """
-    Check if the given O-series model supports native streaming.
-
-    Args:
-        model: The model name to check
-
-    Returns:
-        bool: True if the model supports native streaming, False otherwise
-    """
-    if not model:
-        return False
-
-    return "o3" in model or "o4" in model
-
-
 class AzureOpenAIError(BaseLLMException):
     def __init__(
         self,

@@ -20,7 +20,6 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info, supports_reasoning
 
 from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
-from ..common_utils import does_o_series_support_native_streaming
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
@@ -71,6 +70,21 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
 
         return o_series_only_param
 
+    def does_o_series_support_native_streaming(self, model: Optional[str]) -> bool:
+        """
+        Check if the given O-series model supports native streaming.
+
+        Args:
+            model: The model name to check
+
+        Returns:
+            bool: True if the model supports native streaming, False otherwise
+        """
+        if not model:
+            return False
+
+        return "o3" in model or "o4" in model
+
     def should_fake_stream(
         self,
         model: Optional[str],
@@ -84,7 +98,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         if stream is not True:
             return False
 
-        if does_o_series_support_native_streaming(model):
+        if self.does_o_series_support_native_streaming(model):
             return False
 
         if model is not None:
