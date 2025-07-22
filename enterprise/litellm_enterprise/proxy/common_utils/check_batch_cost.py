@@ -83,14 +83,24 @@ class CheckBatchCost:
                 )
                 continue
 
-            response = await self.llm_router.aretrieve_batch(
-                model=model_id,
-                batch_id=batch_id,
-                litellm_metadata={
-                    "user_api_key_user_id": job.created_by or "default-user-id",
-                    "batch_ignore_default_logging": True,
-                },
+            verbose_proxy_logger.info(
+                f"Querying model ID: {model_id} for cost and usage of batch ID: {batch_id}"
             )
+
+            try:
+                response = await self.llm_router.aretrieve_batch(
+                    model=model_id,
+                    batch_id=batch_id,
+                    litellm_metadata={
+                        "user_api_key_user_id": job.created_by or "default-user-id",
+                        "batch_ignore_default_logging": True,
+                    },
+                )
+            except Exception as e:
+                verbose_proxy_logger.info(
+                    f"Skipping job {unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
+                )
+                continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             managed_files_obj = cast(
@@ -102,6 +112,9 @@ class CheckBatchCost:
                 and response.output_file_id is not None
                 and managed_files_obj is not None
             ):
+                verbose_proxy_logger.info(
+                    f"Batch ID: {batch_id} is complete, tracking cost and usage"
+                )
                 # track cost
                 model_file_id_mapping = {
                     response.output_file_id: {model_id: response.output_file_id}
