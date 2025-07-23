@@ -33,4 +33,3 @@ class RecraftImageEditRequestParams(TypedDict, total=False):
     response_format: Optional[str]  # Format of returned images: url or b64_json
     negative_prompt: Optional[str]  # Description of undesired elements
     controls: Optional[Dict]  # Custom parameters to tweak generation process
-    controls: Optional[Dict]
