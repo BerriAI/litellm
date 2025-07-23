@@ -361,6 +361,9 @@ router_settings:
 | CACHED_STREAMING_CHUNK_DELAY | Delay in seconds for cached streaming chunks. Default is 0.02
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
+| CLOUDZERO_API_KEY | CloudZero API key for authentication
+| CLOUDZERO_CONNECTION_ID | CloudZero connection ID for data submission
+| CLOUDZERO_TIMEZONE | Timezone for date handling (default: UTC)
 | CONFIG_FILE_PATH | File path for configuration file
 | CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
