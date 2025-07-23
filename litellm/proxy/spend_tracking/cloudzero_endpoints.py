@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -14,9 +15,14 @@ from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroExportResponse,
     CloudZeroInitRequest,
     CloudZeroInitResponse,
+    CloudZeroSettingsUpdate,
+    CloudZeroSettingsView,
 )
 
 router = APIRouter()
+
+# Initialize the sensitive data masker for API key masking
+_sensitive_masker = SensitiveDataMasker()
 
 
 async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: str):
@@ -96,6 +102,136 @@ async def _get_cloudzero_settings():
         settings["api_key"] = decrypted_api_key
     
     return settings
+
+
+@router.get(
+    "/cloudzero/settings",
+    tags=["CloudZero"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CloudZeroSettingsView,
+)
+async def get_cloudzero_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    View current CloudZero settings.
+    
+    Returns the current CloudZero configuration with the API key masked for security.
+    Only the first 4 and last 4 characters of the API key are shown.
+    
+    Only admin users can view CloudZero settings.
+    """
+    # Validation
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+    
+    try:
+        # Get CloudZero settings using the accessor method
+        settings = await _get_cloudzero_settings()
+        
+        # Use SensitiveDataMasker to mask the API key
+        masked_settings = _sensitive_masker.mask_dict(settings)
+        
+        return CloudZeroSettingsView(
+            api_key_masked=masked_settings["api_key"],
+            connection_id=settings["connection_id"],
+            timezone=settings["timezone"],
+            status="configured"
+        )
+        
+    except HTTPException as e:
+        if e.status_code == 400:
+            # Settings not configured
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "CloudZero settings not configured"}
+            )
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error retrieving CloudZero settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to retrieve CloudZero settings: {str(e)}"}
+        )
+
+
+@router.put(
+    "/cloudzero/settings",
+    tags=["CloudZero"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CloudZeroInitResponse,
+)
+async def update_cloudzero_settings(
+    request: CloudZeroSettingsUpdate,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update existing CloudZero settings.
+    
+    Allows updating individual CloudZero configuration fields without requiring all fields.
+    Only provided fields will be updated; others will remain unchanged.
+    
+    Parameters:
+    - api_key: (Optional) New CloudZero API key for authentication
+    - connection_id: (Optional) New CloudZero connection ID for data submission
+    - timezone: (Optional) New timezone for date handling
+    
+    Only admin users can update CloudZero settings.
+    """
+    # Validation
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+    
+    # Check if at least one field is provided
+    if not any([request.api_key, request.connection_id, request.timezone]):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "At least one field must be provided for update"}
+        )
+    
+    try:
+        # Get current settings
+        current_settings = await _get_cloudzero_settings()
+        
+        # Update only provided fields
+        updated_api_key = request.api_key if request.api_key is not None else current_settings["api_key"]
+        updated_connection_id = request.connection_id if request.connection_id is not None else current_settings["connection_id"]
+        updated_timezone = request.timezone if request.timezone is not None else current_settings["timezone"]
+        
+        # Store updated settings using the setter method with encryption
+        await _set_cloudzero_settings(
+            api_key=updated_api_key,
+            connection_id=updated_connection_id,
+            timezone=updated_timezone
+        )
+        
+        verbose_proxy_logger.info("CloudZero settings updated successfully")
+        
+        return CloudZeroInitResponse(
+            message="CloudZero settings updated successfully",
+            status="success"
+        )
+        
+    except HTTPException as e:
+        if e.status_code == 400:
+            # Settings not configured yet
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "CloudZero settings not found. Please initialize settings first using /cloudzero/init"}
+            )
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error updating CloudZero settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to update CloudZero settings: {str(e)}"}
+        )
 
 
 @router.post(
