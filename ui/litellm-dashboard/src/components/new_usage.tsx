@@ -29,6 +29,7 @@ import {
   Subtitle,
   DateRangePicker,
   DateRangePickerValue,
+  Button,
 } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
 import { AreaChart } from "@tremor/react";
@@ -58,6 +59,7 @@ import { Team } from "./key_team_helpers/key_list";
 import { EntityList } from "./entity_usage";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
+import CloudZeroExportModal from "./cloudzero_export_modal";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -87,6 +89,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
   const [modelViewType, setModelViewType] = useState<'groups' | 'individual'>('groups');
+  const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
 
   const getAllTags = async () => {
     if (!accessToken) {
@@ -389,20 +392,34 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   return (
     <div style={{ width: "100%" }} className="p-8">
-      {all_admin_roles.includes(userRole || "") ? (
-        <Text className="text-sm text-gray-500 mb-4">
-          Note: If you see key/model-level inconsistencies between Global View
-          and Team Usage, it&apos;s because the Global View was missing spend
-          when user_id = null, prior to v1.71.2.{" "}
-          <a
-            href="https://github.com/BerriAI/litellm/issues/10876"
-            className="text-blue-500 hover:text-blue-700 ml-1"
+      {/* Header with Export Button */}
+      <div className="flex justify-between items-center mb-4">        
+        {/* Export Data Button - Only for admin users */}
+        {all_admin_roles.includes(userRole || "") && (
+          <Button
+            onClick={() => setIsCloudZeroModalOpen(true)}
+            variant="primary"
+            size="sm"
+            className="flex items-center gap-2"
           >
-            Learn more here
-          </a>
-          .
-        </Text>
-      ) : null}
+            <svg 
+              className="w-4 h-4" 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" 
+              />
+            </svg>
+            Export Data
+          </Button>
+        )}
+      </div>
+
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           {all_admin_roles.includes(userRole || "") ? (
@@ -761,6 +778,13 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {/* CloudZero Export Modal */}
+      <CloudZeroExportModal
+        isOpen={isCloudZeroModalOpen}
+        onClose={() => setIsCloudZeroModalOpen(false)}
+        accessToken={accessToken}
+      />
     </div>
   );
 };
