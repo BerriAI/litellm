@@ -47,26 +47,7 @@ class LiteLLMDatabase:
         
         # Query to get spend logs for the specific hour with key_name from verification token
         query = """
-        SELECT 
-            sl.request_id,
-            sl.api_key,
-            vt.key_name,
-            sl.team_id,
-            sl.model,
-            sl.model_group,
-            sl.custom_llm_provider,
-            sl.spend,
-            sl.total_tokens,
-            sl.prompt_tokens,
-            sl.completion_tokens,
-            sl."startTime",
-            sl."endTime",
-            sl.request_tags,
-            sl.status,
-            sl.call_type,
-            sl.user,
-            sl.end_user,
-            sl.metadata
+        SELECT *
         FROM "LiteLLM_SpendLogs" sl
         LEFT JOIN "LiteLLM_VerificationToken" vt ON sl.api_key = vt.token
         WHERE sl."startTime" >= $1 
@@ -90,26 +71,7 @@ class LiteLLMDatabase:
         
         # Query to get recent spend logs with key_name from verification token
         query = """
-        SELECT 
-            sl.request_id,
-            sl.api_key,
-            vt.key_name,
-            sl.team_id,
-            sl.model,
-            sl.model_group,
-            sl.custom_llm_provider,
-            sl.spend,
-            sl.total_tokens,
-            sl.prompt_tokens,
-            sl.completion_tokens,
-            sl."startTime",
-            sl."endTime",
-            sl.request_tags,
-            sl.status,
-            sl.call_type,
-            sl.user,
-            sl.end_user,
-            sl.metadata
+        SELECT *
         FROM "LiteLLM_SpendLogs" sl
         LEFT JOIN "LiteLLM_VerificationToken" vt ON sl.api_key = vt.token
         ORDER BY sl."startTime" DESC
