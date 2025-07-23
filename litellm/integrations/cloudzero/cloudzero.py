@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import Optional
 
 from litellm._logging import verbose_logger
@@ -28,16 +29,17 @@ class CloudZeroLogger(CustomLogger):
         self.connection_id = connection_id or os.getenv("CLOUDZERO_CONNECTION_ID") 
         self.timezone = timezone or os.getenv("CLOUDZERO_TIMEZONE", "UTC")
 
-    async def export_usage_data(self, limit: Optional[int] = None, operation: str = "replace_hourly"):
+    async def export_usage_data(self, target_hour: datetime, limit: Optional[int] = 1000, operation: str = "replace_hourly"):
         """
-        Exports the usage data to CloudZero.
+        Exports the usage data for a specific hour to CloudZero.
 
-        - Reads data from the DB
+        - Reads spend logs from the DB for the specified hour
         - Transforms the data to the CloudZero format
         - Sends the data to CloudZero
         
         Args:
-            limit: Optional limit on number of records to export
+            target_hour: The specific hour to export data for
+            limit: Optional limit on number of records to export (default: 1000)
             operation: CloudZero operation type ("replace_hourly" or "sum")
         """
         try:
@@ -51,8 +53,8 @@ class CloudZeroLogger(CustomLogger):
 
             # Initialize database connection and load data
             database = LiteLLMDatabase()
-            verbose_logger.debug("CloudZero Logger: Loading usage data from database")
-            data = await database.get_usage_data(limit=limit)
+            verbose_logger.debug(f"CloudZero Logger: Loading spend logs for hour {target_hour}")
+            data = await database.get_usage_data_for_hour(target_hour=target_hour, limit=limit)
             
             if data.is_empty():
                 verbose_logger.info("CloudZero Logger: No usage data found to export")
@@ -84,20 +86,21 @@ class CloudZeroLogger(CustomLogger):
             verbose_logger.error(f"CloudZero Logger: Error exporting usage data: {str(e)}")
             raise
 
-    async def dry_run_export_usage_data(self, limit: Optional[int] = 10000):
+    async def dry_run_export_usage_data(self, target_hour: datetime, limit: Optional[int] = 1000):
         """
-        Only prints the data that would be exported to CloudZero.
+        Only prints the spend logs data for a specific hour that would be exported to CloudZero.
         
         Args:
-            limit: Limit number of records to display (default: 10000)
+            target_hour: The specific hour to export data for
+            limit: Limit number of records to display (default: 1000)
         """
         try:
             verbose_logger.debug("CloudZero Logger: Starting dry run export")
             
             # Initialize database connection and load data
             database = LiteLLMDatabase()
-            verbose_logger.debug("CloudZero Logger: Loading usage data for dry run")
-            data = await database.get_usage_data(limit=limit)
+            verbose_logger.debug(f"CloudZero Logger: Loading spend logs for dry run - hour {target_hour}")
+            data = await database.get_usage_data_for_hour(target_hour=target_hour, limit=limit)
             
             if data.is_empty():
                 verbose_logger.warning("CloudZero Dry Run: No usage data found")
