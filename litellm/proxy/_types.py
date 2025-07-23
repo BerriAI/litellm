@@ -2780,6 +2780,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     organization: str
     timeout: Optional[float]
     user: Optional[str]
+    num_retries: Optional[int]
 
 
 class JWTKeyItem(TypedDict, total=False):
