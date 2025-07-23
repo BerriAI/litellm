@@ -361,6 +361,9 @@ router_settings:
 | CACHED_STREAMING_CHUNK_DELAY | Delay in seconds for cached streaming chunks. Default is 0.02
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
+| CLOUDZERO_API_KEY | CloudZero API key for authentication
+| CLOUDZERO_CONNECTION_ID | CloudZero connection ID for data submission
+| CLOUDZERO_TIMEZONE | Timezone for date handling (default: UTC)
 | CONFIG_FILE_PATH | File path for configuration file
 | CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
@@ -612,6 +615,9 @@ router_settings:
 | PHOENIX_API_KEY | API key for Arize Phoenix
 | PHOENIX_COLLECTOR_ENDPOINT | API endpoint for Arize Phoenix
 | PHOENIX_COLLECTOR_HTTP_ENDPOINT | API http endpoint for Arize Phoenix
+| PILLAR_API_BASE | Base URL for Pillar API Guardrails
+| PILLAR_API_KEY | API key for Pillar API Guardrails
+| PILLAR_ON_FLAGGED_ACTION | Action to take when content is flagged ('block' or 'monitor')
 | POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
