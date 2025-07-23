@@ -86,6 +86,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   });
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
+  const [modelViewType, setModelViewType] = useState<'groups' | 'individual'>('groups');
 
   const getAllTags = async () => {
     if (!accessToken) {
@@ -150,6 +151,58 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     return Object.entries(modelSpend)
       .map(([model, metrics]) => ({
         key: model,
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens,
+      }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 5);
+  };
+
+  const getTopModelGroups = () => {
+    const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
+    userSpendData.results.forEach((day) => {
+      Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
+        if (!modelGroupSpend[modelGroup]) {
+          modelGroupSpend[modelGroup] = {
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+            metadata: {},
+            api_key_breakdown: {}
+          };
+        }
+        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend;
+        modelGroupSpend[modelGroup].metrics.prompt_tokens +=
+          metrics.metrics.prompt_tokens;
+        modelGroupSpend[modelGroup].metrics.completion_tokens +=
+          metrics.metrics.completion_tokens;
+        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens;
+        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests;
+        modelGroupSpend[modelGroup].metrics.successful_requests +=
+          metrics.metrics.successful_requests || 0;
+        modelGroupSpend[modelGroup].metrics.failed_requests +=
+          metrics.metrics.failed_requests || 0;
+        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens +=
+          metrics.metrics.cache_read_input_tokens || 0;
+        modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
+          metrics.metrics.cache_creation_input_tokens || 0;
+      });
+    });
+
+    return Object.entries(modelGroupSpend)
+      .map(([modelGroup, metrics]) => ({
+        key: modelGroup,
         spend: metrics.metrics.spend,
         requests: metrics.metrics.api_requests,
         successful_requests: metrics.metrics.successful_requests,
@@ -527,11 +580,35 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     <Col numColSpan={1}>
                       <Card className="h-full">
                         <div className="flex justify-between items-center mb-4">
-                          <Title>Top Models</Title>
+                          <Title>
+                            {modelViewType === 'groups' ? 'Top Public Model Names' : 'Top Litellm Models'}
+                          </Title>
+                          <div className="flex bg-gray-100 rounded-lg p-1">
+                            <button
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                modelViewType === 'groups'
+                                  ? 'bg-white shadow-sm text-gray-900'
+                                  : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                              onClick={() => setModelViewType('groups')}
+                            >
+                              Public Model Name
+                            </button>
+                            <button
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                modelViewType === 'individual'
+                                  ? 'bg-white shadow-sm text-gray-900'
+                                  : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                              onClick={() => setModelViewType('individual')}
+                            >
+                              Litellm Model Name
+                            </button>
+                          </div>
                         </div>
                         <BarChart
                           className="mt-4 h-40"
-                          data={getTopModels()}
+                          data={modelViewType === 'groups' ? getTopModelGroups() : getTopModels()}
                           index="key"
                           categories={["spend"]}
                           colors={["cyan"]}
