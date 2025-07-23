@@ -1,8 +1,7 @@
-import json
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.cloudzero_endpoints import (
@@ -67,9 +66,9 @@ async def init_cloudzero_settings(
             data={
                 "create": {
                     "param_name": "cloudzero_settings",
-                    "param_value": json.dumps(cloudzero_settings),
+                    "param_value": safe_dumps(cloudzero_settings),
                 },
-                "update": {"param_value": json.dumps(cloudzero_settings)},
+                "update": {"param_value": safe_dumps(cloudzero_settings)},
             },
         )
         
