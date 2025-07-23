@@ -877,22 +877,29 @@ app.add_middleware(
 
 app.add_middleware(PrometheusAuthMiddleware)
 
-if not (
-    server_root_path and server_root_path != "/"
-):  # do not mount custom swagger if custom server root path is set
-    swagger_path = os.path.join(current_dir, "swagger")
-    app.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
+
+def mount_swagger_ui():
+    swagger_directory = os.path.join(current_dir, "swagger")
+    swagger_path = "/" if server_root_path is None else server_root_path
+    if not swagger_path.endswith("/"):
+        swagger_path = swagger_path + "/"
+    custom_root_path_swagger_path = swagger_path + "swagger"
+
+    app.mount("/swagger", StaticFiles(directory=swagger_directory), name="swagger")
 
     def swagger_monkey_patch(*args, **kwargs):
         return get_swagger_ui_html(
             *args,
             **kwargs,
-            swagger_js_url="/swagger/swagger-ui-bundle.js",
-            swagger_css_url="/swagger/swagger-ui.css",
-            swagger_favicon_url="/swagger/favicon.png",
+            swagger_js_url=f"{custom_root_path_swagger_path}/swagger-ui-bundle.js",
+            swagger_css_url=f"{custom_root_path_swagger_path}/swagger-ui.css",
+            swagger_favicon_url=f"{custom_root_path_swagger_path}/favicon.png",
         )
 
     applications.get_swagger_ui_html = swagger_monkey_patch
+
+
+mount_swagger_ui()
 
 from typing import Dict
 
