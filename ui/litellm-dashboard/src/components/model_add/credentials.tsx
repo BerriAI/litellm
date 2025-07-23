@@ -126,15 +126,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex justify-between items-center mb-4">
         <Text>
-          Configured credentials for different AI providers. Add and manage your API credentials.{" "}
-          <a 
-            href="https://docs.litellm.ai/docs/credentials" 
-            target="_blank" 
-            rel="noopener noreferrer" 
-            className="text-blue-500 hover:text-blue-700 underline"
-          >
-            Docs
-          </a>
+          Configured credentials for different AI providers. Add and manage your API credentials.
         </Text>
       </div>
 
