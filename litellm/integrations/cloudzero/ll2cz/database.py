@@ -18,26 +18,22 @@
 
 """Database connection and data extraction for LiteLLM."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import polars as pl
-
-from litellm.proxy.proxy_server import prisma_client
 
 
 class LiteLLMDatabase:
     """Handle LiteLLM PostgreSQL database connections and queries."""
     def _ensure_prisma_client(self):
+        from litellm.proxy.proxy_server import prisma_client
+
         """Ensure prisma client is available."""
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         return prisma_client
-
-    def connect(self):
-        """Establish database connection - for backwards compatibility."""
-        return self._ensure_prisma_client()
 
     async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
         """Retrieve consolidated usage data from LiteLLM daily spend tables."""
