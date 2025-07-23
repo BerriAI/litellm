@@ -5,19 +5,16 @@ import {
   Text,
   Grid,
   Button,
-  TextInput,
   Col,
 } from "@tremor/react";
 import {
   Form,
-  Upload,
   Button as AntButton,
   message,
   ColorPicker,
   Space,
 } from "antd";
-import { UploadOutlined, EyeOutlined } from "@ant-design/icons";
-import type { UploadProps } from 'antd';
+import { EyeOutlined } from "@ant-design/icons";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl } from "@/components/networking";
 
@@ -33,7 +30,6 @@ interface UIThemeConfig {
   brand_color_subtle?: string;
   brand_color_faint?: string;
   brand_color_emphasis?: string;
-  logo_url?: string;
 }
 
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
@@ -45,8 +41,6 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [themeConfig, setThemeConfig] = useState<UIThemeConfig>({});
-  const [logoPreview, setLogoPreview] = useState<string | null>(null);
-  const [logoUrlInput, setLogoUrlInput] = useState<string>("");
 
   // Load current theme settings
   useEffect(() => {
@@ -78,11 +72,6 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
         // Update theme context with server values
         if (data.values) {
           updateColors(data.values);
-          // Set logo preview if URL exists
-          if (data.values.logo_url) {
-            setLogoPreview(null); // Clear any file preview
-            setLogoUrlInput(data.values.logo_url);
-          }
         }
         form.setFieldsValue(data.values || {});
       }
@@ -96,34 +85,6 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
     // Update theme context for real-time preview
     updateColors({ [field]: hexColor });
     form.setFieldsValue({ [field]: hexColor });
-  };
-
-  const handleLogoUpload: UploadProps['customRequest'] = async (options) => {
-    const { file, onSuccess, onError } = options;
-    
-    try {
-      // Convert file to data URL for preview
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const dataUrl = e.target?.result as string;
-        setLogoPreview(dataUrl);
-        form.setFieldsValue({ logo_url: dataUrl });
-        setLogoUrlInput(dataUrl);
-      };
-      reader.readAsDataURL(file as File);
-      
-      // For production scaling, you would typically:
-      // 1. Upload to a CDN (e.g., AWS S3, Cloudinary) and get a public URL
-      // 2. Store only the URL in the database
-      // 3. Use the CDN URL for display
-      // For now, we'll use the data URL for preview
-      message.success('Logo loaded successfully');
-      onSuccess?.({ url: 'data-url' });
-    } catch (error) {
-      console.error('Error loading logo:', error);
-      message.error('Failed to load logo');
-      onError?.(error as Error);
-    }
   };
 
   const handleSave = async (values: UIThemeConfig) => {
@@ -163,7 +124,6 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       brand_color_subtle: "#8e91eb",
       brand_color_faint: "#c7d2fe",
       brand_color_emphasis: "#5558eb",
-      logo_url: "",
     };
     
     form.setFieldsValue(defaults);
@@ -181,81 +141,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       <div className="mb-8">
         <Title className="text-2xl font-bold mb-2">UI Theme Customization</Title>
         <Text className="text-gray-600">
-          Customize the appearance of your LiteLLM admin dashboard with custom colors and logo.
+          Customize the appearance of your LiteLLM admin dashboard with custom colors.
         </Text>
       </div>
-
-      {/* Logo Upload Section */}
-      <Card className="mb-6 shadow-sm p-6">
-        <div className="mb-6">
-          <Title className="text-xl font-semibold mb-2">Custom Logo</Title>
-          <Text className="text-gray-600">
-            Upload a custom logo or provide a URL to personalize your dashboard.
-          </Text>
-        </div>
-        
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div>
-            <Text className="text-sm font-medium text-gray-700 mb-3 block">Upload Options</Text>
-            <div className="space-y-3">
-              <Upload
-                customRequest={handleLogoUpload}
-                accept=".png,.jpg,.jpeg,.svg"
-                maxCount={1}
-                showUploadList={false}
-              >
-                <AntButton 
-                  icon={<UploadOutlined />} 
-                  size="large"
-                  className="w-full"
-                  style={{ width: '100%' }}
-                >
-                  Upload Logo
-                </AntButton>
-              </Upload>
-              
-              <div>
-                <Text className="text-xs text-gray-500 mb-1 block">Or enter logo URL:</Text>
-                <TextInput
-                  placeholder="https://example.com/logo.png"
-                  value={logoUrlInput}
-                  onValueChange={(value) => {
-                    setLogoUrlInput(value);
-                    form.setFieldsValue({ logo_url: value });
-                    // Clear file preview when URL is entered
-                    if (value && logoPreview) {
-                      setLogoPreview(null);
-                    }
-                  }}
-                  className="w-full"
-                />
-              </div>
-            </div>
-          </div>
-          
-          {/* Logo Preview */}
-          <div>
-            <Text className="text-sm font-medium text-gray-700 mb-3 block">Preview</Text>
-            {(logoPreview || form.getFieldValue('logo_url')) ? (
-              <div className="bg-gray-50 rounded-lg p-6 min-h-[120px] flex items-center justify-center">
-                <img 
-                  src={logoPreview || form.getFieldValue('logo_url')} 
-                  alt="Logo preview"
-                  className="max-w-full max-h-24 object-contain"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                    setLogoPreview(null);
-                  }}
-                />
-              </div>
-            ) : (
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 min-h-[120px] flex items-center justify-center text-center bg-gray-50">
-                <Text className="text-gray-500 text-sm">Logo preview will appear here</Text>
-              </div>
-            )}
-          </div>
-        </div>
-      </Card>
 
       <Grid numItems={1} numItemsLg={2} className="gap-6">
         {/* Settings Form */}
