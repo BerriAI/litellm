@@ -79,6 +79,27 @@ class RouteChecks:
         )
 
     @staticmethod
+    def _mask_user_id(user_id: str) -> str:
+        """
+        Mask user_id to prevent leaking sensitive information in error messages
+
+        Args:
+            user_id (str): The user_id to mask
+
+        Returns:
+            str: Masked user_id showing only first 2 and last 2 characters
+        """
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+        if not user_id or len(user_id) <= 4:
+            return "***"
+
+        # Use SensitiveDataMasker with custom configuration for user_id
+        masker = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
+
+        return masker._mask_value(user_id)
+
+    @staticmethod
     def non_proxy_admin_allowed_routes_check(
         user_obj: Optional[LiteLLM_UserTable],
         _user_role: Optional[LitellmUserRoles],
@@ -195,8 +216,10 @@ class RouteChecks:
             if user_obj is not None:
                 user_role = user_obj.user_role or "unknown"
                 user_id = user_obj.user_id or "unknown"
+
+            masked_user_id = RouteChecks._mask_user_id(user_id)
             raise Exception(
-                f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
+                f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
             )
 
     @staticmethod
