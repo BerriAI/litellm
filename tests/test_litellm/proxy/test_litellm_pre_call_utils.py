@@ -243,15 +243,13 @@ async def test_add_litellm_data_to_request_disabled_callbacks():
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={
-            "litellm_disabled_callbacks": ["langfuse", "langsmith", "datadog"]
-        }
+        metadata={"litellm_disabled_callbacks": ["langfuse", "langsmith", "datadog"]},
     )
 
     # Setup request data
     data = {
         "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}]
+        "messages": [{"role": "user", "content": "Hello"}],
     }
 
     # Setup proxy config
@@ -262,7 +260,7 @@ async def test_add_litellm_data_to_request_disabled_callbacks():
         data=data,
         request=request_mock,
         user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config
+        proxy_config=proxy_config,
     )
 
     # Verify that litellm_disabled_callbacks was added to the request data
@@ -298,15 +296,13 @@ async def test_add_litellm_data_to_request_disabled_callbacks_empty():
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={
-            "litellm_disabled_callbacks": []
-        }
+        metadata={"litellm_disabled_callbacks": []},
     )
 
     # Setup request data
     data = {
         "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}]
+        "messages": [{"role": "user", "content": "Hello"}],
     }
 
     # Setup proxy config
@@ -317,7 +313,7 @@ async def test_add_litellm_data_to_request_disabled_callbacks_empty():
         data=data,
         request=request_mock,
         user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config
+        proxy_config=proxy_config,
     )
 
     # Verify that litellm_disabled_callbacks is not added when empty
@@ -352,13 +348,13 @@ async def test_add_litellm_data_to_request_disabled_callbacks_not_present():
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={}  # No litellm_disabled_callbacks
+        metadata={},  # No litellm_disabled_callbacks
     )
 
     # Setup request data
     data = {
         "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}]
+        "messages": [{"role": "user", "content": "Hello"}],
     }
 
     # Setup proxy config
@@ -369,7 +365,7 @@ async def test_add_litellm_data_to_request_disabled_callbacks_not_present():
         data=data,
         request=request_mock,
         user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config
+        proxy_config=proxy_config,
     )
 
     # Verify that litellm_disabled_callbacks is not added when not present
@@ -404,15 +400,13 @@ async def test_add_litellm_data_to_request_disabled_callbacks_invalid_type():
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={
-            "litellm_disabled_callbacks": "not_a_list"  # Should be a list
-        }
+        metadata={"litellm_disabled_callbacks": "not_a_list"},  # Should be a list
     )
 
     # Setup request data
     data = {
         "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}]
+        "messages": [{"role": "user", "content": "Hello"}],
     }
 
     # Setup proxy config
@@ -423,7 +417,7 @@ async def test_add_litellm_data_to_request_disabled_callbacks_invalid_type():
         data=data,
         request=request_mock,
         user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config
+        proxy_config=proxy_config,
     )
 
     # Verify that litellm_disabled_callbacks is not added when invalid type
@@ -460,16 +454,20 @@ async def test_add_litellm_data_to_request_disabled_callbacks_with_logging_setti
         org_id="test_org_id",
         metadata={
             "logging": [
-                {"callback_name": "langfuse", "callback_type": "success", "callback_vars": {}}
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {},
+                }
             ],
-            "litellm_disabled_callbacks": ["langsmith", "datadog"]
-        }
+            "litellm_disabled_callbacks": ["langsmith", "datadog"],
+        },
     )
 
     # Setup request data
     data = {
         "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}]
+        "messages": [{"role": "user", "content": "Hello"}],
     }
 
     # Setup proxy config
@@ -480,7 +478,7 @@ async def test_add_litellm_data_to_request_disabled_callbacks_with_logging_setti
         data=data,
         request=request_mock,
         user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config
+        proxy_config=proxy_config,
     )
 
     # Verify that both logging settings and disabled callbacks are handled correctly
@@ -500,12 +498,8 @@ def test_key_dynamic_logging_settings():
     # Test with arize logging
     key_with_arize = UserAPIKeyAuth(
         api_key="test-key",
-        metadata={
-            "logging": [
-                {"callback_name": "arize", "callback_type": "success"}
-            ]
-        },
-        team_metadata={}
+        metadata={"logging": [{"callback_name": "arize", "callback_type": "success"}]},
+        team_metadata={},
     )
     result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_arize)
     assert result == [{"callback_name": "arize", "callback_type": "success"}]
@@ -514,22 +508,22 @@ def test_key_dynamic_logging_settings():
     key_with_langfuse = UserAPIKeyAuth(
         api_key="test-key",
         metadata={
-            "logging": [
-                {"callback_name": "langfuse", "callback_type": "success"}
-            ]
+            "logging": [{"callback_name": "langfuse", "callback_type": "success"}]
         },
-        team_metadata={}
+        team_metadata={},
     )
-    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_langfuse)
+    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(
+        key_with_langfuse
+    )
     assert result == [{"callback_name": "langfuse", "callback_type": "success"}]
 
     # Test with no logging metadata
     key_without_logging = UserAPIKeyAuth(
-        api_key="test-key",
-        metadata={},
-        team_metadata={}
+        api_key="test-key", metadata={}, team_metadata={}
     )
-    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_without_logging)
+    result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(
+        key_without_logging
+    )
     assert result is None
 
 
@@ -542,12 +536,12 @@ def test_team_dynamic_logging_settings():
         api_key="test-key",
         metadata={},
         team_metadata={
-            "logging": [
-                {"callback_name": "arize", "callback_type": "failure"}
-            ]
-        }
+            "logging": [{"callback_name": "arize", "callback_type": "failure"}]
+        },
     )
-    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key_with_team_arize)
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
+        key_with_team_arize
+    )
     assert result == [{"callback_name": "arize", "callback_type": "failure"}]
 
     # Test with langfuse team logging
@@ -555,21 +549,21 @@ def test_team_dynamic_logging_settings():
         api_key="test-key",
         metadata={},
         team_metadata={
-            "logging": [
-                {"callback_name": "langfuse", "callback_type": "success"}
-            ]
-        }
+            "logging": [{"callback_name": "langfuse", "callback_type": "success"}]
+        },
     )
-    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key_with_team_langfuse)
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
+        key_with_team_langfuse
+    )
     assert result == [{"callback_name": "langfuse", "callback_type": "success"}]
 
     # Test with no team logging metadata
     key_without_team_logging = UserAPIKeyAuth(
-        api_key="test-key",
-        metadata={},
-        team_metadata={}
+        api_key="test-key", metadata={}, team_metadata={}
     )
-    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(key_without_team_logging)
+    result = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
+        key_without_team_logging
+    )
     assert result is None
 
 
@@ -588,22 +582,21 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
                     "callback_type": "success",
                     "callback_vars": {
                         "arize_api_key": "test_arize_api_key",
-                        "arize_space_id": "test_arize_space_id"
-                    }
+                        "arize_space_id": "test_arize_space_id",
+                    },
                 }
             ]
-        }
+        },
     )
-    
+
     # Mock proxy_config (not used in this test path since we have team dynamic logging)
     mock_proxy_config = MagicMock()
-    
+
     # Call the function
     result = _get_dynamic_logging_metadata(
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=mock_proxy_config
+        user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config
     )
-    
+
     # Verify the result
     assert result is not None
     assert isinstance(result, TeamCallbackMetadata)
@@ -612,6 +605,68 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars["arize_api_key"] == "test_arize_api_key"
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
 
+
+
+def test_get_num_retries_from_request():
+    """
+    Test LiteLLMProxyRequestSetup._get_num_retries_from_request method
+    """
+    # Test case 1: Header is present with valid integer string
+    headers_with_retries = {"x-litellm-num-retries": "3"}
+    result = LiteLLMProxyRequestSetup._get_num_retries_from_request(
+        headers_with_retries
+    )
+    assert result == 3
+
+    # Test case 2: Header is not present
+    headers_without_retries = {"Content-Type": "application/json"}
+    result = LiteLLMProxyRequestSetup._get_num_retries_from_request(
+        headers_without_retries
+    )
+    assert result is None
+
+    # Test case 3: Empty headers dictionary
+    empty_headers = {}
+    result = LiteLLMProxyRequestSetup._get_num_retries_from_request(empty_headers)
+    assert result is None
+
+    # Test case 4: Header present with zero value
+    headers_with_zero = {"x-litellm-num-retries": "0"}
+    result = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_zero)
+    assert result == 0
+
+    # Test case 5: Header present with large number
+    headers_with_large_number = {"x-litellm-num-retries": "100"}
+    result = LiteLLMProxyRequestSetup._get_num_retries_from_request(
+        headers_with_large_number
+    )
+    assert result == 100
+
+    # Test case 6: Multiple headers with num retries header
+    headers_multiple = {
+        "Content-Type": "application/json",
+        "x-litellm-num-retries": "5",
+        "Authorization": "Bearer token",
+    }
+    result = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_multiple)
+    assert result == 5
+
+    # Test case 7: Header present with invalid value (should raise ValueError when int() is called)
+    headers_with_invalid = {"x-litellm-num-retries": "invalid"}
+    with pytest.raises(ValueError):
+        LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_invalid)
+
+    # Test case 8: Header present with float string (should raise ValueError when int() is called)
+    headers_with_float = {"x-litellm-num-retries": "3.5"}
+    with pytest.raises(ValueError):
+        LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_float)
+
+    # Test case 9: Header present with negative number
+    headers_with_negative = {"x-litellm-num-retries": "-1"}
+    result = LiteLLMProxyRequestSetup._get_num_retries_from_request(
+        headers_with_negative
+    )
+    assert result == -1
 
 def test_add_user_api_key_auth_to_request_metadata():
     """
