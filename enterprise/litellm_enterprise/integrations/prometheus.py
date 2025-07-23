@@ -1277,6 +1277,10 @@ class PrometheusLogger(CustomLogger):
         Proxy level tracking - triggered when the proxy responds with a success response to the client
         """
         try:
+            from litellm.litellm_core_utils.litellm_logging import (
+                StandardLoggingPayloadSetup,
+            )
+
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 hashed_api_key=user_api_key_dict.api_key,
@@ -1288,6 +1292,9 @@ class PrometheusLogger(CustomLogger):
                 user_email=user_api_key_dict.user_email,
                 status_code="200",
                 route=user_api_key_dict.request_route,
+                tags=StandardLoggingPayloadSetup._get_request_tags(
+                    data.get("metadata", {}), data.get("proxy_server_request", {})
+                ),
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
