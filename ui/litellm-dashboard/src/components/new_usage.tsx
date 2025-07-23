@@ -391,16 +391,14 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers");
 
   return (
-    <div style={{ width: "100%" }} className="p-8">
-      {/* Header with Export Button */}
-      <div className="flex justify-between items-center mb-4">        
-        {/* Export Data Button - Only for admin users */}
-        {all_admin_roles.includes(userRole || "") && (
+    <div style={{ width: "100%" }} className="p-8 relative">
+      {/* Export Data Button - Positioned in top right corner */}
+      {all_admin_roles.includes(userRole || "") && (
+        <div className="absolute top-4 right-4 z-10">
           <Button
             onClick={() => setIsCloudZeroModalOpen(true)}
-            variant="primary"
             size="sm"
-            className="flex items-center gap-2"
+            className="flex items-center gap-1 px-3"
           >
             <svg 
               className="w-4 h-4" 
@@ -417,8 +415,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             </svg>
             Export Data
           </Button>
-        )}
-      </div>
+        </div>
+      )}
 
       <TabGroup>
         <TabList variant="solid" className="mt-1">
