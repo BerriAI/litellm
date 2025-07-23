@@ -239,9 +239,6 @@ class VertexImageGeneration(VertexLLM):
             should_use_v1beta1_features=False,
             mode="image_generation",
         )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
 
         # Transform optional params to camelCase format
         optional_params = self.transform_optional_params(optional_params)
