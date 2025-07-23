@@ -1046,7 +1046,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-sonnet-20240229"
+        resolvable_model = "litellm_proxy/claude-3-5-sonnet-20240620"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
