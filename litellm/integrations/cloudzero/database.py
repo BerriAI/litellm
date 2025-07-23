@@ -18,6 +18,7 @@
 
 """Database connection and data extraction for LiteLLM."""
 
+from datetime import date
 from typing import Any, Dict, Optional
 
 import polars as pl
@@ -35,12 +36,32 @@ class LiteLLMDatabase:
             )
         return prisma_client
 
-    async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
-        """Retrieve consolidated usage data from LiteLLM daily spend tables."""
+    async def get_usage_data(
+        self, 
+        limit: Optional[int] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> pl.DataFrame:
+        """Retrieve consolidated usage data from LiteLLM daily spend tables.
+        
+        Args:
+            limit: Maximum number of records to return
+            start_date: Filter records from this date onwards (inclusive)
+            end_date: Filter records up to this date (inclusive)
+        """
         client = self._ensure_prisma_client()
         
+        # Build WHERE clauses for date filtering
+        date_conditions = []
+        if start_date:
+            date_conditions.append(f"date >= '{start_date}'")
+        if end_date:
+            date_conditions.append(f"date <= '{end_date}'")
+        
+        where_clause = f"WHERE {' AND '.join(date_conditions)}" if date_conditions else ""
+        
         # Union query to combine user, team, and tag spend data
-        query = """
+        query = f"""
         WITH consolidated_spend AS (
             -- User spend data
             SELECT
@@ -63,6 +84,7 @@ class LiteLLMDatabase:
                 created_at,
                 updated_at
             FROM "LiteLLM_DailyUserSpend"
+            {where_clause}
 
             UNION ALL
 
@@ -87,6 +109,7 @@ class LiteLLMDatabase:
                 created_at,
                 updated_at
             FROM "LiteLLM_DailyTeamSpend"
+            {where_clause}
 
             UNION ALL
 
@@ -111,6 +134,7 @@ class LiteLLMDatabase:
                 created_at,
                 updated_at
             FROM "LiteLLM_DailyTagSpend"
+            {where_clause}
         )
         SELECT * FROM consolidated_spend
         ORDER BY date DESC, created_at DESC
