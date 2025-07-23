@@ -425,6 +425,32 @@ class LiteLLMProxyRequestSetup:
             user_api_key_request_route=user_api_key_dict.request_route,
         )
         return user_api_key_logged_metadata
+    
+    @staticmethod
+    def add_user_api_key_auth_to_request_metadata(
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        _metadata_variable_name: str,
+    ) -> dict:
+        """
+        Adds the `UserAPIKeyAuth` object to the request metadata.
+        """
+        user_api_key_logged_metadata = (
+            LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                user_api_key_dict=user_api_key_dict
+            )
+        )
+        data[_metadata_variable_name].update(user_api_key_logged_metadata)
+        data[_metadata_variable_name][
+            "user_api_key"
+        ] = (
+            user_api_key_dict.api_key
+        )  # this is just the hashed token
+
+        data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
+            user_api_key_dict, "end_user_max_budget", None
+        )
+        return data
 
     @staticmethod
     def add_key_level_controls(
@@ -646,22 +672,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             data["metadata"]
         )
 
-    user_api_key_logged_metadata = (
-        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-            user_api_key_dict=user_api_key_dict
-        )
+    data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name=_metadata_variable_name,
     )
-    data[_metadata_variable_name].update(user_api_key_logged_metadata)
-    data[_metadata_variable_name][
-        "user_api_key"
-    ] = (
-        user_api_key_dict.api_key
-    )  # this is just the hashed token. [TODO]: replace variable name in repo.
-
-    data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
-        user_api_key_dict, "end_user_max_budget", None
-    )
-
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
