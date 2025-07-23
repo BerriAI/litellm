@@ -19,6 +19,8 @@
 import re
 from typing import Any, cast
 
+import litellm
+
 
 class CZRNGenerator:
     """Generate CloudZero Resource Names (CZRNs) for LiteLLM resources."""
@@ -109,23 +111,25 @@ class CZRNGenerator:
     def _normalize_provider(self, provider: str) -> str:
         """Normalize provider names to standard CZRN format."""
         # Map common provider names to CZRN standards
+        import litellm
         provider_map = {
-            'openai': 'openai',
-            'anthropic': 'anthropic',
-            'azure': 'azure',
-            'azure-ai': 'azure',
-            'aws': 'aws',
-            'aws-bedrock': 'aws',
-            'gcp': 'gcp',
-            'google': 'gcp',
-            'cohere': 'cohere',
-            'huggingface': 'huggingface',
-            'replicate': 'replicate',
-            'together-ai': 'together-ai',
-            'unknown': 'unknown'
+            litellm.LlmProviders.AZURE.value: 'azure',
+            litellm.LlmProviders.AZURE_AI.value: 'azure',
+            litellm.LlmProviders.ANTHROPIC.value: 'anthropic',
+            litellm.LlmProviders.BEDROCK.value: 'aws',
+            litellm.LlmProviders.VERTEX_AI.value: 'gcp',
+            litellm.LlmProviders.GEMINI.value: 'google',
+            litellm.LlmProviders.COHERE.value: 'cohere',
+            litellm.LlmProviders.HUGGINGFACE.value: 'huggingface',
+            litellm.LlmProviders.REPLICATE.value: 'replicate',
+            litellm.LlmProviders.TOGETHER_AI.value: 'together-ai',
         }
 
         normalized = provider.lower().replace('_', '-')
+
+        # use litellm custom llm provider if not in provider_map
+        if normalized not in provider_map:
+            return normalized
         return provider_map.get(normalized, normalized)
 
     def _normalize_component(self, component: str, allow_uppercase: bool = False) -> str:

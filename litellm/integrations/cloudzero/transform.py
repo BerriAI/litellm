@@ -23,7 +23,8 @@ from typing import Any, Optional
 
 import polars as pl
 
-from .czrn import CZRNGenerator
+from ...types.integrations.cloudzero import CBFRecord
+from .cz_resource_names import CZRNGenerator
 
 
 class CBFTransformer:
@@ -76,7 +77,7 @@ class CBFTransformer:
 
         return pl.DataFrame(cbf_data)
 
-    def _create_cbf_record(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _create_cbf_record(self, row: dict[str, Any]) -> CBFRecord:
         """Create a single CBF record from LiteLLM daily spend row."""
 
         # Parse date (daily spend tables use date strings like '2025-04-19')
@@ -151,7 +152,7 @@ class CBFTransformer:
         if total_tokens > 0:
             cbf_record['resource/tag:total_tokens'] = str(total_tokens)
 
-        return cbf_record
+        return CBFRecord(cbf_record)
 
     def _parse_date(self, date_str) -> Optional[datetime]:
         """Parse date string from daily spend tables (e.g., '2025-04-19')."""
