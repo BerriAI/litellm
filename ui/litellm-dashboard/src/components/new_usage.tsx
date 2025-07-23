@@ -81,7 +81,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Add date range state
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
 
