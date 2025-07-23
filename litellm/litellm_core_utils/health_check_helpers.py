@@ -55,7 +55,6 @@ class HealthCheckHelpers:
             2. `user_api_key_auth`: This helps identify health check calls in the DB.
                 We need this since the DB requires an API Key to track a log in the SpendLogs Table
         """
-        from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
         _metadata_variable_name = "litellm_metadata"
