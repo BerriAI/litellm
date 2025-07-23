@@ -78,7 +78,7 @@ This brings the following benefits for LiteLLM users:
 
 ## Bulk Editing Users
 
-<Image src="../../img/bulk_edit_graphic.png" alt="Bulk Editing Users" />
+<Image img={require('../../img/bulk_edit_graphic.png')} />
 
 v1.74.7-stable introduces Bulk Editing Users on the UI. This is useful for:
 - granting all existing users to a default team (useful for controlling access / tracking spend by team)
