@@ -5616,16 +5616,17 @@ def _calculate_retry_after(
     if retry_after is not None and 0 < retry_after <= 60:
         return retry_after
 
-    initial_retry_delay = INITIAL_RETRY_DELAY
-    max_retry_delay = MAX_RETRY_DELAY
-    nb_retries = max_retries - remaining_retries
+    # Apply exponential backoff
+    num_retries = max_retries - remaining_retries
+    sleep_seconds = INITIAL_RETRY_DELAY * pow(2.0, num_retries)
 
-    # Apply exponential backoff, but not more than the max.
-    sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
+    # Make sure sleep_seconds is between MAX_RETRY_DELAY and min_timeout
+    sleep_seconds = min(sleep_seconds, MAX_RETRY_DELAY)
+    sleep_seconds = max(min_timeout, min_timeout)
 
     # Apply some jitter (default JITTER is 0.75 - so upto 0.75s)
     jitter = JITTER * random.random()
-    return max(sleep_seconds, min_timeout) + jitter
+    return sleep_seconds + jitter
 
 
 # custom prompt helper function
