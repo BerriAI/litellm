@@ -273,6 +273,16 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _get_num_retries_from_request(headers: dict) -> Optional[int]:
+        """
+        Workaround for client request from Vercel's AI SDK.
+        """
+        num_retries_header = headers.get("x-litellm-num-retries", None)
+        if num_retries_header is not None:
+            return int(num_retries_header)
+        return None
+
+    @staticmethod
     def _get_forwardable_headers(
         headers: Union[Headers, dict],
     ):
@@ -406,6 +416,10 @@ class LiteLLMProxyRequestSetup:
         timeout = LiteLLMProxyRequestSetup._get_timeout_from_request(headers)
         if timeout is not None:
             data["timeout"] = timeout
+
+        num_retries = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
+        if num_retries is not None:
+            data["num_retries"] = num_retries
 
         return data
 
@@ -801,7 +815,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 data[k] = v
 
     # Add disabled callbacks from key metadata
-    if user_api_key_dict.metadata and "litellm_disabled_callbacks" in user_api_key_dict.metadata:
+    if (
+        user_api_key_dict.metadata
+        and "litellm_disabled_callbacks" in user_api_key_dict.metadata
+    ):
         disabled_callbacks = user_api_key_dict.metadata["litellm_disabled_callbacks"]
         if disabled_callbacks and isinstance(disabled_callbacks, list):
             data["litellm_disabled_callbacks"] = disabled_callbacks
