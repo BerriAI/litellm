@@ -7345,6 +7345,54 @@
         "cache_read_input_token_cost": 7.5e-08,
         "supports_prompt_caching": true
     },
+    "gemini/gemini-2.0-flash-live-001": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_token": 3.5e-07,       
+        "input_cost_per_audio_token": 2.1e-06,
+        "input_cost_per_image": 2.1e-06,
+        "input_cost_per_video_per_second": 2.1e-06,
+        "output_cost_per_token": 1.5e-06,
+        "output_cost_per_audio_token": 8.5e-06, 
+        "litellm_provider": "gemini",
+        "mode": "chat",
+        "rpm": 10,
+        "tpm": 250000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_audio_output": true,
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2-0-flash-live-001",
+        "supports_web_search": true,
+        "supports_url_context": true,
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true
+    },
     "gemini/gemini-2.5-flash-preview-tts": {
         "max_tokens": 65535,
         "max_input_tokens": 1048576,
@@ -8581,6 +8629,54 @@
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
+    "gemini-2.0-flash-live-preview-04-09": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "input_cost_per_token": 5e-07,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_image": 3e-06,
+        "input_cost_per_video_per_second": 3e-06,
+        "output_cost_per_token": 2e-06,
+        "output_cost_per_audio_token": 1.2e-05,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "rpm": 10,
+        "tpm": 250000,
+        "supports_system_messages": true,
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_audio_output": true,
+        "supports_tool_choice": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "source": "https://cloud.google.com/vertex-ai/docs/generative-ai/model-reference/gemini#gemini-2-0-flash-live-preview-04-09",
+        "supports_web_search": true,
+        "supports_url_context": true,
+        "supports_pdf_input": true,
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true
+    },
     "vertex_ai/claude-3-sonnet@20240229": {
         "max_tokens": 4096,
         "max_input_tokens": 200000,
@@ -8970,7 +9066,23 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supports_tool_choice": true
     },
-    "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas": {
+    "vertex_ai/meta/llama-3.1-8b-instruct-maas": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "source": "https://console.cloud.google.com/vertex-ai/publishers/meta/model-garden/llama-3.2-90b-vision-instruct-maas",
+        "supports_tool_choice": true,
+        "metadata": {
+            "notes": "VertexAI states that The Llama 3.1 API service for llama-3.1-70b-instruct-maas and llama-3.1-8b-instruct-maas are in public preview and at no cost."
+        }
+    },
+    "vertex_ai/meta/llama-3.1-70b-instruct-maas": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
@@ -8982,6 +9094,35 @@
         "supports_vision": true,
         "source": "https://console.cloud.google.com/vertex-ai/publishers/meta/model-garden/llama-3.2-90b-vision-instruct-maas",
         "supports_tool_choice": true
+    },
+    "vertex_ai/meta/llama-3.1-405b-instruct-maas": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 16e-06,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "source": "https://console.cloud.google.com/vertex-ai/publishers/meta/model-garden/llama-3.2-90b-vision-instruct-maas",
+        "supports_tool_choice": true
+    },
+    "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai-llama_models",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "source": "https://console.cloud.google.com/vertex-ai/publishers/meta/model-garden/llama-3.2-90b-vision-instruct-maas",
+        "supports_tool_choice": true,
+        "metadata": {
+            "notes": "VertexAI states that The Llama 3.2 API service is at no cost during public preview, and will be priced as per dollar-per-1M-tokens at GA."
+        }
     },
     "vertex_ai/mistral-large@latest": {
         "max_tokens": 8191,
@@ -16627,7 +16768,7 @@
     },
     "recraft/recraftv3": {
         "mode": "image_generation",
-        "input_cost_per_image": 0.04,
+        "output_cost_per_image": 0.04,
         "litellm_provider": "recraft",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -16636,7 +16777,7 @@
     },
     "recraft/recraftv2": {
         "mode": "image_generation",
-        "input_cost_per_image": 0.022,
+        "output_cost_per_image": 0.022,
         "litellm_provider": "recraft",
         "supported_endpoints": [
             "/v1/images/generations"
