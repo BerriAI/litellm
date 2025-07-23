@@ -2070,6 +2070,7 @@ class WebhookEvent(CallInfo):
 class SpecialModelNames(enum.Enum):
     all_team_models = "all-team-models"
     all_proxy_models = "all-proxy-models"
+    all_org_models = "all-org-models"
     no_default_models = "no-default-models"
 
 

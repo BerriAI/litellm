@@ -46,6 +46,9 @@ export const fetchAvailableModelsForTeamOrKey = async (
     };
 
 export const getModelDisplayName = (model: string) => {
+  if (model === 'all-org-models') {
+    return 'All Org Models';
+  }
   if (model.endsWith('/*')) {
     const provider = model.replace('/*', '');
     return `All ${provider} models`;

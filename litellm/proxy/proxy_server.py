@@ -171,6 +171,7 @@ from litellm.proxy.auth.model_checks import (
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
+    get_key_models_async,
     get_mcp_server_ids,
     get_team_models,
 )
@@ -3696,12 +3697,21 @@ async def model_list(
     if only_model_access_groups is True:
         include_model_access_groups = True
 
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-    )
+    # Check if we need async model resolution
+    if SpecialModelNames.all_org_models.value in user_api_key_dict.models:
+        key_models = await get_key_models_async(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+        )
+    else:
+        key_models = get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+        )
 
     team_models: List[str] = user_api_key_dict.team_models
 
@@ -6592,11 +6602,19 @@ async def model_info_v1(  # noqa: PLR0915
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
+    # Check if we need async model resolution
+    if SpecialModelNames.all_org_models.value in user_api_key_dict.models:
+        key_models = await get_key_models_async(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+    else:
+        key_models = get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
     team_models = get_team_models(
         team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
@@ -6838,11 +6856,19 @@ async def model_group_info(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
+    # Check if we need async model resolution
+    if SpecialModelNames.all_org_models.value in user_api_key_dict.models:
+        key_models = await get_key_models_async(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+    else:
+        key_models = get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
     team_models = []
     if (
         not user_api_key_dict.team_id
