@@ -1,4 +1,4 @@
- # used for /metrics endpoint on LiteLLM Proxy
+# used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
 import sys
@@ -2148,9 +2148,11 @@ class PrometheusLogger(CustomLogger):
 
         It emits the current remaining budget metrics for all Keys and Teams.
         """
+        from enterprise.litellm_enterprise.integrations.prometheus import (
+            PrometheusLogger,
+        )
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
         from litellm.integrations.custom_logger import CustomLogger
-        from enterprise.litellm_enterprise.integrations.prometheus import PrometheusLogger
 
         prometheus_loggers: List[CustomLogger] = (
             litellm.logging_callback_manager.get_custom_loggers_for_type(
@@ -2280,6 +2282,8 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     """
     Get custom labels from tags based on admin configuration
     """
+    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
+
     configured_tags = litellm.custom_prometheus_tags
     if configured_tags is None or len(configured_tags) == 0:
         return {}
@@ -2289,7 +2293,7 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     # Map each configured tag to its presence in the request tags
     for configured_tag in configured_tags:
         # Create a safe prometheus label name
-        label_name = f"tag_{configured_tag}".replace("-", "_").replace(".", "_")
+        label_name = _sanitize_prometheus_label_name(configured_tag)
 
         # Check if this tag is present in the request tags
         if configured_tag in tags:
