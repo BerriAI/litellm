@@ -182,12 +182,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
+  const [keyType, setKeyType] = useState<string>("default");
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
   };
 
   const handleCancel = () => {
@@ -197,6 +199,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
   };
 
   useEffect(() => {
@@ -592,30 +595,39 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               <TextInput placeholder="" />
             </Form.Item>
 
-            <Form.Item
-              label={
-                <span>
-                  Models{' '}
-                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              }
-              name="models"
-              rules={[{ required: true, message: "Please select a model" }]}
-              help="required"
-              className="mt-4"
-            >
-              <Select
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
-                onChange={(values) => {
-                  if (values.includes("all-team-models")) {
-                    form.setFieldsValue({ models: ["all-team-models"] });
-                  }
-                }}
-              >
+                         <Form.Item
+               label={
+                 <span>
+                   Models{' '}
+                   <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                     <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                   </Tooltip>
+                 </span>
+               }
+               name="models"
+               rules={
+                 keyType === "management" || keyType === "read_only" 
+                   ? []
+                   : [{ required: true, message: "Please select a model" }]
+               }
+               help={
+                 keyType === "management" || keyType === "read_only"
+                   ? "Models field is disabled for this key type"
+                   : "required"
+               }
+               className="mt-4"
+             >
+               <Select
+                 mode="multiple"
+                 placeholder="Select models"
+                 style={{ width: "100%" }}
+                 disabled={keyType === "management" || keyType === "read_only"}
+                 onChange={(values) => {
+                   if (values.includes("all-team-models")) {
+                     form.setFieldsValue({ models: ["all-team-models"] });
+                   }
+                 }}
+               >
                 <Option key="all-team-models" value="all-team-models">
                   All Team Models
                 </Option>
@@ -646,6 +658,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 placeholder="Select key type" 
                 style={{ width: "100%" }}
                 optionLabelProp="label"
+                onChange={(value) => {
+                  setKeyType(value);
+                  // Clear models field and disable if management or read_only
+                  if (value === "management" || value === "read_only") {
+                    form.setFieldsValue({ models: [] });
+                  }
+                }}
               >
                 <Option value="default" label="Default">
                   <div style={{ padding: '4px 0' }}>
