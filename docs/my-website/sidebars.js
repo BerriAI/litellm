@@ -39,6 +39,7 @@ const sidebars = {
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
+          "proxy/guardrails/model_armor",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pii_masking_v2",
@@ -411,6 +412,7 @@ const sidebars = {
             "providers/huggingface_rerank",
           ]
         },
+        "providers/hyperbolic",
         "providers/databricks",
         "providers/deepgram",
         "providers/watsonx",
@@ -448,6 +450,8 @@ const sidebars = {
         "providers/replicate",
         "providers/togetherai",
         "providers/v0",
+        "providers/morph",
+        "providers/lambda_ai",
         "providers/novita",
         "providers/voyage",
         "providers/jina_ai",
@@ -624,6 +628,7 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
+            "projects/HolmesGPT"
           ],
         },
         "extras/code_quality",

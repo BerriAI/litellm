@@ -16,3 +16,9 @@ guardrails:
       guardrailVersion: "DRAFT"
       default_on: true
 
+
+
+litellm_settings:
+  callbacks: ["datadog_llm_observability"]
+  cache: true
+
