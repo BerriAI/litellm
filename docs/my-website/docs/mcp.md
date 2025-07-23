@@ -313,6 +313,24 @@ MCP Access Groups allow you to group multiple MCP servers together for easier ma
 
 #### 1. Create an Access Group
 
+##### A. Creating Access Groups using Config:
+
+```yaml title="Creating access groups for MCP using the config" showLineNumbers
+mcp_servers:
+  "deepwiki_mcp":
+    url: https://mcp.deepwiki.com/mcp
+    transport: "http"
+    auth_type: "none"
+    spec_version: "2025-03-26"
+    access_groups: ["dev_group"]
+```
+
+While adding `mcp_servers` using the config:
+- Pass in a list of strings inside `access_groups`
+- These groups can then be used for segregating access using keys, teams and MCP clients using headers
+
+##### B. Creating Access Groups using UI
+
 To create an access group:
 - Go to MCP Servers in the LiteLLM UI
 - Click "Add a New MCP Server" 
@@ -343,6 +361,7 @@ Include the access group name in the `x-mcp-servers` header:
 ```
 
 This gives you access to all servers in the "dev_group" access group.
+- Which means that if deepwiki server (and any other servers) which have the access group `dev_group` assigned to them will be available for tool calling
 
 #### Advanced: Connecting Access Groups to API Keys
 
