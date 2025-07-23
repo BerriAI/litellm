@@ -125,28 +125,11 @@ async def cloudzero_dry_run_export(
         )
     
     try:
-        # Get CloudZero settings from database
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
-            where={"param_name": "cloudzero_settings"}
-        )
-        
-        if not cloudzero_config or not cloudzero_config.param_value:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "CloudZero settings not configured. Please run /cloudzero/init first."}
-            )
-        
-        settings = dict(cloudzero_config.param_value)
-        
         # Import and initialize CloudZero logger with credentials
         from litellm.integrations.cloudzero.ll2cz.cloudzero import CloudZeroLogger
 
         # Initialize logger with credentials directly
-        logger = CloudZeroLogger(
-            api_key=settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"]
-        )
+        logger = CloudZeroLogger()
         await logger.dry_run_export_usage_data(limit=request.limit)
         
         verbose_proxy_logger.info("CloudZero dry run export completed successfully")
