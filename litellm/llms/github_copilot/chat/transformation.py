@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, cast
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -25,7 +25,7 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        api_base = self.GITHUB_COPILOT_API_BASE
+        dynamic_api_base = self.authenticator.get_api_base() or self.GITHUB_COPILOT_API_BASE
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -34,7 +34,7 @@ class GithubCopilotConfig(OpenAIConfig):
                 llm_provider=custom_llm_provider,
                 message=str(e),
             )
-        return api_base, dynamic_api_key, custom_llm_provider
+        return dynamic_api_base, dynamic_api_key, custom_llm_provider
 
     def _transform_messages(
         self,
@@ -46,5 +46,5 @@ class GithubCopilotConfig(OpenAIConfig):
         if not disable_copilot_system_to_assistant:
             for message in messages:
                 if "role" in message and message["role"] == "system":
-                    message["role"] = "assistant"
+                    cast(Any, message)["role"] = "assistant"
         return messages
