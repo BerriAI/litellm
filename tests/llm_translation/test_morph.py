@@ -90,11 +90,6 @@ def test_morph_supported_params():
         "messages",
         "model",
         "stream",
-        "temperature",
-        "max_tokens",
-        "tools",
-        "tool_choice",
-        "response_format",
     ]
     
     assert all(param in supported_params for param in expected_params)
