@@ -5,6 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroExportRequest,
     CloudZeroExportResponse,
@@ -13,6 +17,85 @@ from litellm.types.proxy.cloudzero_endpoints import (
 )
 
 router = APIRouter()
+
+
+async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: str):
+    """
+    Store CloudZero settings in the database with encrypted API key.
+    
+    Args:
+        api_key: CloudZero API key to encrypt and store
+        connection_id: CloudZero connection ID
+        timezone: Timezone for date handling
+    """
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    
+    # Encrypt the API key before storing
+    encrypted_api_key = encrypt_value_helper(api_key)
+    
+    cloudzero_settings = {
+        "api_key": encrypted_api_key,
+        "connection_id": connection_id,
+        "timezone": timezone,
+    }
+    
+    await prisma_client.db.litellm_config.upsert(
+        where={"param_name": "cloudzero_settings"},
+        data={
+            "create": {
+                "param_name": "cloudzero_settings",
+                "param_value": json.dumps(cloudzero_settings),
+            },
+            "update": {"param_value": json.dumps(cloudzero_settings)},
+        },
+    )
+
+
+async def _get_cloudzero_settings():
+    """
+    Retrieve CloudZero settings from the database with decrypted API key.
+    
+    Returns:
+        dict: CloudZero settings with decrypted API key
+    """
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    
+    cloudzero_config = await prisma_client.db.litellm_config.find_first(
+        where={"param_name": "cloudzero_settings"}
+    )
+    
+    if not cloudzero_config or not cloudzero_config.param_value:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "CloudZero settings not configured. Please run /cloudzero/init first."}
+        )
+    
+    settings = dict(cloudzero_config.param_value)
+    
+    # Decrypt the API key
+    encrypted_api_key = settings.get("api_key")
+    if encrypted_api_key:
+        decrypted_api_key = decrypt_value_helper(encrypted_api_key, exception_type="error")
+        if decrypted_api_key is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Failed to decrypt CloudZero API key. Check your salt key configuration."}
+            )
+        settings["api_key"] = decrypted_api_key
+    
+    return settings
 
 
 @router.post(
@@ -38,15 +121,7 @@ async def init_cloudzero_settings(
     
     Only admin users can configure CloudZero settings.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
     # Validation
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-    
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
@@ -54,23 +129,11 @@ async def init_cloudzero_settings(
         )
     
     try:
-        # Prepare CloudZero settings
-        cloudzero_settings = {
-            "api_key": request.api_key,
-            "connection_id": request.connection_id,
-            "timezone": request.timezone,
-        }
-        
-        # Store in database  
-        await prisma_client.db.litellm_config.upsert(
-            where={"param_name": "cloudzero_settings"},
-            data={
-                "create": {
-                    "param_name": "cloudzero_settings",
-                    "param_value": json.dumps(cloudzero_settings),
-                },
-                "update": {"param_value": json.dumps(cloudzero_settings)},
-            },
+        # Store settings using the setter method with encryption
+        await _set_cloudzero_settings(
+            api_key=request.api_key,
+            connection_id=request.connection_id,
+            timezone=request.timezone
         )
         
         verbose_proxy_logger.info("CloudZero settings initialized successfully")
@@ -109,15 +172,7 @@ async def cloudzero_dry_run_export(
     
     Only admin users can perform CloudZero exports.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
     # Validation
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-    
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
@@ -168,15 +223,7 @@ async def cloudzero_export(
     
     Only admin users can perform CloudZero exports.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
     # Validation
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-    
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
@@ -184,18 +231,8 @@ async def cloudzero_export(
         )
     
     try:
-        # Get CloudZero settings from database
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
-            where={"param_name": "cloudzero_settings"}
-        )
-        
-        if not cloudzero_config or not cloudzero_config.param_value:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "CloudZero settings not configured. Please run /cloudzero/init first."}
-            )
-        
-        settings = dict(cloudzero_config.param_value)
+        # Get CloudZero settings using the accessor method with decryption
+        settings = await _get_cloudzero_settings()
         
         # Import and initialize CloudZero logger with credentials
         from litellm.integrations.cloudzero.ll2cz.cloudzero import CloudZeroLogger
