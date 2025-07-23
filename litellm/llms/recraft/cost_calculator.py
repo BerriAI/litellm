@@ -1,5 +1,5 @@
 import litellm
-from litellm.types.image import ImageResponse
+from litellm.types.utils import ImageResponse
 
 
 def cost_calculator(
