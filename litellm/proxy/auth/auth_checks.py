@@ -137,14 +137,16 @@ async def common_checks(
         valid_token=valid_token,
     )
 
-    # 4. If user is in budget
-    ## 4.1 check personal budget, if personal key
+    # 4. If user is in budget - check for all users with budget, regardless of team association
+    ## 4.1 check user budget for any key associated with user
     if (
-        (team_object is None or team_object.team_id is None)
-        and user_object is not None
+        user_object is not None
         and user_object.max_budget is not None
     ):
         user_budget = user_object.max_budget
+        verbose_proxy_logger.debug(
+            f"Checking user budget: user_id={user_object.user_id}, spend={user_object.spend}, budget={user_budget}"
+        )
         if user_budget < user_object.spend:
             raise litellm.BudgetExceededError(
                 current_cost=user_object.spend,
