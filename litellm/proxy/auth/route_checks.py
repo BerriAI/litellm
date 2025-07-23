@@ -54,6 +54,19 @@ class RouteChecks:
         if route in valid_token.allowed_routes:
             return True
 
+        ## check if 'allowed_route' is a field name in LiteLLMRoutes
+        if any(
+            allowed_route in LiteLLMRoutes._member_names_
+            for allowed_route in valid_token.allowed_routes
+        ):
+            for allowed_route in valid_token.allowed_routes:
+                if allowed_route in LiteLLMRoutes._member_names_:
+                    if RouteChecks.check_route_access(
+                        route=route,
+                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                    ):
+                        return True
+
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
             if RouteChecks._route_matches_wildcard_pattern(
