@@ -397,7 +397,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
         <div className="absolute top-4 right-4 z-10">
           <button
             onClick={() => setIsCloudZeroModalOpen(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-full flex items-center gap-2 shadow-lg transition-colors duration-200 text-sm font-medium"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-full flex items-center gap-2 shadow-lg transition-colors duration-200 text-sm font-medium"
           >
             <svg 
               className="w-4 h-4" 
