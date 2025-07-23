@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+# CHANGELOG: 2025-07-23 - Added support for using LiteLLM_SpendLogs table for CBF mapping (ishaan-jaff)
 # CHANGELOG: 2025-01-19 - Refactored to use daily spend tables for proper CBF mapping (erik.peterson)
 # CHANGELOG: 2025-01-19 - Migrated from pandas to polars for database operations (erik.peterson)
 # CHANGELOG: 2025-01-19 - Initial database module for LiteLLM data extraction (erik.peterson)
 
 """Database connection and data extraction for LiteLLM."""
 
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 import polars as pl
@@ -35,85 +37,82 @@ class LiteLLMDatabase:
             )
         return prisma_client
 
-    async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
-        """Retrieve consolidated usage data from LiteLLM daily spend tables."""
+    async def get_usage_data_for_hour(self, target_hour: datetime, limit: Optional[int] = 1000) -> pl.DataFrame:
+        """Retrieve spend logs for a specific hour from LiteLLM_SpendLogs table with batching."""
         client = self._ensure_prisma_client()
         
-        # Union query to combine user, team, and tag spend data
+        # Calculate hour range
+        hour_start = target_hour.replace(minute=0, second=0, microsecond=0)
+        hour_end = hour_start + timedelta(hours=1)
+        
+        # Query to get spend logs for the specific hour with key_name from verification token
         query = """
-        WITH consolidated_spend AS (
-            -- User spend data
-            SELECT
-                id,
-                date,
-                user_id as entity_id,
-                'user' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyUserSpend"
+        SELECT 
+            sl.request_id,
+            sl.api_key,
+            vt.key_name,
+            sl.team_id,
+            sl.model,
+            sl.model_group,
+            sl.custom_llm_provider,
+            sl.spend,
+            sl.total_tokens,
+            sl.prompt_tokens,
+            sl.completion_tokens,
+            sl."startTime",
+            sl."endTime",
+            sl.request_tags,
+            sl.status,
+            sl.call_type,
+            sl.user,
+            sl.end_user,
+            sl.metadata
+        FROM "LiteLLM_SpendLogs" sl
+        LEFT JOIN "LiteLLM_VerificationToken" vt ON sl.api_key = vt.token
+        WHERE sl."startTime" >= $1 
+          AND sl."startTime" < $2
+        ORDER BY sl."startTime" ASC
+        """
 
-            UNION ALL
+        if limit:
+            query += f" LIMIT {limit}"
 
-            -- Team spend data
-            SELECT
-                id,
-                date,
-                team_id as entity_id,
-                'team' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTeamSpend"
+        try:
+            db_response = await client.db.query_raw(query, hour_start, hour_end)
+            # Convert the response to polars DataFrame
+            return pl.DataFrame(db_response) if db_response else pl.DataFrame()
+        except Exception as e:
+            raise Exception(f"Error retrieving spend logs for hour {target_hour}: {str(e)}")
 
-            UNION ALL
-
-            -- Tag spend data
-            SELECT
-                id,
-                date,
-                tag as entity_id,
-                'tag' as entity_type,
-                api_key,
-                model,
-                model_group,
-                custom_llm_provider,
-                prompt_tokens,
-                completion_tokens,
-                spend,
-                api_requests,
-                successful_requests,
-                failed_requests,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                created_at,
-                updated_at
-            FROM "LiteLLM_DailyTagSpend"
-        )
-        SELECT * FROM consolidated_spend
-        ORDER BY date DESC, created_at DESC
+    async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
+        """Retrieve recent spend logs from LiteLLM_SpendLogs table (fallback for compatibility)."""
+        client = self._ensure_prisma_client()
+        
+        # Query to get recent spend logs with key_name from verification token
+        query = """
+        SELECT 
+            sl.request_id,
+            sl.api_key,
+            vt.key_name,
+            sl.team_id,
+            sl.model,
+            sl.model_group,
+            sl.custom_llm_provider,
+            sl.spend,
+            sl.total_tokens,
+            sl.prompt_tokens,
+            sl.completion_tokens,
+            sl."startTime",
+            sl."endTime",
+            sl.request_tags,
+            sl.status,
+            sl.call_type,
+            sl.user,
+            sl.end_user,
+            sl.metadata
+        FROM "LiteLLM_SpendLogs" sl
+        LEFT JOIN "LiteLLM_VerificationToken" vt ON sl.api_key = vt.token
+        ORDER BY sl."startTime" DESC
         """
 
         if limit:
@@ -122,36 +121,32 @@ class LiteLLMDatabase:
         try:
             db_response = await client.db.query_raw(query)
             # Convert the response to polars DataFrame
-            return pl.DataFrame(db_response)
+            return pl.DataFrame(db_response) if db_response else pl.DataFrame()
         except Exception as e:
             raise Exception(f"Error retrieving usage data: {str(e)}")
 
     async def get_table_info(self) -> Dict[str, Any]:
-        """Get information about the consolidated daily spend tables."""
+        """Get information about the LiteLLM_SpendLogs table."""
         client = self._ensure_prisma_client()
         
         try:
-            # Get combined row count from both tables
-            user_count = await self._get_table_row_count('LiteLLM_DailyUserSpend')
-            team_count = await self._get_table_row_count('LiteLLM_DailyTeamSpend')
-            tag_count = await self._get_table_row_count('LiteLLM_DailyTagSpend')
+            # Get row count from SpendLogs table
+            spend_logs_count = await self._get_table_row_count('LiteLLM_SpendLogs')
 
-            # Get column structure from user spend table (representative)
+            # Get column structure from spend logs table
             query = """
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
-            WHERE table_name = 'LiteLLM_DailyUserSpend'
+            WHERE table_name = 'LiteLLM_SpendLogs'
             ORDER BY ordinal_position;
             """
             columns_response = await client.db.query_raw(query)
 
             return {
                 'columns': columns_response,
-                'row_count': user_count + team_count + tag_count,
+                'row_count': spend_logs_count,
                 'table_breakdown': {
-                    'user_spend': user_count,
-                    'team_spend': team_count,
-                    'tag_spend': tag_count
+                    'spend_logs': spend_logs_count
                 }
             }
         except Exception as e:
