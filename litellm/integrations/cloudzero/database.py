@@ -45,14 +45,13 @@ class LiteLLMDatabase:
         hour_start = target_hour.replace(minute=0, second=0, microsecond=0)
         hour_end = hour_start + timedelta(hours=1)
         
-        # Query to get spend logs for the specific hour with key_name from verification token
+        # Query to get spend logs for the specific hour
         query = """
         SELECT *
-        FROM "LiteLLM_SpendLogs" sl
-        LEFT JOIN "LiteLLM_VerificationToken" vt ON sl.api_key = vt.token
-        WHERE sl."startTime" >= $1 
-          AND sl."startTime" < $2
-        ORDER BY sl."startTime" ASC
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime" >= $1 
+          AND "startTime" < $2
+        ORDER BY "startTime" ASC
         """
 
         if limit:
@@ -65,27 +64,6 @@ class LiteLLMDatabase:
         except Exception as e:
             raise Exception(f"Error retrieving spend logs for hour {target_hour}: {str(e)}")
 
-    async def get_usage_data(self, limit: Optional[int] = None) -> pl.DataFrame:
-        """Retrieve recent spend logs from LiteLLM_SpendLogs table (fallback for compatibility)."""
-        client = self._ensure_prisma_client()
-        
-        # Query to get recent spend logs with key_name from verification token
-        query = """
-        SELECT *
-        FROM "LiteLLM_SpendLogs" sl
-        LEFT JOIN "LiteLLM_VerificationToken" vt ON sl.api_key = vt.token
-        ORDER BY sl."startTime" DESC
-        """
-
-        if limit:
-            query += f" LIMIT {limit}"
-
-        try:
-            db_response = await client.db.query_raw(query)
-            # Convert the response to polars DataFrame
-            return pl.DataFrame(db_response) if db_response else pl.DataFrame()
-        except Exception as e:
-            raise Exception(f"Error retrieving usage data: {str(e)}")
 
     async def get_table_info(self) -> Dict[str, Any]:
         """Get information about the LiteLLM_SpendLogs table."""

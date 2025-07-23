@@ -90,10 +90,11 @@ class CBFTransformer:
     def _aggregate_to_hourly(self, data: pl.DataFrame) -> pl.DataFrame:
         """Aggregate spend logs to hourly level by team_id, key_name, model, and tags."""
         
-        # Extract hour from startTime and parse tags
+        # Extract hour from startTime, parse tags, and extract key_name from metadata
         data_with_hour = data.with_columns([
             pl.col('startTime').dt.truncate('1h').alias('usage_hour'),
-            pl.col('request_tags').map_elements(self._parse_tags, return_dtype=pl.List(pl.String)).alias('parsed_tags')
+            pl.col('request_tags').map_elements(self._parse_tags, return_dtype=pl.List(pl.String)).alias('parsed_tags'),
+            pl.col('metadata').map_elements(self._extract_key_name_from_metadata, return_dtype=pl.String).alias('key_name')
         ])
         
         # Flatten tags for grouping (each tag becomes a separate record)
@@ -153,6 +154,28 @@ class CBFTransformer:
                 return []
         except (json.JSONDecodeError, TypeError):
             return []
+
+    def _extract_key_name_from_metadata(self, metadata_json: str) -> str:
+        """Extract key_name/key_alias from metadata JSON field."""
+        if not metadata_json or metadata_json in ['{}', 'null']:
+            return ""
+        
+        try:
+            if isinstance(metadata_json, str):
+                metadata = json.loads(metadata_json)
+            else:
+                metadata = metadata_json
+                
+            if isinstance(metadata, dict):
+                # Look for key_alias or user_api_key_alias first, then fallback to key_name
+                return (metadata.get('user_api_key_alias') or 
+                       metadata.get('key_alias') or 
+                       metadata.get('key_name') or 
+                       "")
+            else:
+                return ""
+        except (json.JSONDecodeError, TypeError):
+            return ""
 
     def _create_cbf_record(self, row: dict[str, Any]) -> CBFRecord:
         """Create a single CBF record from aggregated hourly spend data."""
