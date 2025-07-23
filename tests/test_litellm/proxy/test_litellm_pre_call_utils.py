@@ -606,6 +606,7 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
 
 
+
 def test_get_num_retries_from_request():
     """
     Test LiteLLMProxyRequestSetup._get_num_retries_from_request method
@@ -666,3 +667,60 @@ def test_get_num_retries_from_request():
         headers_with_negative
     )
     assert result == -1
+
+def test_add_user_api_key_auth_to_request_metadata():
+    """
+    Test that add_user_api_key_auth_to_request_metadata properly adds user API key authentication data to request metadata
+    """
+    # Setup test data
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "litellm_metadata": {}  # This will be the metadata variable name
+    }
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key-123",
+        user_id="test-user-123",
+        org_id="test-org-456",
+        team_id="test-team-789",
+        key_alias="test-key-alias",
+        user_email="test@example.com",
+        team_alias="test-team-alias",
+        end_user_id="test-end-user-123",
+        request_route="/chat/completions",
+        end_user_max_budget=500.0
+    )
+    
+    metadata_variable_name = "litellm_metadata"
+    
+    # Call the function
+    result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name=metadata_variable_name
+    )
+    
+    # Verify the metadata was properly added
+    metadata = result[metadata_variable_name]
+    
+    # Check that user API key information was added
+    assert metadata["user_api_key_hash"] == "hashed-test-key-123"
+    assert metadata["user_api_key_alias"] == "test-key-alias"
+    assert metadata["user_api_key_team_id"] == "test-team-789"
+    assert metadata["user_api_key_user_id"] == "test-user-123"
+    assert metadata["user_api_key_org_id"] == "test-org-456"
+    assert metadata["user_api_key_team_alias"] == "test-team-alias"
+    assert metadata["user_api_key_end_user_id"] == "test-end-user-123"
+    assert metadata["user_api_key_user_email"] == "test@example.com"
+    assert metadata["user_api_key_request_route"] == "/chat/completions"
+    
+    # Check that the hashed API key was added
+    assert metadata["user_api_key"] == "hashed-test-key-123"
+    
+    # Check that end user max budget was added
+    assert metadata["user_api_end_user_max_budget"] == 500.0
+    
+    # Verify original data is preserved
+    assert result["model"] == "gpt-3.5-turbo"
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]

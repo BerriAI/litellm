@@ -158,7 +158,7 @@ We support ALL Groq models, just set `groq/` as a prefix when sending completion
 | mixtral-8x7b-32768 | `completion(model="groq/mixtral-8x7b-32768", messages)` |
 | gemma-7b-it        | `completion(model="groq/gemma-7b-it", messages)`        |
 | moonshotai/kimi-k2-instruct | `completion(model="groq/moonshotai/kimi-k2-instruct", messages)` |
-| qwen-qwq-32b       | `completion(model="groq/qwen-qwq-32b", messages)`       |  
+| qwen3-32b       | `completion(model="groq/qwen/qwen3-32b", messages)`       |
 
 ## Groq - Tool / Function Calling Example
 

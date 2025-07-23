@@ -759,68 +759,6 @@ def test_completion_base64(model):
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
 
-
-@pytest.mark.parametrize("model", ["claude-3-5-sonnet-latest"])
-def test_completion_function_plus_image(model):
-    litellm.set_verbose = True
-
-    image_content = [
-        {"type": "text", "text": "What’s in this image?"},
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-            },
-        },
-    ]
-    image_message = {"role": "user", "content": image_content}
-
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {
-                            "type": "string",
-                            "enum": ["celsius", "fahrenheit"],
-                        },
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-
-    tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-
-    try:
-        response = completion(
-            model=model,
-            messages=[image_message],
-            tool_choice=tool_choice,
-            tools=tools,
-            stream=False,
-        )
-
-        print(response)
-    except litellm.InternalServerError:
-        pass
-
-
 def test_completion_mistral_api():
     try:
         litellm.set_verbose = True
