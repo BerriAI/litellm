@@ -1165,7 +1165,7 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-general-model",
                 "litellm_params": {
-                    "model": "claude-2.1",
+                    "model": "anthropic/claude-3-5-sonnet-latest",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
