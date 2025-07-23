@@ -111,7 +111,6 @@ class CZRNGenerator:
     def _normalize_provider(self, provider: str) -> str:
         """Normalize provider names to standard CZRN format."""
         # Map common provider names to CZRN standards
-        import litellm
         provider_map = {
             litellm.LlmProviders.AZURE.value: 'azure',
             litellm.LlmProviders.AZURE_AI.value: 'azure',
