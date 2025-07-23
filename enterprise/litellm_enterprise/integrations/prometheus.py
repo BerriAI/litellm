@@ -1231,8 +1231,15 @@ class PrometheusLogger(CustomLogger):
                     "team_alias",
                 ] + EXCEPTION_LABELS,
         """
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
         try:
-            _tags = cast(List[str], request_data.get("tags") or [])
+            _tags = StandardLoggingPayloadSetup._get_request_tags(
+                request_data.get("metadata", {}),
+                request_data.get("proxy_server_request", {}),
+            )
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
