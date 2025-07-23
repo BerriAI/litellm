@@ -19,14 +19,14 @@ class CloudZeroLogger(CustomLogger):
         CLOUDZERO_TIMEZONE: Timezone for date handling (default: UTC)
     """
 
-    def __init__(self, **kwargs):
-        """Initialize CloudZero logger with configuration from environment variables."""
+    def __init__(self, api_key: Optional[str] = None, connection_id: Optional[str] = None, timezone: Optional[str] = None, **kwargs):
+        """Initialize CloudZero logger with configuration from parameters or environment variables."""
         super().__init__(**kwargs)
         
-        # Get configuration from environment variables
-        self.api_key = os.getenv("CLOUDZERO_API_KEY")
-        self.connection_id = os.getenv("CLOUDZERO_CONNECTION_ID") 
-        self.timezone = os.getenv("CLOUDZERO_TIMEZONE", "UTC")
+        # Get configuration from parameters first, fall back to environment variables
+        self.api_key = api_key or os.getenv("CLOUDZERO_API_KEY")
+        self.connection_id = connection_id or os.getenv("CLOUDZERO_CONNECTION_ID") 
+        self.timezone = timezone or os.getenv("CLOUDZERO_TIMEZONE", "UTC")
 
     async def export_usage_data(self, limit: Optional[int] = None, operation: str = "replace_hourly"):
         """
