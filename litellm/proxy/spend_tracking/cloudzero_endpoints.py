@@ -197,10 +197,10 @@ async def cloudzero_export(
         settings = dict(cloudzero_config.param_value)
         
         # Import and initialize CloudZero logger with credentials
-        from litellm.integrations.cloudzero.ll2cz.cloudzero import CloudZeroLogger
+        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 
         # Initialize logger with credentials directly
-        logger = CloudZeroLogger(
+        logger: CloudZeroLogger = CloudZeroLogger(
             api_key=settings["api_key"],
             connection_id=settings["connection_id"],
             timezone=settings["timezone"]
