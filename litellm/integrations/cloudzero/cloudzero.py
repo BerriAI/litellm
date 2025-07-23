@@ -1,0 +1,2 @@
+class CloudZeroLogger:
+    pass
