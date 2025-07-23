@@ -1366,6 +1366,7 @@ class PrometheusLogger(CustomLogger):
                 team_alias=standard_logging_payload["metadata"][
                     "user_api_key_team_alias"
                 ],
+                tags=standard_logging_payload.get("request_tags", []),
             )
 
             """
