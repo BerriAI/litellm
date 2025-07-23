@@ -5623,10 +5623,9 @@ def _calculate_retry_after(
     # Apply exponential backoff, but not more than the max.
     sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
 
-    # Apply some jitter, plus-or-minus half a second.
+    # Apply some jitter (default JITTER is 0.75 - so upto 0.75s)
     jitter = JITTER * random.random()
-    timeout = sleep_seconds + jitter
-    return max(timeout, min_timeout)
+    return max(sleep_seconds, min_timeout) + jitter
 
 
 # custom prompt helper function
