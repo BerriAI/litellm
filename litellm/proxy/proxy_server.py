@@ -132,6 +132,7 @@ from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_PROXY_ADMIN_NAME,
     PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
+    PROXY_BATCH_POLLING_INTERVAL,
     PROXY_BATCH_WRITE_AT,
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -167,6 +168,7 @@ from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
+    get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
     get_mcp_server_ids,
@@ -304,6 +306,7 @@ from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -538,7 +541,7 @@ async def proxy_shutdown_event():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval
     import json
 
     init_verbose_loggers()
@@ -875,21 +878,29 @@ app.add_middleware(
 
 app.add_middleware(PrometheusAuthMiddleware)
 
-swagger_path = os.path.join(current_dir, "swagger")
-router.mount("/swagger", StaticFiles(directory=swagger_path), name="swagger")
+
+def mount_swagger_ui():
+    swagger_directory = os.path.join(current_dir, "swagger")
+    swagger_path = "/" if server_root_path is None else server_root_path
+    if not swagger_path.endswith("/"):
+        swagger_path = swagger_path + "/"
+    custom_root_path_swagger_path = swagger_path + "swagger"
+
+    app.mount("/swagger", StaticFiles(directory=swagger_directory), name="swagger")
+
+    def swagger_monkey_patch(*args, **kwargs):
+        return get_swagger_ui_html(
+            *args,
+            **kwargs,
+            swagger_js_url=f"{custom_root_path_swagger_path}/swagger-ui-bundle.js",
+            swagger_css_url=f"{custom_root_path_swagger_path}/swagger-ui.css",
+            swagger_favicon_url=f"{custom_root_path_swagger_path}/favicon.png",
+        )
+
+    applications.get_swagger_ui_html = swagger_monkey_patch
 
 
-# def swagger_monkey_patch(*args, **kwargs):
-#     return get_swagger_ui_html(
-#         *args,
-#         **kwargs,
-#         swagger_js_url="/swagger/swagger-ui-bundle.js",
-#         swagger_css_url="/swagger/swagger-ui.css",
-#         swagger_favicon_url="/swagger/favicon.png",
-#     )
-
-
-# applications.get_swagger_ui_html = swagger_monkey_patch
+mount_swagger_ui()
 
 from typing import Dict
 
@@ -940,6 +951,7 @@ litellm_proxy_admin_name = LITELLM_PROXY_ADMIN_NAME
 ui_access_mode: Union[Literal["admin", "all"], Dict] = "all"
 proxy_budget_rescheduler_min_time = PROXY_BUDGET_RESCHEDULER_MIN_TIME
 proxy_budget_rescheduler_max_time = PROXY_BUDGET_RESCHEDULER_MAX_TIME
+proxy_batch_polling_interval = PROXY_BATCH_POLLING_INTERVAL
 proxy_batch_write_at = PROXY_BATCH_WRITE_AT
 litellm_master_key_hash = None
 disable_spend_logs = False
@@ -1697,7 +1709,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2039,6 +2051,10 @@ class ProxyConfig:
             )
             proxy_budget_rescheduler_max_time = general_settings.get(
                 "proxy_budget_rescheduler_max_time", proxy_budget_rescheduler_max_time
+            )
+            ## BATCH POLLING INTERVAL ##
+            proxy_batch_polling_interval = general_settings.get(
+                "proxy_batch_polling_interval", proxy_batch_polling_interval
             )
             ## BATCH WRITER ##
             proxy_batch_write_at = general_settings.get(
@@ -3564,7 +3580,7 @@ class ProxyStartupEvent:
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
                     "interval",
-                    seconds=3600,  # these can run infrequently, as batch jobs take time to complete
+                    seconds=proxy_batch_polling_interval,  # these can run infrequently, as batch jobs take time to complete
                 )
 
             except Exception:
@@ -3657,11 +3673,18 @@ async def model_list(
     team_id: Optional[str] = None,
     include_model_access_groups: Optional[bool] = False,
     only_model_access_groups: Optional[bool] = False,
+    include_metadata: Optional[bool] = False,
+    fallback_type: Optional[str] = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
 
     This is just for compatibility with openai projects like aider.
+
+    Query Parameters:
+    - include_metadata: Include additional metadata in the response with fallback information
+    - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
+                    Defaults to "general" when include_metadata=true
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
     all_models = []
@@ -3722,16 +3745,46 @@ async def model_list(
         only_model_access_groups=only_model_access_groups,
     )
 
+    # Build response data
+    model_data = []
+    for model in all_models:
+        model_info = {
+            "id": model,
+            "object": "model",
+            "created": DEFAULT_MODEL_CREATED_AT_TIME,
+            "owned_by": "openai",
+        }
+
+        # Add metadata if requested
+        if include_metadata:
+            metadata = {}
+
+            # Default fallback_type to "general" if include_metadata is true
+            effective_fallback_type = (
+                fallback_type if fallback_type is not None else "general"
+            )
+
+            # Validate fallback_type
+            valid_fallback_types = ["general", "context_window", "content_policy"]
+            if effective_fallback_type not in valid_fallback_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
+                )
+
+            fallbacks = get_all_fallbacks(
+                model=model,
+                llm_router=llm_router,
+                fallback_type=effective_fallback_type,
+            )
+            metadata["fallbacks"] = fallbacks
+
+            model_info["metadata"] = metadata
+
+        model_data.append(model_info)
+
     return dict(
-        data=[
-            {
-                "id": model,
-                "object": "model",
-                "created": DEFAULT_MODEL_CREATED_AT_TIME,
-                "owned_by": "openai",
-            }
-            for model in all_models
-        ],
+        data=model_data,
         object="list",
     )
 
@@ -8746,6 +8799,7 @@ app.include_router(scim_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
+app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
