@@ -762,7 +762,7 @@ def test_completion_base64(model):
 <<<<<<< HEAD
 =======
 
-@pytest.mark.parametrize("model", ["claude-3-5-sonnet-latest"])
+@pytest.mark.parametrize("model", ["claude-3-sonnet-20240229"])
 def test_completion_function_plus_image(model):
     litellm.set_verbose = True
 

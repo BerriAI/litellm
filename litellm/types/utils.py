@@ -2276,6 +2276,8 @@ class LlmProviders(str, Enum):
     DASHSCOPE = "dashscope"
     MOONSHOT = "moonshot"
     V0 = "v0"
+    MORPH = "morph"
+    LAMBDA_AI = "lambda_ai"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -2316,6 +2318,10 @@ class LlmProviders(str, Enum):
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+    HYPERBOLIC = "hyperbolic"
+>>>>>>> bf300f8ca (Revert "Litellm dev 07 21 2025 p1 (#12848)")
     RECRAFT = "recraft"
 =======
     HYPERBOLIC = "hyperbolic"
