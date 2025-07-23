@@ -20,7 +20,7 @@
 
 import zoneinfo
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import httpx
 import polars as pl
@@ -38,6 +38,7 @@ class CloudZeroStreamer:
         self.console = Console()
 
         # Set timezone - default to UTC
+        self.user_timezone: Union[zoneinfo.ZoneInfo, timezone]
         if user_timezone:
             try:
                 self.user_timezone = zoneinfo.ZoneInfo(user_timezone)
@@ -67,7 +68,7 @@ class CloudZeroStreamer:
 
     def _group_by_date(self, data: pl.DataFrame) -> dict[str, pl.DataFrame]:
         """Group data by date, converting to UTC and validating dates."""
-        daily_batches = {}
+        daily_batches: dict[str, list[dict[str, Any]]] = {}
 
         # Ensure we have the required columns
         if 'time/usage_start' not in data.columns:
