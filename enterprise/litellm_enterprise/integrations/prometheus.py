@@ -2293,7 +2293,7 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     # Map each configured tag to its presence in the request tags
     for configured_tag in configured_tags:
         # Create a safe prometheus label name
-        label_name = _sanitize_prometheus_label_name(configured_tag)
+        label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")
 
         # Check if this tag is present in the request tags
         if configured_tag in tags:
