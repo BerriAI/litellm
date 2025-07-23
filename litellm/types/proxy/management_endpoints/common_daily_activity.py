@@ -61,6 +61,9 @@ class BreakdownMetrics(BaseModel):
     models: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
     )  # model -> {metrics, metadata}
+    model_groups: Dict[str, MetricWithMetadata] = Field(
+        default_factory=dict
+    )  # model_group -> {metrics, metadata}
     providers: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
     )  # provider -> {metrics, metadata}
