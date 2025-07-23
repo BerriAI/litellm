@@ -5625,8 +5625,8 @@ def _calculate_retry_after(
 
     # Apply some jitter, plus-or-minus half a second.
     jitter = JITTER * random.random()
-    timeout = sleep_seconds * jitter
-    return timeout if timeout >= min_timeout else min_timeout
+    timeout = sleep_seconds + jitter
+    return max(timeout, min_timeout)
 
 
 # custom prompt helper function
