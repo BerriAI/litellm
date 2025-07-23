@@ -7357,6 +7357,51 @@
         "cache_read_input_token_cost": 7.5e-08,
         "supports_prompt_caching": true
     },
+    "gemini-2.5-flash-lite": {
+        "max_tokens": 65535,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65535,
+        "max_images_per_prompt": 3000,
+        "max_videos_per_prompt": 10,
+        "max_video_length": 1,
+        "max_audio_length_hours": 8.4,
+        "max_audio_per_prompt": 1,
+        "max_pdf_size_mb": 30,
+        "supports_pdf_input": true,
+        "supports_video_input": true,
+        "supports_audio_input": true,
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "input_cost_per_audio_token": 3e-07,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 4e-07,
+        "output_cost_per_reasoning_token": 4e-07,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_url_context": true,
+        "supports_web_search": true,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "supports_audio_output": false,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-lite"
+    },
     "gemini/gemini-2.5-flash-preview-tts": {
         "max_tokens": 65535,
         "max_input_tokens": 1048576,
