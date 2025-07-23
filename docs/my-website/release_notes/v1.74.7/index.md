@@ -28,14 +28,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.7
+ghcr.io/berriai/litellm:v1.74.7.rc.1
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.74.7
+pip install litellm==1.74.7rc1
 ```
 
 </TabItem>
@@ -47,6 +47,7 @@ pip install litellm==1.74.7
 
 
 - **Vector Stores** - Support for Vertex RAG Engine, PG Vector, OpenAI & Azure OpenAI Vector Stores.
+- **Bulk Editing Users** - Bulk editing users on the UI.
 - **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
 - **New LLM Providers** - Added Moonshot API `moonshot` and `v0` provider support.
 
@@ -71,6 +72,29 @@ This brings the following benefits for LiteLLM users:
 
 
 [Get started](../../docs/completion/knowledgebase)
+
+
+---
+
+## Bulk Editing Users
+
+<Image img={require('../../img/bulk_edit_graphic.png')} />
+
+v1.74.7-stable introduces Bulk Editing Users on the UI. This is useful for:
+- granting all existing users to a default team (useful for controlling access / tracking spend by team)
+- controlling personal model access for existing users
+
+[Read more](https://docs.litellm.ai/docs/proxy/ui/bulk_edit_users)
+
+---
+
+## Health Check Server
+
+v1.74.7-stable allows you to run a separate health check app using Docker
+- Allows health check probe to run even when server is under huge load
+- Even while running on a separate ASGI app, if the main app goes unhealthy, the pod goes down killing the health app and notifiying the orchestrator using supervisord
+
+[Read More](https://docs.litellm.ai/docs/proxy/prod#10-use-a-separate-health-check-app)
 
 
 ---
