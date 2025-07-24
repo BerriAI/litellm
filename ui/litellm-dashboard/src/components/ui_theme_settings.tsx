@@ -41,26 +41,70 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
   userRole,
   accessToken,
 }) => {
-  const { colors, updateColors } = useTheme();
+  const { colors, updateColors, triggerLogoUpdate, setLogoUrl, logoUrl: contextLogoUrl } = useTheme();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [themeConfig, setThemeConfig] = useState<UIThemeConfig>({});
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
-  const [logoUrlInput, setLogoUrlInput] = useState<string>("");
+  // Initialize logoUrlInput from context if available
+  const [logoUrlInput, setLogoUrlInput] = useState<string>(() => {
+    // Try to get from context first, then from localStorage as fallback
+    const contextValue = contextLogoUrl || "";
+    const localStorageValue = typeof window !== 'undefined' ? localStorage.getItem('litellm-logo-url') || "" : "";
+    return contextValue || localStorageValue;
+  });
+  
+  // Add debug logging whenever logoUrlInput changes
+  useEffect(() => {
+    console.log('[UI Theme Settings] logoUrlInput changed to:', logoUrlInput);
+  }, [logoUrlInput]);
 
-  // Load current theme settings
+  // Load current theme settings when component mounts or accessToken changes
   useEffect(() => {
     if (accessToken) {
+      console.log('[Component Mount] Starting with contextLogoUrl:', contextLogoUrl);
+      // Always fetch theme settings to get the latest
       fetchThemeSettings();
     }
   }, [accessToken]);
+  
+  // Update input when context logo URL changes
+  useEffect(() => {
+    if (contextLogoUrl && contextLogoUrl !== logoUrlInput) {
+      console.log('[Context Update] Updating logoUrlInput from context:', contextLogoUrl);
+      setLogoUrlInput(contextLogoUrl);
+      form.setFieldsValue({ logo_url: contextLogoUrl });
+    }
+  }, [contextLogoUrl]);
 
   // Sync form with theme context when colors change
   useEffect(() => {
     form.setFieldsValue(colors);
   }, [colors, form]);
 
+  // Remove Form.useWatch as we're now using logoUrlInput as the primary source of truth
+  // The form value is updated when logoUrlInput changes, not the other way around
+
+  const fetchCurrentLogoUrl = async () => {
+    try {
+      const proxyBaseUrl = getProxyBaseUrl();
+      const url = proxyBaseUrl ? `${proxyBaseUrl}/get_logo_url` : "/get_logo_url";
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        return data.logo_url || '';
+      }
+    } catch (error) {
+      console.error('Error fetching current logo URL:', error);
+    }
+    return '';
+  };
+
   const fetchThemeSettings = async () => {
+    // Always fetch the current logo URL from environment as the source of truth
+    const currentLogoUrl = await fetchCurrentLogoUrl();
+    console.log('Current logo URL from environment:', currentLogoUrl);
+    
     try {
       const proxyBaseUrl = getProxyBaseUrl();
       const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_theme_settings` : "/get/ui_theme_settings";
@@ -74,20 +118,72 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
 
       if (response.ok) {
         const data = await response.json();
-        setThemeConfig(data.values || {});
+        console.log('Fetched theme settings:', data);
+        
+        const themeValues = data.values || {};
+        setThemeConfig(themeValues);
+        
         // Update theme context with server values
-        if (data.values) {
-          updateColors(data.values);
-          // Set logo preview if URL exists
-          if (data.values.logo_url) {
-            setLogoPreview(null); // Clear any file preview
-            setLogoUrlInput(data.values.logo_url);
-          }
+        updateColors(themeValues);
+        
+        // Always use the current environment logo URL as the source of truth
+        // This ensures we show what's actually being displayed
+        const logoUrl = currentLogoUrl || themeValues.logo_url || '';
+        console.log('[fetchThemeSettings] Final logo URL:', logoUrl, 'Sources:', {
+          currentLogoUrl,
+          themeLogoUrl: themeValues.logo_url,
+          currentInputValue: logoUrlInput
+        });
+        
+        // Force update the input state
+        setLogoUrlInput(logoUrl);
+        setLogoUrl(logoUrl || null);
+        
+        // Also save to localStorage for persistence
+        if (logoUrl && typeof window !== 'undefined') {
+          localStorage.setItem('litellm-logo-url', logoUrl);
         }
-        form.setFieldsValue(data.values || {});
+        
+        // Double-check it was set
+        setTimeout(() => {
+          console.log('[fetchThemeSettings] After set - logoUrlInput should be:', logoUrl);
+        }, 0);
+        
+        // Clear preview for URLs, keep for data URLs
+        if (logoUrl && !logoUrl.startsWith('data:')) {
+          setLogoPreview(null);
+        } else if (logoUrl && logoUrl.startsWith('data:')) {
+          setLogoPreview(logoUrl);
+        }
+        
+        // Set all form values including logo_url
+        form.setFieldsValue({
+          ...themeValues,
+          logo_url: logoUrl
+        });
+      } else if (currentLogoUrl) {
+        // If theme settings fetch failed but we have a current logo URL, use it
+        console.log('Using current logo URL as fallback:', currentLogoUrl);
+        setLogoUrlInput(currentLogoUrl);
+        setLogoUrl(currentLogoUrl);
+        form.setFieldsValue({ logo_url: currentLogoUrl });
+      } else {
+        console.error('Failed to fetch theme settings:', response.status, response.statusText);
+        // Still set the current logo URL even if theme settings fail
+        if (currentLogoUrl) {
+          setLogoUrlInput(currentLogoUrl);
+          setLogoUrl(currentLogoUrl);
+          form.setFieldsValue({ logo_url: currentLogoUrl });
+        }
       }
     } catch (error) {
       console.error("Error fetching theme settings:", error);
+      // Still set the current logo URL even if theme settings fail
+      if (currentLogoUrl) {
+        setLogoUrlInput(currentLogoUrl);
+        setLogoUrl(currentLogoUrl);
+        form.setFieldsValue({ logo_url: currentLogoUrl });
+      }
     }
   };
 
@@ -109,6 +205,8 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
         setLogoPreview(dataUrl);
         form.setFieldsValue({ logo_url: dataUrl });
         setLogoUrlInput(dataUrl);
+        // Update logo URL in real-time for preview
+        setLogoUrl(dataUrl);
       };
       reader.readAsDataURL(file as File);
       
@@ -141,10 +239,23 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       });
 
       if (response.ok) {
-        await response.json();
+        const result = await response.json();
+        console.log('Theme settings saved successfully:', result);
         message.success("UI theme settings updated successfully!");
         setThemeConfig(values);
         updateColors(values);
+        
+        // Trigger logo update if logo was changed
+        if (values.logo_url !== undefined) {
+          console.log('Logo URL changed, triggering update:', values.logo_url);
+          setLogoUrl(values.logo_url || null);
+          // Small delay to ensure backend has processed the update
+          setTimeout(() => {
+            triggerLogoUpdate();
+            // Force refetch theme settings to ensure sync
+            fetchThemeSettings();
+          }, 500);
+        }
       } else {
         throw new Error("Failed to update settings");
       }
@@ -156,7 +267,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
     }
   };
 
-  const resetToDefaults = () => {
+  const resetToDefaults = async () => {
     const defaults = {
       brand_color_primary: "#6366f1",
       brand_color_muted: "#8688ef",
@@ -167,7 +278,12 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
     };
     
     form.setFieldsValue(defaults);
-    updateColors(defaults);
+    setLogoPreview(null);
+    setLogoUrlInput("");
+    setLogoUrl(null); // Clear logo URL immediately
+    
+    // Save the defaults to trigger logo update
+    await handleSave(defaults);
   };
 
 
@@ -220,11 +336,18 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
                   placeholder="https://example.com/logo.png"
                   value={logoUrlInput}
                   onValueChange={(value) => {
+                    console.log('[TextInput] User changing value to:', value);
                     setLogoUrlInput(value);
                     form.setFieldsValue({ logo_url: value });
                     // Clear file preview when URL is entered
                     if (value && logoPreview) {
                       setLogoPreview(null);
+                    }
+                    // Update logo URL in real-time for preview
+                    if (value) {
+                      setLogoUrl(value);
+                    } else {
+                      setLogoUrl(null);
                     }
                   }}
                   className="w-full"
@@ -236,15 +359,17 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
           {/* Logo Preview */}
           <div>
             <Text className="text-sm font-medium text-gray-700 mb-3 block">Preview</Text>
-            {(logoPreview || form.getFieldValue('logo_url')) ? (
+            {(logoPreview || logoUrlInput) ? (
               <div className="bg-gray-50 rounded-lg p-6 min-h-[120px] flex items-center justify-center">
                 <img 
-                  src={logoPreview || form.getFieldValue('logo_url')} 
+                  src={logoPreview || logoUrlInput} 
                   alt="Logo preview"
                   className="max-w-full max-h-24 object-contain"
                   onError={(e) => {
                     (e.target as HTMLImageElement).style.display = 'none';
-                    setLogoPreview(null);
+                    if (logoPreview) {
+                      setLogoPreview(null);
+                    }
                   }}
                 />
               </div>
@@ -271,6 +396,11 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
             onFinish={handleSave}
             initialValues={themeConfig}
           >
+            {/* Hidden Form.Item for logo_url to ensure it's included in form submission */}
+            <Form.Item name="logo_url" hidden>
+              <input type="hidden" />
+            </Form.Item>
+            
             <div className="space-y-6">
               <div className="border-b border-gray-200 pb-4 mb-4">
                 <Text className="text-lg font-medium text-gray-800">Brand Colors</Text>

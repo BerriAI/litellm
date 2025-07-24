@@ -600,8 +600,10 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     # Convert theme config to dict
     theme_data = theme_config.model_dump(exclude_none=True)
     
-    # Store UI theme config in general_settings
-    config["general_settings"]["ui_theme_config"] = theme_data
+    # Store UI theme config in litellm_settings (where it's retrieved from)
+    if "litellm_settings" not in config:
+        config["litellm_settings"] = {}
+    config["litellm_settings"]["ui_theme_config"] = theme_data
     
     # Update UI_LOGO_PATH environment variable if logo_url is provided
     if theme_data.get("logo_url"):

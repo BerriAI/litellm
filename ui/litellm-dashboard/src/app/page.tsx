@@ -231,7 +231,7 @@ export default function CreateKeyPage() {
   }
 
   return (
-    <ThemeProvider>
+    <ThemeProvider accessToken={accessToken}>
       <Suspense fallback={<LoadingScreen />}>
         <QueryClientProvider client={queryClient}>
         {invitation_id ? (

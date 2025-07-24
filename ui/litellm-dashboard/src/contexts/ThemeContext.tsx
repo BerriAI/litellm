@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { getProxyBaseUrl } from '@/components/networking';
 
 interface ThemeColors {
   brand_color_primary: string;
@@ -12,6 +13,10 @@ interface ThemeContextType {
   colors: ThemeColors;
   updateColors: (newColors: Partial<ThemeColors>) => void;
   resetColors: () => void;
+  logoUpdateTrigger: number;
+  triggerLogoUpdate: () => void;
+  logoUrl: string | null;
+  setLogoUrl: (url: string | null) => void;
 }
 
 const defaultColors: ThemeColors = {
@@ -34,10 +39,13 @@ export const useTheme = () => {
 
 interface ThemeProviderProps {
   children: ReactNode;
+  accessToken?: string | null;
 }
 
-export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
+export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessToken }) => {
   const [colors, setColors] = useState<ThemeColors>(defaultColors);
+  const [logoUpdateTrigger, setLogoUpdateTrigger] = useState(0);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
   // Function to convert hex to RGB
   const hexToRgb = (hex: string): string => {
@@ -102,18 +110,63 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     root.style.setProperty('--brand-900', adjustColorBrightness(primary, -0.4));
   };
 
-  // Load theme from localStorage on mount
+  // Load theme from backend or localStorage on mount
   useEffect(() => {
-    const savedTheme = localStorage.getItem('litellm-theme-colors');
-    if (savedTheme) {
-      try {
-        const parsed = JSON.parse(savedTheme);
-        setColors(parsed);
-      } catch (error) {
-        console.warn('Failed to parse saved theme colors:', error);
+    const loadThemeSettings = async () => {
+      // First try to load from backend if we have an access token
+      if (accessToken) {
+        try {
+          const proxyBaseUrl = getProxyBaseUrl();
+          const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_theme_settings` : '/get/ui_theme_settings';
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data.values) {
+              // Extract color values from the response
+              const themeColors = {
+                brand_color_primary: data.values.brand_color_primary || defaultColors.brand_color_primary,
+                brand_color_muted: data.values.brand_color_muted || defaultColors.brand_color_muted,
+                brand_color_subtle: data.values.brand_color_subtle || defaultColors.brand_color_subtle,
+                brand_color_faint: data.values.brand_color_faint || defaultColors.brand_color_faint,
+                brand_color_emphasis: data.values.brand_color_emphasis || defaultColors.brand_color_emphasis,
+              };
+              setColors(themeColors);
+              // Also save to localStorage for faster subsequent loads
+              localStorage.setItem('litellm-theme-colors', JSON.stringify(themeColors));
+              
+              // Also set logo URL if present
+              if (data.values.logo_url) {
+                setLogoUrl(data.values.logo_url);
+              }
+              return;
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to load theme settings from backend:', error);
+        }
       }
-    }
-  }, []);
+      
+      // Fall back to localStorage if backend fetch fails or no access token
+      const savedTheme = localStorage.getItem('litellm-theme-colors');
+      if (savedTheme) {
+        try {
+          const parsed = JSON.parse(savedTheme);
+          setColors(parsed);
+        } catch (error) {
+          console.warn('Failed to parse saved theme colors:', error);
+        }
+      }
+    };
+    
+    loadThemeSettings();
+  }, [accessToken]);
 
   // Apply colors whenever they change
   useEffect(() => {
@@ -133,8 +186,12 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     localStorage.removeItem('litellm-theme-colors');
   };
 
+  const triggerLogoUpdate = () => {
+    setLogoUpdateTrigger(prev => prev + 1);
+  };
+
   return (
-    <ThemeContext.Provider value={{ colors, updateColors, resetColors }}>
+    <ThemeContext.Provider value={{ colors, updateColors, resetColors, logoUpdateTrigger, triggerLogoUpdate, logoUrl, setLogoUrl }}>
       {children}
     </ThemeContext.Provider>
   );

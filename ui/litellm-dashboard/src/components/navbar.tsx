@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons';
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface NavbarProps {
   userID: string | null;
@@ -38,8 +39,10 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const imageUrl = baseUrl + "/get_image";
+  const [imageUrl, setImageUrl] = useState(baseUrl + "/get_image");
   const [logoutUrl, setLogoutUrl] = useState("");
+  const { logoUpdateTrigger, logoUrl } = useTheme();
+  const [logoError, setLogoError] = useState(false);
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -54,6 +57,19 @@ const Navbar: React.FC<NavbarProps> = ({
 
     initializeProxySettings();
   }, [accessToken]);
+
+  // Update logo URL with cache busting when settings change or logo is updated
+  useEffect(() => {
+    if (logoUrl) {
+      // If we have a logo URL from theme context, use it directly
+      console.log('Using logo URL from theme context:', logoUrl);
+      setImageUrl(logoUrl);
+    } else {
+      // Otherwise fall back to the backend endpoint with cache busting
+      const timestamp = new Date().getTime();
+      setImageUrl(`${baseUrl}/get_image?t=${timestamp}`);
+    }
+  }, [proxySettings, baseUrl, logoUpdateTrigger, logoUrl]);
 
   useEffect(() => {
     setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
@@ -130,6 +146,16 @@ const Navbar: React.FC<NavbarProps> = ({
                 src={imageUrl}
                 alt="LiteLLM Brand"
                 className="h-8 w-auto"
+                onError={(e) => {
+                  console.error('Failed to load logo from:', imageUrl);
+                  setLogoError(true);
+                  // Fallback to default logo on error
+                  (e.target as HTMLImageElement).src = baseUrl + "/get_image";
+                }}
+                onLoad={() => {
+                  console.log('Logo loaded successfully from:', imageUrl);
+                  setLogoError(false);
+                }}
               />
             </Link>
           </div>
