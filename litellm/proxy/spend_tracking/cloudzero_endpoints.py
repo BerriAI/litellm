@@ -30,7 +30,6 @@ async def init_cloudzero_background_job():
         return
     
     try:
-        from litellm.caching import DualCache
         from litellm.proxy.proxy_server import prisma_client
         
         if prisma_client is None:

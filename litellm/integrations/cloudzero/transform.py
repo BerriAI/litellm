@@ -18,9 +18,8 @@
 
 """Transform LiteLLM data to CloudZero AnyCost CBF format."""
 
-import json
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 import polars as pl
 
