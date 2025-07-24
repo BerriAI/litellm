@@ -243,76 +243,16 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
               <div className="flex-grow border-t border-gray-200"></div>
             </div>
-            {/* Team-only Model Switch */}
-            <Form.Item
-              label="Team-BYOK Model"
-              tooltip="Only use this model + credential combination for this team. Useful when teams want to onboard their own OpenAI keys."
-              className="mb-4"
-            >
-              <Tooltip 
-                title={!premiumUser ? "This is an enterprise-only feature. Upgrade to premium to restrict model+credential combinations to a specific team." : ""}
-                placement="top"
-              >
-                <Switch 
-                  checked={isTeamOnly}
-                  onChange={(checked) => {
-                    setIsTeamOnly(checked);
-                    if (!checked) {
-                      form.setFieldValue('team_id', undefined);
-                    }
-                  }}
-                  disabled={!premiumUser}
-                />
-              </Tooltip>
-            </Form.Item>
-
-            {/* Conditional Team Selection */}
-            {isTeamOnly && (
-              <Form.Item
-                label="Select Team"
-                name="team_id"
-                className="mb-4"
-                tooltip="Only keys for this team will be able to call this model."
-                rules={[
-                  {
-                    required: isTeamOnly && !isAdmin,
-                    message: 'Please select a team.'
-                  }
-                ]}
-              >
-                <TeamDropdown teams={teams} disabled={!premiumUser} />
-              </Form.Item>
-            )}
-            {
-              isAdmin && (
-                <>
-                  <Form.Item
-                    label="Model Access Group"
-                    name="model_access_group"
-                    className="mb-4"
-                    tooltip="Use model access groups to give users access to select models, and add new ones to the group over time."
-                  >
-                    <AntdSelect
-                      mode="tags"
-                      showSearch
-                      placeholder="Select existing groups or type to create new ones"
-                      optionFilterProp="children"
-                      tokenSeparators={[',']}
-                      options={modelAccessGroups.map((group) => ({
-                        value: group,
-                        label: group
-                      }))}
-                      maxTagCount="responsive"
-                      allowClear
-                    />
-                  </Form.Item>
-                </>
-              )
-            }
+            
             <AdvancedSettings 
               showAdvancedSettings={showAdvancedSettings}
               setShowAdvancedSettings={setShowAdvancedSettings}
               teams={teams}
+              form={form}
+              premiumUser={premiumUser}
+              isAdmin={isAdmin}
+              isTeamOnly={isTeamOnly}
+              setIsTeamOnly={setIsTeamOnly}
             />
 
             <div className="flex justify-between items-center mb-4">

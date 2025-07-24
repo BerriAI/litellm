@@ -6,20 +6,30 @@ import TextArea from "antd/es/input/TextArea";
 import { Team } from "../key_team_helpers/key_list";
 import TeamDropdown from "../common_components/team_dropdown";
 import CacheControlSettings from "./cache_control_settings";
+import type { FormInstance } from "antd";
 const { Link } = Typography;
 
 interface AdvancedSettingsProps {
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
   teams?: Team[] | null;
+  form: FormInstance;
+  premiumUser: boolean;
+  isAdmin: boolean;
+  isTeamOnly: boolean;
+  setIsTeamOnly: (checked: boolean) => void;
 }
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   showAdvancedSettings,
   setShowAdvancedSettings,
   teams,
+  form,
+  premiumUser,
+  isAdmin,
+  isTeamOnly,
+  setIsTeamOnly,
 }) => {
-  const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
   const [pricingModel, setPricingModel] = React.useState<'per_token' | 'per_second'>('per_token');
   const [showCacheControl, setShowCacheControl] = React.useState(false);
@@ -111,7 +121,41 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
         </AccordionHeader>
         <AccordionBody>
           <div className="bg-white rounded-lg">
-
+            {/* Team-only Model Switch */}
+            <Form.Item
+              label="Team-BYOK Model"
+              tooltip="Only use this model + credential combination for this team. Useful when teams want to onboard their own OpenAI keys."
+              className="mb-4"
+            >
+              <Switch
+                className="bg-gray-600"
+                checked={isTeamOnly}
+                onChange={(checked) => {
+                  setIsTeamOnly(checked);
+                  if (!checked) {
+                    form.setFieldValue('team_id', undefined);
+                  }
+                }}
+                disabled={!premiumUser}
+              />
+            </Form.Item>
+            {/* Conditional Team Selection */}
+            {isTeamOnly && (
+              <Form.Item
+                label="Select Team"
+                name="team_id"
+                className="mb-4"
+                tooltip="Only keys for this team will be able to call this model."
+                rules={[
+                  {
+                    required: isTeamOnly && !isAdmin,
+                    message: 'Please select a team.'
+                  }
+                ]}
+              >
+                <TeamDropdown teams={teams} disabled={!premiumUser} />
+              </Form.Item>
+            )}
             <Form.Item
               label="Custom Pricing"
               name="custom_pricing"
