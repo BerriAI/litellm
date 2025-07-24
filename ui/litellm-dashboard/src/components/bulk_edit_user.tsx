@@ -14,7 +14,7 @@ import {
   Checkbox,
 } from "antd";
 import { Button } from '@tremor/react';
-import { userBulkUpdateUserCall, teamBulkMemberAddCall } from "./networking";
+import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "./networking";
 import { UserEditView } from "./user_edit_view";
 
 const { Text, Title } = Typography;
@@ -135,17 +135,25 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         for (const teamId of selectedTeams) {
           try {
             // Create member objects for bulk add
-            const members = selectedUsers.map(user => ({
-              user_id: user.user_id,
-              role: "user" as const, // Default role for bulk add
-              user_email: user.user_email || null,
-            }));
+            let members: Member[] | null = null;
+            if (updateAllUsers) {
+              members = null;
+              } else { 
+              const members = selectedUsers.map(user => ({
+                user_id: user.user_id,
+                role: "user" as const, // Default role for bulk add
+                user_email: user.user_email || null,
+              }));
+            }
 
+            console.log("updateAllUsers", updateAllUsers);
+            console.log("members", members);
             const result = await teamBulkMemberAddCall(
               accessToken,
               teamId,
-              members,
-              teamBudget || undefined
+              members ? members : null,
+              teamBudget || undefined,
+              updateAllUsers
             );
             
             teamResults.push({

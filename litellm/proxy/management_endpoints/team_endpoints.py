@@ -1605,6 +1605,7 @@ async def bulk_team_member_add(
     Parameters:
     - team_id: str - The ID of the team to add members to
     - members: List[Member] - List of members to add to the team
+    - all_users: Optional[bool] - Flag to add all users on Proxy to the team
     - max_budget_in_team: Optional[float] - Maximum budget allocated to each user within the team
     
     Returns:
@@ -1635,6 +1636,29 @@ async def bulk_team_member_add(
     }'
     ```
     """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if data.all_users:
+        # get all users from the database
+        all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
+            order={"created_at": "desc"}
+        )
+        data.members = [
+            Member(
+                user_id=user.user_id,
+                user_email=user.user_email,
+                role="user",
+            )
+            for user in all_users_in_db
+        ]
+
     if not data.members:
         raise HTTPException(
             status_code=400,
@@ -1642,7 +1666,7 @@ async def bulk_team_member_add(
         )
 
     # Limit batch size to prevent overwhelming the system
-    MAX_BATCH_SIZE = 100
+    MAX_BATCH_SIZE = 500
     if len(data.members) > MAX_BATCH_SIZE:
         raise HTTPException(
             status_code=400,

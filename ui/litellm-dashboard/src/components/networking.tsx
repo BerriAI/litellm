@@ -3700,8 +3700,9 @@ export const teamMemberAddCall = async (
 export const teamBulkMemberAddCall = async (
   accessToken: string,
   teamId: string,
-  members: Member[],
-  maxBudgetInTeam?: number
+  members: Member[] | null,
+  maxBudgetInTeam?: number,
+  allUsers?: boolean
 ) => {
   try {
     console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
@@ -3710,10 +3711,15 @@ export const teamBulkMemberAddCall = async (
       ? `${proxyBaseUrl}/team/bulk_member_add`
       : `/team/bulk_member_add`;
 
-    const requestBody: any = {
+    let requestBody: any = {
       team_id: teamId,
-      members: members,
     };
+
+    if (allUsers) {
+      requestBody.all_users = true;
+    } else {
+      requestBody.members = members;
+    }
 
     if (maxBudgetInTeam !== undefined && maxBudgetInTeam !== null) {
       requestBody.max_budget_in_team = maxBudgetInTeam;
