@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import MCPPostCallResponseObject
+    from litellm.types.router import PreRoutingHookResponse
 
     Span = Union[_Span, Any]
 else:
@@ -41,6 +42,7 @@ else:
     LiteLLMLoggingObj = Any
     UserAPIKeyAuth = Any
     MCPPostCallResponseObject = Any
+    PreRoutingHookResponse = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -132,13 +134,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
-    ):
+    ) -> Optional[PreRoutingHookResponse]:
         """
         This hook is called before the routing decision is made.
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
-        pass
+        return None
 
     async def async_filter_deployments(
         self,

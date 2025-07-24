@@ -773,6 +773,16 @@ class MockRouterTestingParams:
             ),
         )
 
-
 class ModelGroupSettings(BaseModel):
     forward_client_headers_to_llm_api: Optional[List[str]] = None
+
+class PreRoutingHookResponse(BaseModel):
+    """
+    Response object from the pre-routing hook.
+
+    Allows the Pre-Routing Hook to return a modified model and messages.
+
+    Add fields that you expect to be modified by the pre-routing hook.
+    """
+    model: str
+    messages: Optional[List[Dict[str, str]]]
