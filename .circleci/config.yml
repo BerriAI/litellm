@@ -2754,7 +2754,7 @@ jobs:
           name: Check for expected error
           command: |
             if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
-               grep -q "httpx.ConnectError: All connection attempts failed" docker_output.log && \
+               grep -q "prisma.engine.errors.NotConnectedError: Not connected to the query engine" docker_output.log && \
                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log; then
               echo "Expected error found. Test passed."
             else

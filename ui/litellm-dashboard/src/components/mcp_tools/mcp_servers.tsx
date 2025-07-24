@@ -58,6 +58,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([])
   const [isModalVisible, setModalVisible] = useState(false)
 
+  const isInternalUser = userRole === "Internal User";
+
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
     if (!mcpServers) return []
@@ -168,6 +170,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   }
 
   if (!accessToken || !userRole || !userID) {
+    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>
   }
 
@@ -211,7 +214,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                   <Option value="all">
                     <div className="flex items-center gap-2">
                       <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <span className="font-medium">All Servers</span>
+                      <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
                     </div>
                   </Option>
                   <Option value="personal">

@@ -23,6 +23,7 @@ langfuse==2.59.7 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
 ddtrace==2.19.0      # for advanced DD tracing / profiling
 orjson==3.10.12 # fast /embedding responses
+polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.16.0 # admin UI, SSO
 pyjwt[crypto]==2.9.0
@@ -30,6 +31,7 @@ python-multipart==0.0.18 # admin UI
 Pillow==11.0.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 # for azure content safety
+azure-keyvault==4.2.0 # for azure KMS integration
 azure-storage-file-datalake==12.20.0 # for azure buck storage logging
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
@@ -38,7 +40,7 @@ sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==43.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.2.10 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.2.11 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.0 # for env
 tiktoken==0.8.0 # for calculating usage
@@ -57,4 +59,4 @@ websockets==13.1.0 # for realtime API
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.13
+litellm-enterprise==0.1.15

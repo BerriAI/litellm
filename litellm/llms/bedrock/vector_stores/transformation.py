@@ -60,6 +60,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
     ) -> Tuple[str, Dict]:
         if isinstance(query, list):
             query = " ".join(query)
@@ -82,9 +83,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 "filter"
             ] = filters
         if retrieval_config:
-            request_body["retrievalConfiguration"] = BedrockKBRetrievalConfiguration(
-                **retrieval_config
-            )
+            # Create a properly typed retrieval configuration
+            typed_retrieval_config: BedrockKBRetrievalConfiguration = {}
+            if "vectorSearchConfiguration" in retrieval_config:
+                typed_retrieval_config["vectorSearchConfiguration"] = retrieval_config["vectorSearchConfiguration"]
+            request_body["retrievalConfiguration"] = typed_retrieval_config
 
         litellm_logging_obj.model_call_details["query"] = query
         return url, request_body
