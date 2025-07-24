@@ -22,28 +22,6 @@ class IPAddress(BaseModel):
 class UIThemeConfig(BaseModel):
     """Configuration for UI theme customization"""
     
-    # Brand colors
-    brand_color_primary: Optional[str] = Field(
-        default="#6366f1",
-        description="Primary brand color (hex format, e.g., #6366f1)"
-    )
-    brand_color_muted: Optional[str] = Field(
-        default="#8688ef", 
-        description="Muted brand color (hex format, e.g., #8688ef)"
-    )
-    brand_color_subtle: Optional[str] = Field(
-        default="#8e91eb",
-        description="Subtle brand color (hex format, e.g., #8e91eb)"
-    )
-    brand_color_faint: Optional[str] = Field(
-        default="#c7d2fe",
-        description="Faint brand color (hex format, e.g., #c7d2fe)"
-    )
-    brand_color_emphasis: Optional[str] = Field(
-        default="#5558eb",
-        description="Emphasis brand color (hex format, e.g., #5558eb)"
-    )
-    
     # Logo configuration
     logo_url: Optional[str] = Field(
         default=None,
@@ -550,7 +528,7 @@ async def update_sso_settings(sso_config: SSOConfig):
 async def get_ui_theme_settings():
     """
     Get UI theme configuration from the litellm_settings.
-    Returns current theme colors and logo settings for UI customization.
+    Returns current logo settings for UI customization.
     """
     from litellm.proxy.proxy_server import proxy_config
 
@@ -572,7 +550,7 @@ async def get_ui_theme_settings():
 async def update_ui_theme_settings(theme_config: UIThemeConfig):
     """
     Update UI theme configuration.
-    Updates brand colors and logo settings for the admin UI.
+    Updates logo settings for the admin UI.
     """
     from litellm.proxy.proxy_server import proxy_config, store_model_in_db
     import os
@@ -620,21 +598,6 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
         if "UI_LOGO_PATH" in os.environ:
             del os.environ["UI_LOGO_PATH"]
             verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
-    
-    # Create ui_colors.json content for Tailwind CSS
-    ui_colors = {
-        "brand": {
-            "DEFAULT": theme_data.get("brand_color_primary", "#6366f1"),
-            "muted": theme_data.get("brand_color_muted", "#8688ef"),
-            "subtle": theme_data.get("brand_color_subtle", "#8e91eb"), 
-            "faint": theme_data.get("brand_color_faint", "#c7d2fe"),
-            "emphasis": theme_data.get("brand_color_emphasis", "#5558eb"),
-            "inverted": "white"
-        }
-    }
-    
-    # Store ui_colors configuration for UI rebuilding
-    config["general_settings"]["ui_colors"] = ui_colors
 
     # Handle environment variable encryption if needed
     stored_config = config.copy()
@@ -648,10 +611,9 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     await proxy_config.save_config(new_config=stored_config)
 
     return {
-        "message": "UI theme settings updated successfully. UI will reflect changes on next build.",
+        "message": "Logo settings updated successfully.",
         "status": "success",
         "theme_config": theme_data,
-        "ui_colors": ui_colors,
     }
 
 
