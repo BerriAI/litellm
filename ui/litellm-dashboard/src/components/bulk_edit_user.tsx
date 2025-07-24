@@ -78,6 +78,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   }), [teams, visible]);
 
   const handleSubmit = async (formValues: any) => {
+    console.log("formValues", formValues);
     if (!accessToken) {
       message.error("Access token not found");
       return;

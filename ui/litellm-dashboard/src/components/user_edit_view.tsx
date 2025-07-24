@@ -165,7 +165,7 @@ export function UserEditView({
       </Form.Item>
 
       <div className="flex justify-end space-x-2">
-        <Button variant="secondary" onClick={onCancel}>
+        <Button variant="secondary" type="button" onClick={onCancel}>
           Cancel
         </Button>
         <Button type="submit">
