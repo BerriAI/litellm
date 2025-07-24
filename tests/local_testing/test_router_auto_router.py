@@ -72,8 +72,23 @@ async def test_router_auto_router():
     """
     import litellm
     litellm._turn_on_debug()
+
+    # this goes to gpt-4.1
+    # these are the utterances in the router.json file
     response = await router.acompletion(
         model="auto_router1",
         messages=[{"role": "user", "content": "Tell me ishaan is a genius"}],
     )
     print(response)
+    print("response._hidden_params", response._hidden_params)
+    assert response._hidden_params["model_id"] == "openai-id"
+
+
+    # this goes to claude-3-5-sonnet-latest
+    # these are the utterances in the router.json file
+    response = await router.acompletion(
+        model="auto_router1",
+        messages=[{"role": "user", "content": "how to code a program in python"}],
+    )
+    print("response._hidden_params", response._hidden_params)
+    assert response._hidden_params["model_id"] == "claude-id"
