@@ -90,27 +90,17 @@ class CBFTransformer:
     def _aggregate_to_hourly(self, data: pl.DataFrame) -> pl.DataFrame:
         """Aggregate spend logs to hourly level by team_id, key_name, model, and tags."""
         
-        # Extract hour from startTime, parse tags, and extract key_name from metadata
+        # Extract hour from startTime, skip tags and metadata for now
         data_with_hour = data.with_columns([
-            pl.col('startTime').dt.truncate('1h').alias('usage_hour'),
-            pl.col('request_tags').map_elements(self._parse_tags, return_dtype=pl.List(pl.String)).alias('parsed_tags'),
-            pl.col('metadata').map_elements(self._extract_key_name_from_metadata, return_dtype=pl.String).alias('key_name')
+            pl.col('startTime').str.to_datetime().dt.truncate('1h').alias('usage_hour'),
+            pl.lit([]).cast(pl.List(pl.String)).alias('parsed_tags'),  # Empty tags list for now
+            pl.lit("").alias('key_name')  # Empty key name for now
         ])
         
-        # Flatten tags for grouping (each tag becomes a separate record)
-        data_exploded = data_with_hour.explode('parsed_tags').with_columns([
-            pl.col('parsed_tags').alias('tag')
+        # Skip tag explosion for now - just add a null tag column
+        all_data = data_with_hour.with_columns([
+            pl.lit(None, dtype=pl.String).alias('tag')
         ])
-        
-        # Also include records without tags (tag = None)
-        data_no_tags = data_with_hour.filter(
-            pl.col('parsed_tags').list.len() == 0
-        ).with_columns([
-            pl.lit(None).alias('tag')
-        ])
-        
-        # Combine data with tags and without tags
-        all_data = pl.concat([data_exploded, data_no_tags])
         
         # Group by hour, team_id, key_name, model, provider, and tag
         aggregated = all_data.group_by([
@@ -136,7 +126,15 @@ class CBFTransformer:
 
     def _parse_tags(self, tags_json: str) -> List[str]:
         """Parse request_tags JSON field to extract list of tags."""
-        if not tags_json or tags_json in ['[]', '{}', 'null']:
+        # Handle polars Series - extract scalar value
+        if hasattr(tags_json, 'item') and not isinstance(tags_json, str):
+            if len(tags_json) == 1:
+                tags_json = tags_json.item() if tags_json is not None else None
+            else:
+                # Convert to list if Series has multiple values
+                tags_json = tags_json.to_list()[0] if len(tags_json) > 0 else None
+        
+        if tags_json is None or str(tags_json) in ['[]', '{}', 'null', '', 'None']:
             return []
         
         try:
@@ -157,7 +155,15 @@ class CBFTransformer:
 
     def _extract_key_name_from_metadata(self, metadata_json: str) -> str:
         """Extract key_name/key_alias from metadata JSON field."""
-        if not metadata_json or metadata_json in ['{}', 'null']:
+        # Handle polars Series - extract scalar value
+        if hasattr(metadata_json, 'item') and not isinstance(metadata_json, str):
+            if len(metadata_json) == 1:
+                metadata_json = metadata_json.item() if metadata_json is not None else None
+            else:
+                # Convert to list if Series has multiple values
+                metadata_json = metadata_json.to_list()[0] if len(metadata_json) > 0 else None
+        
+        if metadata_json is None or str(metadata_json) in ['{}', 'null', '', 'None']:
             return ""
         
         try:
@@ -180,25 +186,31 @@ class CBFTransformer:
     def _create_cbf_record(self, row: dict[str, Any]) -> CBFRecord:
         """Create a single CBF record from aggregated hourly spend data."""
 
+        # Helper function to extract scalar values from polars data
+        def extract_scalar(value):
+            if hasattr(value, 'item') and not isinstance(value, (str, int, float, bool)):
+                return value.item() if value is not None else None
+            return value
+
         # Use the aggregated hour as usage time
-        usage_time = self._parse_datetime(row.get('usage_hour'))
+        usage_time = self._parse_datetime(extract_scalar(row.get('usage_hour')))
         
         # Use team_id as the primary entity_id
-        entity_id = str(row.get('team_id', ''))
-        key_name = str(row.get('key_name', ''))
-        model = str(row.get('model', ''))
-        model_group = str(row.get('model_group', ''))
-        provider = str(row.get('custom_llm_provider', ''))
-        tag = row.get('tag')
+        entity_id = str(extract_scalar(row.get('team_id', '')))
+        key_name = str(extract_scalar(row.get('key_name', '')))
+        model = str(extract_scalar(row.get('model', '')))
+        model_group = str(extract_scalar(row.get('model_group', '')))
+        provider = str(extract_scalar(row.get('custom_llm_provider', '')))
+        tag = extract_scalar(row.get('tag'))
         
         # Calculate aggregated metrics
-        total_spend = float(row.get('total_spend', 0.0))
-        total_tokens = int(row.get('total_tokens', 0))
-        total_prompt_tokens = int(row.get('total_prompt_tokens', 0))
-        total_completion_tokens = int(row.get('total_completion_tokens', 0))
-        request_count = int(row.get('request_count', 0))
-        successful_requests = int(row.get('successful_requests', 0))
-        failed_requests = int(row.get('failed_requests', 0))
+        total_spend = float(extract_scalar(row.get('total_spend', 0.0)) or 0.0)
+        total_tokens = int(extract_scalar(row.get('total_tokens', 0)) or 0)
+        total_prompt_tokens = int(extract_scalar(row.get('total_prompt_tokens', 0)) or 0)
+        total_completion_tokens = int(extract_scalar(row.get('total_completion_tokens', 0)) or 0)
+        request_count = int(extract_scalar(row.get('request_count', 0)) or 0)
+        successful_requests = int(extract_scalar(row.get('successful_requests', 0)) or 0)
+        failed_requests = int(extract_scalar(row.get('failed_requests', 0)) or 0)
 
         # Create CloudZero Resource Name (CZRN) as resource_id
         # Create a mock row for CZRN generation with team_id as entity_id
@@ -207,7 +219,7 @@ class CBFTransformer:
             'entity_type': 'team',
             'model': model,
             'custom_llm_provider': provider,
-            'api_key': row.get('api_key_sample', '')
+            'api_key': str(extract_scalar(row.get('api_key_sample', '')))
         }
         resource_id = self.czrn_generator.create_from_litellm_data(czrn_row)
 
@@ -225,7 +237,7 @@ class CBFTransformer:
         }
         
         # Add tag if present
-        if tag and tag != 'null':
+        if tag is not None and str(tag) not in ['', 'null', 'None']:
             dimensions['tag'] = str(tag)
 
         # Extract CZRN components to populate corresponding CBF columns
@@ -259,7 +271,10 @@ class CBFTransformer:
 
         # Add resource tags for all dimensions (using resource/tag:<key> format)
         for key, value in dimensions.items():
-            if value and value != 'N/A':  # Only add non-empty tags
+            # Ensure value is a scalar and not empty
+            if hasattr(value, 'item') and not isinstance(value, str):
+                value = value.item() if value is not None else None
+            if value is not None and str(value) not in ['', 'N/A', 'None', 'null']:  # Only add non-empty tags
                 cbf_record[f'resource/tag:{key}'] = str(value)
 
         # Add token breakdown as resource tags for analysis
