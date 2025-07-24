@@ -69,6 +69,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             name=model_name,
             score_threshold=score_threshold if score_threshold is not None else 0.3,
         )
+        self.model_name = model_name
         self.litellm_router_instance = litellm_router_instance
 
     def __call__(self, docs: list[Any], **kwargs) -> list[list[float]]:
@@ -90,7 +91,9 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = self.litellm_router_instance.embedding(
-                input=docs, model=f"{self.type}/{self.name}", **kwargs
+                input=docs, 
+                model=self.model_name, 
+                **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:
@@ -103,7 +106,9 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = self.litellm_router_instance.embedding(
-                input=docs, model=f"{self.type}/{self.name}", **kwargs
+                input=docs, 
+                model=self.model_name, 
+                **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:
@@ -116,7 +121,9 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = await self.litellm_router_instance.aembedding(
-                input=docs, model=f"{self.type}/{self.name}", **kwargs
+                input=docs, 
+                model=self.model_name,
+                **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:
@@ -129,7 +136,9 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
             raise ValueError("litellm_router_instance is not set")
         try:
             embeds = await self.litellm_router_instance.aembedding(
-                input=docs, model=f"{self.type}/{self.name}", **kwargs
+                input=docs, 
+                model=self.model_name,
+                **kwargs
             )
             return litellm_to_list(embeds)
         except Exception as e:
