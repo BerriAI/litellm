@@ -55,6 +55,9 @@ pip install litellm==1.74.7rc1
 
 ## Vector Stores API
 
+<Image img={require('../../img/release_notes/vector_stores.png')} />
+
+
 This release introduces support for using VertexAI RAG Engine, PG Vector, Bedrock Knowledge Bases, and OpenAI Vector Stores with LiteLLM.
 
 This is ideal for use cases requiring external knowledge sources with LLMs.
