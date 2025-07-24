@@ -49,6 +49,14 @@ from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoni
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
+BEDROCK_HOSTED_TOOLS = [
+    "web_search",
+    "bash",
+    "text_editor",
+    "code_execution",
+    # Add more as Bedrock supports them
+]
+
 
 class AmazonConverseConfig(BaseConfig):
     """
