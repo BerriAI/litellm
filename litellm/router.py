@@ -6462,6 +6462,19 @@ class Router:
             )
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
+            
+            #########################################################
+            # Execute Pre-Routing Hooks
+            #########################################################
+            await self.async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+            
+            
             healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
                 request_kwargs=request_kwargs,
@@ -6571,6 +6584,34 @@ class Router:
                         logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                     )
             raise e
+
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: Dict,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+    ):
+        """
+        This hook is called before the routing decision is made.
+
+        Used for the litellm auto-router to modify the request before the routing decision is made.
+        """
+        custom_logger_callbacks: List[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            callback_type=CustomLogger,
+        )
+        
+        for callback in custom_logger_callbacks:
+            await callback.async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+
 
     def get_available_deployment(
         self,

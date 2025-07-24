@@ -125,6 +125,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
     """
 
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: Dict,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+    ):
+        """
+        This hook is called before the routing decision is made.
+
+        Used for the litellm auto-router to modify the request before the routing decision is made.
+        """
+        pass
+
     async def async_filter_deployments(
         self,
         model: str,
