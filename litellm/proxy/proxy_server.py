@@ -3537,14 +3537,8 @@ class ProxyStartupEvent:
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
-
-        if litellm.prometheus_initialize_budget_metrics is True:
-            try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
-
-                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
-            except Exception:
-                PrometheusLogger = None
+        
+        await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
@@ -3590,6 +3584,39 @@ class ProxyStartupEvent:
                 pass
 
         scheduler.start()
+
+    @classmethod
+    async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
+        """
+        Initialize the spend tracking background jobs
+        1. CloudZero Background Job
+        2. Prometheus Background Job
+        
+        Args:
+            scheduler: The scheduler to add the background jobs to
+        """
+        ########################################################
+        # CloudZero Background Job
+        ########################################################
+        from litellm.proxy.spend_tracking.cloudzero_endpoints import (
+            init_cloudzero_background_job,
+            is_cloudzero_setup_in_db,
+        )
+
+        if await is_cloudzero_setup_in_db():
+            await init_cloudzero_background_job()
+        
+        ########################################################
+        # Prometheus Background Job
+        ########################################################
+        if litellm.prometheus_initialize_budget_metrics is True:
+            try:
+                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+
+                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+            except Exception:
+                PrometheusLogger = None
+        
 
     @classmethod
     async def _setup_prisma_client(
