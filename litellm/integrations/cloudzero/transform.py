@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# CHANGELOG: 2025-01-19 - Updated CBF transformation for LiteLLM_SpendLogs with hourly aggregation and team_id focus (erik.peterson)
+# CHANGELOG: 2025-01-19 - Updated CBF transformation for LiteLLM_SpendLogs with hourly aggregation and team_id focus (ishaan-jaff)
 # CHANGELOG: 2025-01-19 - Migrated from pandas to polars for data transformation (erik.peterson)
 # CHANGELOG: 2025-01-19 - Initial CBF transformation module (erik.peterson)
 
@@ -121,67 +121,8 @@ class CBFTransformer:
             pl.col('status').filter(pl.col('status') == 'success').count().alias('successful_requests'),
             pl.col('status').filter(pl.col('status') != 'success').count().alias('failed_requests')
         ])
-        
         return aggregated
 
-    def _parse_tags(self, tags_json: str) -> List[str]:
-        """Parse request_tags JSON field to extract list of tags."""
-        # Handle polars Series - extract scalar value
-        if hasattr(tags_json, 'item') and not isinstance(tags_json, str):
-            if len(tags_json) == 1:
-                tags_json = tags_json.item() if tags_json is not None else None
-            else:
-                # Convert to list if Series has multiple values
-                tags_json = tags_json.to_list()[0] if len(tags_json) > 0 else None
-        
-        if tags_json is None or str(tags_json) in ['[]', '{}', 'null', '', 'None']:
-            return []
-        
-        try:
-            if isinstance(tags_json, str):
-                tags = json.loads(tags_json)
-            else:
-                tags = tags_json
-                
-            if isinstance(tags, list):
-                return [str(tag) for tag in tags if tag]
-            elif isinstance(tags, dict):
-                # If tags is a dict, extract values
-                return [str(value) for value in tags.values() if value]
-            else:
-                return []
-        except (json.JSONDecodeError, TypeError):
-            return []
-
-    def _extract_key_name_from_metadata(self, metadata_json: str) -> str:
-        """Extract key_name/key_alias from metadata JSON field."""
-        # Handle polars Series - extract scalar value
-        if hasattr(metadata_json, 'item') and not isinstance(metadata_json, str):
-            if len(metadata_json) == 1:
-                metadata_json = metadata_json.item() if metadata_json is not None else None
-            else:
-                # Convert to list if Series has multiple values
-                metadata_json = metadata_json.to_list()[0] if len(metadata_json) > 0 else None
-        
-        if metadata_json is None or str(metadata_json) in ['{}', 'null', '', 'None']:
-            return ""
-        
-        try:
-            if isinstance(metadata_json, str):
-                metadata = json.loads(metadata_json)
-            else:
-                metadata = metadata_json
-                
-            if isinstance(metadata, dict):
-                # Look for key_alias or user_api_key_alias first, then fallback to key_name
-                return (metadata.get('user_api_key_alias') or 
-                       metadata.get('key_alias') or 
-                       metadata.get('key_name') or 
-                       "")
-            else:
-                return ""
-        except (json.JSONDecodeError, TypeError):
-            return ""
 
     def _create_cbf_record(self, row: dict[str, Any]) -> CBFRecord:
         """Create a single CBF record from aggregated hourly spend data."""
