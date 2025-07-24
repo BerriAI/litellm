@@ -34,12 +34,8 @@ class AutoRouter(CustomLogger):
             embedding_model: The embedding model to use for the auto-router.
             litellm_router_instance: The instance of the LiteLLM Router.
         """
-        from semantic_router import Route
         from semantic_router.routers import SemanticRouter
 
-        from litellm.router_strategy.auto_router.litellm_encoder import (
-            LiteLLMRouterEncoder,
-        )
         self.router_config_path = router_config_path
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
         self.loaded_router: SemanticRouter = SemanticRouter.from_json(self.router_config_path)
