@@ -574,9 +574,6 @@ class AmazonConverseConfig(BaseConfig):
                 inference_params=inference_params
             ),
         }
-        print("\n==== Bedrock Request ====")
-        print("data:", data)
-        print("========================\n")
 
         # Handle all config blocks
         for config_name, config_class in self.get_config_blocks().items():
