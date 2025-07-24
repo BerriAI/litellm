@@ -1119,7 +1119,9 @@ const Teams: React.FC<TeamProps> = ({
             </p>
             <div className="mb-5">
               <label className="block text-base font-medium text-gray-700 mb-2">
-                {`Type ${teamName} to confirm deletion:`}
+                {`Type `}
+                <span className="underline">{teamName}</span>
+                {` to confirm deletion:`}
               </label>
               <input
                 type="text"
