@@ -46,8 +46,8 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
-    handle_update_object_permission_common,
     attach_object_permission_to_dict,
+    handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -331,6 +331,21 @@ def common_key_access_checks(
 router = APIRouter()
 
 
+def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
+    """
+    Handle the key type.
+    """
+    key_type = data.key_type
+    data_json.pop("key_type", None)
+    if key_type == LiteLLMKeyType.LLM_API:
+        data_json["allowed_routes"] = ["llm_api_routes"]
+    elif key_type == LiteLLMKeyType.MANAGEMENT:
+        data_json["allowed_routes"] = ["management_routes"]
+    elif key_type == LiteLLMKeyType.READ_ONLY:
+        data_json["allowed_routes"] = ["info_routes"]
+    return data_json
+
+
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -455,6 +470,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
+    data_json = handle_key_type(data, data_json)
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
         data_json["key_max_budget"] = data_json.pop("max_budget", None)
@@ -2600,7 +2616,7 @@ async def _list_key_helper(
             key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
             _token = key_dict.get("token")
-            key_list.append(_token)  # Return only the token
+            key_list.append(cast(str, _token))  # Return only the token
 
     return KeyListResponseObject(
         keys=key_list,
@@ -3099,6 +3115,3 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )
-
-
-

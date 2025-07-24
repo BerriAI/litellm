@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
+import { Button, TextInput, Grid, Col, Select as TremorSelect, SelectItem } from "@tremor/react";
 import {
   Card,
   Metric,
@@ -182,12 +182,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
+  const [keyType, setKeyType] = useState<string>("default");
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
   };
 
   const handleCancel = () => {
@@ -197,6 +199,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
   };
 
   useEffect(() => {
@@ -591,31 +594,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             >
               <TextInput placeholder="" />
             </Form.Item>
-            
-            <Form.Item
-              label={
-                <span>
-                  Models{' '}
-                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              }
-              name="models"
-              rules={[{ required: true, message: "Please select a model" }]}
-              help="required"
-              className="mt-4"
-            >
-              <Select
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
-                onChange={(values) => {
-                  if (values.includes("all-team-models")) {
-                    form.setFieldsValue({ models: ["all-team-models"] });
-                  }
-                }}
-              >
+
+                         <Form.Item
+               label={
+                 <span>
+                   Models{' '}
+                   <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                     <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                   </Tooltip>
+                 </span>
+               }
+               name="models"
+               rules={
+                 keyType === "management" || keyType === "read_only" 
+                   ? []
+                   : [{ required: true, message: "Please select a model" }]
+               }
+               help={
+                 keyType === "management" || keyType === "read_only"
+                   ? "Models field is disabled for this key type"
+                   : "required"
+               }
+               className="mt-4"
+             >
+               <Select
+                 mode="multiple"
+                 placeholder="Select models"
+                 style={{ width: "100%" }}
+                 disabled={keyType === "management" || keyType === "read_only"}
+                 onChange={(values) => {
+                   if (values.includes("all-team-models")) {
+                     form.setFieldsValue({ models: ["all-team-models"] });
+                   }
+                 }}
+               >
                 <Option key="all-team-models" value="all-team-models">
                   All Team Models
                 </Option>
@@ -626,6 +638,69 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 ))}
               </Select>
             </Form.Item>
+
+
+            <Form.Item
+              label={
+                <span>
+                  Key Type{' '}
+                  <Tooltip title="Select the type of key to determine what routes and operations this key can access">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
+              name="key_type"
+              initialValue="default"
+              className="mt-4"
+            >
+              <Select 
+                defaultValue="default" 
+                placeholder="Select key type" 
+                style={{ width: "100%" }}
+                optionLabelProp="label"
+                onChange={(value) => {
+                  setKeyType(value);
+                  // Clear models field and disable if management or read_only
+                  if (value === "management" || value === "read_only") {
+                    form.setFieldsValue({ models: [] });
+                  }
+                }}
+              >
+                <Option value="default" label="Default">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call LLM API + Management routes
+                    </div>
+                  </div>
+                </Option>
+                <Option value="llm_api" label="LLM API">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>LLM API</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only LLM API routes (chat/completions, embeddings, etc.)
+                    </div>
+                  </div>
+                </Option>
+                <Option value="management" label="Management">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Management</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only management routes (user/team/key management)
+                    </div>
+                  </div>
+                </Option>
+                <Option value="read_only" label="Read Only">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Read Only</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can only call only info routes (e.g. /key/info, /user/info, /team/info)
+                    </div>
+                  </div>
+                </Option>
+              </Select>
+            </Form.Item>
+            
           </div>
           )}
 
