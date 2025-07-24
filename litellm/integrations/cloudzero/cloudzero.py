@@ -1,5 +1,6 @@
+import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from litellm._logging import verbose_logger
@@ -198,3 +199,55 @@ class CloudZeroLogger(CustomLogger):
         console.print(f"  Unique Services: {unique_services}")
 
         console.print("\n[dim]💡 This is the CloudZero CBF format ready for AnyCost ingestion[/dim]")
+
+    async def init_background_job(self, redis_cache=None):
+        """
+        Initialize a background job that exports usage data every hour.
+        Uses PodLockManager to ensure only one instance runs the export at a time.
+        
+        Args:
+            redis_cache: Redis cache instance for pod locking
+        """
+        from litellm.proxy.db.db_transaction_queue.pod_lock_manager import (
+            PodLockManager,
+        )
+        
+        lock_manager = PodLockManager(redis_cache=redis_cache)
+        cronjob_id = "cloudzero_hourly_export"
+        
+        async def hourly_export_task():
+            while True:
+                try:
+                    # Calculate the previous completed hour
+                    now = datetime.utcnow()
+                    target_hour = now.replace(minute=0, second=0, microsecond=0)
+                    # Export data for the previous hour to ensure all data is available
+                    target_hour = target_hour - timedelta(hours=1)
+                    
+                    # Try to acquire lock
+                    lock_acquired = await lock_manager.acquire_lock(cronjob_id)
+                    
+                    if lock_acquired:
+                        try:
+                            verbose_logger.info(f"CloudZero Background Job: Starting export for hour {target_hour}")
+                            await self.export_usage_data(target_hour)
+                            verbose_logger.info(f"CloudZero Background Job: Completed export for hour {target_hour}")
+                        finally:
+                            # Always release the lock
+                            await lock_manager.release_lock(cronjob_id)
+                    else:
+                        verbose_logger.debug("CloudZero Background Job: Another instance is already running the export")
+                    
+                    # Wait until the next hour
+                    next_hour = (datetime.utcnow() + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+                    sleep_seconds = (next_hour - datetime.utcnow()).total_seconds()
+                    await asyncio.sleep(sleep_seconds)
+                    
+                except Exception as e:
+                    verbose_logger.error(f"CloudZero Background Job: Error in hourly export task: {str(e)}")
+                    # Sleep for 5 minutes before retrying on error
+                    await asyncio.sleep(300)
+        
+        # Start the background task
+        asyncio.create_task(hourly_export_task())
+        verbose_logger.debug("CloudZero Background Job: Initialized hourly export task")

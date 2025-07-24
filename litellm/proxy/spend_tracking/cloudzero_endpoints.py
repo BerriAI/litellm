@@ -14,6 +14,58 @@ from litellm.types.proxy.cloudzero_endpoints import (
 
 router = APIRouter()
 
+# Global variable to track if CloudZero background job has been initialized
+_cloudzero_background_job_initialized = False
+
+
+async def init_cloudzero_background_job():
+    """
+    Initialize CloudZero background job if not already initialized.
+    This should be called from the proxy server startup.
+    """
+    global _cloudzero_background_job_initialized
+    
+    if _cloudzero_background_job_initialized:
+        verbose_proxy_logger.debug("CloudZero background job already initialized, skipping")
+        return
+    
+    try:
+        from litellm.caching import DualCache
+        from litellm.proxy.proxy_server import prisma_client
+        
+        if prisma_client is None:
+            verbose_proxy_logger.warning("Prisma client not available, skipping CloudZero background job initialization")
+            return
+            
+        # Get CloudZero settings from database
+        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+            where={"param_name": "cloudzero_settings"}
+        )
+        
+        if not cloudzero_config or not cloudzero_config.param_value:
+            verbose_proxy_logger.debug("CloudZero settings not configured, skipping background job initialization")
+            return
+        
+        settings = dict(cloudzero_config.param_value)
+        
+        # Initialize CloudZero logger with credentials
+        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+
+        logger = CloudZeroLogger(
+            api_key=settings["api_key"],
+            connection_id=settings["connection_id"],
+            timezone=settings["timezone"]
+        )
+        
+        # Initialize the background job
+        await logger.init_background_job()
+        
+        _cloudzero_background_job_initialized = True
+        verbose_proxy_logger.info("CloudZero background job initialized successfully")
+        
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error initializing CloudZero background job: {str(e)}")
+
 
 @router.post(
     "/cloudzero/init",
@@ -74,6 +126,9 @@ async def init_cloudzero_settings(
         )
         
         verbose_proxy_logger.info("CloudZero settings initialized successfully")
+        
+        # Initialize background job after settings are saved
+        await init_cloudzero_background_job()
         
         return CloudZeroInitResponse(
             message="CloudZero settings initialized successfully",
