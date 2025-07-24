@@ -3545,6 +3545,17 @@ class ProxyStartupEvent:
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
+        
+        ########################################################
+        # CloudZero Background Job
+        ########################################################
+        from litellm.proxy.spend_tracking.cloudzero_endpoints import (
+            init_cloudzero_background_job,
+            is_cloudzero_setup_in_db,
+        )
+
+        if await is_cloudzero_setup_in_db():
+            await init_cloudzero_background_job()
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
