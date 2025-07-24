@@ -161,7 +161,7 @@ class OpenTelemetryConfig:
             "OTEL_EXPORTER_OTLP_HEADERS", os.getenv("OTEL_HEADERS")
         )  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
         enable_metrics: bool = (
-            os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "false").lower()
+            os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", "true").lower()
             == "true"
         )
         enable_events: bool = (
