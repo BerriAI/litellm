@@ -3,6 +3,7 @@ Auto-Routing Strategy that works with a Semantic Router Config
 """
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 if TYPE_CHECKING:
@@ -88,6 +89,7 @@ class AutoRouter(CustomLogger):
         user_message: Dict[str, str] = messages[-1]
         message_content: str = user_message.get("content", "")
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)
+        verbose_router_logger.debug(f"route_choice: {route_choice}")
         if isinstance(route_choice, RouteChoice):
             model = route_choice.name or self.default_model
         elif isinstance(route_choice, list):

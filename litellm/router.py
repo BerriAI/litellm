@@ -165,12 +165,16 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.router_strategy.auto_router.auto_router import AutoRouter
+    from litellm.router_strategy.auto_router.auto_router import (
+        AutoRouter,
+        PreRoutingHookResponse,
+    )
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     AutoRouter = Any
+    PreRoutingHookResponse = Any
 
 
 class RoutingArgs(enum.Enum):
@@ -6517,14 +6521,20 @@ class Router:
             
             #########################################################
             # Execute Pre-Routing Hooks
+            # this hook can modify the model, messages before the routing decision is made
             #########################################################
-            await self.async_pre_routing_hook(
+            pre_routing_hook_response = await self.async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
             )
+            if pre_routing_hook_response is not None:
+                model = pre_routing_hook_response.model
+                messages = pre_routing_hook_response.messages
+            #########################################################
+
             
             
             healthy_deployments = await self.async_get_healthy_deployments(
@@ -6644,7 +6654,7 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
-    ):
+    ) -> Optional[PreRoutingHookResponse]:
         """
         This hook is called before the routing decision is made.
 
@@ -6654,7 +6664,7 @@ class Router:
         # Check if any auto-router should be used
         #########################################################
         if model in self.auto_routers:
-            await self.auto_routers[model].async_pre_routing_hook(
+            return await self.auto_routers[model].async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,
@@ -6662,6 +6672,7 @@ class Router:
                 specific_deployment=specific_deployment,
             )
         
+        return None
 
 
 
