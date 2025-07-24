@@ -541,20 +541,39 @@ class AmazonConverseConfig(BaseConfig):
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
 
-        # PATCH: Allow anthropic_beta and tools to be passed directly for computer-use
-        # If present in optional_params, ensure they are included in additionalModelRequestFields
+        # PATCH: Allow anthropic_beta to be passed directly for computer-use
+        # If present in optional_params, ensure it is included in additionalModelRequestFields
         if "anthropic_beta" in optional_params:
             additional_request_params["anthropic_beta"] = optional_params["anthropic_beta"]
-        if "tools" in optional_params:
-            additional_request_params["tools"] = optional_params["tools"]
+
+        def split_bedrock_tools(tools):
+            builtin_tool_types = {
+                "computer_20241022",
+                "bash_20241022",
+                "text_editor_20241022",
+                # Add more built-in types as Bedrock supports them
+            }
+            builtin_tools = []
+            function_tools = []
+            for tool in tools:
+                if tool.get("type") in builtin_tool_types:
+                    builtin_tools.append(tool)
+                else:
+                    function_tools.append(tool)
+            return builtin_tools, function_tools
+
+        builtin_tools, function_tools = split_bedrock_tools(optional_params.get("tools", []))
+        if builtin_tools:
+            additional_request_params["tools"] = builtin_tools
 
         # Only set the topK value in for models that support it
         additional_request_params.update(
             self._handle_top_k_value(model, inference_params)
         )
 
+        # Use only function tools for toolConfig
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
-            inference_params.pop("tools", [])
+            inference_params.pop("tools", []) if not function_tools else function_tools
         )
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
