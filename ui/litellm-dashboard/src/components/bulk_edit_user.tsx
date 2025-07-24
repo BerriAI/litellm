@@ -60,7 +60,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   };
 
   // Create a mock userData object for the UserEditView
-  const mockUserData = {
+  const mockUserData = React.useMemo(() => ({
     user_id: "bulk_edit",
     user_info: {
       user_email: "",
@@ -75,7 +75,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
     },
     keys: [],
     teams: teams || [],
-  };
+  }), [teams, visible]);
 
   const handleSubmit = async (formValues: any) => {
     if (!accessToken) {
