@@ -827,7 +827,7 @@ class CustomStreamWrapper:
 
                     model_response = self.strip_role_from_delta(model_response)
                     verbose_logger.debug(
-                        f"model_response.choices[0].delta: {model_response.choices[0].delta}"
+                        f"model_response.choices[0].delta inside is_chunk_non_empty: {model_response.choices[0].delta}"
                     )
                 else:
                     ## else
@@ -847,7 +847,7 @@ class CustomStreamWrapper:
                 self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
                 )
-                print_verbose(f"returning model_response: {model_response}")
+
                 return model_response
             else:
                 return
@@ -900,7 +900,6 @@ class CustomStreamWrapper:
             model_response = self.strip_role_from_delta(model_response)
             return model_response
         else:
-            model_response = self.strip_role_from_delta(model_response)
             if hasattr(model_response, "usage"):
                 self.chunks.append(model_response)
             return
