@@ -15,7 +15,16 @@ from litellm import Router
 current_path = os.path.dirname(os.path.abspath(__file__))
 router_json_path = os.path.join(current_path, "auto_router", "router.json")
 
-router = Router(
+
+@pytest.mark.asyncio
+async def test_router_auto_router():
+    """
+    Simple e2e test to validate we get an llm response from the auto router
+    """
+    import litellm
+    litellm._turn_on_debug()
+
+    router = Router(
     model_list=[
             {
                 "model_name": "custom-text-embedding-model",
@@ -67,14 +76,6 @@ router = Router(
         ],
     )
 
-
-@pytest.mark.asyncio
-async def test_router_auto_router():
-    """
-    Simple e2e test to validate we get an llm response from the auto router
-    """
-    import litellm
-    litellm._turn_on_debug()
 
     # this goes to gpt-4.1
     # these are the utterances in the router.json file
