@@ -51,23 +51,11 @@ class CloudZeroLogger(CustomLogger):
                     "CloudZero configuration missing. Please set CLOUDZERO_API_KEY and CLOUDZERO_CONNECTION_ID environment variables."
                 )
 
-            # Initialize database connection and load data
-            database = LiteLLMDatabase()
-            verbose_logger.debug(f"CloudZero Logger: Loading spend logs for hour {target_hour}")
-            data = await database.get_usage_data_for_hour(target_hour=target_hour, limit=limit)
-            
-            if data.is_empty():
-                verbose_logger.info("CloudZero Logger: No usage data found to export")
-                return
-
-            verbose_logger.debug(f"CloudZero Logger: Processing {len(data)} records")
-            
-            # Transform data to CloudZero CBF format
-            transformer = CBFTransformer()
-            cbf_data = transformer.transform(data)
+            # Fetch and transform data using helper
+            cbf_data = await self._fetch_cbf_data_for_hour(target_hour, limit)
             
             if cbf_data.is_empty():
-                verbose_logger.warning("CloudZero Logger: No valid data after transformation")
+                verbose_logger.info("CloudZero Logger: No usage data found to export")
                 return
 
             # Send data to CloudZero
@@ -86,6 +74,37 @@ class CloudZeroLogger(CustomLogger):
             verbose_logger.error(f"CloudZero Logger: Error exporting usage data: {str(e)}")
             raise
 
+    async def _fetch_cbf_data_for_hour(self, target_hour: datetime, limit: Optional[int] = 1000):
+        """
+        Helper method to fetch usage data for a specific hour and transform it to CloudZero CBF format.
+        
+        Args:
+            target_hour: The specific hour to fetch data for
+            limit: Optional limit on number of records to fetch (default: 1000)
+            
+        Returns:
+            CBF formatted data ready for CloudZero ingestion
+        """
+        # Initialize database connection and load data
+        database = LiteLLMDatabase()
+        verbose_logger.debug(f"CloudZero Logger: Loading spend logs for hour {target_hour}")
+        data = await database.get_usage_data_for_hour(target_hour=target_hour, limit=limit)
+        
+        if data.is_empty():
+            verbose_logger.info("CloudZero Logger: No usage data found for the specified hour")
+            return data  # Return empty data
+
+        verbose_logger.debug(f"CloudZero Logger: Processing {len(data)} records")
+        
+        # Transform data to CloudZero CBF format
+        transformer = CBFTransformer()
+        cbf_data = transformer.transform(data)
+        
+        if cbf_data.is_empty():
+            verbose_logger.warning("CloudZero Logger: No valid data after transformation")
+            
+        return cbf_data
+
     async def dry_run_export_usage_data(self, target_hour: datetime, limit: Optional[int] = 1000):
         """
         Only prints the spend logs data for a specific hour that would be exported to CloudZero.
@@ -97,23 +116,11 @@ class CloudZeroLogger(CustomLogger):
         try:
             verbose_logger.debug("CloudZero Logger: Starting dry run export")
             
-            # Initialize database connection and load data
-            database = LiteLLMDatabase()
-            verbose_logger.debug(f"CloudZero Logger: Loading spend logs for dry run - hour {target_hour}")
-            data = await database.get_usage_data_for_hour(target_hour=target_hour, limit=limit)
-            
-            if data.is_empty():
-                verbose_logger.warning("CloudZero Dry Run: No usage data found")
-                return
-
-            verbose_logger.debug(f"CloudZero Dry Run: Processing {len(data)} records...")
-            
-            # Transform data to CloudZero CBF format
-            transformer = CBFTransformer()
-            cbf_data = transformer.transform(data)
+            # Fetch and transform data using helper
+            cbf_data = await self._fetch_cbf_data_for_hour(target_hour, limit)
             
             if cbf_data.is_empty():
-                verbose_logger.warning("CloudZero Dry Run: No valid data after transformation")
+                verbose_logger.warning("CloudZero Dry Run: No usage data found")
                 return
 
             # Display the transformed data on screen
