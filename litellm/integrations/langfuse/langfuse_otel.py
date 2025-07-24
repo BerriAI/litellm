@@ -91,7 +91,6 @@ class LangfuseOtelLogger:
         compatibility.
         """
         from litellm.integrations.arize._utils import safe_set_attribute
-        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
 
         # 1) Environment variable override
         langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
