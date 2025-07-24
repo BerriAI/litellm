@@ -146,8 +146,6 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
               }));
             }
 
-            console.log("updateAllUsers", updateAllUsers);
-            console.log("members", members);
             const result = await teamBulkMemberAddCall(
               accessToken,
               teamId,
@@ -155,6 +153,8 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
               teamBudget || undefined,
               updateAllUsers
             );
+
+            console.log("result", result);
             
             teamResults.push({
               teamId,
@@ -372,7 +372,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
 
       {loading && (
         <div style={{ textAlign: "center", marginTop: "10px" }}>
-          <Text>Updating {selectedUsers.length} user(s)...</Text>
+          <Text>Updating {updateAllUsers ? "all users" : selectedUsers.length} user(s)...</Text>
         </div>
       )}
     </Modal>
