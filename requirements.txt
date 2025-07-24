@@ -53,10 +53,10 @@ pydantic==2.10.2 # proxy + openai req.
 jsonschema==4.22.0 # validating json schema
 websockets==13.1.0 # for realtime API
 ### OpenTelemetry
-opentelemetry-api==1.33.1
-opentelemetry-sdk==1.33.1
-opentelemetry-exporter-otlp==1.33.1
-opentelemetry-semantic-conventions==0.54b1
+opentelemetry-api==1.30.0
+opentelemetry-sdk==1.30.0
+opentelemetry-exporter-otlp==1.30.0
+opentelemetry-semantic-conventions==0.51b0
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
