@@ -1,14 +1,5 @@
 import pytest
 from litellm.llms.bedrock.image.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
-from litellm.types.llms.bedrock import (
-    AmazonNovaCanvasTextToImageParams,
-    AmazonNovaCanvasImageGenerationConfig,
-    AmazonNovaCanvasTextToImageRequest,
-    AmazonNovaCanvasColorGuidedGenerationParams,
-    AmazonNovaCanvasColorGuidedRequest,
-    AmazonNovaCanvasInpaintingParams,
-    AmazonNovaCanvasInpaintingRequest,
-)
 from litellm.types.utils import ImageResponse
 
 def test_transform_request_body_text_to_image():
