@@ -43,10 +43,8 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
-    is_pass_through_provider_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
-    should_run_auth_on_pass_through_provider_route,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
@@ -440,11 +438,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
-        elif is_pass_through_provider_route(route=route):
-            if should_run_auth_on_pass_through_provider_route(route=route) is False:
-                return UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-                )
 
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 

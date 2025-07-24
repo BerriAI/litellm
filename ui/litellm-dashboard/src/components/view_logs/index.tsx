@@ -542,7 +542,7 @@ export default function SpendLogsTable({
               </h1>
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
-              <KeyInfoView keyId={selectedKeyIdInfoView} keyData={selectedKeyInfo} accessToken={accessToken} userID={userID} userRole={userRole} teams={allTeams} onClose={() => setSelectedKeyIdInfoView(null)} premiumUser={premiumUser} setAccessToken={() => {}} />
+              <KeyInfoView keyId={selectedKeyIdInfoView} keyData={selectedKeyInfo} accessToken={accessToken} userID={userID} userRole={userRole} teams={allTeams} onClose={() => setSelectedKeyIdInfoView(null)} premiumUser={premiumUser} />
             ) : selectedSessionId ? (
               <div className="bg-white rounded-lg shadow">
                 <DataTable
@@ -929,7 +929,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cost:</span>
-              <span>${formatNumberWithCommas(row.original.spend || 0, 4)}</span>
+              <span>${formatNumberWithCommas(row.original.spend || 0, 6)}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cache Hit:</span>

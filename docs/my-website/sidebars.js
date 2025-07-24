@@ -39,8 +39,10 @@ const sidebars = {
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
+          "proxy/guardrails/model_armor",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
+          "proxy/guardrails/pillar_security",
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
@@ -173,6 +175,7 @@ const sidebars = {
             "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
+            "proxy/ui/bulk_edit_users",
             {
               type: "category",
               label: "UI Logs",
@@ -282,7 +285,6 @@ const sidebars = {
           type: "category",
           label: "/vector_stores",
           items: [
-            "vector_stores/create",
             "vector_stores/search",
           ]
         },
@@ -411,6 +413,7 @@ const sidebars = {
             "providers/huggingface_rerank",
           ]
         },
+        "providers/hyperbolic",
         "providers/databricks",
         "providers/deepgram",
         "providers/watsonx",
@@ -444,9 +447,12 @@ const sidebars = {
         "providers/github_copilot",
         "providers/ai21",
         "providers/nlp_cloud",
+        "providers/recraft",
         "providers/replicate",
         "providers/togetherai",
         "providers/v0",
+        "providers/morph",
+        "providers/lambda_ai",
         "providers/novita",
         "providers/voyage",
         "providers/jina_ai",
@@ -623,6 +629,7 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
+            "projects/HolmesGPT"
           ],
         },
         "extras/code_quality",

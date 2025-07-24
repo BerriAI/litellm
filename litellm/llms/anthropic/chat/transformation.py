@@ -127,7 +127,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
-            "reasoning_effort",
             "web_search_options",
         ]
 
@@ -136,6 +135,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             custom_llm_provider=self.custom_llm_provider,
         ):
             params.append("thinking")
+            params.append("reasoning_effort")
 
         return params
 

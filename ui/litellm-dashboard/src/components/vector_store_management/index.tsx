@@ -144,7 +144,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({
         </div>
         
         <Text className="mb-4">
-          <p>You can use vector stores to store and retrieve LLM embeddings. Currently, we support Amazon Bedrock vector stores.</p>
+          <p>You can use vector stores to store and retrieve LLM embeddings..</p>
         </Text>
 
         <TremorButton

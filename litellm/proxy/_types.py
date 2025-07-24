@@ -307,7 +307,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/responses/{response_id}",
         "/responses/{response_id}/input_items",
         "/v1/responses/{response_id}/input_items",
-
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -1767,6 +1766,22 @@ class UserAPIKeyAuth(
         if JWTHandler.is_jwt(token=api_key):
             return f"hashed-jwt-{hash_token(token=api_key)}"
         return api_key
+    
+
+    @classmethod
+    def get_litellm_internal_health_check_user_api_key_auth(cls) -> "UserAPIKeyAuth":
+        """
+        Returns a `UserAPIKeyAuth` object for the litellm internal health check service account.
+        
+        This is used to track number of requests/spend for health check calls.
+        """
+        from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+        return cls(
+            api_key=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+            team_id=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+            key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+            team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+        )
 
 
 class UserInfoResponse(LiteLLMPydanticObjectBase):
@@ -2765,6 +2780,7 @@ class LitellmDataForBackendLLMCall(TypedDict, total=False):
     organization: str
     timeout: Optional[float]
     user: Optional[str]
+    num_retries: Optional[int]
 
 
 class JWTKeyItem(TypedDict, total=False):

@@ -1003,11 +1003,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {all_admin_roles.includes(userRole || "") && (
-            <Button className="w-fit" onClick={handleCreateNewModelClick}>
-              + Create New Model
-            </Button>
-          )}
           {selectedModelId ? (
             <ModelInfoView
               modelId={selectedModelId}
@@ -1397,6 +1392,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 credentials={credentialsList}
                 accessToken={accessToken}
                 userRole={userRole}
+                premiumUser={premiumUser}
               />
             </TabPanel>
             <TabPanel>

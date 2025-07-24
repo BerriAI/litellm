@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Card,
   Text,
@@ -13,51 +13,34 @@ import {
   Title,
   Badge,
   TextInput,
-  Select as TremorSelect,
+  Select as TremorSelect
 } from "@tremor/react";
-import {
-  ArrowLeftIcon,
-  TrashIcon,
-  RefreshIcon,
-} from "@heroicons/react/outline";
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
 import { keyDeleteCall, keyUpdateCall } from "./networking";
 import { KeyResponse } from "./key_team_helpers/key_list";
-import {
-  Form,
-  Input,
-  InputNumber,
-  message,
-  Select,
-  Tooltip,
-  Button as AntdButton,
-} from "antd";
+import { Form, Input, InputNumber, message, Select, Tooltip, Button as AntdButton } from "antd";
 import { KeyEditView } from "./key_edit_view";
 import { RegenerateKeyModal } from "./regenerate_key_modal";
-import { rolesWithWriteAccess } from "../utils/roles";
+import { rolesWithWriteAccess } from '../utils/roles';
 import ObjectPermissionsView from "./object_permissions_view";
 import LoggingSettingsView from "./logging_settings_view";
-import {
-  copyToClipboard as utilCopyToClipboard,
-  formatNumberWithCommas,
-} from "@/utils/dataUtils";
-import {
-  extractLoggingSettings,
-  formatMetadataForDisplay,
-} from "./key_info_utils";
+import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
+import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
 import { CopyIcon, CheckIcon } from "lucide-react";
+import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "./callback_info_helpers";
 
 interface KeyInfoViewProps {
-  keyId: string;
-  onClose: () => void;
-  keyData: KeyResponse | undefined;
-  onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
-  onDelete?: () => void;
-  accessToken: string | null;
-  userID: string | null;
-  userRole: string | null;
-  teams: any[] | null;
-  premiumUser: boolean;
-  setAccessToken: (token: string) => void;
+  keyId: string
+  onClose: () => void
+  keyData: KeyResponse | undefined
+  onKeyDataUpdate?: (data: Partial<KeyResponse>) => void
+  onDelete?: () => void
+  accessToken: string | null
+  userID: string | null
+  userRole: string | null
+  teams: any[] | null
+  premiumUser: boolean
+  setAccessToken?: (token: string) => void
 }
 
 export default function KeyInfoView({
@@ -73,22 +56,40 @@ export default function KeyInfoView({
   premiumUser,
   setAccessToken,
 }: KeyInfoViewProps) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [form] = Form.useForm();
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false);
-  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [currentKeyData, setCurrentKeyData] = useState(keyData);
+  const [isEditing, setIsEditing] = useState(false)
+  const [form] = Form.useForm()
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
+  const [isRegenerateModalOpen, setIsRegenerateModalOpen] = useState(false)
+  const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
 
-  React.useEffect(() => {
-    setCurrentKeyData(keyData);
-  }, [keyData]);
+  // Add local state to maintain key data and track regeneration
+  const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData)
+  const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null)
+  const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false)
 
+  // Update local state when keyData prop changes (but don't reset to undefined)
+  useEffect(() => {
+    if (keyData) {
+      setCurrentKeyData(keyData)
+    }
+  }, [keyData])
+
+  // Reset recent regeneration indicator after 5 seconds
+  useEffect(() => {
+    if (isRecentlyRegenerated) {
+      const timer = setTimeout(() => {
+        setIsRecentlyRegenerated(false)
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [isRecentlyRegenerated])
+
+  // Use currentKeyData instead of keyData throughout the component
   if (!currentKeyData) {
     return (
       <div className="p-4">
-        <Button
-          icon={ArrowLeftIcon}
+        <Button 
+          icon={ArrowLeftIcon} 
           variant="light"
           onClick={onClose}
           className="mb-4"
@@ -111,21 +112,18 @@ export default function KeyInfoView({
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
           ...currentKeyData.object_permission,
-          vector_stores: formValues.vector_stores || [],
+          vector_stores: formValues.vector_stores || []
         };
         // Remove vector_stores from the top level as it should be in object_permission
         delete formValues.vector_stores;
       }
 
       if (formValues.mcp_servers_and_groups !== undefined) {
-        const { servers, accessGroups } = formValues.mcp_servers_and_groups || {
-          servers: [],
-          accessGroups: [],
-        };
+        const { servers, accessGroups } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [] };
         formValues.object_permission = {
           ...currentKeyData.object_permission,
           mcp_servers: servers || [],
-          mcp_access_groups: accessGroups || [],
+          mcp_access_groups: accessGroups || []
         };
         // Remove mcp_servers_and_groups from the top level as it should be in object_permission
         delete formValues.mcp_servers_and_groups;
@@ -143,6 +141,11 @@ export default function KeyInfoView({
             ...(formValues.logging_settings
               ? { logging: formValues.logging_settings }
               : {}),
+            ...(formValues.disabled_callbacks?.length > 0
+              ? { 
+                  litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks)
+                }
+              : {}),
           };
         } catch (error) {
           console.error("Error parsing metadata JSON:", error);
@@ -158,6 +161,11 @@ export default function KeyInfoView({
           ...(formValues.logging_settings
             ? { logging: formValues.logging_settings }
             : {}),
+          ...(formValues.disabled_callbacks?.length > 0
+            ? { 
+                litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks)
+              }
+            : {}),
         };
       }
 
@@ -168,46 +176,35 @@ export default function KeyInfoView({
         const durationMap: Record<string, string> = {
           daily: "24h",
           weekly: "7d",
-          monthly: "30d",
+          monthly: "30d"
         };
         formValues.budget_duration = durationMap[formValues.budget_duration];
       }
 
-      const newKeyValues = await keyUpdateCall(accessToken, formValues);
+      const newKeyValues = await keyUpdateCall(accessToken, formValues)
 
-      setCurrentKeyData((prev) =>
-        prev ? { ...prev, ...newKeyValues } : newKeyValues,
-      );
+      // Update local state
+      setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...newKeyValues } : undefined))
 
       if (onKeyDataUpdate) {
-        onKeyDataUpdate(newKeyValues);
+        onKeyDataUpdate(newKeyValues)
       }
-
       message.success("Key updated successfully");
       setIsEditing(false);
+      // Refresh key data here if needed
     } catch (error) {
       message.error("Failed to update key");
       console.error("Error updating key:", error);
     }
   };
 
-  const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
-    setCurrentKeyData((prev) =>
-      prev ? { ...prev, ...updatedKeyData } : (updatedKeyData as KeyResponse),
-    );
-
-    if (onKeyDataUpdate) {
-      onKeyDataUpdate(updatedKeyData);
-    }
-  };
-
   const handleDelete = async () => {
     try {
-      if (!accessToken) return;
-      await keyDeleteCall(accessToken as string, currentKeyData.token);
-      message.success("Key deleted successfully");
+      if (!accessToken) return
+      await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id)
+      message.success("Key deleted successfully")
       if (onDelete) {
-        onDelete();
+        onDelete()
       }
       onClose();
     } catch (error) {
@@ -221,17 +218,58 @@ export default function KeyInfoView({
     if (success) {
       setCopiedStates((prev) => ({ ...prev, [key]: true }));
       setTimeout(() => {
-        setCopiedStates((prev) => ({ ...prev, [key]: false }));
-      }, 2000);
+        setCopiedStates((prev) => ({ ...prev, [key]: false }))
+      }, 2000)
     }
-  };
+  }
+
+  const handleRegenerateKeyUpdate = (updatedKeyData: Partial<KeyResponse>) => {
+    // Update local state immediately with ALL the new data
+    setCurrentKeyData((prevData) => {
+      if (!prevData) return undefined
+      const newData = {
+        ...prevData,
+        ...updatedKeyData, // This should include the new token (key-id)
+        // Update the created_at to show when it was regenerated
+        created_at: new Date().toLocaleString(),
+      }
+      return newData
+    })
+
+    // Track regeneration timestamp
+    setLastRegeneratedAt(new Date())
+    setIsRecentlyRegenerated(true)
+
+    if (onKeyDataUpdate) {
+      onKeyDataUpdate({
+        ...updatedKeyData,
+        created_at: new Date().toLocaleString(),
+      })
+    }
+  }
+
+  // Update the formatTimestamp function to use the desired date format
+  const formatTimestamp = (timestamp: string | Date) => {
+    const date = new Date(timestamp)
+    const dateStr = date.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    })
+    const timeStr = date.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+    return `${dateStr} at ${timeStr}`
+  }
 
   return (
     <div className="w-full h-screen p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button
-            icon={ArrowLeftIcon}
+          <Button 
+            icon={ArrowLeftIcon} 
             variant="light"
             onClick={onClose}
             className="mb-4"
@@ -239,38 +277,49 @@ export default function KeyInfoView({
             Back to Keys
           </Button>
           <Title>{currentKeyData.key_alias || "API Key"}</Title>
-          <div className="flex items-center cursor-pointer">
-            <Text className="text-gray-500 font-mono">
-              {currentKeyData.token}
-            </Text>
+
+          <div className="flex items-center cursor-pointer mb-2 space-y-6">
+            <div>
+              <Text className="text-xs text-gray-400 uppercase tracking-wide mt-2">Key ID</Text>
+              <Text className="text-gray-500 font-mono text-sm">{currentKeyData.token_id || currentKeyData.token}</Text>
+            </div>
             <AntdButton
               type="text"
               size="small"
-              icon={
-                copiedStates["key-id"] ? (
-                  <CheckIcon size={12} />
-                ) : (
-                  <CopyIcon size={12} />
-                )
-              }
-              onClick={() => copyToClipboard(currentKeyData.token, "key-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              icon={copiedStates["key-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(currentKeyData.token_id || currentKeyData.token, "key-id")}
+              className={`ml-2 transition-all duration-200${
                 copiedStates["key-id"]
                   ? "text-green-600 bg-green-50 border-green-200"
                   : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
             />
           </div>
+
+          {/* Add timestamp and regeneration indicator */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Text className="text-sm text-gray-500">
+              {currentKeyData.updated_at && currentKeyData.updated_at !== currentKeyData.created_at
+                ? `Updated: ${formatTimestamp(currentKeyData.updated_at)}`
+                : `Created: ${formatTimestamp(currentKeyData.created_at)}`}
+            </Text>
+
+            {isRecentlyRegenerated && (
+              <Badge color="green" size="xs" className="animate-pulse">
+                Recently Regenerated
+              </Badge>
+            )}
+
+            {lastRegeneratedAt && (
+              <Badge color="blue" size="xs">
+                Regenerated
+              </Badge>
+            )}
+          </div>
         </div>
         {userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex gap-2">
-            <Tooltip
-              title={
-                !premiumUser
-                  ? "This is a LiteLLM Enterprise feature, and requires a valid key to use."
-                  : ""
-              }
-            >
+            <Tooltip title={!premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : ""}>
               <span className="inline-block">
                 <Button
                   icon={RefreshIcon}
@@ -301,8 +350,8 @@ export default function KeyInfoView({
         visible={isRegenerateModalOpen}
         onClose={() => setIsRegenerateModalOpen(false)}
         accessToken={accessToken}
-        setAccessToken={setAccessToken}
         premiumUser={premiumUser}
+        setAccessToken={setAccessToken}
         onKeyUpdate={handleRegenerateKeyUpdate}
       />
 
@@ -310,19 +359,11 @@ export default function KeyInfoView({
       {isDeleteModalOpen && (
         <div className="fixed z-10 inset-0 overflow-y-auto">
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div
-              className="fixed inset-0 transition-opacity"
-              aria-hidden="true"
-            >
+            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
               <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
             </div>
 
-            <span
-              className="hidden sm:inline-block sm:align-middle sm:h-screen"
-              aria-hidden="true"
-            >
-              &#8203;
-            </span>
+            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
 
             <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
@@ -340,7 +381,11 @@ export default function KeyInfoView({
                 </div>
               </div>
               <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={handleDelete} color="red" className="ml-2">
+                <Button
+                  onClick={handleDelete}
+                  color="red"
+                  className="ml-2"
+                >
                   Delete
                 </Button>
                 <Button onClick={() => setIsDeleteModalOpen(false)}>
@@ -365,9 +410,7 @@ export default function KeyInfoView({
               <Card>
                 <Text>Spend</Text>
                 <div className="mt-2">
-                  <Title>
-                    ${formatNumberWithCommas(currentKeyData.spend, 4)}
-                  </Title>
+                  <Title>${formatNumberWithCommas(currentKeyData.spend, 4)}</Title>
                   <Text>
                     of{" "}
                     {currentKeyData.max_budget !== null
@@ -380,18 +423,8 @@ export default function KeyInfoView({
               <Card>
                 <Text>Rate Limits</Text>
                 <div className="mt-2">
-                  <Text>
-                    TPM:{" "}
-                    {currentKeyData.tpm_limit !== null
-                      ? currentKeyData.tpm_limit
-                      : "Unlimited"}
-                  </Text>
-                  <Text>
-                    RPM:{" "}
-                    {currentKeyData.rpm_limit !== null
-                      ? currentKeyData.rpm_limit
-                      : "Unlimited"}
-                  </Text>
+                  <Text>TPM: {currentKeyData.tpm_limit !== null ? currentKeyData.tpm_limit : "Unlimited"}</Text>
+                  <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
                 </div>
               </Card>
 
@@ -420,6 +453,11 @@ export default function KeyInfoView({
 
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
+                disabledCallbacks={
+                  Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks)
+                    ? mapInternalToDisplayNames(currentKeyData.metadata.litellm_disabled_callbacks)
+                    : []
+                }
                 variant="card"
               />
             </Grid>
@@ -430,13 +468,11 @@ export default function KeyInfoView({
             <Card className="overflow-y-auto max-h-[65vh]">
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
-                {!isEditing &&
-                  userRole &&
-                  rolesWithWriteAccess.includes(userRole) && (
-                    <Button variant="light" onClick={() => setIsEditing(true)}>
-                      Edit Settings
-                    </Button>
-                  )}
+                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
+                  <Button variant="light" onClick={() => setIsEditing(true)}>
+                    Edit Settings
+                  </Button>
+                )}
               </div>
 
               {isEditing ? (
@@ -453,9 +489,9 @@ export default function KeyInfoView({
                 <div className="space-y-4">
                   <div>
                     <Text className="font-medium">Key ID</Text>
-                    <Text className="font-mono">{currentKeyData.token}</Text>
+                    <Text className="font-mono">{currentKeyData.token_id || currentKeyData.token}</Text>
                   </div>
-
+                  
                   <div>
                     <Text className="font-medium">Key Alias</Text>
                     <Text>{currentKeyData.key_alias || "Not Set"}</Text>
@@ -478,25 +514,29 @@ export default function KeyInfoView({
 
                   <div>
                     <Text className="font-medium">Created</Text>
-                    <Text>
-                      {new Date(currentKeyData.created_at).toLocaleString()}
-                    </Text>
+                    <Text>{formatTimestamp(currentKeyData.created_at)}</Text>
                   </div>
+
+                  {lastRegeneratedAt && (
+                    <div>
+                      <Text className="font-medium">Last Regenerated</Text>
+                      <div className="flex items-center gap-2">
+                        <Text>{formatTimestamp(lastRegeneratedAt)}</Text>
+                        <Badge color="green" size="xs">
+                          Recent
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
 
                   <div>
                     <Text className="font-medium">Expires</Text>
-                    <Text>
-                      {currentKeyData.expires
-                        ? new Date(currentKeyData.expires).toLocaleString()
-                        : "Never"}
-                    </Text>
+                    <Text>{currentKeyData.expires ? formatTimestamp(currentKeyData.expires) : "Never"}</Text>
                   </div>
 
                   <div>
                     <Text className="font-medium">Spend</Text>
-                    <Text>
-                      ${formatNumberWithCommas(currentKeyData.spend, 4)} USD
-                    </Text>
+                    <Text>${formatNumberWithCommas(currentKeyData.spend, 4)} USD</Text>
                   </div>
 
                   <div>
@@ -511,13 +551,9 @@ export default function KeyInfoView({
                   <div>
                     <Text className="font-medium">Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {currentKeyData.models &&
-                      currentKeyData.models.length > 0 ? (
+                      {currentKeyData.models && currentKeyData.models.length > 0 ? (
                         currentKeyData.models.map((model, index) => (
-                          <span
-                            key={index}
-                            className="px-2 py-1 bg-blue-100 rounded text-xs"
-                          >
+                          <span key={index} className="px-2 py-1 bg-blue-100 rounded text-xs">
                             {model}
                           </span>
                         ))
@@ -529,18 +565,8 @@ export default function KeyInfoView({
 
                   <div>
                     <Text className="font-medium">Rate Limits</Text>
-                    <Text>
-                      TPM:{" "}
-                      {currentKeyData.tpm_limit !== null
-                        ? currentKeyData.tpm_limit
-                        : "Unlimited"}
-                    </Text>
-                    <Text>
-                      RPM:{" "}
-                      {currentKeyData.rpm_limit !== null
-                        ? currentKeyData.rpm_limit
-                        : "Unlimited"}
-                    </Text>
+                    <Text>TPM: {currentKeyData.tpm_limit !== null ? currentKeyData.tpm_limit : "Unlimited"}</Text>
+                    <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
                     <Text>
                       Max Parallel Requests:{" "}
                       {currentKeyData.max_parallel_requests !== null
@@ -550,17 +576,13 @@ export default function KeyInfoView({
                     <Text>
                       Model TPM Limits:{" "}
                       {currentKeyData.metadata?.model_tpm_limit
-                        ? JSON.stringify(
-                            currentKeyData.metadata.model_tpm_limit,
-                          )
+                        ? JSON.stringify(currentKeyData.metadata.model_tpm_limit)
                         : "Unlimited"}
                     </Text>
                     <Text>
                       Model RPM Limits:{" "}
                       {currentKeyData.metadata?.model_rpm_limit
-                        ? JSON.stringify(
-                            currentKeyData.metadata.model_rpm_limit,
-                          )
+                        ? JSON.stringify(currentKeyData.metadata.model_rpm_limit)
                         : "Unlimited"}
                     </Text>
                   </div>
@@ -580,9 +602,12 @@ export default function KeyInfoView({
                   />
 
                   <LoggingSettingsView
-                    loggingConfigs={extractLoggingSettings(
-                      currentKeyData.metadata,
-                    )}
+                    loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
+                    disabledCallbacks={
+                      Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks)
+                        ? mapInternalToDisplayNames(currentKeyData.metadata.litellm_disabled_callbacks)
+                        : []
+                    }
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />
@@ -594,4 +619,4 @@ export default function KeyInfoView({
       </TabGroup>
     </div>
   );
-}
+} 

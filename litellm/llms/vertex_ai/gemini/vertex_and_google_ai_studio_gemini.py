@@ -35,6 +35,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import AnthropicThinkingParam
@@ -1174,10 +1175,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
 
-                functions, tools, cumulative_tool_call_index = VertexGeminiConfig._transform_parts(
-                    parts=candidate["content"]["parts"],
-                    cumulative_tool_call_idx=cumulative_tool_call_index,
-                    is_function_call=is_function_call(standard_optional_params),
+                functions, tools, cumulative_tool_call_index = (
+                    VertexGeminiConfig._transform_parts(
+                        parts=candidate["content"]["parts"],
+                        cumulative_tool_call_idx=cumulative_tool_call_index,
+                        is_function_call=is_function_call(standard_optional_params),
+                    )
                 )
 
             if "logprobsResult" in candidate:
@@ -1879,7 +1882,7 @@ class VertexLLM(VertexBase):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = HTTPHandler(**_params)  # type: ignore
+            client = _get_httpx_client(params=_params)
         else:
             client = client
 
@@ -1952,6 +1955,7 @@ class ModelResponseIterator:
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, self.logging_obj.optional_params
                 )
+
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore

@@ -73,15 +73,15 @@ async def add_allowed_ip(ip_address: IPAddress):
         store_model_in_db,
     )
 
+    if prisma_client is None:
+        raise Exception("No DB Connected")
+
     _allowed_ips: List = general_settings.get("allowed_ips", [])
     if ip_address.ip not in _allowed_ips:
         _allowed_ips.append(ip_address.ip)
         general_settings["allowed_ips"] = _allowed_ips
     else:
         raise HTTPException(status_code=400, detail="IP address already exists")
-
-    if prisma_client is None:
-        raise Exception("No DB Connected")
 
     if store_model_in_db is not True:
         raise HTTPException(
@@ -480,7 +480,7 @@ async def update_sso_settings(sso_config: SSOConfig):
         elif field_name == "ui_access_mode" and value is not None:
 
             config["general_settings"]["ui_access_mode"] = value
-        elif field_name in env_var_mapping and value is not None:
+        elif field_name in env_var_mapping and value is not None and len(value) > 0:
             env_var_name = env_var_mapping[field_name]
             # Update in config
             config["environment_variables"][env_var_name] = value
