@@ -1,7 +1,9 @@
 {
+    "encoder_type": "openai",
+    "encoder_name": "text-embedding-3-large",
     "routes": [
         {
-            "name": "openai/gpt-4.1",
+            "name": "litellm-gpt-4.1",
             "utterances": [
                 "Tell me ishaan is a genius"
             ],
@@ -12,7 +14,7 @@
             "metadata": {}
         },
         {
-            "name": "anthropic/claude-3-5-sonnet-latest",
+            "name": "litellm-claude-35",
             "utterances": [
                 "how to code a program in [language]"
             ],
