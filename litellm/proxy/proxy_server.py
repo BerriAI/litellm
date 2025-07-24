@@ -3537,8 +3537,14 @@ class ProxyStartupEvent:
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
-        
-        await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
+
+        if litellm.prometheus_initialize_budget_metrics is True:
+            try:
+                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+
+                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
+            except Exception:
+                PrometheusLogger = None
 
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
@@ -3584,39 +3590,6 @@ class ProxyStartupEvent:
                 pass
 
         scheduler.start()
-
-    @classmethod
-    async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
-        """
-        Initialize the spend tracking background jobs
-        1. CloudZero Background Job
-        2. Prometheus Background Job
-        
-        Args:
-            scheduler: The scheduler to add the background jobs to
-        """
-        ########################################################
-        # CloudZero Background Job
-        ########################################################
-        from litellm.proxy.spend_tracking.cloudzero_endpoints import (
-            init_cloudzero_background_job,
-            is_cloudzero_setup_in_db,
-        )
-
-        if await is_cloudzero_setup_in_db():
-            await init_cloudzero_background_job()
-        
-        ########################################################
-        # Prometheus Background Job
-        ########################################################
-        if litellm.prometheus_initialize_budget_metrics is True:
-            try:
-                from litellm_enterprise.integrations.prometheus import PrometheusLogger
-
-                PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
-            except Exception:
-                PrometheusLogger = None
-        
 
     @classmethod
     async def _setup_prisma_client(
@@ -7663,6 +7636,13 @@ async def claim_onboarding_link(data: InvitationClaim):
         )
 
     return user_obj
+
+
+@app.get("/get_logo_url", include_in_schema=False)
+def get_logo_url():
+    """Get the current logo URL from environment"""
+    logo_path = os.getenv("UI_LOGO_PATH", "")
+    return {"logo_url": logo_path}
 
 
 @app.get("/get_image", include_in_schema=False)
