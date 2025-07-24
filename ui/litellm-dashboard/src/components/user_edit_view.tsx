@@ -132,6 +132,9 @@ export function UserEditView({
           <Select.Option key="all-proxy-models" value="all-proxy-models">
             All Proxy Models
           </Select.Option>
+          <Select.Option key="no-default-models" value="no-default-models">
+            No Default Models
+          </Select.Option>
           {userModels.map((model) => (
             <Select.Option key={model} value={model}>
               {getModelDisplayName(model)}
