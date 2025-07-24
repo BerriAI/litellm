@@ -12,6 +12,9 @@ sys.path.insert(
 
 from litellm import Router
 
+current_path = os.path.dirname(os.path.abspath(__file__))
+router_json_path = os.path.join(current_path, "auto_router", "router.json")
+
 router = Router(
     model_list=[
             {
@@ -47,7 +50,7 @@ router = Router(
                 "model_name": "auto_router1",
                 "litellm_params": {
                     "model": "auto_router/auto_router_1",
-                    "auto_router_config_path": "auto_router/router.json",
+                    "auto_router_config_path": router_json_path,
                     "auto_router_default_model": "gpt-4o-mini",
                     "auto_router_embedding_model": "custom-text-embedding-model",
                 },
@@ -56,7 +59,7 @@ router = Router(
                 "model_name": "auto_router_2",
                 "litellm_params": {
                     "model": "auto_router/auto_router_2",
-                    "auto_router_config_path": "auto_router/router.json",
+                    "auto_router_config_path": router_json_path,
                     "auto_router_default_model": "gpt-4o-mini",
                     "auto_router_embedding_model": "custom-text-embedding-model-2",
                 },
