@@ -67,6 +67,36 @@ async def init_cloudzero_background_job():
         verbose_proxy_logger.error(f"Error initializing CloudZero background job: {str(e)}")
 
 
+async def is_cloudzero_setup_in_db() -> bool:
+    """
+    Check if CloudZero is setup in the database.
+    
+    CloudZero is considered setup in the database if:
+    - CloudZero settings exist in the database  
+    - The settings have a non-None value
+    
+    Returns:
+        bool: True if CloudZero is active, False otherwise
+    """
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+        
+        if prisma_client is None:
+            return False
+            
+        # Check for CloudZero settings in database
+        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+            where={"param_name": "cloudzero_settings"}
+        )
+        
+        # CloudZero is setup in the database if config exists and has non-None value
+        return cloudzero_config is not None and cloudzero_config.param_value is not None
+        
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error checking CloudZero status: {str(e)}")
+        return False
+
+
 @router.post(
     "/cloudzero/init",
     tags=["CloudZero"],
