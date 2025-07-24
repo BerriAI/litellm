@@ -10,7 +10,7 @@ import Image from '@theme/IdealImage';
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Get free 7-day trial key](https://www.litellm.ai/#trial)
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -23,9 +23,9 @@ If you're using the LiteLLM CLI with `litellm --config proxy_config.yaml` then y
 Add this to your proxy config.yaml 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   callbacks: ["prometheus"]
 ```
@@ -40,7 +40,7 @@ Test Request
 curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Content-Type: application/json' \
     --data '{
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4o",
     "messages": [
         {
         "role": "user",
@@ -64,9 +64,9 @@ Use this for for tracking per [user, key, team, etc.](virtual_keys)
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
 | `litellm_spend_metric`                | Total Spend, per `"user", "key", "model", "team", "end-user"`                 |
-| `litellm_total_tokens`         | input + output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
-| `litellm_input_tokens`         | input tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
-| `litellm_output_tokens`        | output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`             |
+| `litellm_total_tokens_metric`         | input + output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
+| `litellm_input_tokens_metric`         | input tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`     |
+| `litellm_output_tokens_metric`        | output tokens per `"end_user", "hashed_api_key", "api_key_alias", "requested_model", "team", "team_alias", "user", "model"`             |
 
 ### Team - Budget
 
@@ -180,17 +180,32 @@ Use this for LLM API Error monitoring and tracking remaining rate limits and tok
 | `litellm_llm_api_latency_metric`  | Latency (seconds) for just the LLM API call - tracked for labels "model", "hashed_api_key", "api_key_alias", "team", "team_alias", "requested_model", "end_user", "user" |
 | `litellm_llm_api_time_to_first_token_metric`             | Time to first token for LLM API call - tracked for labels `model`, `hashed_api_key`, `api_key_alias`, `team`, `team_alias` [Note: only emitted for streaming requests] |
 
+## Tracking `end_user` on Prometheus
+
+By default LiteLLM does not track `end_user` on Prometheus. This is done to reduce the cardinality of the metrics from LiteLLM Proxy.
+
+If you want to track `end_user` on Prometheus, you can do the following:
+
+```yaml showLineNumbers title="config.yaml"
+litellm_settings:
+  callbacks: ["prometheus"]
+  enable_end_user_cost_tracking_prometheus_only: true
+```
+
+
 ## [BETA] Custom Metrics
 
 Track custom metrics on prometheus on all events mentioned above. 
 
-1. Define the custom metrics in the `config.yaml`
+### Custom Metadata Labels
+
+1. Define the custom metadata labels in the `config.yaml`
 
 ```yaml
 model_list:
-  - model_name: openai/gpt-3.5-turbo
+  - model_name: openai/gpt-4o
     litellm_params:
-      model: openai/gpt-3.5-turbo
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
@@ -205,7 +220,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer <LITELLM_API_KEY>' \
 -d '{
-    "model": "openai/gpt-3.5-turbo",
+    "model": "openai/gpt-4o",
     "messages": [
       {
         "role": "user",
@@ -230,15 +245,187 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 ... "metadata_foo": "hello world" ...
 ```
 
+### Custom Tags
+
+Track specific tags as prometheus labels for better filtering and monitoring.
+
+1. Define the custom tags in the `config.yaml`
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  callbacks: ["prometheus"]
+  custom_prometheus_metadata_labels: ["metadata.foo", "metadata.bar"]
+  custom_prometheus_tags: ["prod", "staging", "batch-job"]
+```
+
+2. Make a request with tags
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <LITELLM_API_KEY>' \
+-d '{
+    "model": "openai/gpt-4o",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What's in this image?"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "metadata": {
+        "tags": ["prod", "user-facing"]
+    }
+}'
+```
+
+3. Check your `/metrics` endpoint for the custom tag metrics
+
+```
+... "tag_prod": "true", "tag_staging": "false", "tag_batch_job": "false" ...
+```
+
+**How Custom Tags Work:**
+- Each configured tag becomes a boolean label in prometheus metrics
+- If a tag is present in the request, the label value is `"true"`
+- If a tag is not present in the request, the label value is `"false"`
+- Tag names are sanitized for prometheus compatibility (e.g., `"batch-job"` becomes `"tag_batch_job"`)
+
+**Use Cases:**
+- Environment tracking (`prod`, `staging`, `dev`)
+- Request type classification (`batch-job`, `user-facing`, `background`)
+- Feature flags (`new-feature`, `beta-users`)
+- Team or service identification (`team-a`, `service-xyz`)
+
+
+## Configuring Metrics and Labels
+
+You can selectively enable specific metrics and control which labels are included to optimize performance and reduce cardinality.
+
+### Enable Specific Metrics and Labels
+
+Configure which metrics to emit by specifying them in `prometheus_metrics_config`. Each configuration group needs a `group` name (for organization) and a list of `metrics` to enable. You can optionally include a list of `include_labels` to filter the labels for the metrics.
+
+```yaml
+model_list:
+ - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    # High-cardinality metrics with minimal labels
+    - group: "proxy_metrics"
+      metrics:
+        - "litellm_proxy_total_requests_metric"
+        - "litellm_proxy_failed_requests_metric"
+      include_labels:
+        - "hashed_api_key"
+        - "requested_model"
+        - "model_group"
+```
+
+On starting up LiteLLM if your metrics were correctly configured, you should see the following on your container logs
+
+<Image 
+  img={require('../../img/prom_config.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
+### Filter Labels Per Metric
+
+Control which labels are included for each metric to reduce cardinality:
+
+```yaml
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    - group: "token_consumption"
+      metrics:
+        - "litellm_input_tokens_metric"
+        - "litellm_output_tokens_metric"
+        - "litellm_total_tokens_metric"
+      include_labels:
+        - "model"
+        - "team"
+        - "hashed_api_key"
+    - group: "request_tracking"
+      metrics:
+        - "litellm_proxy_total_requests_metric"
+      include_labels:
+        - "status_code"
+        - "requested_model"
+```
+
+### Advanced Configuration
+
+You can create multiple configuration groups with different label sets:
+
+```yaml
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    # High-cardinality metrics with minimal labels
+    - group: "deployment_health"
+      metrics:
+        - "litellm_deployment_success_responses"
+        - "litellm_deployment_failure_responses"
+      include_labels:
+        - "api_provider"
+        - "requested_model"
+    
+    # Budget metrics with full label set
+    - group: "budget_tracking"
+      metrics:
+        - "litellm_remaining_team_budget_metric"
+      include_labels:
+        - "team"
+        - "team_alias"
+        - "hashed_api_key"
+        - "api_key_alias"
+        - "model"
+        - "end_user"
+    
+    # Latency metrics with performance-focused labels
+    - group: "performance"
+      metrics:
+        - "litellm_request_total_latency_metric"
+        - "litellm_llm_api_latency_metric"
+      include_labels:
+        - "model"
+        - "api_provider"
+        - "requested_model"
+```
+
+**Configuration Structure:**
+- `group`: A descriptive name for organizing related metrics
+- `metrics`: List of metric names to include in this group  
+- `include_labels`: (Optional) List of labels to include for these metrics
+
+**Default Behavior**: If no `prometheus_metrics_config` is specified, all metrics are enabled with their default labels (backward compatible).
+
 ## Monitor System Health
 
 To monitor the health of litellm adjacent services (redis / postgres), do:
 
 ```yaml
 model_list:
- - model_name: gpt-3.5-turbo
+ - model_name: gpt-4o
     litellm_params:
-      model: gpt-3.5-turbo
+      model: gpt-4o
 litellm_settings:
   service_callback: ["prometheus_system"]
 ```
@@ -263,7 +450,7 @@ Use these metrics to monitor the health of the DB Transaction Queue. Eg. Monitor
 
 
 
-## **🔥 LiteLLM Maintained Grafana Dashboards **
+## 🔥 LiteLLM Maintained Grafana Dashboards 
 
 Link to Grafana Dashboards maintained by LiteLLM
 

@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { Card, Form, Typography, Select, Input, Switch, Tooltip, Modal, message, Divider, Space, Tag, Image, Steps } from 'antd';
 import { Button, TextInput } from '@tremor/react';
 import type { FormInstance } from 'antd';
-import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap } from './guardrail_info_helpers';
+import { GuardrailProviders, guardrail_provider_map, shouldRenderPIIConfigSettings, guardrailLogoMap, populateGuardrailProviders, populateGuardrailProviderMap, getGuardrailProviders } from './guardrail_info_helpers';
 import { createGuardrailCall, getGuardrailUISettings, getGuardrailProviderSpecificParams } from '../networking';
 import PiiConfiguration from './pii_configuration';
 import GuardrailProviderFields from './guardrail_provider_fields';
+import GuardrailOptionalParams from './guardrail_optional_params';
 
 const { Title, Text, Link } = Typography;
 const { Option } = Select;
@@ -51,10 +52,13 @@ interface ProviderParam {
   default_value?: string;
   options?: string[];
   type?: string;
+  fields?: { [key: string]: ProviderParam };
+  dict_key_options?: string[];
+  dict_value_type?: string;
 }
 
 interface ProviderParamsResponse {
-  [provider: string]: ProviderParam[];
+  [provider: string]: { [key: string]: ProviderParam };
 }
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ 
@@ -71,6 +75,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
   const [selectedActions, setSelectedActions] = useState<{[key: string]: string}>({});
   const [currentStep, setCurrentStep] = useState(0);
   const [providerParams, setProviderParams] = useState<ProviderParamsResponse | null>(null);
+  
+  // Azure Text Moderation state
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [globalSeverityThreshold, setGlobalSeverityThreshold] = useState<number>(2);
+  const [categorySpecificThresholds, setCategorySpecificThresholds] = useState<{[key: string]: number}>({});
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {
@@ -86,6 +95,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
         setGuardrailSettings(uiSettings);
         setProviderParams(providerParamsResp);
+        
+        // Populate dynamic providers from API response
+        populateGuardrailProviders(providerParamsResp);
+        populateGuardrailProviderMap(providerParamsResp);
       } catch (error) {
         console.error('Error fetching guardrail data:', error);
         message.error('Failed to load guardrail configuration');
@@ -107,6 +120,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     // Reset PII selections when changing provider
     setSelectedEntities([]);
     setSelectedActions({});
+    
+    // Reset Azure Text Moderation selections when changing provider
+    setSelectedCategories([]);
+    setGlobalSeverityThreshold(2);
+    setCategorySpecificThresholds({});
   };
 
   const handleEntitySelect = (entity: string) => {
@@ -126,6 +144,26 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     }));
   };
 
+  // Azure Text Moderation handlers
+  const handleCategorySelect = (category: string) => {
+    setSelectedCategories(prev => 
+      prev.includes(category) 
+        ? prev.filter(c => c !== category)
+        : [...prev, category]
+    );
+  };
+
+  const handleGlobalSeverityChange = (threshold: number) => {
+    setGlobalSeverityThreshold(threshold);
+  };
+
+  const handleCategorySeverityChange = (category: string, threshold: number) => {
+    setCategorySpecificThresholds(prev => ({
+      ...prev,
+      [category]: threshold
+    }));
+  };
+
   const nextStep = async () => {
     try {
       // Validate current step fields
@@ -142,6 +180,15 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
           await form.validateFields(fieldsToValidate);
         }
       }
+      
+      // Validate configuration steps
+      if (currentStep === 1) {
+        if (shouldRenderPIIConfigSettings(selectedProvider) && selectedEntities.length === 0) {
+          message.error('Please select at least one PII entity to continue');
+          return;
+        }
+      }
+      
       setCurrentStep(currentStep + 1);
     } catch (error) {
       console.error("Form validation failed:", error);
@@ -157,6 +204,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     setSelectedProvider(null);
     setSelectedEntities([]);
     setSelectedActions({});
+    setSelectedCategories([]);
+    setGlobalSeverityThreshold(2);
+    setCategorySpecificThresholds({});
     setCurrentStep(0);
   };
 
@@ -173,7 +223,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
 
       // After validation, fetch *all* form values (including those from previous steps)
       const values = form.getFieldsValue(true);
-      
+
+
       // Get the guardrail provider value from the map
       const guardrailProvider = guardrail_provider_map[values.provider];
       
@@ -236,17 +287,41 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
        * the selected provider and ONLY pass those recognised params.
        ******************************/
 
+      console.log("values: ", JSON.stringify(values));
+
       // Use pre-fetched provider params to copy recognised params
       if (providerParams && selectedProvider) {
         const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
-        const providerSpecificParams = providerParams[providerKey] || [];
+        console.log("providerKey: ", providerKey);
+        const providerSpecificParams = providerParams[providerKey] || {};
+        
+        const allowedParams = new Set<string>();
 
-        const allowedParams = new Set<string>(
-          providerSpecificParams.map((p) => p.param)
-        );
+        console.log("providerSpecificParams: ", JSON.stringify(providerSpecificParams));
+        
+        // Add root-level parameters (like api_key, api_base, api_version)
+        Object.keys(providerSpecificParams).forEach(paramName => {
+          if (paramName !== 'optional_params') {
+            allowedParams.add(paramName);
+          }
+        });
+        
+        // Add nested parameters from optional_params.fields
+        if (providerSpecificParams.optional_params && 
+            providerSpecificParams.optional_params.fields) {
+          Object.keys(providerSpecificParams.optional_params.fields).forEach(paramName => {
+            allowedParams.add(paramName);
+          });
+        }
 
+        console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
-          const paramValue = values[paramName];
+          // Check for both direct parameter name and nested optional_params object
+          let paramValue = values[paramName];
+          if (paramValue === undefined || paramValue === null || paramValue === '') {
+            paramValue = values.optional_params?.[paramName];
+          }
+          
           if (paramValue !== undefined && paramValue !== null && paramValue !== '') {
             guardrailData.litellm_params[paramName] = paramValue;
           }
@@ -298,7 +373,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
             dropdownRender={menu => menu}
             showSearch={true}
           >
-            {Object.entries(GuardrailProviders).map(([key, value]) => (
+            {Object.entries(getGuardrailProviders()).map(([key, value]) => (
               <Option 
                 key={key} 
                 value={key}
@@ -436,6 +511,25 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
     );
   };
 
+
+  const renderOptionalParams = () => {
+    if (!selectedProvider || !providerParams) return null;
+    
+    console.log("guardrail_provider_map: ", guardrail_provider_map);
+    console.log("selectedProvider: ", selectedProvider);
+    const providerKey = guardrail_provider_map[selectedProvider]?.toLowerCase();
+    const providerFields = providerParams && providerParams[providerKey];
+    
+    if (!providerFields || !providerFields.optional_params) return null;
+    
+    return (
+      <GuardrailOptionalParams
+        optionalParams={providerFields.optional_params}
+        parentFieldKey="optional_params"
+      />
+    );
+  };
+
   const renderStepContent = () => {
     switch (currentStep) {
       case 0:
@@ -443,7 +537,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       case 1:
         if (shouldRenderPIIConfigSettings(selectedProvider)) {
           return renderPiiConfiguration();
-        }
+        } 
+        return renderOptionalParams();
       default:
         return null;
     }
@@ -460,14 +555,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
             Previous
           </Button>
         )}
-        {currentStep < 1 && (
+        {currentStep < 2 && (
           <Button 
             onClick={nextStep}
           >
             Next
           </Button>
         )}
-        {currentStep === 1 && (
+        {currentStep === 2 && (
           <Button 
             onClick={handleSubmit}
             loading={loading}
@@ -503,7 +598,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({
       >
         <Steps current={currentStep} className="mb-6">
           <Step title="Basic Info" />
-          <Step title={selectedProvider === 'PresidioPII' ? "PII Configuration" : "Provider Configuration"} />
+          <Step title={
+            shouldRenderPIIConfigSettings(selectedProvider) ? "PII Configuration" :
+            "Provider Configuration"
+          } />
         </Steps>
         
         {renderStepContent()}

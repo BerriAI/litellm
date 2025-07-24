@@ -1,3 +1,17 @@
+export interface Team {
+  team_id: string;
+  team_alias?: string;
+  organization_id?: string | null;
+}
+
+// Default no auth value
+export const AUTH_TYPE = {
+  NONE: "none",
+  API_KEY: "api_key",
+  BEARER_TOKEN: "bearer_token",
+  BASIC: "basic",
+};
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
@@ -14,16 +28,24 @@ export const handleTransport = (transport?: string | null): string => {
 
 export const handleAuth = (authType?: string | null): string => {
   if (authType === null || authType === undefined) {
-    return "none";
+    return AUTH_TYPE.NONE;
   }
 
   return authType;
 };
 
+export const mcpServerHasAuth = (authType?: string | null): boolean => {
+  return handleAuth(authType) !== AUTH_TYPE.NONE;
+} 
+
 // Define the structure for tool input schema properties
 export interface InputSchemaProperty {
     type: string;
     description?: string;
+    properties?: Record<string, InputSchemaProperty>; // For nested object properties
+    required?: string[]; // For required fields in nested objects
+    enum?: string[]; // For enum values
+    default?: any; // For default values
   }
   
   // Define the structure for the input schema of a tool
@@ -33,10 +55,18 @@ export interface InputSchemaProperty {
     required?: string[];
   }
   
+  // Define MCPServerCostInfo for cost tracking
+  export interface MCPServerCostInfo {
+    default_cost_per_query?: number | null;
+    tool_name_to_cost_per_query?: Record<string, number | null>;
+  }
+
   // Define MCP provider info
   export interface MCPInfo {
     server_name: string;
+    description?: string;
     logo_url?: string;
+    mcp_server_cost_info?: MCPServerCostInfo | null;
   }
   
   // Define the structure for a single MCP tool
@@ -89,6 +119,7 @@ export interface InputSchemaProperty {
   export interface MCPToolsViewerProps {
     serverId: string;
     accessToken: string | null;
+    auth_type?: string | null;
     userRole: string | null;
     userID: string | null;
   }
@@ -101,10 +132,13 @@ export interface MCPServer {
   transport?: string | null;
   spec_version?: string | null;
   auth_type?: string | null;
+  mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;
   updated_at: string;
   updated_by: string;
+  teams?: Team[];
+  mcp_access_groups?: string[];
 }
 
 export interface MCPServerProps {

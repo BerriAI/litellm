@@ -124,6 +124,8 @@ class ScimTransformations:
         # Get team members
         scim_members: List[SCIMMember] = []
         for member in team.members_with_roles or []:
+            if isinstance(member, dict):
+                member = Member(**member)
             scim_members.append(
                 SCIMMember(
                     value=ScimTransformations._get_scim_member_value(member),

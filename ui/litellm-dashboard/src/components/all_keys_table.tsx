@@ -38,11 +38,12 @@ import {
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
 import { Badge, Text } from "@tremor/react";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface AllKeysTableProps {
-  keys: KeyResponse[];
-  setKeys: Setter<KeyResponse[]>;
-  isLoading?: boolean;
+  keys: KeyResponse[]
+  setKeys: (keys: KeyResponse[] | ((prev: KeyResponse[]) => KeyResponse[])) => void
+  isLoading?: boolean
   pagination: {
     currentPage: number;
     totalPages: number;
@@ -63,9 +64,11 @@ interface AllKeysTableProps {
   refresh?: () => void;
   onSortChange?: (sortBy: string, sortOrder: 'asc' | 'desc') => void;
   currentSort?: {
-    sortBy: string;
-    sortOrder: 'asc' | 'desc';
-  };
+    sortBy: string
+    sortOrder: "asc" | "desc"
+  }
+  premiumUser: boolean
+  setAccessToken?: (token: string) => void
 }
 
 // Define columns similar to our logs table
@@ -140,6 +143,8 @@ export function AllKeysTable({
   refresh,
   onSortChange,
   currentSort,
+  premiumUser,
+  setAccessToken,
 }: AllKeysTableProps) {
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [userList, setUserList] = useState<UserResponse[]>([]);
@@ -292,12 +297,15 @@ export function AllKeysTable({
       accessorKey: "user_id",
       header: "User ID",
       cell: (info) => {
-        const userId = info.getValue() as string;
-        return userId ? (
-          <Tooltip title={userId}>
-            <span>{userId.slice(0, 7)}...</span>
-          </Tooltip>
-        ) : "-";
+        const userId = info.getValue() as string | null;
+        if (userId && userId.length > 15) {
+          return (
+            <Tooltip title={userId}>
+              <span>{userId.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return userId ? userId : "-";
       },
     },
     {
@@ -314,8 +322,15 @@ export function AllKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       cell: (info) => {
-        const value = info.getValue();
-        return value ? value : "Unknown";
+        const value = info.getValue() as string | null;
+        if (value && value.length > 15) {
+          return (
+            <Tooltip title={value}>
+              <span>{value.slice(0, 7)}...</span>
+            </Tooltip>
+          );
+        }
+        return value;
       },
     },
     {
@@ -340,16 +355,19 @@ export function AllKeysTable({
       id: "spend",
       accessorKey: "spend",
       header: "Spend (USD)",
-      cell: (info) => Number(info.getValue()).toFixed(4),
+      cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
       header: "Budget (USD)",
-      cell: (info) =>
-        info.getValue() !== null && info.getValue() !== undefined
-          ? info.getValue()
-          : "Unlimited",
+      cell: (info) => {
+        const maxBudget = info.getValue() as number | null;
+        if (maxBudget === null) {
+          return "Unlimited";
+        }
+        return `$${formatNumberWithCommas(maxBudget)}`;
+      },
     },
     {
       id: "budget_reset_at",
@@ -598,14 +616,18 @@ export function AllKeysTable({
               }
               return key
             }))
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after an update
           }}
           onDelete={() => {
             setKeys(keys => keys.filter(key => key.token !== selectedKeyId))
+            if (refresh) refresh(); // Minimal fix: refresh the full key list after a delete
           }}
           accessToken={accessToken}
           userID={userID}
           userRole={userRole}
           teams={allTeams}
+          premiumUser={premiumUser}
+          setAccessToken={setAccessToken}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">

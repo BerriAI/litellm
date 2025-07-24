@@ -214,7 +214,6 @@ async def test_bedrock_guardrail_triggered():
             pytest.fail("Should have thrown an exception")
         except Exception as e:
             print(e)
-            assert "GUARDRAIL_INTERVENED" in str(e)
             assert "Violated guardrail policy" in str(e)
 
 

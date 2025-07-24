@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 
 
 class LiteLLM_UserScimMetadata(BaseModel):
@@ -22,8 +22,8 @@ class SCIMResource(BaseModel):
 
 
 class SCIMUserName(BaseModel):
-    familyName: str
-    givenName: str
+    familyName: Optional[str] = None
+    givenName: Optional[str] = None
     formatted: Optional[str] = None
     middleName: Optional[str] = None
     honorificPrefix: Optional[str] = None
@@ -43,8 +43,8 @@ class SCIMUserGroup(BaseModel):
 
 
 class SCIMUser(SCIMResource):
-    userName: str
-    name: SCIMUserName
+    userName: Optional[str] = None
+    name: Optional[SCIMUserName] = None
     displayName: Optional[str] = None
     active: bool = True
     emails: Optional[List[SCIMUserEmail]] = None
@@ -72,11 +72,43 @@ class SCIMListResponse(BaseModel):
 
 # SCIM PATCH Operation Models
 class SCIMPatchOperation(BaseModel):
-    op: Literal["add", "remove", "replace"]
+    op: str
     path: Optional[str] = None
     value: Optional[Any] = None
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def normalize_op(cls, v):
+        if isinstance(v, str):
+            v_lower = v.lower()
+            if v_lower not in {"add", "remove", "replace"}:
+                raise ValueError("op must be add, remove, or replace")
+            return v_lower
+        return v
 
 
 class SCIMPatchOp(BaseModel):
     schemas: List[str] = ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]
     Operations: List[SCIMPatchOperation]
+
+
+# SCIM Service Provider Configuration Models
+class SCIMFeature(BaseModel):
+    supported: bool
+    maxOperations: Optional[int] = None
+    maxPayloadSize: Optional[int] = None
+    maxResults: Optional[int] = None
+
+
+class SCIMServiceProviderConfig(BaseModel):
+    schemas: List[str] = [
+        "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
+    ]
+    patch: SCIMFeature = SCIMFeature(supported=True)
+    bulk: SCIMFeature = SCIMFeature(supported=False)
+    filter: SCIMFeature = SCIMFeature(supported=False)
+    changePassword: SCIMFeature = SCIMFeature(supported=False)
+    sort: SCIMFeature = SCIMFeature(supported=False)
+    etag: SCIMFeature = SCIMFeature(supported=False)
+    authenticationSchemes: Optional[List[Dict[str, Any]]] = None
+    meta: Optional[Dict[str, Any]] = None

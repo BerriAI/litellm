@@ -195,6 +195,7 @@ async def new_end_user(
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     - spend: Optional[float] - Specify initial spend for a given customer.
+    - budget_reset_at: Optional[str] - Specify the date and time when the budget should be reset.
     
     
     - Allow specifying allowed regions 

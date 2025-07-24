@@ -570,7 +570,7 @@ async def test_proxy_all_models():
         await chat_completion(
             session=session,
             key=LITELLM_MASTER_KEY,
-            model="anthropic/claude-3-sonnet-20240229",
+            model="anthropic/claude-3-5-sonnet-latest",
         )
 
 

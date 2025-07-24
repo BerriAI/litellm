@@ -1,7 +1,22 @@
-# Attribute Management changes to Users
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
 
-Call management endpoints on behalf of a user. (Useful when connecting proxy to your development platform).
 
+# ✨ Audit Logs
+
+<Image 
+  img={require('../../img/release_notes/ui_audit_log.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
+As a Proxy Admin, you can check if and when a entity (key, team, user, model) was created, updated, deleted, or regenerated, along with who performed the action. This is useful for auditing and compliance.
+
+LiteLLM tracks changes to the following entities and actions:
+
+- **Entities:** Keys, Teams, Users, Models
+- **Actions:** Create, Update, Delete, Regenerate
 
 :::tip
 
@@ -9,14 +24,45 @@ Requires Enterprise License, Get in touch with us [here](https://calendly.com/d/
 
 :::
 
-## 1. Switch on audit Logs 
+## Usage
+
+### 1. Switch on audit Logs 
 Add `store_audit_logs` to your litellm config.yaml and then start the proxy
 ```shell
 litellm_settings:
   store_audit_logs: true
 ```
 
-## 2. Set `LiteLLM-Changed-By` in request headers
+### 2. Make a change to an entity
+
+In this example, we will delete a key.
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/key/delete' \
+    -H 'Authorization: Bearer sk-1234' \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "key": "d5265fc73296c8fea819b4525590c99beab8c707e465afdf60dab57e1fa145e4"
+    }'
+```
+
+### 3. View the audit log on LiteLLM UI
+
+On the LiteLLM UI, navigate to Logs -> Audit Logs. You should see the audit log for the key deletion.
+
+<Image 
+  img={require('../../img/key_delete.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
+## Advanced
+
+### Attribute Management changes to Users
+
+Call management endpoints on behalf of a user. (Useful when connecting proxy to your development platform).
+
+## 1. Set `LiteLLM-Changed-By` in request headers
 
 Set the 'user_id' in request headers, when calling a management endpoint. [View Full List](https://litellm-api.up.railway.app/#/team%20management).
 
@@ -36,7 +82,7 @@ curl -X POST 'http://0.0.0.0:4000/team/update' \
     }'
 ```
 
-## 3. Emitted Audit Log 
+## 2. Emitted Audit Log 
 
 ```bash
 {

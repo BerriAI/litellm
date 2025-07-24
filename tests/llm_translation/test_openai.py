@@ -456,16 +456,148 @@ class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.OPENAI
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-4o"])
 async def test_openai_pdf_url(model):
     from litellm.utils import return_raw_request, CallTypes
 
-    request = return_raw_request(CallTypes.completion, {
-        "model": model,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": "What is the first page of the PDF?"}, {"type": "file", "file": {"file_id": "https://arxiv.org/pdf/2303.08774"}}]}],
-    })
+    request = return_raw_request(
+        CallTypes.completion,
+        {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is the first page of the PDF?"},
+                        {
+                            "type": "file",
+                            "file": {"file_id": "https://arxiv.org/pdf/2303.08774"},
+                        },
+                    ],
+                }
+            ],
+        },
+    )
     print("request: ", request)
 
-    assert "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
+    assert (
+        "file_data" in request["raw_request_body"]["messages"][0]["content"][1]["file"]
+    )
 
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_codex_stream(sync_mode):
+    from litellm.main import stream_chunk_builder
+
+    kwargs = {
+        "model": "openai/codex-mini-latest",
+        "messages": [{"role": "user", "content": "Hey!"}],
+        "stream": True,
+    }
+
+    chunks = []
+    if sync_mode:
+        response = litellm.completion(**kwargs)
+        for chunk in response:
+            chunks.append(chunk)
+    else:
+        response = await litellm.acompletion(**kwargs)
+        async for chunk in response:
+            chunks.append(chunk)
+
+    complete_response = stream_chunk_builder(chunks=chunks)
+    print("complete_response: ", complete_response)
+
+    assert complete_response.choices[0].message.content is not None
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_codex(sync_mode):
+
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai-codex-mini-latest",
+                "litellm_params": {
+                    "model": "openai/codex-mini-latest",
+                },
+            }
+        ]
+    )
+
+    kwargs = {
+        "model": "openai-codex-mini-latest",
+        "messages": [{"role": "user", "content": "Hey!"}],
+    }
+
+    if sync_mode:
+        response = router.completion(**kwargs)
+    else:
+        response = await router.acompletion(**kwargs)
+    print("response: ", response)
+
+    assert response.choices[0].message.content is not None
+
+@pytest.mark.asyncio
+async def test_openai_via_gemini_streaming_bridge():
+    """
+    Test that the openai via gemini streaming bridge works correctly
+    """
+    from litellm import Router
+    from litellm.types.utils import ModelResponseStream
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                },
+                "model_info": {
+                    "version": 2,
+                },
+            }
+        ],
+        model_group_alias={"gemini-2.5-pro": "openai/gpt-3.5-turbo"},
+    )
+
+    response = await router.agenerate_content_stream(
+        model="openai/gpt-3.5-turbo",
+        contents=[
+            {
+                "parts": [{"text": "Write a long story about space exploration"}],
+                "role": "user",
+            }
+        ],
+        generationConfig={"maxOutputTokens": 500},
+    )
+
+    printed_chunks = []
+    async for chunk in response:
+        print("chunk: ", chunk)
+        printed_chunks.append(chunk)
+        assert not isinstance(chunk, ModelResponseStream)
+
+    assert len(printed_chunks) > 0
+
+def test_openai_deepresearch_model_bridge():
+    """
+    Test that the deepresearch model bridge works correctly
+    """
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="o3-deep-research-2025-06-26",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        tools=[
+            {"type": "web_search_preview"},
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+        ],
+    )
+
+    print("response: ", response)

@@ -43,8 +43,14 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendMetrics,
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
+    BulkUpdateUserRequest,
+    BulkUpdateUserResponse,
     UserListResponse,
+    UserUpdateResult,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
 
 router = APIRouter()
 
@@ -52,13 +58,18 @@ router = APIRouter()
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
-    auto_create_key = data_json.pop("auto_create_key", True)
-    if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
 
-    if litellm.default_internal_user_params:
+    auto_create_key = data_json.pop("auto_create_key", True)
+
+    if auto_create_key is False:
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
+
+    if litellm.default_internal_user_params and (
+        data.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and data.user_role != LitellmUserRoles.PROXY_ADMIN
+    ):
         for key, value in litellm.default_internal_user_params.items():
             if key == "available_teams":
                 continue
@@ -88,6 +99,7 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         ):
             data_json["budget_duration"] = litellm.internal_user_budget_duration
 
+    data_json.pop("teams", None)  # handled separately
     return data_json
 
 
@@ -110,14 +122,163 @@ async def _check_duplicate_user_email(
             raise Exception("Database not connected")
 
         existing_user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": user_email.strip()}
+            where={"user_email": {"equals": user_email.strip(), "mode": "insensitive"}}
         )
 
         if existing_user is not None:
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"User with email {user_email} already exists"},
+                detail={
+                    "error": f"User with email {existing_user.user_email} already exists"
+                },
             )
+
+
+async def _add_user_to_organizations(
+    user_id: str,
+    organizations: List[str],
+    prisma_client: "PrismaClient",
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    """
+    Add a user to organizations
+    """
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_add,
+    )
+
+    tasks = []
+    for organization_id in organizations:
+        tasks.append(
+            organization_member_add(
+                data=OrganizationMemberAddRequest(
+                    organization_id=organization_id,
+                    member=[
+                        OrgMember(
+                            user_id=user_id,
+                            role=LitellmUserRoles.INTERNAL_USER,
+                        )
+                    ],
+                ),
+                http_request=Request(
+                    scope={"type": "http", "path": "/user/new"},
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+        )
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _add_user_to_team(
+    user_id: str,
+    team_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    user_email: Optional[str] = None,
+    max_budget_in_team: Optional[float] = None,
+    user_role: Literal["user", "admin"] = "user",
+):
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    try:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=team_id,
+                member=Member(
+                    user_id=user_id,
+                    role=user_role,
+                    user_email=user_email,
+                ),
+                max_budget_in_team=max_budget_in_team,
+            ),
+            user_api_key_dict=user_api_key_dict,
+        )
+    except HTTPException as e:
+        if e.status_code == 400 and (
+            "already exists" in str(e) or "doesn't exist" in str(e)
+        ):
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                    str(e)
+                )
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+    except Exception as e:
+        if "already exists" in str(e) or "doesn't exist" in str(e):
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                    str(e)
+                )
+            )
+        elif (
+            isinstance(e, ProxyException)
+            and ProxyErrorTypes.team_member_already_in_team in e.type
+        ):
+            verbose_proxy_logger.debug(
+                "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
+                    str(e)
+                )
+            )
+        else:
+            raise e
+
+
+def check_if_default_team_set() -> Optional[Union[List[str], List[NewUserRequestTeam]]]:
+    if litellm.default_internal_user_params is None:
+        return None
+    teams = litellm.default_internal_user_params.get("teams")
+    if teams is not None:
+        if all(isinstance(team, str) for team in teams):
+            return teams
+        elif all(isinstance(team, dict) for team in teams):
+            return [
+                NewUserRequestTeam(
+                    team_id=team.get("team_id"),
+                    max_budget_in_team=team.get("max_budget_in_team"),
+                    user_role=team.get("user_role", "user"),
+                )
+                for team in teams
+            ]
+        else:
+            verbose_proxy_logger.error(
+                "Invalid team type in default internal user params: %s",
+                teams,
+            )
+    return None
+
+
+async def add_new_user_to_default_team(
+    user_id: str,
+    user_email: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    teams: Union[List[str], List[NewUserRequestTeam]],
+    prisma_client: "PrismaClient",
+):
+    tasks = []
+    for team in teams:
+        user_role: Literal["user", "admin"] = "user"
+        if isinstance(team, str):
+            team_id = team
+        elif isinstance(team, NewUserRequestTeam):
+            team_id = team.team_id
+            user_role = team.user_role
+        else:
+            raise ValueError(f"Invalid team type: {type(team)}")
+
+        tasks.append(
+            _add_user_to_team(
+                user_id=user_id,
+                team_id=team_id,
+                user_email=user_email,
+                user_api_key_dict=user_api_key_dict,
+                user_role=user_role,
+            )
+        )
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @router.post(
@@ -169,6 +330,7 @@ async def new_user(
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - organizations: List[str] - List of organization id's the user is a member of
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -188,58 +350,70 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import _license_check, prisma_client
 
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=400, detail=CommonProxyErrors.db_not_connected_error.value
+            )
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail=CommonProxyErrors.db_not_connected_error.value,
+            )
         # Check for duplicate email
         await _check_duplicate_user_email(data.user_email, prisma_client)
 
+        # Check if license is over limit
+        total_users = await prisma_client.db.litellm_usertable.count()
+        if total_users and _license_check.is_over_limit(total_users=total_users):
+            raise HTTPException(
+                status_code=403,
+                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+            )
+
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
+        teams = data.teams
+        if teams is None:
+            teams = check_if_default_team_set()
+        organization_ids = cast(
+            Optional[List[str]], data_json.pop("organizations", None)
+        )
+
         response = await generate_key_helper_fn(request_type="user", **data_json)
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
-        if data_json.get("team_id", None) is not None:
-            from litellm.proxy.management_endpoints.team_endpoints import (
-                team_member_add,
+        _team_id = data_json.get("team_id", None)
+        if _team_id is not None:
+            await _add_user_to_team(
+                user_id=cast(str, response.get("user_id")),
+                team_id=_team_id,
+                user_api_key_dict=user_api_key_dict,
+                user_email=data.user_email,
+                max_budget_in_team=None,
+                user_role="user",
+            )
+        elif teams is not None:
+            await add_new_user_to_default_team(
+                user_id=cast(str, response.get("user_id")),
+                user_email=data.user_email,
+                user_api_key_dict=user_api_key_dict,
+                teams=teams,
+                prisma_client=prisma_client,
             )
 
-            try:
-                await team_member_add(
-                    data=TeamMemberAddRequest(
-                        team_id=data_json.get("team_id", None),
-                        member=Member(
-                            user_id=data_json.get("user_id", None),
-                            role="user",
-                            user_email=data_json.get("user_email", None),
-                        ),
-                    ),
-                    user_api_key_dict=user_api_key_dict,
-                )
-            except HTTPException as e:
-                if e.status_code == 400 and (
-                    "already exists" in str(e) or "doesn't exist" in str(e)
-                ):
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                            str(e)
-                        )
-                    )
-                else:
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): Exception occured - {}".format(
-                            str(e)
-                        )
-                    )
-            except Exception as e:
-                if "already exists" in str(e) or "doesn't exist" in str(e):
-                    verbose_proxy_logger.debug(
-                        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user(): User already exists in team - {}".format(
-                            str(e)
-                        )
-                    )
-                else:
-                    raise e
+        user_id = cast(Optional[str], response.get("user_id", None))
+
+        if organization_ids is not None and user_id is not None:
+            await _add_user_to_organizations(
+                user_id=user_id,
+                organizations=organization_ids,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         special_keys = ["token", "token_id"]
         response_dict = {}
@@ -321,6 +495,26 @@ def get_team_from_list(
     return None
 
 
+def get_user_id_from_request(request: Request) -> Optional[str]:
+    """
+    Get the user id from the request
+    """
+    # Get the raw query string and parse it properly to handle + characters
+    user_id: Optional[str] = None
+    query_string = str(request.url.query)
+    if "user_id=" in query_string:
+        # Extract the user_id value from the raw query string
+        import re
+        from urllib.parse import unquote
+
+        match = re.search(r"user_id=([^&]*)", query_string)
+        if match:
+            # Use unquote instead of unquote_plus to preserve + characters
+            raw_user_id = unquote(match.group(1))
+            user_id = raw_user_id
+    return user_id
+
+
 @router.get(
     "/user/info",
     tags=["Internal User management"],
@@ -329,6 +523,7 @@ def get_team_from_list(
 )
 @management_endpoint_wrapper
 async def user_info(
+    request: Request,
     user_id: Optional[str] = fastapi.Query(
         default=None, description="User ID in the request parameters"
     ),
@@ -350,6 +545,12 @@ async def user_info(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        # Handle URL encoding properly by getting user_id from the original request
+        if (
+            user_id is not None and " " in user_id
+        ):  # if user_id is not None and contains a space, get the user_id from the request - this is to handle the case where the user_id is encoded in the url
+            user_id = get_user_id_from_request(request=request)
+
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
@@ -362,10 +563,12 @@ async def user_info(
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
+
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
         else:
             user_info = None
+
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []
@@ -576,9 +779,9 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -586,6 +789,143 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> di
             )
 
     return non_default_values
+
+
+async def _update_single_user_helper(
+    user_request: UpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Helper function to update a single user.
+    Used by both user_update and bulk_user_update endpoints.
+
+    Returns the updated user data or raises an exception on failure.
+    """
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+
+    if prisma_client is None:
+        raise Exception("Not connected to DB!")
+
+    # Validate user identifier
+    if not user_request.user_id and not user_request.user_email:
+        raise ValueError("Either user_id or user_email must be provided")
+
+    # Convert to data format expected by update logic
+    data_json: dict = user_request.model_dump(exclude_unset=True)
+
+    # Apply update transformations (reuse existing logic)
+    non_default_values = _update_internal_user_params(
+        data_json=data_json, data=user_request
+    )
+
+    # Get existing user data for audit logging and metadata preparation
+    existing_user_row: Optional[BaseModel] = None
+    if user_request.user_id:
+        existing_user_row = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_id": user_request.user_id}
+        )
+    elif user_request.user_email:
+        existing_user_row = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": user_request.user_email}
+        )
+
+    if existing_user_row is not None:
+        existing_user_row = LiteLLM_UserTable(
+            **existing_user_row.model_dump(exclude_none=True)
+        )
+
+    existing_metadata = (
+        cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
+        if existing_user_row is not None
+        else {}
+    )
+
+    non_default_values = prepare_metadata_fields(
+        data=user_request,
+        non_default_values=non_default_values,
+        existing_metadata=existing_metadata or {},
+    )
+
+    # Perform the update
+    response: Optional[Dict[str, Any]] = None
+
+    if user_request.user_id and len(user_request.user_id) > 0:
+        non_default_values["user_id"] = user_request.user_id
+        response = await prisma_client.update_data(
+            user_id=user_request.user_id,
+            data=non_default_values,
+            table_name="user",
+        )
+    elif user_request.user_email:
+        # Handle email-based updates
+        existing_user_rows = await prisma_client.get_data(
+            key_val={"user_email": user_request.user_email},
+            table_name="user",
+            query_type="find_all",
+        )
+
+        if (
+            existing_user_rows
+            and isinstance(existing_user_rows, list)
+            and len(existing_user_rows) > 0
+        ):
+            for existing_user in existing_user_rows:
+                non_default_values["user_id"] = existing_user.user_id
+                response = await prisma_client.update_data(
+                    user_id=existing_user.user_id,
+                    data=non_default_values,
+                    table_name="user",
+                )
+                break  # Update first matching user
+        else:
+            # Create new user if not found
+            non_default_values["user_id"] = str(uuid.uuid4())
+            non_default_values["user_email"] = user_request.user_email
+            response = await prisma_client.insert_data(
+                data=non_default_values, table_name="user"
+            )
+
+    # Create audit log for successful update
+    if response is not None:
+        try:
+            updated_user_row = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_id": response["user_id"]}
+            )
+
+            if updated_user_row:
+                user_row_typed = LiteLLM_UserTable(
+                    **updated_user_row.model_dump(exclude_none=True)
+                )
+
+                # Create audit log asynchronously
+                asyncio.create_task(
+                    UserManagementEventHooks.create_internal_user_audit_log(
+                        user_id=user_row_typed.user_id,
+                        action="updated",
+                        litellm_changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        before_value=(
+                            existing_user_row.model_dump_json(exclude_none=True)
+                            if existing_user_row
+                            else None
+                        ),
+                        after_value=user_row_typed.model_dump_json(exclude_none=True),
+                    )
+                )
+        except Exception as audit_error:
+            verbose_proxy_logger.warning(
+                f"Failed to create audit log for user {response.get('user_id')}: {audit_error}"
+            )
+
+    if response is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Failed to update user"},
+        )
+    return response
 
 
 @router.post(
@@ -644,116 +984,13 @@ async def user_update(
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
-
     try:
-        data_json: dict = data.model_dump(exclude_unset=True)
-        # get the row from db
-        if prisma_client is None:
-            raise Exception("Not connected to DB!")
-
-        # get non default values for key
-        non_default_values = _update_internal_user_params(
-            data_json=data_json, data=data
-        )
-
-        existing_user_row: Optional[BaseModel] = None
-        if data.user_id is not None:
-            existing_user_row = await prisma_client.db.litellm_usertable.find_first(
-                where={"user_id": data.user_id}
-            )
-            if existing_user_row is not None:
-                existing_user_row = LiteLLM_UserTable(
-                    **existing_user_row.model_dump(exclude_none=True)
-                )
-
-        existing_metadata = (
-            cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
-            if existing_user_row is not None
-            else {}
-        )
-
-        non_default_values = prepare_metadata_fields(
-            data=data,
-            non_default_values=non_default_values,
-            existing_metadata=existing_metadata or {},
-        )
-
-        ## ADD USER, IF NEW ##
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
-        response: Optional[Any] = None
-        if data.user_id is not None and len(data.user_id) > 0:
-            non_default_values["user_id"] = data.user_id  # type: ignore
-            verbose_proxy_logger.debug("In update user, user_id condition block.")
-            response = await prisma_client.update_data(
-                user_id=data.user_id,
-                data=non_default_values,
-                table_name="user",
-            )
-            verbose_proxy_logger.debug(
-                f"received response from updating prisma client. response={response}"
-            )
-        elif data.user_email is not None:
-            non_default_values["user_id"] = str(uuid.uuid4())
-            non_default_values["user_email"] = data.user_email
-            ## user email is not unique acc. to prisma schema -> future improvement
-            ### for now: check if it exists in db, if not - insert it
-            existing_user_rows = await prisma_client.get_data(
-                key_val={"user_email": data.user_email},
-                table_name="user",
-                query_type="find_all",
-            )
-            if existing_user_rows is None or (
-                isinstance(existing_user_rows, list) and len(existing_user_rows) == 0
-            ):
-                response = await prisma_client.insert_data(
-                    data=non_default_values, table_name="user"
-                )
-            elif isinstance(existing_user_rows, list) and len(existing_user_rows) > 0:
-                for existing_user in existing_user_rows:
-                    response = await prisma_client.update_data(
-                        user_id=existing_user.user_id,
-                        data=non_default_values,
-                        table_name="user",
-                    )
-
-        if response is not None:  # emit audit log
-            try:
-                user_row: BaseModel = (
-                    await prisma_client.db.litellm_usertable.find_first(
-                        where={"user_id": response["user_id"]}
-                    )
-                )
-
-                user_row_litellm_typed = LiteLLM_UserTable(
-                    **user_row.model_dump(exclude_none=True)
-                )
-
-                asyncio.create_task(
-                    UserManagementEventHooks.create_internal_user_audit_log(
-                        user_id=user_row_litellm_typed.user_id,
-                        action="updated",
-                        litellm_changed_by=user_api_key_dict.user_id,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=(
-                            existing_user_row.model_dump_json(exclude_none=True)
-                            if existing_user_row
-                            else None
-                        ),
-                        after_value=user_row_litellm_typed.model_dump_json(
-                            exclude_none=True
-                        ),
-                    )
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "Unable to create audit log for user on `/user/update` - {}".format(
-                        str(e)
-                    )
-                )
-        return response  # type: ignore
-        # update based on remaining passed in values
+        response = await _update_single_user_helper(
+            user_request=data,
+            user_api_key_dict=user_api_key_dict,
+        )
+        return response
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_update(): Exception occured - {}".format(
@@ -776,6 +1013,131 @@ async def user_update(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@router.post(
+    "/user/bulk_update",
+    tags=["Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkUpdateUserResponse,
+)
+@management_endpoint_wrapper
+async def bulk_user_update(
+    data: BulkUpdateUserRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Bulk update multiple users at once.
+    
+    This endpoint allows updating multiple users in a single request. Each user update
+    is processed independently - if some updates fail, others will still succeed.
+    
+    Parameters:
+    - users: List[UpdateUserRequest] - List of user update requests
+    
+    Returns:
+    - results: List of individual update results
+    - total_requested: Total number of users requested for update
+    - successful_updates: Number of successful updates
+    - failed_updates: Number of failed updates
+    
+    Example request:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/bulk_update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "users": [
+            {
+                "user_id": "user1",
+                "user_role": "internal_user",
+                "max_budget": 100.0
+            },
+            {
+                "user_email": "user2@example.com", 
+                "user_role": "internal_user_viewer",
+                "max_budget": 50.0
+            }
+        ]
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected"},
+        )
+
+    if not data.users:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "At least one user update request is required"},
+        )
+
+    # Limit batch size to prevent overwhelming the system
+    MAX_BATCH_SIZE = 100
+    if len(data.users) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Maximum {MAX_BATCH_SIZE} users can be updated at once"},
+        )
+
+    results: List[UserUpdateResult] = []
+    successful_updates = 0
+    failed_updates = 0
+
+    # Process each user update independently
+    for user_request in data.users:
+        try:
+            response = await _update_single_user_helper(
+                user_request=user_request,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+            # Record success
+            results.append(
+                UserUpdateResult(
+                    user_id=(
+                        response.get("user_id") if response else user_request.user_id
+                    ),
+                    user_email=user_request.user_email,
+                    success=True,
+                    updated_user=response,
+                )
+            )
+            successful_updates += 1
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
+            )
+            # Record failure
+            error_message = str(e)
+            verbose_proxy_logger.error(
+                f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
+            )
+
+            results.append(
+                UserUpdateResult(
+                    user_id=user_request.user_id,
+                    user_email=user_request.user_email,
+                    success=False,
+                    error=error_message,
+                )
+            )
+            failed_updates += 1
+
+    return BulkUpdateUserResponse(
+        results=results,
+        total_requested=len(data.users),
+        successful_updates=successful_updates,
+        failed_updates=failed_updates,
+    )
 
 
 async def get_user_key_counts(
@@ -1222,13 +1584,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:
@@ -1266,16 +1628,17 @@ def update_breakdown_metrics(
     """Updates breakdown metrics for a single record using the existing update_metrics function"""
 
     # Update model breakdown
-    if record.model not in breakdown.models:
-        breakdown.models[record.model] = MetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=model_metadata.get(
-                record.model, {}
-            ),  # Add any model-specific metadata here
+    if record.model:
+        if record.model not in breakdown.models:
+            breakdown.models[record.model] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=model_metadata.get(
+                    record.model, {}
+                ),  # Add any model-specific metadata here
+            )
+        breakdown.models[record.model].metrics = update_metrics(
+            breakdown.models[record.model].metrics, record
         )
-    breakdown.models[record.model].metrics = update_metrics(
-        breakdown.models[record.model].metrics, record
-    )
 
     # Update provider breakdown
     provider = record.custom_llm_provider or "unknown"

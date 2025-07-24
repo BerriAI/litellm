@@ -4,7 +4,7 @@ Pass-through endpoints for Bedrock - call provider-specific endpoint, in native 
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Cost Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
+| Cost Tracking | ✅ | For `/invoke` and `/converse` endpoints |
 | Logging | ✅ | works across all integrations |
 | End-user Tracking | ❌ | [Tell us if you need this](https://github.com/BerriAI/litellm/issues/new) |
 | Streaming | ✅ | |

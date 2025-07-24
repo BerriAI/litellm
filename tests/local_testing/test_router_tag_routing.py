@@ -116,11 +116,21 @@ async def test_router_free_paid_tier_embeddings():
                 },
                 "model_info": {"id": "very-expensive-model"},
             },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default"],
+                    "mock_response": ["1", "2", "3"],
+                },
+                "model_info": {"id": "default-model"},
+            },
         ],
         enable_tag_filtering=True,
     )
 
-    for _ in range(1):
+    for _ in range(5):
         # this should pick model with id == very-cheap-model
         response = await router.aembedding(
             model="gpt-4",
@@ -136,7 +146,7 @@ async def test_router_free_paid_tier_embeddings():
         assert response_extra_info["model_id"] == "very-cheap-model"
 
     for _ in range(5):
-        # this should pick model with id == very-cheap-model
+        # this should pick model with id == very-expensive-model
         response = await router.aembedding(
             model="gpt-4",
             input="Tell me a joke.",
@@ -219,6 +229,22 @@ async def test_default_tagged_deployments():
 
         assert response_extra_info["model_id"] == "default-model"
 
+    for _ in range(5):
+        # requests with invalid tags, this should pick model with id == "default-model"
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Tell me a joke."}],
+            metadata={"tags": ["invalid-tag"]},
+        )
+
+        print("Response: ", response)
+
+        response_extra_info = response._hidden_params
+        print("response_extra_info: ", response_extra_info)
+
+        assert response_extra_info["model_id"] == "default-model"
+
+
 
 @pytest.mark.asyncio()
 async def test_error_from_tag_routing():
@@ -288,3 +314,4 @@ def test_tag_routing_with_list_of_tags():
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"])
     assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamC"])
     assert not is_valid_deployment_tag(["teamA", "teamB"], [])
+    assert not is_valid_deployment_tag(["default"], ["teamA"])

@@ -296,6 +296,12 @@ class OllamaChatConfig(BaseConfig):
                 cast(dict, m)["tool_calls"] = new_tools
             new_messages.append(m)
 
+        # Load Config
+        config = self.get_config()
+        for k, v in config.items():
+            if k not in optional_params:
+                optional_params[k] = v
+
         data = {
             "model": model,
             "messages": new_messages,
@@ -406,6 +412,15 @@ class OllamaChatConfig(BaseConfig):
 
 
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
+    def _is_function_call_complete(self, function_args: Union[str, dict]) -> bool:
+        if isinstance(function_args, dict):
+            return True
+        try:
+            json.loads(function_args)
+            return True
+        except Exception:
+            return False
+
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
             """
@@ -438,9 +453,21 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             """
             from litellm.types.utils import Delta, StreamingChoices
 
+            # process tool calls - if complete function arg - add id to tool call
+            tool_calls = chunk["message"].get("tool_calls")
+            if tool_calls is not None:
+                for tool_call in tool_calls:
+                    function_args = tool_call.get("function").get("arguments")
+                    if function_args is not None and len(function_args) > 0:
+                        is_function_call_complete = self._is_function_call_complete(
+                            function_args
+                        )
+                        if is_function_call_complete:
+                            tool_call["id"] = str(uuid.uuid4())
+
             delta = Delta(
                 content=chunk["message"].get("content", ""),
-                tool_calls=chunk["message"].get("tool_calls"),
+                tool_calls=tool_calls,
             )
 
             if chunk["done"] is True:

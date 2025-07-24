@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Guardrails.ai
+# Guardrails AI
 
-Use [Guardrails.ai](https://www.guardrailsai.com/) to add checks to LLM output.
+Use Guardrails AI ([guardrailsai.com](https://www.guardrailsai.com/)) to add checks to LLM output.
 
 ## Pre-requisites
 
@@ -74,7 +74,7 @@ Use this to control what guardrails run per project. In this tutorial we only wa
 curl -X POST 'http://0.0.0.0:4000/key/generate' \
     -H 'Authorization: Bearer sk-1234' \
     -H 'Content-Type: application/json' \
-    -D '{
+    -d '{
             "guardrails": ["guardrails_ai-guard"]
         }
     }'

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.proxy.anthropic_endpoints.endpoints import async_data_generator_anthropic
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 
 class TestAnthropicEndpoints(unittest.TestCase):
@@ -38,7 +38,7 @@ class TestAnthropicEndpoints(unittest.TestCase):
         # Execute
         result = [
             chunk
-            async for chunk in async_data_generator_anthropic(
+            async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
                 response=mock_response,
                 user_api_key_dict=mock_user_api_key_dict,
                 request_data=mock_request_data,
@@ -66,7 +66,3 @@ class TestAnthropicEndpoints(unittest.TestCase):
         assert (
             mock_safe_dumps.call_count == 2
         )  # Called twice, once for each dict object
-
-
-if __name__ == "__main__":
-    unittest.main()

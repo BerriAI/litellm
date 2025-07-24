@@ -22,7 +22,7 @@ import openai
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments, _should_run_cooldown_logic
 from litellm.types.router import (
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
@@ -119,6 +119,119 @@ async def test_dynamic_cooldowns():
 
     assert "cooldown_time" in tmp_mock.call_args[0][0]["litellm_params"]
     assert tmp_mock.call_args[0][0]["litellm_params"]["cooldown_time"] == 0
+
+
+@pytest.mark.asyncio
+async def test_cooldown_time_zero_uses_zero_not_default():
+    """
+    Test that when cooldown_time=0 is passed, it uses 0 instead of the default cooldown time
+    AND that the early exit logic prevents cooldown entirely
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "cooldown_time": 0,
+                },
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                },
+            },
+        ],
+        cooldown_time=300,  # Default cooldown time is 300 seconds
+        num_retries=0,
+    )
+
+    # Mock the add_deployment_to_cooldown method to verify it's NOT called
+    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown") as mock_add_cooldown:
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except litellm.RateLimitError:
+            pass
+
+        # Verify that add_deployment_to_cooldown was NOT called due to early exit
+        mock_add_cooldown.assert_not_called()
+    
+    # Also verify the deployment is not in cooldown
+    cooldown_list = await _async_get_cooldown_deployments(
+        litellm_router_instance=router, parent_otel_span=None
+    )
+    assert len(cooldown_list) == 0
+    
+    # Verify the deployment is still healthy and available
+    healthy_deployments, _ = await router._async_get_healthy_deployments(
+        model="gpt-3.5-turbo", parent_otel_span=None
+    )
+    assert len(healthy_deployments) == 1
+
+
+def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
+    """
+    Unit test for _should_run_cooldown_logic to verify early exit when time_to_cooldown is 0
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+                "model_info": {
+                    "id": "test-deployment-id",
+                },
+            }
+        ],
+        cooldown_time=300,
+    )
+    
+    # Test with time_to_cooldown = 0 - should return False (don't run cooldown logic)
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id",
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=0.0
+    )
+    assert result is False, "Should not run cooldown logic when time_to_cooldown is 0"
+    
+    # Test with very small time_to_cooldown (effectively 0) - should return False
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id",
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=1e-10
+    )
+    assert result is False, "Should not run cooldown logic when time_to_cooldown is effectively 0"
+    
+    # Test with None time_to_cooldown - should return True (use default cooldown logic)
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id", 
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=None
+    )
+    assert result is True, "Should run cooldown logic when time_to_cooldown is None"
+    
+    # Test with positive time_to_cooldown - should return True
+    result = _should_run_cooldown_logic(
+        litellm_router_instance=router,
+        deployment="test-deployment-id",
+        exception_status=429,
+        original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
+        time_to_cooldown=60.0
+    )
+    assert result is True, "Should run cooldown logic when time_to_cooldown is positive"
 
 
 @pytest.mark.parametrize("num_deployments", [1, 2])

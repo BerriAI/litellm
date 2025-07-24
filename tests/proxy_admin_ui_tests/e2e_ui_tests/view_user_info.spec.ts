@@ -24,10 +24,6 @@ test.describe("User Info View", () => {
     // Click on the user ID
     await firstUserIdCell.click();
 
-    // Wait for user info view to load
-    await page.waitForSelector('h1:has-text("User")');
-    console.log("User info view loaded");
-
     // Check for tabs
     await expect(page.locator('button:has-text("Overview")')).toBeVisible();
     await expect(page.locator('button:has-text("Details")')).toBeVisible();
@@ -43,7 +39,10 @@ test.describe("User Info View", () => {
     await page.locator('button:has-text("Back to Users")').click();
 
     // Verify we're back on the users page
-    await expect(page.locator('h1:has-text("Users")')).toBeVisible();
+    await expect(page.locator("table")).toBeVisible();
+    await expect(
+      page.locator('input[placeholder="Search by email..."]')
+    ).toBeVisible();
   });
 
   // test("should handle user deletion", async ({ page }) => {

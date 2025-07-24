@@ -14,11 +14,21 @@ import pytest
 
 import litellm
 from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
     SSOUserDefinedValues,
+    UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    ExperimentalUIJWTToken,
+    _can_object_call_vector_stores,
+    get_user_object,
+    vector_store_access_check,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.utils import get_utc_datetime
 
@@ -178,3 +188,185 @@ async def test_default_internal_user_params_with_get_user_object(monkeypatch):
     assert creation_args["models"] == ["gpt-4", "claude-3-opus"]
     assert creation_args["max_budget"] == 200.0
     assert creation_args["user_role"] == "internal_user"
+
+
+# Vector Store Auth Check Tests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prisma_client,vector_store_registry,expected_result",
+    [
+        (None, MagicMock(), True),  # No prisma client
+        (MagicMock(), None, True),  # No vector store registry
+        (MagicMock(), MagicMock(), True),  # No vector stores to run
+    ],
+)
+async def test_vector_store_access_check_early_returns(
+    prisma_client, vector_store_registry, expected_result
+):
+    """Test vector_store_access_check returns True for early exit conditions"""
+    request_body = {"messages": [{"role": "user", "content": "test"}]}
+
+    if vector_store_registry:
+        vector_store_registry.get_vector_store_ids_to_run.return_value = None
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client), patch(
+        "litellm.vector_store_registry", vector_store_registry
+    ):
+        result = await vector_store_access_check(
+            request_body=request_body,
+            team_object=None,
+            valid_token=None,
+        )
+
+    assert result == expected_result
+
+
+@pytest.mark.parametrize(
+    "object_permissions,vector_store_ids,should_raise,error_type",
+    [
+        (None, ["store-1"], False, None),  # None permissions - should pass
+        (
+            {"vector_stores": []},
+            ["store-1"],
+            False,
+            None,
+        ),  # Empty vector_stores - should pass (access to all)
+        (
+            {"vector_stores": ["store-1", "store-2"]},
+            ["store-1"],
+            False,
+            None,
+        ),  # Has access
+        (
+            {"vector_stores": ["store-1", "store-2"]},
+            ["store-3"],
+            True,
+            ProxyErrorTypes.key_vector_store_access_denied,
+        ),  # No access
+        (
+            {"vector_stores": ["store-1"]},
+            ["store-1", "store-3"],
+            True,
+            ProxyErrorTypes.team_vector_store_access_denied,
+        ),  # Partial access
+    ],
+)
+def test_can_object_call_vector_stores_scenarios(
+    object_permissions, vector_store_ids, should_raise, error_type
+):
+    """Test _can_object_call_vector_stores with various permission scenarios"""
+    # Convert dict to object if not None
+    if object_permissions is not None:
+        mock_permissions = MagicMock()
+        mock_permissions.vector_stores = object_permissions["vector_stores"]
+        object_permissions = mock_permissions
+
+    object_type = (
+        "key"
+        if error_type == ProxyErrorTypes.key_vector_store_access_denied
+        else "team"
+    )
+
+    if should_raise:
+        with pytest.raises(ProxyException) as exc_info:
+            _can_object_call_vector_stores(
+                object_type=object_type,
+                vector_store_ids_to_run=vector_store_ids,
+                object_permissions=object_permissions,
+            )
+        assert exc_info.value.type == error_type
+    else:
+        result = _can_object_call_vector_stores(
+            object_type=object_type,
+            vector_store_ids_to_run=vector_store_ids,
+            object_permissions=object_permissions,
+        )
+        assert result is True
+
+
+@pytest.mark.asyncio
+async def test_vector_store_access_check_with_permissions():
+    """Test vector_store_access_check with actual permission checking"""
+    request_body = {"tools": [{"type": "function", "function": {"name": "test"}}]}
+
+    # Test with valid token that has access
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        object_permission_id="perm-123",
+        models=["gpt-4"],
+        max_budget=100.0,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_permissions = MagicMock()
+    mock_permissions.vector_stores = ["store-1", "store-2"]
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=mock_permissions
+    )
+
+    mock_vector_store_registry = MagicMock()
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-1"]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
+    ):
+        result = await vector_store_access_check(
+            request_body=request_body,
+            team_object=None,
+            valid_token=valid_token,
+        )
+
+    assert result is True
+
+    # Test with denied access
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-3"]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=None,
+                valid_token=valid_token,
+            )
+
+        assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
+def test_can_object_call_model_with_alias():
+    """Test that can_object_call_model works with model aliases"""
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "[ip-approved] gpt-4o"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "[ip-approved] gpt-4o": {
+                "model": "gpt-3.5-turbo",
+                "hidden": True,
+            },
+        },
+    )
+
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["gpt-3.5-turbo"],
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    print(result)

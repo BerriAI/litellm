@@ -50,6 +50,14 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> Optional[str]:
         return model.replace("gemini/", "")
 
+    def process_model_name(self, models: List[Dict[str, str]]) -> List[str]:
+        litellm_model_names = []
+        for model in models:
+            stripped_model_name = model["name"].replace("models/", "")
+            litellm_model_name = "gemini/" + stripped_model_name
+            litellm_model_names.append(litellm_model_name)
+        return litellm_model_names
+
     def get_models(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
@@ -72,11 +80,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
         models = response.json()["models"]
 
-        litellm_model_names = []
-        for model in models:
-            stripped_model_name = model["name"].strip("models/")
-            litellm_model_name = "gemini/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
+        litellm_model_names = self.process_model_name(models)
         return litellm_model_names
 
     def get_error_class(

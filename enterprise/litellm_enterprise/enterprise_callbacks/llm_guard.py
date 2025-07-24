@@ -19,8 +19,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import get_formatted_prompt
 
-litellm.set_verbose = True
-
 
 class _ENTERPRISE_LLMGuard(CustomLogger):
     # Class variables or attributes

@@ -242,3 +242,4 @@ def test_cache_read_input_tokens_retained():
 
     assert usage.cache_creation_input_tokens == 4
     assert usage.cache_read_input_tokens == 11775
+    assert usage.prompt_tokens_details.cached_tokens == 11775

@@ -1,6 +1,6 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 
 import httpx
 
@@ -10,9 +10,33 @@ from litellm.types.llms.openai import AllMessageValues
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.types.utils import ModelResponseStream
+
     Span = Union[_Span, Any]
 else:
     Span = Any
+
+
+def safe_divide_seconds(
+    seconds: float, 
+    denominator: float,
+    default: Optional[float] = None
+) -> Optional[float]:
+    """
+    Safely divide seconds by denominator, handling zero division.
+    
+    Args:
+        seconds: Time duration in seconds
+        denominator: The divisor (e.g., number of tokens)
+        default: Value to return if division by zero (defaults to None)
+        
+    Returns:
+        The result of the division as a float (seconds per unit), or default if denominator is zero
+    """
+    if denominator <= 0:
+        return default
+        
+    return float(seconds / denominator)
 
 
 def map_finish_reason(
@@ -68,6 +92,15 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
     return
+
+
+def remove_items_at_indices(items: Optional[List[Any]], indices: Iterable[int]) -> None:
+    """Remove items from a list in-place by index"""
+    if items is None:
+        return
+    for index in sorted(set(indices), reverse=True):
+        if 0 <= index < len(items):
+            items.pop(index)
 
 
 def add_missing_spend_metadata_to_litellm_metadata(
@@ -158,3 +191,15 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
         **additional_headers,
     }
     return additional_headers
+
+
+def preserve_upstream_non_openai_attributes(
+    model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
+):
+    """
+    Preserve non-OpenAI attributes from the original chunk.
+    """
+    expected_keys = set(model_response.model_fields.keys()).union({"usage"})
+    for key, value in original_chunk.model_dump().items():
+        if key not in expected_keys:
+            setattr(model_response, key, value)

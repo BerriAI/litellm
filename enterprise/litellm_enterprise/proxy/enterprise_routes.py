@@ -6,6 +6,7 @@ from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
 
 from .audit_logging_endpoints import router as audit_logging_router
 from .guardrails.endpoints import router as guardrails_router
+from .management_endpoints import management_endpoints_router
 from .utils import _should_block_robots
 from .vector_stores.endpoints import router as vector_stores_router
 
@@ -14,6 +15,7 @@ router.include_router(vector_stores_router)
 router.include_router(guardrails_router)
 router.include_router(email_events_router)
 router.include_router(audit_logging_router)
+router.include_router(management_endpoints_router)
 
 
 @router.get("/robots.txt")

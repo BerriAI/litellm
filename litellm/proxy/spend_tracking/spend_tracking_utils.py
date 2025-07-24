@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
@@ -91,9 +92,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata[
-        "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
@@ -213,6 +214,11 @@ def get_logging_payload(  # noqa: PLR0915
         else "[]"
     )
     if (
+        standard_logging_payload is not None
+        and standard_logging_payload.get("request_tags") is not None
+    ):  # use 'tags' from standard logging payload instead
+        request_tags = json.dumps(standard_logging_payload["request_tags"])
+    if (
         _is_master_key(api_key=api_key, _master_key=master_key)
         and general_settings.get("disable_adding_master_key_hash_to_db") is True
     ):
@@ -281,6 +287,13 @@ def get_logging_payload(  # noqa: PLR0915
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
+    mcp_namespaced_tool_name = None
+    mcp_tool_call_metadata = clean_metadata.get("mcp_tool_call_metadata", {})
+    if mcp_tool_call_metadata is not None:
+        mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
+            "namespaced_tool_name", None
+        )
+
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
             request_id=str(id),
@@ -293,7 +306,7 @@ def get_logging_payload(  # noqa: PLR0915
             model=kwargs.get("model", "") or "",
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
-            metadata=json.dumps(clean_metadata),
+            metadata=safe_dumps(clean_metadata),
             cache_key=cache_key,
             spend=kwargs.get("response_cost", 0),
             total_tokens=usage.get("total_tokens", standard_logging_total_tokens),
@@ -306,6 +319,7 @@ def get_logging_payload(  # noqa: PLR0915
             api_base=litellm_params.get("api_base", ""),
             model_group=_model_group,
             model_id=_model_id,
+            mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=kwargs.get("custom_llm_provider", ""),
             messages=_get_messages_for_spend_logs_payload(
@@ -540,8 +554,12 @@ def _get_response_for_spend_logs_payload(
 
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
     from litellm.proxy.proxy_server import general_settings
+    from litellm.secret_managers.main import get_secret_bool
 
-    return general_settings.get("store_prompts_in_spend_logs") is True
+    return (
+        general_settings.get("store_prompts_in_spend_logs") is True
+        or get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+    )
 
 
 def _get_status_for_spend_log(

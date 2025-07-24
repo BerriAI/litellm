@@ -43,7 +43,7 @@ class VertexAIBatchPrediction(VertexLLM):
             custom_llm_provider="vertex_ai",
         )
 
-        default_api_base = self.create_vertex_url(
+        default_api_base = self.create_vertex_batch_url(
             vertex_location=vertex_location or "us-central1",
             vertex_project=vertex_project or project_id,
         )
@@ -117,7 +117,7 @@ class VertexAIBatchPrediction(VertexLLM):
         )
         return vertex_batch_response
 
-    def create_vertex_url(
+    def create_vertex_batch_url(
         self,
         vertex_location: str,
         vertex_project: str,
@@ -145,7 +145,7 @@ class VertexAIBatchPrediction(VertexLLM):
             custom_llm_provider="vertex_ai",
         )
 
-        default_api_base = self.create_vertex_url(
+        default_api_base = self.create_vertex_batch_url(
             vertex_location=vertex_location or "us-central1",
             vertex_project=vertex_project or project_id,
         )

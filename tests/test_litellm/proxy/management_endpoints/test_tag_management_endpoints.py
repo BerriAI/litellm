@@ -26,6 +26,8 @@ async def test_create_and_get_tag():
     """
     # Mock the prisma client and _get_tags_config and _save_tags_config
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ) as mock_router, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
     ) as mock_get_tags, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
@@ -50,6 +52,7 @@ async def test_create_and_get_tag():
 
         # Test tag creation
         response = client.post("/tag/new", json=tag_data, headers=headers)
+        print(f"response: {response.text}")
         assert response.status_code == 200
         result = response.json()
         assert result["message"] == "Tag test-tag created successfully"
@@ -158,3 +161,93 @@ async def test_delete_tag():
 
         # Verify _save_tags_config was called without the deleted tag
         mock_save_tags.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_deployments_by_model_id():
+    """
+    Test get_deployments_by_model when model is found by model_id
+    """
+    from unittest.mock import Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_deployments_by_model,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    # Create a mock router
+    mock_router = Mock()
+
+    # Setup mock to return deployment by model_id
+    mock_deployment = Deployment(
+        model_name="gpt-3.5-turbo",
+        litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
+        model_info=ModelInfo(),
+    )
+    mock_router.get_deployment.return_value = mock_deployment
+
+    result = await get_deployments_by_model("model-123", mock_router)
+
+    assert len(result) == 1
+    assert result[0] == mock_deployment
+    mock_router.get_deployment.assert_called_once_with(model_id="model-123")
+
+
+@pytest.mark.asyncio
+async def test_get_deployments_by_model_name():
+    """
+    Test get_deployments_by_model when model is found by model_name
+    """
+    from unittest.mock import Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_deployments_by_model,
+    )
+    from litellm.types.router import Deployment
+
+    # Create a mock router
+    mock_router = Mock()
+
+    # Setup mock to not find by model_id but find by model_name
+    mock_router.get_deployment.return_value = None
+    mock_router.get_model_list.return_value = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-key"},
+            "model_info": {"id": "model-1", "description": "Test model"},
+        }
+    ]
+
+    result = await get_deployments_by_model("gpt-3.5-turbo", mock_router)
+
+    assert len(result) == 1
+    assert result[0].model_name == "gpt-3.5-turbo"
+    assert isinstance(result[0], Deployment)
+    mock_router.get_deployment.assert_called_once_with(model_id="gpt-3.5-turbo")
+    mock_router.get_model_list.assert_called_once_with(model_name="gpt-3.5-turbo")
+
+
+@pytest.mark.asyncio
+async def test_get_deployments_by_model_not_found():
+    """
+    Test get_deployments_by_model when model is not found
+    """
+    from unittest.mock import Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_deployments_by_model,
+    )
+
+    # Create a mock router
+    mock_router = Mock()
+
+    # Setup mock to not find model by either method
+    mock_router.get_deployment.return_value = None
+    mock_router.get_model_list.return_value = None
+
+    result = await get_deployments_by_model("nonexistent-model", mock_router)
+
+    assert len(result) == 0
+    assert result == []
+    mock_router.get_deployment.assert_called_once_with(model_id="nonexistent-model")
+    mock_router.get_model_list.assert_called_once_with(model_name="nonexistent-model")

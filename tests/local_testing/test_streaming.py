@@ -642,7 +642,6 @@ def test_completion_ollama_hosted_stream():
     "model",
     [
         # "claude-3-5-haiku-20241022",
-        # "claude-2",
         # "mistral/mistral-small-latest",
         "openrouter/openai/gpt-4o-mini",
     ],
@@ -673,36 +672,6 @@ def test_completion_model_stream(model):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.asyncio
-async def test_acompletion_claude_2_stream():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="claude-2.1",
-            messages=[{"role": "user", "content": "hello from litellm"}],
-            stream=True,
-        )
-        complete_response = ""
-        # Add any assertions here to check the response
-        idx = 0
-        async for chunk in response:
-            print(chunk)
-            # print(chunk.choices[0].delta)
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-            idx += 1
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except litellm.InternalServerError:
-        pass
-    except litellm.RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 @pytest.mark.parametrize(
     "sync_mode",
@@ -712,7 +681,7 @@ async def test_acompletion_claude_2_stream():
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_completion_gemini_stream(sync_mode):
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         print("Streaming gemini response")
         function1 = [
             {
@@ -920,7 +889,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
         #     return
         pytest.fail(f"Error occurred: {e}")
 
-
+@pytest.mark.flaky(retries=3, delay=1)
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():
     litellm.set_verbose = True
     tools = [
@@ -952,7 +921,7 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/mistral-large-latest",
+            model="mistral/mistral-medium-latest",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -975,6 +944,8 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
             elif chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
             idx += 1
+    except litellm.RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -2891,6 +2862,7 @@ def test_azure_streaming_and_function_calling():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         raise e
+
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():

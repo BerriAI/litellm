@@ -184,7 +184,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             return tools
 
         # if claude, convert to anthropic tool and then to databricks tool
-        anthropic_tools = self._map_tools(tools=tools)
+        anthropic_tools, _ = self._map_tools(
+            tools=tools
+        )  # unclear how mcp tool calling on databricks works
         databricks_tools = [
             cast(DatabricksTool, self.convert_anthropic_tool_to_databricks_tool(tool))
             for tool in anthropic_tools

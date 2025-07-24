@@ -44,6 +44,8 @@ import { InvitationLink } from "./onboarding_link";
 import SSOModals from "./SSOModals";
 import { ssoProviderConfigs } from './SSOModals';
 import SCIMConfig from "./SCIM";
+import UIAccessControlForm from "./UIAccessControlForm";
+import UsefulLinksManagement from "./useful_links_management";
 
 interface AdminPanelProps {
   searchParams: any;
@@ -53,6 +55,7 @@ interface AdminPanelProps {
   showSSOBanner: boolean;
   premiumUser: boolean;
   proxySettings?: any;
+  userRole?: string | null;
 }
 import { useBaseUrl } from "./constants";
 
@@ -62,12 +65,12 @@ import {
   Member,
   userGetAllUsersCall,
   User,
-  setCallbacksCall,
   invitationCreateCall,
   getPossibleUserRoles,
   addAllowedIP,
   getAllowedIPs,
   deleteAllowedIP,
+  getSSOSettings,
 } from "./networking";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -77,6 +80,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   showSSOBanner,
   premiumUser,
   proxySettings,
+  userRole,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -97,8 +101,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isAllowedIPModalVisible, setIsAllowedIPModalVisible] = useState(false);
   const [isAddIPModalVisible, setIsAddIPModalVisible] = useState(false);
   const [isDeleteIPModalVisible, setIsDeleteIPModalVisible] = useState(false);
+  const [isUIAccessControlModalVisible, setIsUIAccessControlModalVisible] = useState(false);
   const [allowedIPs, setAllowedIPs] = useState<string[]>([]);
   const [ipToDelete, setIPToDelete] = useState<string | null>(null);
+  const [ssoConfigured, setSsoConfigured] = useState<boolean>(false);
   const router = useRouter();
 
   const [possibleUIRoles, setPossibleUIRoles] = useState<null | Record<
@@ -116,6 +122,30 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   let nonSssoUrl = baseUrl;
   nonSssoUrl += "/fallback/login";
+
+  // Extract the SSO configuration check logic into a separate function for reuse
+  const checkSSOConfiguration = async () => {
+    if (accessToken && premiumUser) {
+      try {
+        const ssoData = await getSSOSettings(accessToken);
+        console.log("SSO data:", ssoData);
+        
+        // Check if any SSO provider is configured
+        if (ssoData && ssoData.values) {
+          const hasGoogleSSO = ssoData.values.google_client_id && ssoData.values.google_client_secret;
+          const hasMicrosoftSSO = ssoData.values.microsoft_client_id && ssoData.values.microsoft_client_secret;
+          const hasGenericSSO = ssoData.values.generic_client_id && ssoData.values.generic_client_secret;
+          
+          setSsoConfigured(hasGoogleSSO || hasMicrosoftSSO || hasGenericSSO);
+        } else {
+          setSsoConfigured(false);
+        }
+      } catch (error) {
+        console.error("Error checking SSO configuration:", error);
+        setSsoConfigured(false);
+      }
+    }
+  };
 
   const handleShowAllowedIPs = async () => {
     try {
@@ -186,6 +216,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleAddSSOOk = () => {
     setIsAddSSOModalVisible(false);
     form.resetFields();
+    // Refresh SSO configuration status
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const handleAddSSOCancel = () => {
@@ -194,19 +228,24 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleShowInstructions = (formValues: Record<string, any>) => {
-    handleAdminCreate(formValues);
-    handleSSOUpdate(formValues);
     setIsAddSSOModalVisible(false);
     setIsInstructionsModalVisible(true);
-    // Optionally, you can call handleSSOUpdate here with the formValues
   };
 
   const handleInstructionsOk = () => {
     setIsInstructionsModalVisible(false);
+    // Refresh SSO configuration status after instructions are closed
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const handleInstructionsCancel = () => {
     setIsInstructionsModalVisible(false);
+    // Refresh SSO configuration status after instructions are closed
+    if (accessToken && premiumUser) {
+      checkSSOConfiguration();
+    }
   };
 
   const roles = ["proxy_admin", "proxy_admin_viewer"];
@@ -267,6 +306,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
     fetchProxyAdminInfo();
   }, [accessToken]);
+
+  // Add new useEffect to check SSO configuration
+  useEffect(() => {
+    checkSSOConfiguration();
+  }, [accessToken, premiumUser]);
 
   const handleMemberUpdateOk = () => {
     setIsUpdateModalModalVisible(false);
@@ -493,33 +537,14 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const handleSSOUpdate = async (formValues: Record<string, any>) => {
-    if (accessToken == null) {
-      return;
-    }
-
-    const provider = formValues.sso_provider;
-    const config = ssoProviderConfigs[provider];
-    
-    const envVars: Record<string, string> = {
-      PROXY_BASE_URL: formValues.proxy_base_url,
-    };
-
-    // Add provider-specific environment variables using the configuration
-    if (config) {
-      Object.entries(config.envVarMap).forEach(([formKey, envKey]) => {
-        if (formValues[formKey]) {
-          envVars[envKey] = formValues[formKey];
-        }
-      });
-    }
-
-    const payload = {
-      environment_variables: envVars,
-    };
-    
-    setCallbacksCall(accessToken, payload);
+  const handleUIAccessControlOk = () => {
+    setIsUIAccessControlModalVisible(false);
   };
+
+  const handleUIAccessControlCancel = () => {
+    setIsUIAccessControlModalVisible(false);
+  };
+
   console.log(`admins: ${admins?.length}`);
   return (
     <div className="w-full m-2 mt-2 p-8">
@@ -529,17 +554,36 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <TabList>
           <Tab>Security Settings</Tab>
           <Tab>SCIM</Tab>
+          <Tab>Useful Links</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
             <Card>
               <Title level={4}> ✨ Security Settings</Title>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem', marginLeft: '0.5rem' }}>
                 <div>
-                  <Button onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}>Add SSO</Button>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}
+                  >
+                    {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
+                  </Button>
                 </div>
                 <div>
-                  <Button onClick={handleShowAllowedIPs}>Allowed IPs</Button>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={handleShowAllowedIPs}
+                  >
+                    Allowed IPs
+                  </Button>
+                </div>
+                <div>
+                  <Button 
+                    style={{ width: '150px' }}
+                    onClick={() => premiumUser === true ? setIsUIAccessControlModalVisible(true) : message.error("Only premium users can configure UI access control")}
+                  >
+                    UI Access Control
+                  </Button>
                 </div>
               </div>
             </Card>
@@ -554,6 +598,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 handleInstructionsOk={handleInstructionsOk}
                 handleInstructionsCancel={handleInstructionsCancel}
                 form={form}
+                accessToken={accessToken}
+                ssoConfigured={ssoConfigured}
               />
               <Modal
               title="Manage Allowed IP Addresses"
@@ -630,6 +676,24 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         >
           <p>Are you sure you want to delete the IP address: {ipToDelete}?</p>
         </Modal>
+
+        {/* UI Access Control Modal */}
+        <Modal
+          title="UI Access Control Settings"
+          visible={isUIAccessControlModalVisible}
+          width={600}
+          footer={null}
+          onOk={handleUIAccessControlOk}
+          onCancel={handleUIAccessControlCancel}
+        >
+          <UIAccessControlForm 
+            accessToken={accessToken} 
+            onSuccess={() => {
+              handleUIAccessControlOk();
+              message.success("UI Access Control settings updated successfully");
+            }} 
+          />
+        </Modal>
         </div>
         <Callout title="Login without SSO" color="teal">
           If you need to login without sso, you can access{" "}
@@ -643,6 +707,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               accessToken={accessToken} 
               userID={userID}
               proxySettings={proxySettings}
+            />
+          </TabPanel>
+          <TabPanel>
+            <UsefulLinksManagement 
+              accessToken={accessToken}
+              userRole={userRole || null}
             />
           </TabPanel>
         </TabPanels>

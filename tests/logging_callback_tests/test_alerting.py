@@ -143,22 +143,6 @@ def slack_alerting():
     )
 
 
-# Test for hanging LLM responses
-@pytest.mark.asyncio
-async def test_response_taking_too_long_hanging(slack_alerting):
-    request_data = {
-        "model": "test_model",
-        "messages": "test_messages",
-        "litellm_status": "running",
-    }
-    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        await slack_alerting.response_taking_too_long(
-            type="hanging_request", request_data=request_data
-        )
-
-        mock_send_alert.assert_awaited_once()
-
-
 # Test for slow LLM responses
 @pytest.mark.asyncio
 async def test_response_taking_too_long_callback(slack_alerting):

@@ -469,6 +469,7 @@ def retrieve_batch(
         raise e
 
 
+@client
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
@@ -481,6 +482,7 @@ async def alist_batches(
     """
     Async: List your organization's batches.
     """
+
     try:
         loop = asyncio.get_event_loop()
         kwargs["alist_batches"] = True
@@ -510,6 +512,7 @@ async def alist_batches(
         raise e
 
 
+@client
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,

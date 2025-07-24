@@ -15,7 +15,6 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import datetime
-import json
 import os
 import traceback
 import uuid
@@ -253,7 +252,8 @@ class DataDogLogger(
         standard_logging_object: StandardLoggingPayload,
         status: DataDogStatus,
     ) -> DatadogPayload:
-        json_payload = json.dumps(standard_logging_object, default=str)
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        json_payload = safe_dumps(standard_logging_object)
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
         dd_payload = DatadogPayload(
             ddsource=self._get_datadog_source(),
@@ -317,9 +317,9 @@ class DataDogLogger(
         """
 
         import gzip
-        import json
 
-        compressed_data = gzip.compress(json.dumps(data, default=str).encode("utf-8"))
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        compressed_data = gzip.compress(safe_dumps(data).encode("utf-8"))
         response = await self.async_client.post(
             url=self.intake_url,
             data=compressed_data,  # type: ignore
@@ -348,7 +348,8 @@ class DataDogLogger(
         try:
             _payload_dict = payload.model_dump()
             _payload_dict.update(event_metadata or {})
-            _dd_message_str = json.dumps(_payload_dict, default=str)
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+            _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
                 ddtags=self._get_datadog_tags(),
@@ -388,7 +389,8 @@ class DataDogLogger(
             _payload_dict = payload.model_dump()
             _payload_dict.update(event_metadata or {})
 
-            _dd_message_str = json.dumps(_payload_dict, default=str)
+            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+            _dd_message_str = safe_dumps(_payload_dict)
             _dd_payload = DatadogPayload(
                 ddsource=self._get_datadog_source(),
                 ddtags=self._get_datadog_tags(),
@@ -418,7 +420,6 @@ class DataDogLogger(
 
         (Not Recommended) If you want this to get logged set `litellm.datadog_use_v1 = True`
         """
-        import json
 
         litellm_params = kwargs.get("litellm_params", {})
         metadata = (
@@ -475,7 +476,8 @@ class DataDogLogger(
             "metadata": clean_metadata,
         }
 
-        json_payload = json.dumps(payload, default=str)
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+        json_payload = safe_dumps(payload)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 

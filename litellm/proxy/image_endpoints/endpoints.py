@@ -54,10 +54,17 @@ async def batch_to_bytesio(
     response_class=ORJSONResponse,
     tags=["images"],
 )
+@router.post(
+    "/openai/deployments/{model:path}/images/generations",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["images"],
+)  # azure compatible endpoint
 async def image_generation(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    model: Optional[str] = None,
 ):
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
@@ -86,7 +93,8 @@ async def image_generation(
         )
 
         data["model"] = (
-            general_settings.get("image_generation_model", None)  # server default
+            model
+            or general_settings.get("image_generation_model", None)  # server default
             or user_model  # model name passed via cli args
             or data.get("model", None)  # default passed in http request
         )
@@ -181,12 +189,19 @@ async def image_generation(
     dependencies=[Depends(user_api_key_auth)],
     tags=["images"],
 )
+@router.post(
+    "/openai/deployments/{model:path}/images/edits",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["images"],
+)  # azure compatible endpoint
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
     image: List[UploadFile] = File(...),
     mask: Optional[List[UploadFile]] = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    model: Optional[str] = None,
 ):
     """
     Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create
@@ -227,6 +242,12 @@ async def image_edit_api(
     if mask_files:
         data["mask"] = mask_files
 
+    data["model"] = (
+        model
+        or general_settings.get("image_generation_model", None)  # server default
+        or user_model  # model name passed via cli args
+        or data.get("model", None)  # default passed in http request
+    )
     #########################################################
     # Process request
     #########################################################

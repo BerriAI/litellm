@@ -733,6 +733,68 @@ follow_up = client.responses.create(
 </TabItem>
 </Tabs>
 
+## Calling non-Responses API endpoints (`/responses` to `/chat/completions` Bridge)
+
+LiteLLM allows you to call non-Responses API models via a bridge to LiteLLM's `/chat/completions` endpoint. This is useful for calling Anthropic, Gemini and even non-Responses API OpenAI models.
+
+
+#### Python SDK Usage
+
+```python showLineNumbers title="SDK Usage"
+import litellm
+import os
+
+# Set API key
+os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-api-key"
+
+# Non-streaming response
+response = litellm.responses(
+    model="anthropic/claude-3-5-sonnet-20240620",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+print(response)
+```
+
+#### LiteLLM Proxy Usage
+
+**Setup Config:**
+
+```yaml showLineNumbers title="Example Configuration"
+model_list:
+- model_name: anthropic-model
+  litellm_params:
+    model: anthropic/claude-3-5-sonnet-20240620
+    api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+**Start Proxy:**
+
+```bash showLineNumbers title="Start LiteLLM Proxy"
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**Make Request:**
+
+```bash showLineNumbers title="non-Responses API Model Request"
+curl http://localhost:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "anthropic-model",
+    "input": "who is Michael Jordan"
+  }'
+```
+
+
+
+
+
+
+
 ## Session Management - Non-OpenAI Models
 
 LiteLLM Proxy supports session management for non-OpenAI models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 

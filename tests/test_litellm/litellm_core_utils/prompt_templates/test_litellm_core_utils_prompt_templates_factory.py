@@ -83,6 +83,48 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     )
 
 
+def test_convert_to_azure_openai_messages():
+    """Test coverting image_url to azure_openai spec"""
+
+    from typing import List
+    from litellm.types.llms.openai import AllMessageValues
+    from litellm.litellm_core_utils.prompt_templates.factory  import  convert_to_azure_openai_messages
+
+    input: List[AllMessageValues] = [
+        {
+            "role": "user",
+            "content": [
+                            {
+                                "type": "text",
+                                "text": "What is in this image?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": "www.mock.com"
+                            }
+                        ]
+        }
+    ]
+
+    expected_content = [
+        {
+            "type": "text",
+            "text": "What is in this image?"  
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": "www.mock.com"}  
+        }
+    ]
+
+    output = convert_to_azure_openai_messages(input)
+
+    content = output[0].get('content')
+    assert content == expected_content
+
+
+
+
 def test_bedrock_validate_format_image_or_video():
     """Test the _validate_format method for images, videos, and documents"""
 
@@ -288,3 +330,87 @@ def test_bedrock_validate_format_image_or_video():
 #     assert "### System:\nBe helpful\n\n" in result["prompt"]
 #     assert "### Assistant:\nI see a cat in the image.\n\n" in result["prompt"]
 #     assert result["images"] == ["http://example.com/image.jpg"]
+
+
+def test_vertex_ai_transform_empty_function_call_arguments():
+    """
+    Test that the _transform_parts method handles empty function call arguments correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        VertexFunctionCall,
+        _gemini_tool_call_invoke_helper,
+    )
+
+    function_call = {
+        "name": "get_weather",
+        "arguments": "",
+    }
+    result: VertexFunctionCall = _gemini_tool_call_invoke_helper(function_call)
+    print(result)
+    assert result["args"] == {
+        "type": "object",
+    }
+
+
+@pytest.mark.asyncio
+async def test_bedrock_process_image_async_factory():
+    """
+    Test that the _process_image_async_factory method handles image input correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockImageProcessor,
+    )
+
+    image_url = "data:application/pdf; qs=0.001;base64,JVBERi0xLjQKJcOkw7zDtsOfCjIgMCBvYmoKPDwvTGVuZ3RoIDMgMCBSL0ZpbHRlci9GbGF0ZURlY29kZT4"
+
+    content_block = await BedrockImageProcessor.process_image_async(
+        image_url=image_url, format=None
+    )
+    print(f"content_block: {content_block}")
+
+
+def test_unpack_defs_resolves_nested_ref_inside_anyof_items():
+    """Ensure unpack_defs correctly resolves $ref inside items within anyOf (Issue #11372)."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+
+    # Define a minimal schema reproducing the bug scenario
+    schema = {
+        "type": "object",
+        "properties": {
+            "vatAmounts": {
+                "anyOf": [
+                    {  # List of VatAmount
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/VatAmount"},
+                    },
+                    {"type": "null"},
+                ],
+                "title": "Vat Amounts",
+            }
+        },
+        "$defs": {
+            "VatAmount": {
+                "type": "object",
+                "properties": {
+                    "vatRate": {"type": "number"},
+                    "vatAmount": {"type": "number"},
+                },
+                "required": ["vatRate", "vatAmount"],
+                "title": "VatAmount",
+            }
+        },
+    }
+
+    # Perform unpacking
+    unpack_defs(schema, schema["$defs"])
+
+    # Extract the items schema after unpacking
+    items_schema = (
+        schema["properties"]["vatAmounts"]["anyOf"][0]["items"]
+    )
+
+    # Assertions: items_schema should now be the resolved object, not an empty dict
+    assert isinstance(items_schema, dict), "Items schema should be a dict after unpacking"
+    assert items_schema.get("type") == "object"
+    # Ensure essential properties are present
+    assert set(items_schema.get("properties", {}).keys()) == {"vatRate", "vatAmount"}

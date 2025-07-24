@@ -207,6 +207,50 @@ print(delete_response)
 |----------|---------------------|
 | `openai` | [All Responses API parameters are supported](https://github.com/BerriAI/litellm/blob/7c3df984da8e4dff9201e4c5353fdc7a2b441831/litellm/llms/openai/responses/transformation.py#L23) |
 
+## Reusable Prompts
+
+Use the `prompt` parameter to reference a stored prompt template and optionally supply variables.
+
+```python showLineNumbers title="Stored Prompt"
+import litellm
+
+response = litellm.responses(
+    model="openai/o1-pro",
+    prompt={
+        "id": "pmpt_abc123",
+        "version": "2",
+        "variables": {
+            "customer_name": "Jane Doe",
+            "product": "40oz juice box",
+        },
+    },
+)
+
+print(response)
+```
+
+The same parameter is supported when calling the LiteLLM proxy with the OpenAI SDK:
+
+```python showLineNumbers title="Stored Prompt via Proxy"
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:4000", api_key="your-api-key")
+
+response = client.responses.create(
+    model="openai/o1-pro",
+    prompt={
+        "id": "pmpt_abc123",
+        "version": "2",
+        "variables": {
+            "customer_name": "Jane Doe",
+            "product": "40oz juice box",
+        },
+    },
+)
+
+print(response)
+```
+
 ## Computer Use 
 
 <Tabs>

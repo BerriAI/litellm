@@ -1089,6 +1089,7 @@ async def test_async_completion_azure_caching_streaming():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_async_embedding_azure_caching():
     print("Testing custom callback input - Azure Caching")
     customHandler_caching = CompletionCustomHandler()
@@ -1536,7 +1537,7 @@ def test_logging_standard_payload_failure_call():
         assert "additional_headers" in standard_logging_object["hidden_params"]
 
 
-@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("stream", [False, True])
 def test_logging_standard_payload_llm_headers(stream):
     from litellm.types.utils import StandardLoggingPayload
 

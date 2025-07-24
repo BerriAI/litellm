@@ -87,6 +87,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Organization ID",
     "Key Alias",
     "User ID",
+    "End User",
     "Key Hash",
     "Model"
   ];

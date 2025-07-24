@@ -111,7 +111,7 @@ class BraintrustLogger(CustomLogger):
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
         """
-        Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_"
+        Adds metadata from proxy request headers to Braintrust logging if keys start with "braintrust_"
         and overwrites litellm_params.metadata if already included.
 
         For example if you want to append your trace to an existing `trace_id` via header, send
@@ -254,6 +254,11 @@ class BraintrustLogger(CustomLogger):
             if cost is not None:
                 clean_metadata["litellm_response_cost"] = cost
 
+            # metadata.model is required for braintrust to calculate the "Estimated cost" metric
+            litellm_model = kwargs.get("model", None)
+            if litellm_model is not None:
+                clean_metadata["model"] = litellm_model
+
             metrics: Optional[dict] = None
             usage_obj = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
@@ -390,6 +395,11 @@ class BraintrustLogger(CustomLogger):
             cost = kwargs.get("response_cost", None)
             if cost is not None:
                 clean_metadata["litellm_response_cost"] = cost
+
+            # metadata.model is required for braintrust to calculate the "Estimated cost" metric
+            litellm_model = kwargs.get("model", None)
+            if litellm_model is not None:
+                clean_metadata["model"] = litellm_model
 
             metrics: Optional[dict] = None
             usage_obj = getattr(response_obj, "usage", None)

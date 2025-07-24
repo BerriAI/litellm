@@ -3,12 +3,16 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+import fastapi
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system-path
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
+from litellm.proxy.health_endpoints.health_app_factory import build_health_app
+import builtins
+import types
 
 
 class TestProxyInitializationHelpers:
@@ -100,6 +104,19 @@ class TestProxyInitializationHelpers:
             )
             assert args["log_config"] is None
 
+        # Test with keepalive_timeout
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+            "localhost", 8000, None, 60
+        )
+        assert args["timeout_keep_alive"] == 60
+
+        # Test with both log_config and keepalive_timeout
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+            "localhost", 8000, "log_config.json", 120
+        )
+        assert args["log_config"] == "log_config.json"
+        assert args["timeout_keep_alive"] == 120
+
     @patch("asyncio.run")
     @patch("builtins.print")
     def test_init_hypercorn_server(self, mock_print, mock_asyncio_run):
@@ -108,7 +125,7 @@ class TestProxyInitializationHelpers:
 
         # Execute
         ProxyInitializationHelpers._init_hypercorn_server(
-            mock_app, "localhost", 8000, None, None
+            mock_app, "localhost", 8000, None, None, None
         )
 
         # Assert
@@ -116,7 +133,7 @@ class TestProxyInitializationHelpers:
 
         # Test with SSL
         ProxyInitializationHelpers._init_hypercorn_server(
-            mock_app, "localhost", 8000, "cert.pem", "key.pem"
+            mock_app, "localhost", 8000, "cert.pem", "key.pem", "ECDHE"
         )
 
     @patch("subprocess.Popen")
@@ -245,3 +262,107 @@ class TestProxyInitializationHelpers:
 
             assert result.exit_code == 0
             mock_uvicorn_run.assert_called_once()
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    def test_keepalive_timeout_flag(self, mock_print, mock_uvicorn_run):
+        """Test that the keepalive_timeout flag is properly passed to uvicorn"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ), patch(
+            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+        ) as mock_get_args:
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+                "timeout_keep_alive": 30,
+            }
+
+            result = runner.invoke(run_server, ["--local", "--keepalive_timeout", "30"])
+
+            assert result.exit_code == 0
+            mock_get_args.assert_called_once_with(
+                host="0.0.0.0",
+                port=4000,
+                log_config=None,
+                keepalive_timeout=30,
+            )
+            mock_uvicorn_run.assert_called_once()
+            
+            # Check that the uvicorn.run was called with the timeout_keep_alive parameter
+            call_args = mock_uvicorn_run.call_args
+            assert call_args[1]["timeout_keep_alive"] == 30
+
+
+class TestHealthAppFactory:
+    """Test cases for the health app factory module"""
+    
+    def test_build_health_app(self):
+        """Test that build_health_app creates a FastAPI app with the correct title and includes the health router"""
+        # Execute
+        health_app = build_health_app()
+        
+        # Assert
+        assert health_app.title == "LiteLLM Health Endpoints"
+        assert isinstance(health_app, fastapi.FastAPI)
+        
+        # Verify that the app has the expected health endpoints by checking route paths
+        # When a router is included, its routes are flattened into the main app's routes
+        route_paths = []
+        for route in health_app.routes:
+            if hasattr(route, 'path'):
+                route_paths.append(route.path)
+        
+        # Check for some expected health endpoints
+        expected_paths = [
+            "/test",
+            "/health/services", 
+            "/health",
+            "/health/history",
+            "/health/latest",
+            "/settings",
+            "/active/callbacks",
+            "/health/readiness",
+            "/health/liveliness",
+            "/health/liveness",
+            "/health/test_connection"
+        ]
+        
+        # At least some of the expected health endpoints should be present
+        found_paths = [path for path in expected_paths if path in route_paths]
+        assert len(found_paths) > 0, f"Expected to find health endpoints, but found: {route_paths}"
+        
+        # Verify that the app has routes (indicating the router was included)
+        assert len(health_app.routes) > 0, "Health app should have routes from the included router"
+        
+    def test_build_health_app_returns_different_instances(self):
+        """Test that build_health_app returns different FastAPI instances on each call"""
+        # Execute
+        health_app_1 = build_health_app()
+        health_app_2 = build_health_app()
+        
+        # Assert
+        assert health_app_1 is not health_app_2
+        assert health_app_1.title == health_app_2.title
+        assert isinstance(health_app_1, fastapi.FastAPI)
+        assert isinstance(health_app_2, fastapi.FastAPI)

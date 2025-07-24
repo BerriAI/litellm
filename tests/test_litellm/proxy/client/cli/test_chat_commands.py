@@ -1,9 +1,16 @@
 import json
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 from click.testing import CliRunner
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
 
 from litellm.proxy.client.cli.main import cli
 

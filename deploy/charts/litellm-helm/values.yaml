@@ -27,6 +27,9 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template
   name: ""
 
+# annotations for litellm deployment
+deploymentAnnotations: {}
+# annotations for litellm pods
 podAnnotations: {}
 podLabels: {}
 
@@ -197,6 +200,7 @@ migrationJob:
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
   ttlSecondsAfterFinished: 120
+  extraContainers: []
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {

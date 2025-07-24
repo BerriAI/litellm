@@ -70,3 +70,34 @@ class TestOllamaChatConfigResponseFormat:
         assert (
             optional_params["format"] == "json"
         ), f"Expected 'json' for type 'json_object', got: {optional_params['format']}"
+
+    def test_transform_request_loads_config_parameters(self):
+        """Test that transform_request loads config parameters without overriding existing optional_params"""
+        # Set config parameters on the class
+        import litellm
+
+        litellm.OllamaChatConfig(num_ctx=8000, temperature=0.0)
+
+        try:
+            config = OllamaChatConfig()
+
+            # Initial optional_params with existing temperature (should not be overridden)
+            optional_params = {"temperature": 0.3}
+
+            # Transform request
+            result = config.transform_request(
+                model="llama2",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+
+            # Verify config values were loaded but existing optional_params were preserved
+            assert result["options"]["temperature"] == 0.3  # Should keep existing value
+            assert result["options"]["num_ctx"] == 8000  # Should load from config
+
+        finally:
+            # Clean up class attributes
+            delattr(litellm.OllamaChatConfig, "num_ctx")
+            delattr(litellm.OllamaChatConfig, "temperature")

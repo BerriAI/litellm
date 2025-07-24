@@ -25,11 +25,32 @@ For **Amazon Nova Models**: Bump to v1.53.5+
 
 :::
 
+## Authentication
+
 :::info
 
 LiteLLM uses boto3 to handle authentication. All these options are supported - https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html#credentials.
 
 :::
+ 
+LiteLLM supports API key authentication in addition to traditional boto3 authentication methods. For additional API key details, refer to [docs](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html).
+
+Option 1: use the AWS_BEARER_TOKEN_BEDROCK environment variable 
+
+```bash
+export AWS_BEARER_TOKEN_BEDROCK="your-api-key"
+```
+
+Option 2: use the api_key parameter to pass in API key for completion, embedding, image_generation API calls.
+
+```python
+response = completion(
+  model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  api_key="your-api-key"
+)
+```
+
 
 ## Usage
 

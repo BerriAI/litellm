@@ -411,3 +411,93 @@ async def test_azure_image_edit_cost_tracking():
         # check response_cost
         assert test_custom_logger.standard_logging_payload["response_cost"] is not None
         assert test_custom_logger.standard_logging_payload["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_recraft_image_edit_api():
+    from litellm import aimage_edit
+    import requests
+    litellm._turn_on_debug()
+    global TEST_IMAGES
+    try:
+        prompt = """
+        Create a studio ghibli style image that combines all the reference images. Make sure the person looks like a CTO.
+        """
+        result = await aimage_edit(
+            prompt=prompt,
+            model="recraft/recraftv3",
+            image=TEST_IMAGES,
+        )
+        print("result from image edit", result)
+
+        # Validate the response meets expected schema
+        ImageResponse.model_validate(result)
+        
+        if isinstance(result, ImageResponse) and result.data:
+            image_url = result.data[0].url
+            
+            # download the image
+            image_bytes = requests.get(image_url).content
+            with open("test_image_edit.png", "wb") as f:
+                f.write(image_bytes)
+    except litellm.ContentPolicyViolationError as e:
+        pass
+
+
+def test_recraft_image_edit_config():
+    """
+    Test Recraft image edit configuration parameter mapping and request transformation.
+    """
+    from litellm.llms.recraft.image_edit.transformation import RecraftImageEditConfig
+    from litellm.types.images.main import ImageEditOptionalRequestParams
+    from litellm.types.router import GenericLiteLLMParams
+    
+    config = RecraftImageEditConfig()
+    
+    # Test supported OpenAI params
+    supported_params = config.get_supported_openai_params("recraftv3")
+    expected_params = ["n", "response_format", "style"]
+    assert supported_params == expected_params
+    
+    # Test parameter mapping (reuses OpenAI logic with filtering)
+    image_edit_params = ImageEditOptionalRequestParams({
+        "n": 2,
+        "response_format": "b64_json",
+        "style": "realistic_image",
+        "size": "1024x1024",  # Should be dropped
+        "quality": "high"     # Should be dropped
+    })
+    
+    mapped_params = config.map_openai_params(image_edit_params, "recraftv3", drop_params=True)
+    
+    # Should only contain supported params
+    assert mapped_params["n"] == 2
+    assert mapped_params["response_format"] == "b64_json"
+    assert mapped_params["style"] == "realistic_image"
+    assert "size" not in mapped_params  # Should be dropped
+    assert "quality" not in mapped_params  # Should be dropped
+    
+    # Test request transformation (reuses OpenAI file handling)
+    mock_image = b"fake_image_data"
+    prompt = "winter landscape"
+    litellm_params = GenericLiteLLMParams(api_key="test_key")
+    
+    data, files = config.transform_image_edit_request(
+        model="recraftv3",
+        prompt=prompt,
+        image=mock_image,
+        image_edit_optional_request_params={"strength": 0.7, "n": 1},
+        litellm_params=litellm_params,
+        headers={}
+    )
+    
+    # Check data structure (like OpenAI but with Recraft additions)
+    assert data["prompt"] == prompt
+    assert data["strength"] == 0.7  # Recraft-specific parameter
+    assert data["model"] == "recraftv3"
+    
+    # Check file structure (reuses OpenAI logic)
+    assert len(files) == 1
+    assert files[0][0] == "image"  # Field name (not image[] like OpenAI)
+    assert files[0][1][1] == mock_image  # Image data
+    assert files[0][1][2] == "image/png"  # Content type
