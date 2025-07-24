@@ -1,5 +1,6 @@
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
+from pydantic import ConfigDict
 from semantic_router.encoders import DenseEncoder
 from semantic_router.encoders.base import AsymmetricDenseMixin
 
@@ -26,7 +27,19 @@ def litellm_to_list(embeds: litellm.EmbeddingResponse) -> list[list[float]]:
     return [x["embedding"] for x in embeds.data]
 
 
-class LiteLLMRouterEncoder(DenseEncoder, AsymmetricDenseMixin):
+class CustomDenseEncoder(DenseEncoder):
+    model_config = ConfigDict(extra='allow')
+
+    def __init__(self, litellm_router_instance: Optional["Router"] = None, **kwargs):
+        # Extract litellm_router_instance from kwargs if passed there
+        if 'litellm_router_instance' in kwargs:
+            litellm_router_instance = kwargs.pop('litellm_router_instance')
+        
+        super().__init__(**kwargs)
+        self.litellm_router_instance = litellm_router_instance
+
+
+class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
     """LiteLLM encoder class for generating embeddings using LiteLLM.
 
     The LiteLLMRouterEncoder class is a subclass of DenseEncoder and utilizes the LiteLLM Router SDK
@@ -52,11 +65,11 @@ class LiteLLMRouterEncoder(DenseEncoder, AsymmetricDenseMixin):
         :param score_threshold: The score threshold for the embeddings.
         :type score_threshold: float
         """
-        self.litellm_router_instance: "Router" = litellm_router_instance
         super().__init__(
             name=model_name,
             score_threshold=score_threshold if score_threshold is not None else 0.3,
         )
+        self.litellm_router_instance = litellm_router_instance
 
     def __call__(self, docs: list[Any], **kwargs) -> list[list[float]]:
         """Encode a list of text documents into embeddings using LiteLLM.
@@ -73,6 +86,8 @@ class LiteLLMRouterEncoder(DenseEncoder, AsymmetricDenseMixin):
         return await self.aencode_queries(docs, **kwargs)
 
     def encode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
+        if self.litellm_router_instance is None:
+            raise ValueError("litellm_router_instance is not set")
         try:
             embeds = self.litellm_router_instance.embedding(
                 input=docs, model=f"{self.type}/{self.name}", **kwargs
@@ -84,6 +99,8 @@ class LiteLLMRouterEncoder(DenseEncoder, AsymmetricDenseMixin):
             ) from e
 
     def encode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
+        if self.litellm_router_instance is None:
+            raise ValueError("litellm_router_instance is not set")
         try:
             embeds = self.litellm_router_instance.embedding(
                 input=docs, model=f"{self.type}/{self.name}", **kwargs
@@ -95,6 +112,8 @@ class LiteLLMRouterEncoder(DenseEncoder, AsymmetricDenseMixin):
             ) from e
 
     async def aencode_queries(self, docs: list[str], **kwargs) -> list[list[float]]:
+        if self.litellm_router_instance is None:
+            raise ValueError("litellm_router_instance is not set")
         try:
             embeds = await self.litellm_router_instance.aembedding(
                 input=docs, model=f"{self.type}/{self.name}", **kwargs
@@ -106,6 +125,8 @@ class LiteLLMRouterEncoder(DenseEncoder, AsymmetricDenseMixin):
             ) from e
 
     async def aencode_documents(self, docs: list[str], **kwargs) -> list[list[float]]:
+        if self.litellm_router_instance is None:
+            raise ValueError("litellm_router_instance is not set")
         try:
             embeds = await self.litellm_router_instance.aembedding(
                 input=docs, model=f"{self.type}/{self.name}", **kwargs

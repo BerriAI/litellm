@@ -401,6 +401,7 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
+        self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         if model_list is not None:
             model_list = copy.deepcopy(model_list)
@@ -520,7 +521,6 @@ class Router:
             routing_strategy_args=routing_strategy_args,
         )
         self.access_groups = None
-        self.auto_routers: Dict[str, "AutoRouter"] = {}
         ## USAGE TRACKING ##
         if isinstance(litellm._async_success_callback, list):
             litellm.logging_callback_manager.add_litellm_async_success_callback(

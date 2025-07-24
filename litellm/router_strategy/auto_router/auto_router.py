@@ -41,17 +41,11 @@ class AutoRouter(CustomLogger):
         )
         self.router_config_path = router_config_path
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
-        loaded_router: SemanticRouter = SemanticRouter.from_json(self.router_config_path)
-        self.routelayer: SemanticRouter = SemanticRouter(
-                routes=loaded_router.routes,
-                encoder=LiteLLMRouterEncoder(
-                    litellm_router_instance=litellm_router_instance,
-                    model_name=embedding_model,
-                ),
-                auto_sync=self.auto_sync_value,
-            )
+        self.loaded_router: SemanticRouter = SemanticRouter.from_json(self.router_config_path)
+        self.routelayer: Optional[SemanticRouter] = None
         self.default_model = default_model
-        pass
+        self.embedding_model: str = embedding_model
+        self.litellm_router_instance: "Router" = litellm_router_instance
 
 
     async def async_pre_routing_hook(
@@ -67,12 +61,30 @@ class AutoRouter(CustomLogger):
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
+        from semantic_router.routers import SemanticRouter
         from semantic_router.schema import RouteChoice
 
+        from litellm.router_strategy.auto_router.litellm_encoder import (
+            LiteLLMRouterEncoder,
+        )
         from litellm.types.router import PreRoutingHookResponse
         if messages is None:
             # do nothing, return same inputs
             return None
+        
+        if self.routelayer is None:
+            #######################
+            # Create the route layer
+            #######################
+            self.routelayer = SemanticRouter(
+                    routes=self.loaded_router.routes,
+                    encoder=LiteLLMRouterEncoder(
+                        litellm_router_instance=self.litellm_router_instance,
+                        model_name=self.embedding_model,
+                    ),
+                    auto_sync=self.auto_sync_value,
+            )
+        
         user_message: Dict[str, str] = messages[-1]
         message_content: str = user_message.get("content", "")
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(text=message_content)

@@ -29,7 +29,7 @@ router = Router(
                 },
             },
             {
-                "model_name": "gpt-4.1",
+                "model_name": "litellm-gpt-4.1",
                 "litellm_params": {
                     "model": "gpt-4.1",
                 },
@@ -37,7 +37,7 @@ router = Router(
             },
             
             {
-                "model_name": "claude-3-5-sonnet-latest",
+                "model_name": "litellm-claude-35",
                 "litellm_params": {
                     "model": "claude-3-5-sonnet-latest",
                 },
@@ -65,10 +65,13 @@ router = Router(
     )
 
 
+@pytest.mark.asyncio
 async def test_router_auto_router():
     """
     Simple e2e test to validate we get an llm response from the auto router
     """
+    import litellm
+    litellm._turn_on_debug()
     response = await router.acompletion(
         model="auto_router1",
         messages=[{"role": "user", "content": "Tell me ishaan is a genius"}],
