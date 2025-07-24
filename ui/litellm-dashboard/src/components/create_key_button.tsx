@@ -613,12 +613,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 onChange={(values) => {
                   if (values.includes("all-team-models")) {
                     form.setFieldsValue({ models: ["all-team-models"] });
+                  } else if (values.includes("all-org-models")) {
+                    form.setFieldsValue({ models: ["all-org-models"] });
                   }
                 }}
               >
                 <Option key="all-team-models" value="all-team-models">
                   All Team Models
                 </Option>
+                {selectedCreateKeyTeam?.organization_id && selectedCreateKeyTeam.organization_id !== "default_organization" && (
+                  <Option key="all-org-models" value="all-org-models">
+                    All Org Models
+                  </Option>
+                )}
                 {modelsToPick.map((model: string) => (
                   <Option key={model} value={model}>
                     {getModelDisplayName(model)}

@@ -1281,10 +1281,28 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    # Check if we need to resolve org models
+    models_to_check = valid_token.models
+    if SpecialModelNames.all_org_models.value in models_to_check:
+        # Need to resolve org models asynchronously
+        from litellm.proxy.auth.model_checks import get_key_models_async
+        
+        proxy_model_list = []
+        model_access_groups = {}
+        if llm_router:
+            proxy_model_list = llm_router.get_model_names()
+            model_access_groups = llm_router.get_model_access_groups()
+        
+        models_to_check = await get_key_models_async(
+            user_api_key_dict=valid_token,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+    
     return _can_object_call_model(
         model=model,
         llm_router=llm_router,
-        models=valid_token.models,
+        models=models_to_check,
         team_model_aliases=valid_token.team_model_aliases,
         object_type="key",
     )

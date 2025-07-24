@@ -154,10 +154,21 @@ export function KeyEditView({
           mode="multiple"
           placeholder="Select models"
           style={{ width: "100%" }}
+          onChange={(values) => {
+            if (values.includes("all-team-models")) {
+              form.setFieldsValue({ models: ["all-team-models"] });
+            } else if (values.includes("all-org-models")) {
+              form.setFieldsValue({ models: ["all-org-models"] });
+            }
+          }}
         >
           {/* Only show All Team Models if team has models */}
           {availableModels.length > 0 && (
             <Select.Option value="all-team-models">All Team Models</Select.Option>
+          )}
+          {/* Show All Org Models if team has an organization */}
+          {team?.organization_id && team.organization_id !== "default_organization" && (
+            <Select.Option value="all-org-models">All Org Models</Select.Option>
           )}
           {/* Show available team models */}
           {availableModels.map(model => (

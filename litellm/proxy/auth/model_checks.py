@@ -64,6 +64,27 @@ def _get_models_from_access_groups(
     return all_models
 
 
+async def get_org_models(org_id: str) -> Optional[List[str]]:
+    """
+    Returns the list of models for a given organization
+    """
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if prisma_client is None:
+        return None
+    
+    try:
+        org = await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": org_id}
+        )
+        if org and org.models:
+            return org.models
+        return None
+    except Exception:
+        verbose_proxy_logger.debug(f"Error getting org models for org_id {org_id}")
+        return None
+
+
 async def get_mcp_server_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> List[str]:
@@ -115,12 +136,54 @@ def get_key_models(
             all_models = user_api_key_dict.team_models
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = proxy_model_list
+        if SpecialModelNames.all_org_models.value in all_models:
+            # Note: Organization models need to be resolved asynchronously
+            # This will be handled in the async version of this function
+            verbose_proxy_logger.debug(
+                "all-org-models found in key models, needs async resolution"
+            )
 
     all_models = _get_models_from_access_groups(
         model_access_groups=model_access_groups, all_models=all_models
     )
 
     verbose_proxy_logger.debug("ALL KEY MODELS - {}".format(len(all_models)))
+    return all_models
+
+
+async def get_key_models_async(
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+    include_model_access_groups: Optional[bool] = False,
+    only_model_access_groups: Optional[bool] = False,
+) -> List[str]:
+    """
+    Async version of get_key_models that can resolve org models.
+    
+    Returns:
+    - List of model name strings
+    - Empty list if no models set
+    """
+    all_models: List[str] = []
+    if len(user_api_key_dict.models) > 0:
+        all_models = user_api_key_dict.models
+        if SpecialModelNames.all_team_models.value in all_models:
+            all_models = user_api_key_dict.team_models
+        if SpecialModelNames.all_proxy_models.value in all_models:
+            all_models = proxy_model_list
+        if SpecialModelNames.all_org_models.value in all_models:
+            # Get organization models if available
+            if user_api_key_dict.org_id:
+                org_models = await get_org_models(user_api_key_dict.org_id)
+                if org_models:
+                    all_models = org_models
+
+    all_models = _get_models_from_access_groups(
+        model_access_groups=model_access_groups, all_models=all_models
+    )
+
+    verbose_proxy_logger.debug("ALL KEY MODELS (async) - {}".format(len(all_models)))
     return all_models
 
 
