@@ -29,6 +29,7 @@ import {
   Subtitle,
   DateRangePicker,
   DateRangePickerValue,
+  Button,
 } from "@tremor/react";
 import UsageDatePicker from "./shared/usage_date_picker";
 import { AreaChart } from "@tremor/react";
@@ -58,6 +59,7 @@ import { Team } from "./key_team_helpers/key_list";
 import { EntityList } from "./entity_usage";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
+import CloudZeroExportModal from "./cloudzero_export_modal";
 
 interface NewUsagePageProps {
   accessToken: string | null;
@@ -86,6 +88,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   });
 
   const [allTags, setAllTags] = useState<EntityList[]>([]);
+  const [modelViewType, setModelViewType] = useState<'groups' | 'individual'>('groups');
+  const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
 
   const getAllTags = async () => {
     if (!accessToken) {
@@ -150,6 +154,58 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
     return Object.entries(modelSpend)
       .map(([model, metrics]) => ({
         key: model,
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens,
+      }))
+      .sort((a, b) => b.spend - a.spend)
+      .slice(0, 5);
+  };
+
+  const getTopModelGroups = () => {
+    const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
+    userSpendData.results.forEach((day) => {
+      Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
+        if (!modelGroupSpend[modelGroup]) {
+          modelGroupSpend[modelGroup] = {
+            metrics: {
+              spend: 0,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              api_requests: 0,
+              successful_requests: 0,
+              failed_requests: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+            metadata: {},
+            api_key_breakdown: {}
+          };
+        }
+        modelGroupSpend[modelGroup].metrics.spend += metrics.metrics.spend;
+        modelGroupSpend[modelGroup].metrics.prompt_tokens +=
+          metrics.metrics.prompt_tokens;
+        modelGroupSpend[modelGroup].metrics.completion_tokens +=
+          metrics.metrics.completion_tokens;
+        modelGroupSpend[modelGroup].metrics.total_tokens += metrics.metrics.total_tokens;
+        modelGroupSpend[modelGroup].metrics.api_requests += metrics.metrics.api_requests;
+        modelGroupSpend[modelGroup].metrics.successful_requests +=
+          metrics.metrics.successful_requests || 0;
+        modelGroupSpend[modelGroup].metrics.failed_requests +=
+          metrics.metrics.failed_requests || 0;
+        modelGroupSpend[modelGroup].metrics.cache_read_input_tokens +=
+          metrics.metrics.cache_read_input_tokens || 0;
+        modelGroupSpend[modelGroup].metrics.cache_creation_input_tokens +=
+          metrics.metrics.cache_creation_input_tokens || 0;
+      });
+    });
+
+    return Object.entries(modelGroupSpend)
+      .map(([modelGroup, metrics]) => ({
+        key: modelGroup,
         spend: metrics.metrics.spend,
         requests: metrics.metrics.api_requests,
         successful_requests: metrics.metrics.successful_requests,
@@ -335,21 +391,45 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers");
 
   return (
-    <div style={{ width: "100%" }} className="p-8">
-      {all_admin_roles.includes(userRole || "") ? (
-        <Text className="text-sm text-gray-500 mb-4">
-          Note: If you see key/model-level inconsistencies between Global View
-          and Team Usage, it&apos;s because the Global View was missing spend
-          when user_id = null, prior to v1.71.2.{" "}
-          <a
-            href="https://github.com/BerriAI/litellm/issues/10876"
-            className="text-blue-500 hover:text-blue-700 ml-1"
+    <div style={{ width: "100%" }} className="p-8 relative">
+      {/* Export Data Button - Positioned in top right corner */}
+      {all_admin_roles.includes(userRole || "") && (
+        <div className="absolute top-4 right-4 z-10">
+          <button
+            onClick={() => setIsCloudZeroModalOpen(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-full flex items-center gap-2 shadow-lg transition-colors duration-200 text-sm font-medium"
           >
-            Learn more here
-          </a>
-          .
-        </Text>
-      ) : null}
+            <svg 
+              className="w-4 h-4" 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" 
+              />
+            </svg>
+            Export Data
+            <svg 
+              className="w-3 h-3" 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                d="M19 9l-7 7-7-7" 
+              />
+            </svg>
+          </button>
+        </div>
+      )}
+
       <TabGroup>
         <TabList variant="solid" className="mt-1">
           {all_admin_roles.includes(userRole || "") ? (
@@ -527,11 +607,35 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
                     <Col numColSpan={1}>
                       <Card className="h-full">
                         <div className="flex justify-between items-center mb-4">
-                          <Title>Top Models</Title>
+                          <Title>
+                            {modelViewType === 'groups' ? 'Top Public Model Names' : 'Top Litellm Models'}
+                          </Title>
+                          <div className="flex bg-gray-100 rounded-lg p-1">
+                            <button
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                modelViewType === 'groups'
+                                  ? 'bg-white shadow-sm text-gray-900'
+                                  : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                              onClick={() => setModelViewType('groups')}
+                            >
+                              Public Model Name
+                            </button>
+                            <button
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                                modelViewType === 'individual'
+                                  ? 'bg-white shadow-sm text-gray-900'
+                                  : 'text-gray-600 hover:text-gray-900'
+                              }`}
+                              onClick={() => setModelViewType('individual')}
+                            >
+                              Litellm Model Name
+                            </button>
+                          </div>
                         </div>
                         <BarChart
                           className="mt-4 h-40"
-                          data={getTopModels()}
+                          data={modelViewType === 'groups' ? getTopModelGroups() : getTopModels()}
                           index="key"
                           categories={["spend"]}
                           colors={["cyan"]}
@@ -684,6 +788,13 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {/* CloudZero Export Modal */}
+      <CloudZeroExportModal
+        isOpen={isCloudZeroModalOpen}
+        onClose={() => setIsCloudZeroModalOpen(false)}
+        accessToken={accessToken}
+      />
     </div>
   );
 };

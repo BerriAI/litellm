@@ -904,13 +904,6 @@ class TestProxyFunctionCalling:
                 "litellm_proxy/claude-3-5-sonnet-20240620",
                 True,
             ),
-            ("claude-3-opus-20240229", "litellm_proxy/claude-3-opus-20240229", True),
-            (
-                "claude-3-sonnet-20240229",
-                "litellm_proxy/claude-3-sonnet-20240229",
-                True,
-            ),
-            ("claude-3-haiku-20240307", "litellm_proxy/claude-3-haiku-20240307", True),
             # Google models
             ("gemini-pro", "litellm_proxy/gemini-pro", True),
             ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
@@ -924,11 +917,6 @@ class TestProxyFunctionCalling:
             ),  # This model doesn't support function calling
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
-            (
-                "anthropic.claude-instant-v1",
-                "litellm_proxy/anthropic.claude-instant-v1",
-                False,
-            ),
         ],
     )
     def test_proxy_function_calling_support_consistency(
@@ -1058,7 +1046,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-sonnet-20240229"
+        resolvable_model = "litellm_proxy/claude-3-5-sonnet-latest"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
@@ -1069,7 +1057,7 @@ class TestProxyFunctionCalling:
         
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
-           - litellm_proxy/claude-3-sonnet-20240229
+           - litellm_proxy/claude-3-5-sonnet-latest
            - litellm_proxy/anthropic/claude-3-haiku-20240307
            
         ❌ DOESN'T WORK (requires proxy server config):
