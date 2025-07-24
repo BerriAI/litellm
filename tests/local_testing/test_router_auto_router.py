@@ -15,6 +15,20 @@ from litellm import Router
 router = Router(
     model_list=[
             {
+                "model_name": "custom-text-embedding-model",
+                "litellm_params": {
+                    "model": "text-embedding-3-large",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "custom-text-embedding-model-2",
+                "litellm_params": {
+                    "model": "text-embedding-3-large",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
                 "model_name": "gpt-4.1",
                 "litellm_params": {
                     "model": "gpt-4.1",
@@ -33,14 +47,18 @@ router = Router(
                 "model_name": "auto_router1",
                 "litellm_params": {
                     "model": "auto_router/auto_router_1",
-                    "router_config_path": "auto_router/router.json",
+                    "auto_router_config_path": "auto_router/router.json",
+                    "auto_router_default_model": "openai/gpt-4o-mini",
+                    "auto_router_embedding_model": "custom-text-embedding-model",
                 },
             },
             {
                 "model_name": "auto_router_2",
                 "litellm_params": {
                     "model": "auto_router/auto_router_2",
-                    "router_config_path": "auto_router/router_2.json",
+                    "auto_router_config_path": "auto_router/router_2.json",
+                    "auto_router_default_model": "openai/gpt-4o-mini",
+                    "auto_router_embedding_model": "custom-text-embedding-model-2",
                 },
             },
         ],
