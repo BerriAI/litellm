@@ -48,7 +48,7 @@ router = Router(
                 "litellm_params": {
                     "model": "auto_router/auto_router_1",
                     "auto_router_config_path": "auto_router/router.json",
-                    "auto_router_default_model": "openai/gpt-4o-mini",
+                    "auto_router_default_model": "gpt-4o-mini",
                     "auto_router_embedding_model": "custom-text-embedding-model",
                 },
             },
@@ -57,7 +57,7 @@ router = Router(
                 "litellm_params": {
                     "model": "auto_router/auto_router_2",
                     "auto_router_config_path": "auto_router/router_2.json",
-                    "auto_router_default_model": "openai/gpt-4o-mini",
+                    "auto_router_default_model": "gpt-4o-mini",
                     "auto_router_embedding_model": "custom-text-embedding-model-2",
                 },
             },
