@@ -1,6 +1,4 @@
 {
-    "encoder_type": "openai",
-    "encoder_name": "text-embedding-3-large",
     "routes": [
         {
             "name": "openai/gpt-4.1",

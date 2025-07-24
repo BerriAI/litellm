@@ -18,18 +18,23 @@ class AutoRouter(CustomLogger):
     def __init__(
         self,
         router_config_path: str,
-        default_model: str
+        default_model: str,
+        embedding_model: str,
+        embedding_model_api_key: str,
     ):  
         from semantic_router import Route
-        from semantic_router.encoders import OpenAIEncoder
+        from semantic_router.encoders import LiteLLMEncoder
         from semantic_router.routers import SemanticRouter
         self.router_config_path = router_config_path
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
         loaded_router: SemanticRouter = SemanticRouter.from_json(self.router_config_path)
         self.routelayer: SemanticRouter = SemanticRouter(
                 routes=loaded_router.routes,
-                encoder=loaded_router.encoder,
-                auto_sync=self.auto_sync_value
+                encoder=LiteLLMEncoder(
+                    name=embedding_model,
+                    api_key=embedding_model_api_key,
+                ),
+                auto_sync=self.auto_sync_value,
             )
         self.default_model = default_model
         pass
