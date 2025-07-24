@@ -45,12 +45,16 @@ class LiteLLMDatabase:
         hour_start = target_hour.replace(minute=0, second=0, microsecond=0)
         hour_end = hour_start + timedelta(hours=1)
         
+        # Convert datetime objects to ISO format strings for PostgreSQL compatibility
+        hour_start_str = hour_start.isoformat()
+        hour_end_str = hour_end.isoformat()
+        
         # Query to get spend logs for the specific hour
         query = """
         SELECT *
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= $1 
-          AND "startTime" < $2
+        WHERE "startTime" >= $1::timestamp 
+          AND "startTime" < $2::timestamp
         ORDER BY "startTime" ASC
         """
 
@@ -58,7 +62,7 @@ class LiteLLMDatabase:
             query += f" LIMIT {limit}"
 
         try:
-            db_response = await client.db.query_raw(query, hour_start, hour_end)
+            db_response = await client.db.query_raw(query, hour_start_str, hour_end_str)
             # Convert the response to polars DataFrame
             return pl.DataFrame(db_response) if db_response else pl.DataFrame()
         except Exception as e:
