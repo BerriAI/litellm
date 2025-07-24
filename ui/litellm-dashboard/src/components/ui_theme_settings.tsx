@@ -184,9 +184,9 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
               onClick={handleSave}
               loading={loading}
               disabled={loading}
-              color="blue"
+              color="indigo"
             >
-              Save Logo
+              Save Changes
             </Button>
             <Button
               onClick={handleReset}
