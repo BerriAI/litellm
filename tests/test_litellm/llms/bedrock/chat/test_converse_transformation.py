@@ -268,3 +268,122 @@ def test_get_supported_openai_params_bedrock_converse():
 
         assert set(supported_params_without_prefix) == set(supported_params_with_prefix), f"Supported params mismatch for model: {model}. Without prefix: {supported_params_without_prefix}, With prefix: {supported_params_with_prefix}"
         print(f"✅ Passed for model: {model}")
+
+
+def test_transform_request_helper_includes_anthropic_beta_and_tools():
+    config = AmazonConverseConfig()
+    system_content_blocks = []
+    optional_params = {
+        "anthropic_beta": ["computer-use-2024-10-22"],
+        "tools": [
+            {
+                "type": "computer_20241022",
+                "name": "computer",
+                "display_height_px": 768,
+                "display_width_px": 1024,
+                "display_number": 0,
+            }
+        ],
+        "some_other_param": 123,
+    }
+    data = config._transform_request_helper(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        system_content_blocks=system_content_blocks,
+        optional_params=optional_params,
+        messages=None,
+    )
+    assert "additionalModelRequestFields" in data
+    fields = data["additionalModelRequestFields"]
+    assert "anthropic_beta" in fields
+    assert fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert "tools" in fields
+    assert fields["tools"][0]["type"] == "computer_20241022"
+    assert fields["tools"][0]["name"] == "computer"
+
+
+def test_transform_response_with_computer_use_tool():
+    import httpx
+    from litellm.types.llms.bedrock import ConverseResponseBlock, ConverseTokenUsageBlock
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    # Simulate a Bedrock Converse response with a computer-use tool call
+    response_json = {
+        "additionalModelResponseFields": {},
+        "metrics": {"latencyMs": 100.0},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_123",
+                            "name": "computer",
+                            "input": {
+                                "display_height_px": 768,
+                                "display_width_px": 1024,
+                                "display_number": 0,
+                            },
+                        }
+                    }
+                ]
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+    # Mock httpx.Response
+    class MockResponse:
+        def json(self):
+            return response_json
+        @property
+        def text(self):
+            return json.dumps(response_json)
+    
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+    optional_params = {
+        "tools": [
+            {
+                "type": "computer_20241022",
+                "function": {
+                    "name": "computer",
+                    "parameters": {
+                        "display_height_px": 768,
+                        "display_width_px": 1024,
+                        "display_number": 0,
+                    },
+                },
+            }
+        ]
+    }
+    # Call the transformation logic
+    result = config._transform_response(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+    # Check that the tool call is present in the returned message
+    assert result.choices[0].message.tool_calls is not None
+    assert len(result.choices[0].message.tool_calls) == 1
+    tool_call = result.choices[0].message.tool_calls[0]
+    assert tool_call.function.name == "computer"
+    args = json.loads(tool_call.function.arguments)
+    assert args["display_height_px"] == 768
+    assert args["display_width_px"] == 1024
+    assert args["display_number"] == 0

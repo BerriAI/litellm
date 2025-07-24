@@ -541,6 +541,13 @@ class AmazonConverseConfig(BaseConfig):
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
 
+        # PATCH: Allow anthropic_beta and tools to be passed directly for computer-use
+        # If present in optional_params, ensure they are included in additionalModelRequestFields
+        if "anthropic_beta" in optional_params:
+            additional_request_params["anthropic_beta"] = optional_params["anthropic_beta"]
+        if "tools" in optional_params:
+            additional_request_params["tools"] = optional_params["tools"]
+
         # Only set the topK value in for models that support it
         additional_request_params.update(
             self._handle_top_k_value(model, inference_params)
@@ -567,6 +574,9 @@ class AmazonConverseConfig(BaseConfig):
                 inference_params=inference_params
             ),
         }
+        print("\n==== Bedrock Request ====")
+        print("data:", data)
+        print("========================\n")
 
         # Handle all config blocks
         for config_name, config_class in self.get_config_blocks().items():
