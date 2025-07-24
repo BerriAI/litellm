@@ -2,7 +2,6 @@
 from typing import Any, Dict, List, Union, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -577,7 +576,6 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     """
     from litellm.proxy.proxy_server import proxy_config, store_model_in_db
     import os
-    import json
 
     if store_model_in_db is not True:
         raise HTTPException(
@@ -606,9 +604,22 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     config["litellm_settings"]["ui_theme_config"] = theme_data
     
     # Update UI_LOGO_PATH environment variable if logo_url is provided
-    if theme_data.get("logo_url"):
-        config["environment_variables"]["UI_LOGO_PATH"] = theme_data["logo_url"]
-        os.environ["UI_LOGO_PATH"] = theme_data["logo_url"]
+    # If logo_url is empty string, None, or null, remove the environment variable to use default
+    logo_url = theme_data.get("logo_url")
+    verbose_proxy_logger.debug(f"Updating logo_url: {logo_url}")
+    
+    if logo_url and isinstance(logo_url, str) and logo_url.strip():  # Check if logo_url exists and is not empty/whitespace
+        config["environment_variables"]["UI_LOGO_PATH"] = logo_url
+        os.environ["UI_LOGO_PATH"] = logo_url
+        verbose_proxy_logger.debug(f"Set UI_LOGO_PATH to: {logo_url}")
+    else:
+        # Remove the environment variable to restore default logo
+        if "UI_LOGO_PATH" in config.get("environment_variables", {}):
+            del config["environment_variables"]["UI_LOGO_PATH"]
+            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from config")
+        if "UI_LOGO_PATH" in os.environ:
+            del os.environ["UI_LOGO_PATH"]
+            verbose_proxy_logger.debug("Removed UI_LOGO_PATH from environment")
     
     # Create ui_colors.json content for Tailwind CSS
     ui_colors = {
@@ -625,8 +636,16 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     # Store ui_colors configuration for UI rebuilding
     config["general_settings"]["ui_colors"] = ui_colors
 
+    # Handle environment variable encryption if needed
+    stored_config = config.copy()
+    if "environment_variables" in stored_config and len(stored_config["environment_variables"]) > 0:
+        # Only encrypt if there are environment variables to encrypt
+        stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
+            environment_variables=stored_config["environment_variables"]
+        )
+    
     # Save the updated config
-    await proxy_config.save_config(new_config=config)
+    await proxy_config.save_config(new_config=stored_config)
 
     return {
         "message": "UI theme settings updated successfully. UI will reflect changes on next build.",
@@ -647,7 +666,6 @@ async def upload_logo(file: UploadFile = File(...)):
     Accepts image files (PNG, JPG, JPEG, SVG) and stores them for use in the UI.
     """
     import os
-    import shutil
     from pathlib import Path
 
     # Validate file type

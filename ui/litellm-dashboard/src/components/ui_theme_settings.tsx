@@ -33,7 +33,7 @@ interface UIThemeConfig {
   brand_color_subtle?: string;
   brand_color_faint?: string;
   brand_color_emphasis?: string;
-  logo_url?: string;
+  logo_url?: string | null;
 }
 
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
@@ -274,13 +274,18 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       brand_color_subtle: "#8e91eb",
       brand_color_faint: "#c7d2fe",
       brand_color_emphasis: "#5558eb",
-      logo_url: "",
+      logo_url: null, // Explicitly set to null to trigger removal
     };
     
-    form.setFieldsValue(defaults);
+    form.setFieldsValue({ ...defaults, logo_url: "" });
     setLogoPreview(null);
     setLogoUrlInput("");
     setLogoUrl(null); // Clear logo URL immediately
+    
+    // Clear from localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('litellm-logo-url');
+    }
     
     // Save the defaults to trigger logo update
     await handleSave(defaults);
