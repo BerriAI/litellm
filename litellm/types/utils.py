@@ -864,6 +864,9 @@ class PromptTokensDetailsWrapper(
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Ensure cached_tokens is set to 0 if None
+        if self.cached_tokens is None:
+            self.cached_tokens = 0
         if self.character_count is None:
             del self.character_count
         if self.image_count is None:
