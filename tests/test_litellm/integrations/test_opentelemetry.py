@@ -624,7 +624,7 @@ class TestOpenTelemetry(unittest.TestCase):
     def test_handle_success_spans_only(self):
         # make sure neither events nor metrics is on
         os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", None)
-        os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"] = "false"
+        os.environ.pop("LITELLM_OTEL_INTEGRATION_ENABLE_METRICS", None)
 
         # ─── build in‐memory OTEL providers/exporters ─────────────────────────────
         span_exporter = InMemorySpanExporter()
