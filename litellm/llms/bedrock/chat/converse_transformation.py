@@ -49,6 +49,14 @@ from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoni
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
+BEDROCK_HOSTED_TOOLS = [
+    "web_search",
+    "bash",
+    "text_editor",
+    "code_execution",
+    # Add more as Bedrock supports them
+]
+
 
 class AmazonConverseConfig(BaseConfig):
     """
@@ -547,16 +555,15 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params["anthropic_beta"] = optional_params["anthropic_beta"]
 
         def split_bedrock_tools(tools):
-            builtin_tool_types = {
-                "computer_20241022",
-                "bash_20241022",
-                "text_editor_20241022",
-                # Add more built-in types as Bedrock supports them
-            }
             builtin_tools = []
             function_tools = []
             for tool in tools:
-                if tool.get("type") in builtin_tool_types:
+                tool_type = tool.get("type", "")
+                if tool_type == "function" or tool_type == "custom":
+                    function_tools.append(tool)
+                elif tool_type.startswith("computer_"):
+                    builtin_tools.append(tool)
+                elif any(tool_type.startswith(t) for t in BEDROCK_HOSTED_TOOLS):
                     builtin_tools.append(tool)
                 else:
                     function_tools.append(tool)
