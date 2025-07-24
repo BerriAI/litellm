@@ -27,7 +27,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        poetry install --with dev,proxy-dev --extras proxy
+        poetry install --with dev,proxy-dev --extras "proxy semantic-router"
         poetry run pip install "pytest-retry==1.6.3"
         poetry run pip install pytest-xdist
         poetry run pip install "google-genai==1.22.0"
