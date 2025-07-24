@@ -109,6 +109,8 @@ async def cloudzero_dry_run_export(
     
     Only admin users can perform CloudZero exports.
     """
+    from datetime import datetime
+
     from litellm.proxy.proxy_server import prisma_client
 
     # Validation
@@ -126,11 +128,11 @@ async def cloudzero_dry_run_export(
     
     try:
         # Import and initialize CloudZero logger with credentials
-        from litellm.integrations.cloudzero.ll2cz.cloudzero import CloudZeroLogger
+        from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 
         # Initialize logger with credentials directly
         logger = CloudZeroLogger()
-        await logger.dry_run_export_usage_data(limit=request.limit)
+        await logger.dry_run_export_usage_data(target_hour=datetime.utcnow(), limit=request.limit)
         
         verbose_proxy_logger.info("CloudZero dry run export completed successfully")
         
