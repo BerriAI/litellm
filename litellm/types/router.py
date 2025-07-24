@@ -209,6 +209,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
 
+
+    # auto-router params
+    auto_router_config_path: Optional[str] = None
+    auto_router_default_model: Optional[str] = None
+    auto_router_embedding_model: Optional[str] = None
+
     def __init__(
         self,
         custom_llm_provider: Optional[str] = None,
@@ -253,6 +259,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
         mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None,
+        # auto-router params
+        auto_router_config_path: Optional[str] = None,
+        auto_router_default_model: Optional[str] = None,
+        auto_router_embedding_model: Optional[str] = None,
         **params,
     ):
         args = locals()
