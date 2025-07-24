@@ -952,12 +952,10 @@ class NewUserResponse(GenerateKeyResponse):
     updated_at: Optional[datetime] = None
 
 
-class UpdateUserRequest(GenerateRequestBase):
-    # Note: the defaults of all Params here MUST BE NONE
-    # else they will get overwritten
-    user_id: Optional[str] = None
+class UpdateUserRequestNoUserIDorEmail(
+    GenerateRequestBase
+):  # shared with BulkUpdateUserRequest
     password: Optional[str] = None
-    user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     user_role: Optional[
@@ -969,6 +967,13 @@ class UpdateUserRequest(GenerateRequestBase):
         ]
     ] = None
     max_budget: Optional[float] = None
+
+
+class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
+    # Note: the defaults of all Params here MUST BE NONE
+    # else they will get overwritten
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1766,16 +1771,16 @@ class UserAPIKeyAuth(
         if JWTHandler.is_jwt(token=api_key):
             return f"hashed-jwt-{hash_token(token=api_key)}"
         return api_key
-    
 
     @classmethod
     def get_litellm_internal_health_check_user_api_key_auth(cls) -> "UserAPIKeyAuth":
         """
         Returns a `UserAPIKeyAuth` object for the litellm internal health check service account.
-        
+
         This is used to track number of requests/spend for health check calls.
         """
         from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
         return cls(
             api_key=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_id=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,

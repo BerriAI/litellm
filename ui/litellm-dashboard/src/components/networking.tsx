@@ -4017,7 +4017,8 @@ export const userUpdateUserCall = async (
 export const userBulkUpdateUserCall = async (
   accessToken: string,
   formValues: any, // Assuming formValues is an object
-  userIds: string[]
+  userIds?: string[], // Optional - if not provided, will update all users
+  allUsers: boolean = false // Flag to update all users
 ) => {
   try {
     console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
@@ -4025,16 +4026,31 @@ export const userBulkUpdateUserCall = async (
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/user/bulk_update`
       : `/user/bulk_update`;
-    let request_body = [] 
-    for (const user_id of userIds) {
-      request_body.push({
-        user_id: user_id,
-        ...formValues,
+    
+    let request_body_json: string;
+    
+    if (allUsers) {
+      // Update all users mode
+      request_body_json = JSON.stringify({
+        all_users: true,
+        user_updates: formValues,
       });
+    } else if (userIds && userIds.length > 0) {
+      // Update specific users mode
+      let request_body = [] 
+      for (const user_id of userIds) {
+        request_body.push({
+          user_id: user_id,
+          ...formValues,
+        });
+      }
+      request_body_json = JSON.stringify({
+        users: request_body,
+      });
+    } else {
+      throw new Error("Must provide either userIds or set allUsers=true");
     }
-    let request_body_json = JSON.stringify({
-      users: request_body,
-    });
+    
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4052,8 +4068,16 @@ export const userBulkUpdateUserCall = async (
     }
 
     const data = (await response.json()) as {
-      user_id: string;
-      data: UserInfo;
+      results: Array<{
+        user_id?: string;
+        user_email?: string;
+        success: boolean;
+        error?: string;
+        updated_user?: any;
+      }>;
+      total_requested: number;
+      successful_updates: number;
+      failed_updates: number;
     };
     console.log("API Response:", data);
     //message.success("User role updated");
