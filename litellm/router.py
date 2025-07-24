@@ -6650,18 +6650,19 @@ class Router:
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
-        custom_logger_callbacks: List[CustomLogger] = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=CustomLogger,
-        )
-        
-        for callback in custom_logger_callbacks:
-            await callback.async_pre_routing_hook(
+        #########################################################
+        # Check if any auto-router should be used
+        #########################################################
+        if model in self.auto_routers:
+            await self.auto_routers[model].async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,
                 input=input,
                 specific_deployment=specific_deployment,
             )
+        
+
 
 
 
