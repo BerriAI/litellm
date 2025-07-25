@@ -129,6 +129,7 @@ class CustomGuardrail(CustomLogger):
         self,
         requested_guardrails: Union[List[str], List[Dict[str, DynamicGuardrailParams]]],
     ) -> bool:
+
         for _guardrail in requested_guardrails:
             if isinstance(_guardrail, dict):
                 if self.guardrail_name in _guardrail:
