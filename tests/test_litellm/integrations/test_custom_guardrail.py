@@ -13,11 +13,11 @@ class TestCustomGuardrailDeploymentHook:
         """Test that method returns kwargs unchanged when no guardrails are present"""
         custom_guardrail = CustomGuardrail()
 
-        # Test with litellm_guardrails as None
+        # Test with guardrails as None
         kwargs = {
             "messages": [{"role": "user", "content": "test message"}],
             "model": "gpt-3.5-turbo",
-            "litellm_guardrails": None,
+            "guardrails": None,
         }
 
         result = await custom_guardrail.async_pre_call_deployment_hook(
@@ -26,8 +26,8 @@ class TestCustomGuardrailDeploymentHook:
 
         assert result == kwargs
 
-        # Test with litellm_guardrails as non-list
-        kwargs["litellm_guardrails"] = "not_a_list"
+        # Test with guardrails as non-list
+        kwargs["guardrails"] = "not_a_list"
 
         result = await custom_guardrail.async_pre_call_deployment_hook(
             kwargs=kwargs, call_type=CallTypes.completion
@@ -50,7 +50,7 @@ class TestCustomGuardrailDeploymentHook:
         kwargs = {
             "messages": original_messages,
             "model": "gpt-3.5-turbo",
-            "litellm_guardrails": ["some_guardrail"],
+            "guardrails": ["some_guardrail"],
             "user_api_key_user_id": "test_user",
             "user_api_key_team_id": "test_team",
             "user_api_key_end_user_id": "test_end_user",
