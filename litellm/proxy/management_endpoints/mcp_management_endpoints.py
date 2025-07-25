@@ -357,6 +357,9 @@ if MCP_AVAILABLE:
         # Server name validation: disallow '-'
         if payload.server_name:
             validate_mcp_server_name(payload.server_name, raise_http_exception=True)
+        # Alias validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
         # Alias normalization and defaulting
         alias = payload.alias
         if not alias and payload.server_name:
@@ -508,6 +511,9 @@ if MCP_AVAILABLE:
         # Server name validation: disallow '-'
         if payload.server_name:
             validate_mcp_server_name(payload.server_name, raise_http_exception=True)
+        # Alias validation: disallow '-'
+        if payload.alias:
+            validate_mcp_server_name(payload.alias, raise_http_exception=True)
         # Alias normalization and defaulting
         alias = payload.alias
         if not alias and payload.server_name:
