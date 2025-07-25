@@ -56,14 +56,14 @@ class TestAutoRouter:
         # Act
         auto_router = AutoRouter(
             model_name=model_name,
-            router_config_path=router_config_path,
+            auto_router_config_path=router_config_path,
             default_model=default_model,
             embedding_model=embedding_model,
             litellm_router_instance=mock_router_instance,
         )
         
         # Assert
-        assert auto_router.router_config_path == router_config_path
+        assert auto_router.auto_router_config_path == router_config_path
         assert auto_router.auto_sync_value == AutoRouter.DEFAULT_AUTO_SYNC_VALUE
         assert auto_router.default_model == default_model
         assert auto_router.embedding_model == embedding_model
@@ -93,7 +93,7 @@ class TestAutoRouter:
         
         auto_router = AutoRouter(
             model_name="test-auto-router",
-            router_config_path="test/path/router.json",
+            auto_router_config_path="test/path/router.json",
             default_model="gpt-4o-mini",
             embedding_model="text-embedding-model",
             litellm_router_instance=mock_router_instance,
@@ -136,7 +136,7 @@ class TestAutoRouter:
         
         auto_router = AutoRouter(
             model_name="test-auto-router",
-            router_config_path="test/path/router.json",
+            auto_router_config_path="test/path/router.json",
             default_model="gpt-4o-mini",
             embedding_model="text-embedding-model",
             litellm_router_instance=mock_router_instance,
@@ -163,7 +163,7 @@ class TestAutoRouter:
         with patch('semantic_router.routers.SemanticRouter'):
             auto_router = AutoRouter(
                 model_name="test-auto-router",
-                router_config_path="test/path/router.json",
+                auto_router_config_path="test/path/router.json",
                 default_model="gpt-4o-mini",
                 embedding_model="text-embedding-model",
                 litellm_router_instance=mock_router_instance,

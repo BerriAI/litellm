@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
 import type { FormInstance } from "antd";
 import type { UploadProps } from "antd/es/upload";
+import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import LiteLLMModelNameField from "./litellm_model_name";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 import ProviderSpecificFields from "./provider_specific_fields";
@@ -15,6 +16,8 @@ import { Row, Col } from "antd";
 import { Text, TextInput, Switch } from "@tremor/react";
 import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
+import AddAutoRouterTab from "./add_auto_router_tab";
+import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 
 interface AddModelTabProps {
   form: FormInstance;
@@ -85,10 +88,28 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole);
 
+  const handleAutoRouterOk = () => {
+    form
+      .validateFields()
+      .then((values) => {
+        handleAddAutoRouterSubmit(values, accessToken, form, handleOk);
+      })
+      .catch((error) => {
+        console.error("Validation failed:", error);
+      });
+  };
+
   return (
     <>
       <Title level={2}>Add new model</Title>
-      <Card>
+      <TabGroup className="w-full">
+        <TabList className="mb-4">
+          <Tab>Add Model</Tab>
+          <Tab>Add Auto Router</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Card>
         <Form
           form={form}
           onFinish={handleOk}
@@ -328,7 +349,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             </div>
           </>
         </Form>
-      </Card>
+            </Card>
+          </TabPanel>
+          <TabPanel>
+            <AddAutoRouterTab
+              form={form}
+              handleOk={handleAutoRouterOk}
+              accessToken={accessToken}
+              userRole={userRole}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
       
       {/* Test Connection Results Modal */}
       <Modal
