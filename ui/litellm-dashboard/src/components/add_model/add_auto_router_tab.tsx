@@ -131,13 +131,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           </Form.Item>
 
           {/* Router Configuration Builder */}
-          <Form.Item
-            label="Router Configuration"
-            tooltip="Configure routing logic to automatically select the best model based on user input"
-            labelCol={{ span: 24 }}
-            labelAlign="left"
-            className="mb-4"
-          >
+          <div className="w-full mb-4">
             <RouterConfigBuilder
               modelInfo={modelInfo}
               value={routerConfig}
@@ -146,7 +140,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 form.setFieldValue('auto_router_config', config);
               }}
             />
-          </Form.Item>
+          </div>
 
           {/* Auto Router Default Model */}
           <Form.Item
