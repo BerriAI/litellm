@@ -8,22 +8,28 @@ export const handleAddAutoRouterSubmit = async (
   callback?: () => void,
 ) => {
   try {
+    console.log("=== AUTO ROUTER SUBMIT HANDLER CALLED ===");
     console.log("handling auto router submit for formValues:", values);
+    console.log("Access token:", accessToken ? "Present" : "Missing");
+    console.log("Form:", form ? "Present" : "Missing");
+    console.log("Callback:", callback ? "Present" : "Missing");
 
     // Create auto router configuration
     const autoRouterConfig = {
       model_name: values.auto_router_name,
       litellm_params: {
         model: `auto_router/${values.auto_router_name}`,
-        auto_router_config: values.auto_router_config, // Use built JSON config instead of file path
+        auto_router_config: values.auto_router_config, // Pass the actual JSON config built by RouterConfigBuilder
         auto_router_default_model: values.auto_router_default_model,
       },
       model_info: {},
     };
 
     // Add optional embedding model if provided
-    if (values.auto_router_embedding_model) {
+    if (values.auto_router_embedding_model && values.auto_router_embedding_model !== 'custom') {
       autoRouterConfig.litellm_params.auto_router_embedding_model = values.auto_router_embedding_model;
+    } else if (values.custom_embedding_model) {
+      autoRouterConfig.litellm_params.auto_router_embedding_model = values.custom_embedding_model;
     }
 
     // Add team information if provided
@@ -39,8 +45,9 @@ export const handleAddAutoRouterSubmit = async (
     console.log("Auto router configuration to be created:", autoRouterConfig);
 
     // Create the auto router using the same model creation endpoint
+    console.log("Calling modelCreateCall with:", { accessToken: accessToken ? "Present" : "Missing", config: autoRouterConfig });
     const response: any = await modelCreateCall(accessToken, autoRouterConfig as Model);
-    console.log(`response for auto router create call: ${response["data"]}`);
+    console.log(`response for auto router create call:`, response);
 
     message.success("Auto router added successfully!");
     

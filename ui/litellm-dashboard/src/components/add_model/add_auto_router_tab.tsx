@@ -72,6 +72,30 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   // Auto router specific form submit handler
   const handleAutoRouterSubmit = () => {
+    console.log("Auto router submit triggered!");
+    console.log("Router config:", routerConfig);
+    const currentFormValues = form.getFieldsValue();
+    console.log("Form values:", currentFormValues);
+    
+    // Check basic required fields first
+    if (!currentFormValues.auto_router_name) {
+      message.error("Please enter an Auto Router Name");
+      return;
+    }
+    
+    if (!currentFormValues.auto_router_default_model) {
+      message.error("Please select a Default Model");
+      return;
+    }
+
+    // Set auto router specific form values that are required by the regular model form
+    form.setFieldsValue({
+      custom_llm_provider: 'auto_router',
+      model: currentFormValues.auto_router_name,
+      // api_key is not needed for auto router, but form expects it
+      api_key: 'not_required_for_auto_router'
+    });
+    
     // Custom validation for router config
     if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
       message.error("Please configure at least one route for the auto router");
@@ -91,15 +115,34 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     form
       .validateFields()
       .then((values) => {
+        console.log("Form validation passed, submitting with values:", values);
         // Add the router config to form values
         const submitValues = {
           ...values,
           auto_router_config: routerConfig,
         };
+        console.log("Final submit values:", submitValues);
         handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
       })
       .catch((error) => {
         console.error("Validation failed:", error);
+        
+        // Extract specific field errors
+        const fieldErrors = error.errorFields || [];
+        if (fieldErrors.length > 0) {
+          const missingFields = fieldErrors.map((field: any) => {
+            const fieldName = field.name[0];
+            const friendlyNames: { [key: string]: string } = {
+              'auto_router_name': 'Auto Router Name',
+              'auto_router_default_model': 'Default Model',
+              'auto_router_embedding_model': 'Embedding Model'
+            };
+            return friendlyNames[fieldName] || fieldName;
+          });
+          message.error(`Please fill in the following required fields: ${missingFields.join(', ')}`);
+        } else {
+          message.error("Please fill in all required fields");
+        }
       });
   };
 
@@ -152,11 +195,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             labelAlign="left"
           >
             <AntdSelect
-              value={form.getFieldValue('auto_router_default_model')}
               placeholder="Select a default model"
               onChange={(value) => {
                 setShowCustomDefaultModel(value === 'custom');
-                form.setFieldValue('auto_router_default_model', value);
               }}
               options={[
                 ...Array.from(new Set(modelInfo.map(option => option.model_group)))
@@ -270,7 +311,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             </Tooltip>
             <div className="space-x-2">
               <Button onClick={handleTestConnection} loading={isTestingConnection}>Test Connect</Button>
-              <Button htmlType="submit">Add Auto Router</Button>
+              <Button 
+                onClick={() => {
+                  console.log("Add Auto Router button clicked!");
+                  console.log("Current router config:", routerConfig);
+                  console.log("Current form values:", form.getFieldsValue());
+                  handleAutoRouterSubmit();
+                }}
+              >
+                Add Auto Router
+              </Button>
             </div>
           </div>
         </Form>
