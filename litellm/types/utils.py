@@ -2093,6 +2093,7 @@ all_litellm_params = [
     "metadata",
     "litellm_metadata",
     "litellm_trace_id",
+    "litellm_guardrails",
     "tags",
     "acompletion",
     "aimg_generation",
