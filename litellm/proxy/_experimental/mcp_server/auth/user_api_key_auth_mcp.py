@@ -130,6 +130,10 @@ class MCPRequestHandler:
         
         for header_name, header_value in headers.items():
             if header_name.lower().startswith(prefix):
+                # Skip the access groups header as it's not a server auth header
+                if header_name.lower() == MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME.lower() or header_name.lower() == MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME.lower():
+                    continue
+                    
                 # Extract server_alias and header_name from x-mcp-{server_alias}-{header_name}
                 remaining = header_name[len(prefix):].lower()
                 if '-' in remaining:

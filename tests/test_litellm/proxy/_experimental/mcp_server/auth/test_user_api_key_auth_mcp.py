@@ -183,11 +183,11 @@ class TestMCPRequestHandler:
                 [
                     (b"x-litellm-api-key", b"test-api-key-123"),
                     (b"x-mcp-github-authorization", b"Bearer github-token"),
-                    (b"x-mcp-zapier-x-api-key", b"zapier-api-key"),
+                    (b"x-mcp-zapier_x_api-key", b"zapier-api-key"),
                 ],
                 "test-api-key-123",
                 None,
-                {"github": "Bearer github-token", "zapier": "zapier-api-key"},
+                {"github": "Bearer github-token", "zapier_x_api": "zapier-api-key"},
             ),
             # Test case 10: Both legacy and server-specific auth headers
             (
@@ -205,11 +205,11 @@ class TestMCPRequestHandler:
                 [
                     (b"x-litellm-api-key", b"test-api-key-123"),
                     (b"x-mcp-deepwiki-authorization", b"Basic base64-encoded"),
-                    (b"x-mcp-custom-x-custom-header", b"custom-value"),
+                    (b"x-mcp-custom_x_custom-header", b"custom-value"),
                 ],
                 "test-api-key-123",
                 None,
-                {"deepwiki": "Basic base64-encoded", "custom": "custom-value"},
+                {"deepwiki": "Basic base64-encoded", "custom_x_custom": "custom-value"},
             ),
             # Test case 12: Case insensitive server-specific headers
             (
@@ -619,13 +619,13 @@ class TestMCPCustomHeaderName:
         headers = Headers({
             "x-litellm-api-key": "test-key",
             "x-mcp-github-authorization": "Bearer github-token",
-            "x-mcp-zapier-x-api-key": "zapier-api-key",
+            "x-mcp-zapier_x_api-key": "zapier-api-key",
             "x-mcp-deepwiki-authorization": "Basic base64-encoded"
         })
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         expected = {
             "github": "Bearer github-token",
-            "zapier": "zapier-api-key", 
+            "zapier_x_api": "zapier-api-key", 
             "deepwiki": "Basic base64-encoded"
         }
         assert result == expected
@@ -634,12 +634,12 @@ class TestMCPCustomHeaderName:
         headers = Headers({
             "x-litellm-api-key": "test-key",
             "X-MCP-GITHUB-AUTHORIZATION": "Bearer github-token",
-            "x-mcp-ZAPIER-x-api-key": "zapier-api-key"
+            "x-mcp-ZAPIER_x_api-key": "zapier-api-key"
         })
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         expected = {
             "github": "Bearer github-token",
-            "zapier": "zapier-api-key"
+            "zapier_x_api": "zapier-api-key"
         }
         assert result == expected
         
@@ -652,6 +652,57 @@ class TestMCPCustomHeaderName:
         })
         result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
         assert result == {"github": "Bearer github-token"}
+        
+        # Test case 6: Edge case - header with multiple hyphens in server alias
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github_mcp-authorization": "Bearer github-mcp-token",
+            "x-mcp-gh_mcp2-authorization": "Bearer gh-mcp2-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        expected = {
+            "github_mcp": "Bearer github-mcp-token",
+            "gh_mcp2": "Bearer gh-mcp2-token"
+        }
+        assert result == expected
+        
+        # Test case 7: Edge case - header with underscore in server alias
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github_mcp-authorization": "Bearer github-mcp-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github_mcp": "Bearer github-mcp-token"}
+        
+        # Test case 8: Edge case - empty header value
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-authorization": ""
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github": ""}
+        
+        # Test case 9: Edge case - very long header value
+        long_token = "Bearer " + "x" * 1000
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-authorization": long_token
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github": long_token}
+        
+        # Test case 10: Edge case - special characters in server alias
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-123-authorization": "Bearer github-123-token",
+            "x-mcp-github_test-authorization": "Bearer github-test-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        expected = {
+            "github-123": "Bearer github-123-token",
+            "github_test": "Bearer github-test-token"
+        }
+        assert result == expected
 
 
 class TestMCPAccessGroupsE2E:
@@ -694,6 +745,8 @@ class TestMCPAccessGroupsE2E:
             assert auth_result.api_key == "test-api-key"
             assert mcp_auth_header is None
             assert mcp_servers is None
+            # The access groups header should not be parsed as a server auth header
+            # It should be handled separately by the access groups parsing logic
             assert mcp_server_auth_headers == {}
 
             # Verify the mock was called
@@ -755,6 +808,9 @@ def test_mcp_path_based_server_segregation(monkeypatch):
         # Get auth context
         user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers = get_auth_context()
         
+        # Capture the MCP servers for testing
+        captured_mcp_servers["servers"] = mcp_servers
+        
         # Send response
         await send({
             "type": "http.response.start",
@@ -785,7 +841,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     client = TestClient(app)
     response = client.get("/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"})
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.json() == {"status": "ok"}
 
     # The context should have mcp_servers set to ["zapier", "group1"]
     assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]
