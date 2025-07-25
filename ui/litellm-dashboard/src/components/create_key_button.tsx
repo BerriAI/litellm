@@ -37,7 +37,6 @@ import {
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
-import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -49,6 +48,7 @@ import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 
 
 const { Option } = Select;
@@ -896,12 +896,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         className="mt-4"
                         help="Select MCP servers or access groups this key can access. "
                       >
-                        <PremiumMCPSelector
-                          onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
+                        <MCPServerSelector
+                          onChange={(val: any) => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
                           value={form.getFieldValue('allowed_mcp_servers_and_groups')}
                           accessToken={accessToken}
                           placeholder="Select MCP servers or access groups (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
 
