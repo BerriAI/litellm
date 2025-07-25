@@ -479,3 +479,164 @@ def test_role_assumption_without_session_name():
 
         # Should only be called once due to caching
         assert mock_sts_client.assume_role.call_count == 1
+
+
+def test_cache_keys_are_different_for_different_roles():
+    """
+    Test that cache keys are different for different AWS roles.
+    This ensures that credentials for different roles don't get mixed up.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Create arguments for two different roles
+    args1 = {
+        "aws_access_key_id": None,
+        "aws_secret_access_key": None,
+        "aws_role_name": "arn:aws:iam::1111111111111:role/LitellmRole",
+        "aws_session_name": "test-session-1"
+    }
+    
+    args2 = {
+        "aws_access_key_id": None,
+        "aws_secret_access_key": None,
+        "aws_role_name": "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+        "aws_session_name": "test-session-2"
+    }
+    
+    # Generate cache keys
+    cache_key1 = base_aws_llm.get_cache_key(args1)
+    cache_key2 = base_aws_llm.get_cache_key(args2)
+    
+    # Cache keys should be different because the role names are different
+    assert cache_key1 != cache_key2
+
+
+def test_different_roles_without_session_names_should_not_share_cache():
+    """
+    Test that different roles with auto-generated session names don't share cache.
+    This was the original issue where cache keys were the same for different roles.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Create arguments for two different roles without session names
+    args1 = {
+        "aws_access_key_id": None,
+        "aws_secret_access_key": None,
+        "aws_role_name": "arn:aws:iam::1111111111111:role/LitellmRole",
+        "aws_session_name": None
+    }
+    
+    args2 = {
+        "aws_access_key_id": None,
+        "aws_secret_access_key": None,
+        "aws_role_name": "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+        "aws_session_name": None
+    }
+    
+    # Generate cache keys
+    cache_key1 = base_aws_llm.get_cache_key(args1)
+    cache_key2 = base_aws_llm.get_cache_key(args2)
+    
+    # Cache keys should be different because the role names are different
+    assert cache_key1 != cache_key2
+
+
+def test_skip_role_assumption_when_already_using_target_role():
+    """
+    Test that role assumption is skipped when we're already using the target role.
+    This fixes the issue where EKS/IRSA environments would try to assume the same role twice.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Mock get_caller_identity to return an assumed role ARN
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::1111111111111:assumed-role/LitellmRole/some-session-name",
+        "UserId": "AROABC123DEFGHIJKLMN:some-session-name",
+        "Account": "1111111111111"
+    }
+    
+    # Mock session credentials
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "current-access-key"
+    mock_credentials.secret_key = "current-secret-key"
+    mock_credentials.token = "current-session-token"
+    
+    mock_session = MagicMock()
+    mock_session.get_credentials.return_value = mock_credentials
+    
+    with patch("boto3.client", return_value=mock_sts_client), \
+         patch("boto3.Session", return_value=mock_session):
+        
+        # Try to assume the same role we're already using
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
+            aws_session_name="test-session"
+        )
+        
+        # Should return current credentials without calling assume_role
+        mock_sts_client.assume_role.assert_not_called()
+        assert credentials == mock_credentials
+        assert ttl is None
+
+
+def test_proceed_with_role_assumption_for_different_role():
+    """
+    Test that role assumption proceeds normally when trying to assume a different role.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Mock get_caller_identity to return an assumed role ARN
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::1111111111111:assumed-role/LitellmRole/some-session-name",
+        "UserId": "AROABC123DEFGHIJKLMN:some-session-name",
+        "Account": "1111111111111"
+    }
+    
+    # Mock the STS response with proper expiration handling
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    current_time = datetime.now(timezone.utc)
+    # Create a timedelta object that returns 3600 when total_seconds() is called
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+    
+    with patch("boto3.client", return_value=mock_sts_client):
+        
+        # Try to assume a different role
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+            aws_session_name="test-session"
+        )
+        
+        # Should call assume_role for the different role
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+            RoleSessionName="test-session"
+        )
+        
+        # Verify credentials are returned correctly
+        assert credentials.access_key == "assumed-access-key"
+        assert credentials.secret_key == "assumed-secret-key"
+        assert credentials.token == "assumed-session-token"
+        assert ttl is not None
