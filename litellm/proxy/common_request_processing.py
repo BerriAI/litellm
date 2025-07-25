@@ -730,8 +730,11 @@ class ProxyBaseLLMRequestProcessing:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events
         """
+        from litellm.types.utils import ModelResponse, ModelResponseStream
+
         verbose_proxy_logger.debug("inside generator")
         try:
+            str_so_far = ""
             async for chunk in response:
                 verbose_proxy_logger.debug(
                     "async_data_generator: received streaming chunk - {}".format(chunk)
@@ -741,7 +744,12 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict=user_api_key_dict,
                     response=chunk,
                     data=request_data,
+                    str_so_far=str_so_far,
                 )
+
+                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                    response_str = litellm.get_response_string(response_obj=chunk)
+                    str_so_far += response_str
 
                 # Format chunk using helper function
                 yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)
