@@ -2314,6 +2314,7 @@ class LlmProviders(str, Enum):
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     RECRAFT = "recraft"
+    HEROKU = "heroku"
 
 
 # Create a set of all provider values for quick lookup
