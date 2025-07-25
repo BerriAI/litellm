@@ -90,6 +90,10 @@ interface RetryPolicyObject {
   [key: string]: { [retryPolicyKey: string]: number } | undefined;
 }
 
+interface GlobalRetryPolicyObject {
+  [retryPolicyKey: string]: number;
+}
+
 interface GlobalExceptionActivityData {
   sum_num_rate_limit_exceptions: number;
   daily_data: { date: string; num_rate_limit_exceptions: number }[];
@@ -173,6 +177,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] =
     useState<RetryPolicyObject | null>(null);
+  const [globalRetryPolicy, setGlobalRetryPolicy] = useState<GlobalRetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
 
   const [globalExceptionData, setGlobalExceptionData] =
@@ -444,13 +449,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
 
     console.log("new modelGroupRetryPolicy:", modelGroupRetryPolicy);
+    console.log("new globalRetryPolicy:", globalRetryPolicy);
 
     try {
-      const payload = {
-        router_settings: {
-          model_group_retry_policy: modelGroupRetryPolicy,
-        },
+      const payload: any = {
+        router_settings: {},
       };
+
+      // Add model group retry policy if it exists
+      if (modelGroupRetryPolicy) {
+        payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy;
+      }
+
+      // Add global retry policy if it exists
+      if (globalRetryPolicy) {
+        payload.router_settings.retry_policy = globalRetryPolicy;
+      }
 
       await setCallbacksCall(accessToken, payload);
       message.success("Retry settings saved successfully");
@@ -625,6 +639,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         console.log("model_group_retry_policy:", model_group_retry_policy);
         console.log("default_retries:", default_retries);
         setModelGroupRetryPolicy(model_group_retry_policy);
+        setGlobalRetryPolicy(router_settings.retry_policy);
         setDefaultRetry(default_retries);
       } catch (error) {
         console.error("There was an error fetching the model data", error);
@@ -1704,50 +1719,63 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Grid>
                 </TabPanel>
                 <TabPanel>
-                  <div className="flex items-center">
-                    <Text>Filter by Public Model Name</Text>
-
-                    <Select
-                      className="mb-4 mt-2 ml-2 w-50"
-                      defaultValue={
-                        selectedModelGroup
-                          ? selectedModelGroup
-                          : availableModelGroups[0]
-                      }
-                      value={
-                        selectedModelGroup
-                          ? selectedModelGroup
-                          : availableModelGroups[0]
-                      }
-                      onValueChange={(value) => setSelectedModelGroup(value)}
-                    >
-                      {availableModelGroups.map((group, idx) => (
-                        <SelectItem
-                          key={idx}
-                          value={group}
-                          onClick={() => setSelectedModelGroup(group)}
-                        >
-                          {group}
-                        </SelectItem>
-                      ))}
-                    </Select>
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="flex items-center">
+                      <Text>Retry Policy Scope:</Text>
+                      <Select
+                        className="ml-2 w-48"
+                        defaultValue="global"
+                        value={selectedModelGroup === "global" ? "global" : selectedModelGroup || availableModelGroups[0]}
+                        onValueChange={(value) => setSelectedModelGroup(value)}
+                      >
+                        <SelectItem value="global">Global Default</SelectItem>
+                        {availableModelGroups.map((group, idx) => (
+                          <SelectItem
+                            key={idx}
+                            value={group}
+                            onClick={() => setSelectedModelGroup(group)}
+                          >
+                            {group}
+                          </SelectItem>
+                        ))}
+                      </Select>
+                    </div>
                   </div>
 
-                  <Title>Retry Policy for {selectedModelGroup}</Title>
-                  <Text className="mb-6">
-                    How many retries should be attempted based on the Exception
-                  </Text>
+                  {selectedModelGroup === "global" ? (
+                    <>
+                      <Title>Global Retry Policy</Title>
+                      <Text className="mb-6">
+                        Default retry settings applied to all model groups unless overridden
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Title>Retry Policy for {selectedModelGroup}</Title>
+                      <Text className="mb-6">
+                        Model-specific retry settings. Falls back to global defaults if not set.
+                      </Text>
+                    </>
+                  )}
                   {retry_policy_map && (
                     <table>
                       <tbody>
                         {Object.entries(retry_policy_map).map(
                           ([exceptionType, retryPolicyKey], idx) => {
-                            let retryCount =
-                              modelGroupRetryPolicy?.[selectedModelGroup!]?.[
-                                retryPolicyKey
-                              ];
-                            if (retryCount == null) {
-                              retryCount = defaultRetry;
+                            let retryCount: number;
+                            
+                            if (selectedModelGroup === "global") {
+                              // Show global policy values
+                              retryCount = globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
+                            } else {
+                              // Show model-group specific values with fallback to global
+                              const modelSpecificCount = modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey];
+                              if (modelSpecificCount != null) {
+                                retryCount = modelSpecificCount;
+                              } else {
+                                // Fall back to global policy, then default
+                                retryCount = globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
+                              }
                             }
 
                             return (
@@ -1757,6 +1785,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                               >
                                 <td>
                                   <Text>{exceptionType}</Text>
+                                  {selectedModelGroup !== "global" && (
+                                    <Text className="text-xs text-gray-500 ml-2">
+                                      (Global: {globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry})
+                                    </Text>
+                                  )}
                                 </td>
                                 <td>
                                   <InputNumber
@@ -1765,22 +1798,34 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                     min={0}
                                     step={1}
                                     onChange={(value) => {
-                                      setModelGroupRetryPolicy(
-                                        (prevModelGroupRetryPolicy) => {
-                                          const prevRetryPolicy =
-                                            prevModelGroupRetryPolicy?.[
-                                              selectedModelGroup!
-                                            ] ?? {};
+                                      if (selectedModelGroup === "global") {
+                                        // Update global policy
+                                        setGlobalRetryPolicy((prevGlobalRetryPolicy) => {
+                                          if (value == null) return prevGlobalRetryPolicy;
                                           return {
-                                            ...(prevModelGroupRetryPolicy ??
-                                              {}),
-                                            [selectedModelGroup!]: {
-                                              ...prevRetryPolicy,
-                                              [retryPolicyKey!]: value,
-                                            },
-                                          } as RetryPolicyObject;
-                                        }
-                                      );
+                                            ...(prevGlobalRetryPolicy ?? {}),
+                                            [retryPolicyKey]: value,
+                                          };
+                                        });
+                                      } else {
+                                        // Update model-group specific policy
+                                        setModelGroupRetryPolicy(
+                                          (prevModelGroupRetryPolicy) => {
+                                            const prevRetryPolicy =
+                                              prevModelGroupRetryPolicy?.[
+                                                selectedModelGroup!
+                                              ] ?? {};
+                                            return {
+                                              ...(prevModelGroupRetryPolicy ??
+                                                {}),
+                                              [selectedModelGroup!]: {
+                                                ...prevRetryPolicy,
+                                                [retryPolicyKey!]: value,
+                                              },
+                                            } as RetryPolicyObject;
+                                          }
+                                        );
+                                      }
                                     }}
                                   />
                                 </td>
