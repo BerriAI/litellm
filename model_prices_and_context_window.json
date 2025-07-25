@@ -16670,5 +16670,25 @@
         "supports_vision": false,
         "supports_system_messages": true,
         "supports_tool_choice": false
+    },
+    "heroku/claude-4-sonnet": {
+        "max_tokens": 8192,
+        "litellm_provider": "heroku",
+        "mode": "chat"
+    },
+    "heroku/claude-3-7-sonnet": {
+        "max_tokens": 8192,
+        "litellm_provider": "heroku",
+        "mode": "chat"
+    },
+    "heroku/claude-3-5-sonnet-latest": {
+        "max_tokens": 8192,
+        "litellm_provider": "heroku",
+        "mode": "chat"
+    },
+    "heroku/claude-3-5-haiku": {
+        "max_tokens": 4096,
+        "litellm_provider": "heroku",
+        "mode": "chat"
     }
 }
