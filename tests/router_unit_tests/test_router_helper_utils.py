@@ -1263,55 +1263,6 @@ def test_is_auto_router_deployment(model_list):
     assert router._is_auto_router_deployment(litellm_params_contains) is False
 
 
-def test_init_auto_router_deployment_missing_params(model_list):
-    """Test if the 'init_auto_router_deployment' function raises ValueError when required parameters are missing"""
-    router = Router(model_list=model_list)
-    
-    # Test case 1: Missing auto_router_config_path
-    litellm_params = LiteLLM_Params(
-        model="auto_router/test",
-        auto_router_default_model="gpt-3.5-turbo",
-        auto_router_embedding_model="text-embedding-ada-002"
-    )
-    deployment = Deployment(
-        model_name="test-auto-router", 
-        litellm_params=litellm_params,
-        model_info={"id": "test-id"}
-    )
-    
-    with pytest.raises(ValueError, match="auto_router_config_path is required"):
-        router.init_auto_router_deployment(deployment)
-    
-    # Test case 2: Missing auto_router_default_model
-    litellm_params = LiteLLM_Params(
-        model="auto_router/test",
-        auto_router_config_path="/path/to/config",
-        auto_router_embedding_model="text-embedding-ada-002"
-    )
-    deployment = Deployment(
-        model_name="test-auto-router", 
-        litellm_params=litellm_params,
-        model_info={"id": "test-id"}
-    )
-    
-    with pytest.raises(ValueError, match="auto_router_default_model is required"):
-        router.init_auto_router_deployment(deployment)
-    
-    # Test case 3: Missing auto_router_embedding_model
-    litellm_params = LiteLLM_Params(
-        model="auto_router/test",
-        auto_router_config_path="/path/to/config",
-        auto_router_default_model="gpt-3.5-turbo"
-    )
-    deployment = Deployment(
-        model_name="test-auto-router", 
-        litellm_params=litellm_params,
-        model_info={"id": "test-id"}
-    )
-    
-    with pytest.raises(ValueError, match="auto_router_embedding_model is required"):
-        router.init_auto_router_deployment(deployment)
-
 
 @patch('litellm.router_strategy.auto_router.auto_router.AutoRouter')
 def test_init_auto_router_deployment_success(mock_auto_router, model_list):

@@ -21,6 +21,7 @@ import {
 } from "./networking";
 
 import { handleAddModelSubmit } from "./add_model/handle_add_model_submit";
+
 import CredentialsPanel from "@/components/model_add/credentials";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import {
@@ -67,6 +68,7 @@ import {
 } from "./provider_info_helpers";
 import ModelInfoView from "./model_info_view";
 import AddModelTab from "./add_model/add_model_tab";
+
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
 import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
@@ -966,6 +968,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         console.error("Validation failed:", error);
       });
   };
+
+
 
   console.log(`selectedProvider: ${selectedProvider}`);
   console.log(`providerModels.length: ${providerModels.length}`);
