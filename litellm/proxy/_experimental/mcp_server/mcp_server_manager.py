@@ -112,6 +112,17 @@ class MCPServerManager:
             mcp_info["server_name"] = server_name
             mcp_info["description"] = server_config.get("description", None)
 
+            # Use alias for name if present, else server_name
+            alias = server_config.get("alias", None)
+            
+            # Create a temporary server object to use with get_server_prefix utility
+            temp_server = type('TempServer', (), {
+                'alias': alias,
+                'server_name': server_name,
+                'server_id': None
+            })()
+            name_for_prefix = get_server_prefix(temp_server)
+
             # Generate stable server ID based on parameters
             server_id = self._generate_stable_server_id(
                 server_name=server_name,
@@ -119,11 +130,14 @@ class MCPServerManager:
                 transport=server_config.get("transport", MCPTransport.http),
                 spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
                 auth_type=server_config.get("auth_type", None),
+                alias=alias,
             )
 
             new_server = MCPServer(
                 server_id=server_id,
-                name=server_name,
+                name=name_for_prefix,
+                alias=alias,
+                server_name=server_name,
                 url=server_config.get("url", None) or "",
                 command=server_config.get("command", None) or "",
                 args=server_config.get("args", None) or [],
@@ -504,6 +518,7 @@ class MCPServerManager:
         transport: str,
         spec_version: str,
         auth_type: Optional[str] = None,
+        alias: Optional[str] = None,
     ) -> str:
         """
         Generate a stable server ID based on server parameters using a hash function.
@@ -519,13 +534,14 @@ class MCPServerManager:
             transport: Transport type (sse, http, etc.)
             spec_version: MCP spec version
             auth_type: Authentication type (optional)
+            alias: Server alias (optional)
 
         Returns:
             A deterministic server ID string
         """
         # Create a string from all the identifying parameters
         params_string = (
-            f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}"
+            f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}|{alias or ''}"
         )
 
         # Generate SHA-256 hash
