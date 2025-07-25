@@ -19,7 +19,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 |---------|-------------|
 | MCP Operations | • List Tools<br/>• Call Tools |
 | Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
-| LiteLLM Permission Management | ✨ Enterprise Only<br/>• By Key<br/>• By Team<br/>• By Organization |
+| LiteLLM Permission Management | • By Key<br/>• By Team<br/>• By Organization |
 
 ## Adding your MCP
 
@@ -606,7 +606,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
 
 
 
-## ✨ MCP Cost Tracking
+## MCP Cost Tracking
 
 LiteLLM provides two ways to track costs for MCP tool calls:
 
@@ -722,7 +722,7 @@ When MCP tools are called, your custom hook will:
 2. Modify the response if needed
 3. Track costs in LiteLLM's logging system
 
-## ✨ MCP Permission Management
+## MCP Permission Management
 
 LiteLLM supports managing permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM. When a MCP client attempts to list tools, LiteLLM will only return the tools the entity has permissions to access.
 
