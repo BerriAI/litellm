@@ -490,9 +490,11 @@ def get_end_user_id_from_request_body(
         custom_header_name_to_check = general_settings.get(user_id_header_config_key)
 
         if custom_header_name_to_check and isinstance(custom_header_name_to_check, str):
-            user_id_from_header = request_headers.get(custom_header_name_to_check)
-            if user_id_from_header is not None and user_id_from_header.strip():
-                return str(user_id_from_header)
+            for header_name, header_value in request_headers.items():
+                if header_name.lower() == custom_header_name_to_check.lower():
+                    user_id_from_header = header_value
+                    if user_id_from_header.strip():
+                        return str(user_id_from_header)
 
     # Check 2: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:

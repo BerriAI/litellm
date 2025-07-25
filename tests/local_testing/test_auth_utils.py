@@ -169,6 +169,13 @@ def test_get_end_user_id_from_request_body_always_returns_str():
             },
             "header-priority"
         ),
+        # Test 12: user_header_name is matched case-insensitively
+        (
+            {"x-user-id": "lowercase-header-user"},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "lowercase-header-user"
+        ),
     ]
 )
 def test_get_end_user_id_from_request_body_with_user_header_name(
