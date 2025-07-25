@@ -1292,7 +1292,8 @@ def test_init_auto_router_deployment_success(mock_auto_router, model_list):
     # Verify AutoRouter was called with correct parameters
     mock_auto_router.assert_called_once_with(
         model_name="test-auto-router",
-        router_config_path="/path/to/config",
+        auto_router_config_path="/path/to/config",
+        auto_router_config=None,
         default_model="gpt-3.5-turbo",
         embedding_model="text-embedding-ada-002",
         litellm_router_instance=router,
