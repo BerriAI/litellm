@@ -912,6 +912,13 @@ def strip_null_values(data: Any) -> Any:
 def log_requester_metadata(clean_metadata: dict):
     returned_metadata = {}
     requester_metadata = clean_metadata.get("requester_metadata") or {}
+    
+    # Copy langfuse_* keys from requester_metadata to root level
+    if isinstance(requester_metadata, dict):
+        for key, value in requester_metadata.items():
+            if key.startswith("langfuse_"):
+                returned_metadata[key] = value
+    
     for k, v in clean_metadata.items():
         if k not in requester_metadata:
             returned_metadata[k] = v
