@@ -2317,6 +2317,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    AUTO_ROUTER = "auto_router"
 
 
 # Create a set of all provider values for quick lookup

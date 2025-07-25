@@ -62,6 +62,7 @@ rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.15", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
+semantic-router = {version = "*", optional = true, python = ">=3.9"}
 
 [tool.poetry.extras]
 proxy = [
@@ -104,6 +105,8 @@ utils = [
 ]
 
 caching = ["diskcache"]
+
+semantic-router = ["semantic-router"]
 
 [tool.isort]
 profile = "black"
