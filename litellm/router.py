@@ -4703,11 +4703,6 @@ class Router:
                 )
             
 
-            #########################################################
-            # Check if this is an auto-router deployment
-            #########################################################
-            if self._is_auto_router_deployment(litellm_params=litellm_params):
-                self.init_auto_router_deployment(deployment=deployment)
 
             ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
             _model_name = deployment.litellm_params.model
@@ -4764,9 +4759,10 @@ class Router:
         This will initialize the auto-router and add it to the auto-routers dictionary.
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
-        router_config_path: Optional[str] = deployment.litellm_params.auto_router_config_path
-        if router_config_path is None:
-            raise ValueError("auto_router_config_path is required for auto-router deployments. Please set it in the litellm_params")
+        auto_router_config_path: Optional[str] = deployment.litellm_params.auto_router_config_path
+        auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
+        if auto_router_config_path is None and auto_router_config is None:
+            raise ValueError("auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params")
         
         default_model: Optional[str] = deployment.litellm_params.auto_router_default_model
         if default_model is None:
@@ -4778,7 +4774,8 @@ class Router:
 
         autor_router: AutoRouter = AutoRouter(
             model_name=deployment.model_name,
-            router_config_path=router_config_path,
+            auto_router_config_path=auto_router_config_path,
+            auto_router_config=auto_router_config,
             default_model=default_model,
             embedding_model=embedding_model,
             litellm_router_instance=self,
@@ -4949,6 +4946,12 @@ class Router:
             custom_llm_provider=custom_llm_provider,
             model=deployment.litellm_params.model,
         )
+
+        #########################################################
+        # Check if this is an auto-router deployment
+        #########################################################
+        if self._is_auto_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_auto_router_deployment(deployment=deployment)
 
         return deployment
 

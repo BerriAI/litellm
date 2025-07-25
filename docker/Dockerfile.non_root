@@ -46,6 +46,9 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
     && rm -f *.whl \
     && rm -rf /wheels
 
+# Install semantic_router without dependencies
+RUN pip install semantic_router --no-deps
+
 # Ensure correct JWT library is used (pyjwt not jwt)
 RUN pip uninstall jwt -y && \
     pip uninstall PyJWT -y && \
