@@ -211,19 +211,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             />
           </Form.Item>
 
-          {showCustomDefaultModel && (
-            <Form.Item
-              label="Custom Default Model"
-              name="custom_default_model"
-            >
-              <TextInput 
-                placeholder="Enter custom model name"
-                onChange={(e) => {
-                  form.setFieldValue('auto_router_default_model', e.target.value);
-                }}
-              />
-            </Form.Item>
-          )}
 
           {/* Embedding Model */}
           <Form.Item
@@ -243,20 +230,6 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
               allowClear
             />
           </Form.Item>
-
-          {showCustomEmbeddingModel && (
-            <Form.Item
-              label="Custom Embedding Model"
-              name="custom_embedding_model"
-            >
-              <TextInput 
-                placeholder="Enter custom embedding model name"
-                onChange={(e) => {
-                  form.setFieldValue('auto_router_embedding_model', e.target.value);
-                }}
-              />
-            </Form.Item>
-          )}
 
           {/* Model Access Groups - Admin only */}
           {userRole === "Admin" && (
