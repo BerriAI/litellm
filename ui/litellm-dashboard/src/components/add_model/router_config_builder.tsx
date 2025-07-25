@@ -15,9 +15,22 @@ interface Route {
   score_threshold: number;
 }
 
+interface SavedRoute {
+  id?: string;
+  name?: string;
+  model?: string;
+  utterances?: string[];
+  description?: string;
+  score_threshold?: number;
+}
+
+interface RouterConfig {
+  routes?: SavedRoute[];
+}
+
 interface RouterConfigBuilderProps {
   modelInfo: ModelGroup[];
-  value?: any;
+  value?: RouterConfig;
   onChange?: (config: any) => void;
 }
 
@@ -26,17 +39,30 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({
   value,
   onChange,
 }) => {
-  const [routes, setRoutes] = useState<Route[]>(value?.routes || []);
+  const [routes, setRoutes] = useState<Route[]>([]);
   const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
   const [expandedRoutes, setExpandedRoutes] = useState<string[]>([]);
 
-  // Initialize expanded routes for existing routes on mount
+  // Initialize routes from value prop
   useEffect(() => {
-    if (value?.routes && value.routes.length > 0 && expandedRoutes.length === 0) {
-      const existingRouteIds = value.routes.map((route: any) => route.id || `route-${Math.random()}`);
-      setExpandedRoutes(existingRouteIds);
+    if (value?.routes) {
+      const initializedRoutes = value.routes.map((route: SavedRoute, index: number) => ({
+        id: route.id || `route-${index}-${Date.now()}`,
+        model: route.name || route.model || "", // handle both 'name' and 'model' fields
+        utterances: route.utterances || [],
+        description: route.description || "",
+        score_threshold: route.score_threshold || 0.5,
+      }));
+      setRoutes(initializedRoutes);
+      
+      // Set expanded routes for existing routes
+      const routeIds = initializedRoutes.map(route => route.id);
+      setExpandedRoutes(routeIds);
+    } else {
+      setRoutes([]);
+      setExpandedRoutes([]);
     }
-  }, [value?.routes, expandedRoutes.length]);
+  }, [value]);
 
   // Handle adding a new route
   const addRoute = () => {
