@@ -171,6 +171,7 @@ from litellm.types.utils import (
     ImageResponse,
     LlmProviders,
     LlmProvidersSet,
+    LLMResponseTypes,
     Message,
     ModelInfo,
     ModelInfoBase,
@@ -904,7 +905,6 @@ def client(original_function):  # noqa: PLR0915
         modified_kwargs = kwargs.copy()
 
         for callback in litellm.callbacks:
-
             if isinstance(callback, CustomLogger):
                 result = await callback.async_pre_call_deployment_hook(
                     modified_kwargs, typed_call_type
@@ -913,6 +913,27 @@ def client(original_function):  # noqa: PLR0915
                     modified_kwargs = result
 
         return modified_kwargs
+
+    async def async_post_call_success_deployment_hook(
+        request_data: dict, response: Any, call_type: Optional[CallTypes]
+    ) -> Optional[Any]:
+        """
+        Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+        try:
+            typed_call_type = CallTypes(call_type)
+        except ValueError:
+            typed_call_type = None  # unknown call type
+
+        for callback in litellm.callbacks:
+            if isinstance(callback, CustomLogger):
+                result = await callback.async_post_call_success_deployment_hook(
+                    request_data, cast(LLMResponseTypes, response), typed_call_type
+                )
+                if result is not None:
+                    return result
+
+        return response
 
     def post_call_processing(original_response, model, optional_params: Optional[dict]):
         try:
@@ -1443,6 +1464,13 @@ def client(original_function):  # noqa: PLR0915
             post_call_processing(
                 original_response=result, model=model, optional_params=kwargs
             )
+            # Only run if call_type is a valid value in CallTypes
+            if call_type in [ct.value for ct in CallTypes]:
+                await async_post_call_success_deployment_hook(
+                    request_data=kwargs,
+                    response=result,
+                    call_type=CallTypes(call_type),
+                )
 
             ## Add response to cache
             await _llm_caching_handler.async_set_cache(
@@ -6684,6 +6712,8 @@ class ProviderConfigManager:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
+        elif litellm.LlmProviders.LAMBDA_AI == provider:
+            return litellm.LambdaAIChatConfig()
         elif litellm.LlmProviders.LLAMA == provider:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
@@ -6832,6 +6862,8 @@ class ProviderConfigManager:
             return litellm.MoonshotChatConfig()
         elif litellm.LlmProviders.V0 == provider:
             return litellm.V0ChatConfig()
+        elif litellm.LlmProviders.MORPH == provider:
+            return litellm.MorphChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
@@ -6882,6 +6914,8 @@ class ProviderConfigManager:
             return litellm.NscaleConfig()
         elif litellm.LlmProviders.HEROKU == provider:
             return litellm.HerokuChatConfig()
+        elif litellm.LlmProviders.HYPERBOLIC == provider:
+            return litellm.HyperbolicChatConfig()
         return None
 
     @staticmethod
@@ -7179,12 +7213,18 @@ class ProviderConfigManager:
             )
 
             return OpenAIImageEditConfig()
-        if LlmProviders.AZURE == provider:
+        elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
             )
 
             return AzureImageEditConfig()
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_edit.transformation import (
+                RecraftImageEditConfig,
+            )
+
+            return RecraftImageEditConfig()
         return None
 
     @staticmethod

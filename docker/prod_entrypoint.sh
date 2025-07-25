@@ -1,6 +1,7 @@
 #!/bin/sh
 
 if [ "$SEPARATE_HEALTH_APP" = "1" ]; then
+    export LITELLM_ARGS="$@"
     exec supervisord -c /etc/supervisord.conf
 fi
 

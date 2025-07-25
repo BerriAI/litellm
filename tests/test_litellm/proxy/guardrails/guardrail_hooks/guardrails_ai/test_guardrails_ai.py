@@ -133,3 +133,62 @@ async def test_guardrails_ai_process_input():
         assert result["messages"][1]["content"] == "First question"
         assert result["messages"][2]["content"] == "First answer"
         assert result["messages"][3]["content"] == "sanitized message"
+
+    # Test case 7: Test validatedOutput preference over rawLlmOutput
+    with patch.object(
+        guardrails_ai_guardrail,
+        "make_guardrails_ai_api_request",
+        return_value=GuardrailsAIResponse(
+            rawLlmOutput="Somtimes I hav spelling errors in my vriting",
+            validatedOutput="Sometimes I have spelling errors in my writing",
+            validationPassed=True,
+            callId="test-123",
+        ),
+    ) as mock_api_request:
+
+        data = {
+            "messages": [
+                {"role": "user", "content": "Somtimes I hav spelling errors in my vriting"}
+            ]
+        }
+
+        result = await guardrails_ai_guardrail.process_input(data, "completion")
+
+        mock_api_request.assert_called_once_with(
+            llm_output="Somtimes I hav spelling errors in my vriting", request_data=data
+        )
+
+        # Should use validatedOutput when available
+        assert result["messages"][0]["content"] == "Sometimes I have spelling errors in my writing"
+
+    # Test case 8: Test fallback to rawLlmOutput when validatedOutput is not present
+    with patch.object(
+        guardrails_ai_guardrail,
+        "make_guardrails_ai_api_request",
+        return_value=GuardrailsAIResponse(
+            rawLlmOutput="fallback text",
+            validatedOutput="",  # Empty validatedOutput
+            validationPassed=True,
+            callId="test-456",
+        ),
+    ) as mock_api_request:
+
+        data = {"messages": [{"role": "user", "content": "Test message"}]}
+
+        result = await guardrails_ai_guardrail.process_input(data, "completion")
+
+        assert result["messages"][0]["content"] == "fallback text"
+
+    # Test case 9: Test fallback to original text when neither validatedOutput nor rawLlmOutput is present
+    with patch.object(
+        guardrails_ai_guardrail,
+        "make_guardrails_ai_api_request",
+        return_value={},  # Empty response
+    ) as mock_api_request:
+
+        data = {"messages": [{"role": "user", "content": "Original message"}]}
+
+        result = await guardrails_ai_guardrail.process_input(data, "completion")
+
+        # Should keep original content when no output fields are present
+        assert result["messages"][0]["content"] == "Original message"

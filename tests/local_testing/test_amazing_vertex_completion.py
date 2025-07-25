@@ -66,6 +66,7 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-2.0-flash-thinking-exp",
     "gemini-2.0-flash-thinking-exp-01-21",
     "gemini-2.0-flash-preview-image-generation",
+    "gemini-2.0-flash-live-preview-04-09",
 ]
 
 
