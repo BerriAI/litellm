@@ -175,7 +175,7 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     except Exception as e:
         verbose_proxy_logger.exception(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        raise HTTPException(status_code=403, detail=str("Authentication failed"))
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 def update_valid_token_with_end_user_params(
