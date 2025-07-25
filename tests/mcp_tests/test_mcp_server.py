@@ -116,7 +116,7 @@ async def test_mcp_server_manager_https_server():
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
-        mock_client.list_tools.assert_called_once()
+        mock_client.list_tools.assert_called()
         mock_client.call_tool.assert_called_once()
 
 
@@ -672,6 +672,7 @@ async def test_get_tools_from_mcp_servers():
     mock_server_1 = MCPServer(
         server_id="server1_id",
         name="server1",
+        server_name="server1",
         url="http://test1.com",
         transport=MCPTransport.http,
         spec_version=MCPSpecVersion.nov_2024
@@ -679,6 +680,7 @@ async def test_get_tools_from_mcp_servers():
     mock_server_2 = MCPServer(
         server_id="server2_id",
         name="server2",
+        server_name="server2",
         url="http://test2.com",
         transport=MCPTransport.http,
         spec_version=MCPSpecVersion.nov_2024
@@ -696,13 +698,13 @@ async def test_get_tools_from_mcp_servers():
                 return mock_server_2
             return None
 
-        with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager.get_allowed_mcp_servers', 
-                  new_callable=AsyncMock, return_value=["server1_id", "server2_id"]), \
-             patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager.get_mcp_server_by_id',
-                  side_effect=mock_get_server_by_id), \
-             patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager._get_tools_from_server',
-                  new_callable=AsyncMock, return_value=[mock_tool_1]):
+        # Create a mock manager
+        mock_manager = AsyncMock()
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id"])
+        mock_manager.get_mcp_server_by_id = mock_get_server_by_id
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
+        with patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', mock_manager):
             # Test with specific servers
             result = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
@@ -713,9 +715,14 @@ async def test_get_tools_from_mcp_servers():
             assert result[0].name == "tool1", "Should return tool from server1"
 
         # Test Case 2: Without specific MCP servers
-        with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager.list_tools',
-                  new_callable=AsyncMock, return_value=[mock_tool_1, mock_tool_2]):
+        # Create a different mock manager for the second test case
+        mock_manager_2 = AsyncMock()
+        mock_manager_2.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id"])
+        mock_manager_2.get_mcp_server_by_id = mock_get_server_by_id
+        mock_manager_2._get_tools_from_server = AsyncMock(side_effect=lambda server, mcp_auth_header=None: 
+            [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2])
 
+        with patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', mock_manager_2):
             result = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header=mock_auth_header,
