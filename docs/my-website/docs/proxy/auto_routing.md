@@ -1,6 +1,10 @@
+import Image from '@theme/IdealImage';
+
 # Auto Routing
 
 LiteLLM can auto select the best model for a request based on rules you define.
+
+<Image alt="Auto Routing" img={require('../../img/auto_router.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
 
 ## LiteLLM Python SDK
 
