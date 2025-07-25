@@ -49,11 +49,6 @@ export const handleAddAutoRouterSubmit = async (
     console.log("Calling modelCreateCall with:", { accessToken: accessToken ? "Present" : "Missing", config: autoRouterConfig });
     const response: any = await modelCreateCall(accessToken, autoRouterConfig as Model);
     console.log(`response for auto router create call:`, response);
-
-    message.success("Auto router added successfully!");
-    
-    // Call the callback function if provided (usually to refresh the model list)
-    callback && callback();
     
     // Reset the form
     form.resetFields();
