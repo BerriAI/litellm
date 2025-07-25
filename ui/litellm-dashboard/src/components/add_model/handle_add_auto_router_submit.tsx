@@ -15,11 +15,11 @@ export const handleAddAutoRouterSubmit = async (
     console.log("Callback:", callback ? "Present" : "Missing");
 
     // Create auto router configuration
-    const autoRouterConfig = {
+    const autoRouterConfig: any = {
       model_name: values.auto_router_name,
       litellm_params: {
         model: `auto_router/${values.auto_router_name}`,
-        auto_router_config: values.auto_router_config, // Pass the actual JSON config built by RouterConfigBuilder
+        auto_router_config: JSON.stringify(values.auto_router_config), // Convert JSON object to string as expected by backend
         auto_router_default_model: values.auto_router_default_model,
       },
       model_info: {},
@@ -43,6 +43,7 @@ export const handleAddAutoRouterSubmit = async (
     }
 
     console.log("Auto router configuration to be created:", autoRouterConfig);
+    console.log("Auto router config (stringified):", autoRouterConfig.litellm_params.auto_router_config);
 
     // Create the auto router using the same model creation endpoint
     console.log("Calling modelCreateCall with:", { accessToken: accessToken ? "Present" : "Missing", config: autoRouterConfig });
