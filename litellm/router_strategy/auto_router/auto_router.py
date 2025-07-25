@@ -62,6 +62,9 @@ class AutoRouter(CustomLogger):
 
     def _load_auto_router_routes_from_config_json(self) -> List[Route]:
         import json
+
+        from semantic_router.routers.base import Route
+        
         if self.auto_router_config is None:
             raise ValueError("No auto router config provided")
         auto_router_routes: List[Route] = []
