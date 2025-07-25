@@ -439,11 +439,10 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
               <CodeBlock
                 code={`{
   "mcpServers": {
-    "Zapier_MCP": {
-      "server_url": "${proxyBaseUrl}/mcp",
+    "LiteLLM": {
+      "url": "${proxyBaseUrl}/mcp/",
       "headers": {
-        "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-        "x-mcp-servers": ["Zapier_MCP,dev"]
+        "x-litellm-api-key": "Bearer sk-1234"
       }
     }
   }
