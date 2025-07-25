@@ -672,6 +672,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.NscaleConfig()._get_openai_compatible_provider_info(
             api_base=api_base, api_key=api_key
         )
+    elif custom_llm_provider == "heroku":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.HerokuChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "dashscope":
         (
             api_base,
