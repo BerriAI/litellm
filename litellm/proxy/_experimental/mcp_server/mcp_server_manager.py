@@ -397,9 +397,11 @@ class MCPServerManager:
             raise ValueError(f"Tool {name} not found")
 
         # Validate that the server from prefix matches the actual server (if prefix was used)
-        if server_name_from_prefix and normalize_server_name(server_name_from_prefix) != normalize_server_name(mcp_server.name):
-            raise ValueError(
-                f"Tool {name} server prefix mismatch: expected {mcp_server.name}, got {server_name_from_prefix}")
+        if server_name_from_prefix:
+            expected_prefix = get_server_prefix(mcp_server)
+            if normalize_server_name(server_name_from_prefix) != normalize_server_name(expected_prefix):
+                raise ValueError(
+                    f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}")
 
         client = self._create_mcp_client(
             server=mcp_server,
