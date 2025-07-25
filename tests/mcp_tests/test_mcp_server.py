@@ -90,21 +90,13 @@ async def test_mcp_server_manager_https_server():
         
         # Verify tools were returned and properly prefixed
         assert len(tools) == 1
-        # The server should use the server_id as prefix since alias and server_name are None
-        # Get the server from registry to find its server_id
-        server_id = list(mcp_server_manager.get_registry().keys())[0]
-        expected_prefix = server_id
+        # The server should use the server_name as prefix since no alias is provided
+        expected_prefix = "zapier_mcp_server"
         assert tools[0].name == f"{expected_prefix}-gmail_send_email"
         
         # Manually set up the tool mapping for the call_tool test
         mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = expected_prefix
         mcp_server_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-gmail_send_email"] = expected_prefix
-        
-        # Also set up the mapping to use server_id for lookup
-        server = mcp_server_manager.get_mcp_server_by_id(expected_prefix)
-        if server:
-            mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = server.name
-            mcp_server_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-gmail_send_email"] = server.name
         
         result = await mcp_server_manager.call_tool(
             name=f"{expected_prefix}-gmail_send_email",
@@ -191,9 +183,8 @@ async def test_mcp_http_transport_list_tools_mock():
         
         # Assertions
         assert len(tools) == 2
-        # Get the server_id to use as prefix since alias and server_name are None
-        server_id = list(test_manager.get_registry().keys())[0]
-        expected_prefix = server_id
+        # The server should use the server_name as prefix since no alias is provided
+        expected_prefix = "test_http_server"
         assert tools[0].name == f"{expected_prefix}-gmail_send_email"
         assert tools[1].name == f"{expected_prefix}-calendar_create_event"
         
@@ -202,8 +193,7 @@ async def test_mcp_http_transport_list_tools_mock():
         mock_client.list_tools.assert_called_once()
         
         # Verify tool mapping was updated
-        server_id = list(test_manager.get_registry().keys())[0]
-        expected_prefix = server_id
+        expected_prefix = "test_http_server"
         assert test_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-gmail_send_email"] == expected_prefix
         assert test_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-calendar_create_event"] == expected_prefix
 
@@ -659,9 +649,8 @@ async def test_list_tools_rest_api_success():
 
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
-            # Get the server_id to use as prefix since alias and server_name are None
-            server_id = list(global_mcp_server_manager.get_registry().keys())[0]
-            expected_prefix = server_id
+            # The server should use the server_name as prefix since no alias is provided
+            expected_prefix = "test_server"
             assert response["tools"][0].name == f"{expected_prefix}-test_tool"
     finally:
         # Restore original state
@@ -800,9 +789,8 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         tools = await test_manager.list_tools(user_api_key_auth=MagicMock())
         # Should only return tools from server_a
         assert len(tools) == 1
-        # Get the server_id to use as prefix since alias and server_name are None
-        server_id = list(test_manager.get_registry().keys())[0]
-        expected_prefix = server_id
+        # The server should use the server_name as prefix since no alias is provided
+        expected_prefix = "server_a"
         assert tools[0].name.startswith(f"{expected_prefix}-")
 
 def test_mcp_server_manager_access_groups_from_config():
