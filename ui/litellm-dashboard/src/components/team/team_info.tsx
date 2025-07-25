@@ -697,13 +697,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
-                    <VectorStoreSelector
+                    <PremiumVectorStoreSelector
                       onChange={(values) =>
                          form.setFieldValue("vector_stores", values)
                       }
                       value={form.getFieldValue("vector_stores")}
                       accessToken={accessToken || ""}
                       placeholder="Select vector stores"
+                      premiumUser={premiumUser}
                     />
                   </Form.Item>
 
