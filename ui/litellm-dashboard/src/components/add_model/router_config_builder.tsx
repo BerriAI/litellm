@@ -135,7 +135,7 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({
       {/* Routes */}
       {routes.length === 0 ? (
         <div className="text-center py-12 text-gray-500 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200 mb-6">
-          <Text>No routes configured. Click "Add Route" to get started.</Text>
+          <Text>No routes configured. Click &ldquo;Add Route&rdquo; to get started.</Text>
         </div>
       ) : (
         <div className="space-y-3 mb-6 w-full">
