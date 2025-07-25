@@ -17,6 +17,7 @@ import {
   EmailEventSettingsResponse,
   EmailEventSettingsUpdateRequest,
 } from "./email_events/types";
+import { jsonFields } from "./common_components/check_openapi_schema"
 
 const isLocal = process.env.NODE_ENV === "development";
 export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -573,14 +574,16 @@ export const keyCreateServiceAccountCall = async (
       delete formValues.description;
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
-    // if formValues.metadata is not undefined, make it a valid dict
-    if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        throw new Error("Failed to parse metadata: " + error);
+    // Parse JSON fields if they exist
+    for (const field of jsonFields) {
+      if (formValues[field]) {
+        console.log(`formValues.${field}:`, formValues[field]);
+        // if there's an exception JSON.parse, show it in the message
+        try {
+          formValues[field] = JSON.parse(formValues[field]);
+        } catch (error) {
+          throw new Error(`Failed to parse ${field}: ` + error);
+        }
       }
     }
 
@@ -624,7 +627,7 @@ export const keyCreateCall = async (
 
     // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
     if (formValues.description) {
-      // add to formValues.metadata
+      // add to formValues.metadat
       if (!formValues.metadata) {
         formValues.metadata = {};
       }
@@ -634,14 +637,16 @@ export const keyCreateCall = async (
       delete formValues.description;
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
-    // if formValues.metadata is not undefined, make it a valid dict
-    if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        throw new Error("Failed to parse metadata: " + error);
+    // Parse JSON fields if they exist
+    for (const field of jsonFields) {
+      if (formValues[field]) {
+        console.log(`formValues.${field}:`, formValues[field]);
+        // if there's an exception JSON.parse, show it in the message
+        try {
+          formValues[field] = JSON.parse(formValues[field]);
+        } catch (error) {
+          throw new Error(`Failed to parse ${field}: ` + error);
+        }
       }
     }
 
@@ -6390,5 +6395,4 @@ export const vectorStoreSearchCall = async (
     throw error;
   }
 };
-
 
