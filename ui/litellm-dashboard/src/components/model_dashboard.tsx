@@ -448,26 +448,28 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       return;
     }
 
-    console.log("new modelGroupRetryPolicy:", modelGroupRetryPolicy);
-    console.log("new globalRetryPolicy:", globalRetryPolicy);
-
     try {
       const payload: any = {
         router_settings: {},
       };
 
-      // Add model group retry policy if it exists
-      if (modelGroupRetryPolicy) {
-        payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy;
-      }
-
-      // Add global retry policy if it exists
-      if (globalRetryPolicy) {
-        payload.router_settings.retry_policy = globalRetryPolicy;
+      if (selectedModelGroup === "global") {
+        // Only update global retry policy
+        console.log("Saving global retry policy:", globalRetryPolicy);
+        if (globalRetryPolicy) {
+          payload.router_settings.retry_policy = globalRetryPolicy;
+        }
+        message.success("Global retry settings saved successfully");
+      } else {
+        // Only update model group retry policy
+        console.log("Saving model group retry policy for", selectedModelGroup, ":", modelGroupRetryPolicy);
+        if (modelGroupRetryPolicy) {
+          payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy;
+        }
+        message.success(`Retry settings saved successfully for ${selectedModelGroup}`);
       }
 
       await setCallbacksCall(accessToken, payload);
-      message.success("Retry settings saved successfully");
     } catch (error) {
       console.error("Failed to save retry settings:", error);
       message.error("Failed to save retry settings");
