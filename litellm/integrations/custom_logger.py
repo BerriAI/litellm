@@ -155,6 +155,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
         pass
 
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: dict,
+        response: LLMResponseTypes,
+        call_type: Optional[CallTypes],
+    ) -> Optional[LLMResponseTypes]:
+        """
+        Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+        pass
+
     #### Fallback Events - router/proxy only ####
     async def log_model_group_rate_limit_error(
         self, exception: Exception, original_model_group: Optional[str], kwargs: dict
@@ -355,18 +366,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
-    
+
     #########################################################
     # MCP TOOL CALL HOOKS
     #########################################################
-    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
+    async def async_post_mcp_tool_call_hook(
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+    ) -> Optional[MCPPostCallResponseObject]:
         """
         This log gets called after the MCP tool call is made.
 
         Useful if you want to modiy the standard logging payload after the MCP tool call is made.
         """
         return None
-    
 
     # Useful helpers for custom logger classes
 
