@@ -460,40 +460,18 @@ class BaseAWSLLM:
         import boto3
         from botocore.credentials import Credentials
 
-        with tracer.trace("boto3.client(sts)"):
-            sts_client = boto3.client(
-                "sts",
-                aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
-                aws_secret_access_key=aws_secret_access_key,  # [OPTIONAL]
-            )
-
-        # Check if we're already using the target role to avoid duplicate assumption
-        # This is especially important in EKS/IRSA environments where roles are already assumed
-        try:
-            caller_identity = sts_client.get_caller_identity()
-            current_arn = caller_identity.get("Arn", "")
-            
-            # Extract role name from current ARN (format: arn:aws:sts::account:assumed-role/RoleName/session)
-            if "assumed-role" in current_arn:
-                current_role_name = current_arn.split("/")[1]
-                target_role_name = aws_role_name.split("/")[-1]  # Extract role name from ARN
-                
-                if current_role_name == target_role_name:
-                    verbose_logger.debug(
-                        f"Already using target role {aws_role_name}, returning current credentials"
-                    )
-                    # Get current session credentials
-                    with tracer.trace("boto3.Session()"):
-                        session = boto3.Session(
-                            aws_access_key_id=aws_access_key_id,
-                            aws_secret_access_key=aws_secret_access_key,
-                        )
-                    current_credentials = session.get_credentials()
-                    if current_credentials:
-                        return current_credentials, None
-        except Exception as e:
-            verbose_logger.debug(f"Could not check current identity: {e}")
-            # Continue with normal role assumption if identity check fails
+        # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
+        # This allows the web identity token to work automatically
+        if aws_access_key_id is None and aws_secret_access_key is None:
+            with tracer.trace("boto3.client(sts)"):
+                sts_client = boto3.client("sts")
+        else:
+            with tracer.trace("boto3.client(sts)"):
+                sts_client = boto3.client(
+                    "sts",
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                )
 
         sts_response = sts_client.assume_role(
             RoleArn=aws_role_name, RoleSessionName=aws_session_name

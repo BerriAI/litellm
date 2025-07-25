@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
@@ -541,64 +541,15 @@ def test_different_roles_without_session_names_should_not_share_cache():
     assert cache_key1 != cache_key2
 
 
-def test_skip_role_assumption_when_already_using_target_role():
+def test_eks_irsa_ambient_credentials_used():
     """
-    Test that role assumption is skipped when we're already using the target role.
-    This fixes the issue where EKS/IRSA environments would try to assume the same role twice.
-    """
-    base_aws_llm = BaseAWSLLM()
-    
-    # Mock the boto3 STS client
-    mock_sts_client = MagicMock()
-    
-    # Mock get_caller_identity to return an assumed role ARN
-    mock_sts_client.get_caller_identity.return_value = {
-        "Arn": "arn:aws:sts::1111111111111:assumed-role/LitellmRole/some-session-name",
-        "UserId": "AROABC123DEFGHIJKLMN:some-session-name",
-        "Account": "1111111111111"
-    }
-    
-    # Mock session credentials
-    mock_credentials = MagicMock()
-    mock_credentials.access_key = "current-access-key"
-    mock_credentials.secret_key = "current-secret-key"
-    mock_credentials.token = "current-session-token"
-    
-    mock_session = MagicMock()
-    mock_session.get_credentials.return_value = mock_credentials
-    
-    with patch("boto3.client", return_value=mock_sts_client), \
-         patch("boto3.Session", return_value=mock_session):
-        
-        # Try to assume the same role we're already using
-        credentials, ttl = base_aws_llm._auth_with_aws_role(
-            aws_access_key_id=None,
-            aws_secret_access_key=None,
-            aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
-            aws_session_name="test-session"
-        )
-        
-        # Should return current credentials without calling assume_role
-        mock_sts_client.assume_role.assert_not_called()
-        assert credentials == mock_credentials
-        assert ttl is None
-
-
-def test_proceed_with_role_assumption_for_different_role():
-    """
-    Test that role assumption proceeds normally when trying to assume a different role.
+    Test that in EKS/IRSA environments, ambient credentials are used when no explicit keys provided.
+    This allows web identity tokens to work automatically.
     """
     base_aws_llm = BaseAWSLLM()
     
     # Mock the boto3 STS client
     mock_sts_client = MagicMock()
-    
-    # Mock get_caller_identity to return an assumed role ARN
-    mock_sts_client.get_caller_identity.return_value = {
-        "Arn": "arn:aws:sts::1111111111111:assumed-role/LitellmRole/some-session-name",
-        "UserId": "AROABC123DEFGHIJKLMN:some-session-name",
-        "Account": "1111111111111"
-    }
     
     # Mock the STS response with proper expiration handling
     mock_expiry = MagicMock()
@@ -619,9 +570,9 @@ def test_proceed_with_role_assumption_for_different_role():
     }
     mock_sts_client.assume_role.return_value = mock_sts_response
     
-    with patch("boto3.client", return_value=mock_sts_client):
+    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
         
-        # Try to assume a different role
+        # Call with no explicit credentials (EKS/IRSA scenario)
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
@@ -629,7 +580,10 @@ def test_proceed_with_role_assumption_for_different_role():
             aws_session_name="test-session"
         )
         
-        # Should call assume_role for the different role
+        # Should create STS client without explicit credentials (using ambient credentials)
+        mock_boto3_client.assert_called_once_with("sts")
+        
+        # Should call assume_role
         mock_sts_client.assume_role.assert_called_once_with(
             RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             RoleSessionName="test-session"
@@ -640,3 +594,344 @@ def test_proceed_with_role_assumption_for_different_role():
         assert credentials.secret_key == "assumed-secret-key"
         assert credentials.token == "assumed-session-token"
         assert ttl is not None
+
+
+def test_explicit_credentials_used_when_provided():
+    """
+    Test that explicit credentials are used when provided (non-EKS/IRSA scenario).
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Mock the STS response with proper expiration handling
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    current_time = datetime.now(timezone.utc)
+    # Create a timedelta object that returns 3600 when total_seconds() is called
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+    
+    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+        
+        # Call with explicit credentials
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id="explicit-access-key",
+            aws_secret_access_key="explicit-secret-key",
+            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+            aws_session_name="test-session"
+        )
+        
+        # Should create STS client with explicit credentials
+        mock_boto3_client.assert_called_once_with(
+            "sts",
+            aws_access_key_id="explicit-access-key",
+            aws_secret_access_key="explicit-secret-key",
+        )
+        
+        # Should call assume_role
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+            RoleSessionName="test-session"
+        )
+        
+        # Verify credentials are returned correctly
+        assert credentials.access_key == "assumed-access-key"
+        assert credentials.secret_key == "assumed-secret-key"
+        assert credentials.token == "assumed-session-token"
+        assert ttl is not None
+
+
+def test_partial_credentials_still_use_ambient():
+    """
+    Test that if only one credential is provided, we still use ambient credentials.
+    This handles edge cases where configuration might be incomplete.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Mock the STS response
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+    
+    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+        
+        # Call with only access key (missing secret key)
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+            aws_session_name="test-session"
+        )
+        
+        # Should still pass partial credentials to boto3.client
+        mock_boto3_client.assert_called_once_with(
+            "sts",
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key=None
+        )
+        
+        # Should still call assume_role
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+            RoleSessionName="test-session"
+        )
+
+
+def test_cross_account_role_assumption():
+    """
+    Test assuming a role in a different AWS account (common in multi-account setups).
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Mock the STS response for cross-account role
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "cross-account-access-key",
+            "SecretAccessKey": "cross-account-secret-key",
+            "SessionToken": "cross-account-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+    
+    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+        
+        # Assume role in different account (EKS/IRSA scenario)
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::999999999999:role/CrossAccountRole",
+            aws_session_name="cross-account-session"
+        )
+        
+        # Should use ambient credentials
+        mock_boto3_client.assert_called_once_with("sts")
+        
+        # Should call assume_role with cross-account role
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::999999999999:role/CrossAccountRole",
+            RoleSessionName="cross-account-session"
+        )
+        
+        # Verify cross-account credentials are returned
+        assert credentials.access_key == "cross-account-access-key"
+        assert credentials.secret_key == "cross-account-secret-key"
+        assert credentials.token == "cross-account-session-token"
+        assert ttl is not None
+
+
+def test_role_assumption_with_custom_session_name():
+    """
+    Test role assumption with a custom session name.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Mock the STS response
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "custom-session-access-key",
+            "SecretAccessKey": "custom-session-secret-key",
+            "SessionToken": "custom-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+    
+    with patch("boto3.client", return_value=mock_sts_client):
+        
+        # Use custom session name
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
+            aws_session_name="evals-bedrock-session"
+        )
+        
+        # Should call assume_role with custom session name
+        mock_sts_client.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::1111111111111:role/LitellmRole",
+            RoleSessionName="evals-bedrock-session"
+        )
+        
+        # Verify credentials are returned
+        assert credentials.access_key == "custom-session-access-key"
+        assert credentials.secret_key == "custom-session-secret-key"
+        assert credentials.token == "custom-session-token"
+
+
+def test_role_assumption_ttl_calculation():
+    """
+    Test that TTL is calculated correctly from STS response expiration.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Create a real datetime for expiration (1 hour from now)
+    expiration_time = datetime.now(timezone.utc) + timedelta(hours=1)
+    
+    mock_sts_response = {
+        "Credentials": {
+            "AccessKeyId": "ttl-test-access-key",
+            "SecretAccessKey": "ttl-test-secret-key",
+            "SessionToken": "ttl-test-session-token",
+            "Expiration": expiration_time,
+        }
+    }
+    mock_sts_client.assume_role.return_value = mock_sts_response
+    
+    with patch("boto3.client", return_value=mock_sts_client):
+        
+        credentials, ttl = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
+            aws_session_name="ttl-test-session"
+        )
+        
+        # TTL should be approximately 3540 seconds (1 hour - 60 second buffer)
+        assert ttl is not None
+        assert 3500 <= ttl <= 3600  # Allow some variance for test execution time
+
+
+def test_role_assumption_error_handling():
+    """
+    Test that role assumption errors are properly propagated.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client to raise an exception
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.side_effect = Exception("AccessDenied: User is not authorized to perform sts:AssumeRole")
+    
+    with patch("boto3.client", return_value=mock_sts_client):
+        
+        # Should raise the exception
+        with pytest.raises(Exception) as exc_info:
+            base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_role_name="arn:aws:iam::1111111111111:role/UnauthorizedRole",
+                aws_session_name="error-test-session"
+            )
+        
+        assert "AccessDenied" in str(exc_info.value)
+
+
+def test_multiple_role_assumptions_in_sequence():
+    """
+    Test that multiple role assumptions work correctly in sequence.
+    This simulates the scenario where different models use different roles.
+    """
+    base_aws_llm = BaseAWSLLM()
+    
+    # Mock the boto3 STS client
+    mock_sts_client = MagicMock()
+    
+    # Mock different responses for different roles
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+
+    # First role response
+    mock_sts_response1 = {
+        "Credentials": {
+            "AccessKeyId": "role1-access-key",
+            "SecretAccessKey": "role1-secret-key",
+            "SessionToken": "role1-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    
+    # Second role response
+    mock_sts_response2 = {
+        "Credentials": {
+            "AccessKeyId": "role2-access-key",
+            "SecretAccessKey": "role2-secret-key",
+            "SessionToken": "role2-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    
+    # Configure mock to return different responses
+    mock_sts_client.assume_role.side_effect = [mock_sts_response1, mock_sts_response2]
+    
+    with patch("boto3.client", return_value=mock_sts_client):
+        
+        # First role assumption
+        credentials1, ttl1 = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
+            aws_session_name="session-1"
+        )
+        
+        # Second role assumption
+        credentials2, ttl2 = base_aws_llm._auth_with_aws_role(
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+            aws_session_name="session-2"
+        )
+        
+        # Verify both role assumptions were made
+        assert mock_sts_client.assume_role.call_count == 2
+        
+        # Verify first role credentials
+        assert credentials1.access_key == "role1-access-key"
+        assert credentials1.secret_key == "role1-secret-key"
+        assert credentials1.token == "role1-session-token"
+        
+        # Verify second role credentials
+        assert credentials2.access_key == "role2-access-key"
+        assert credentials2.secret_key == "role2-secret-key"
+        assert credentials2.token == "role2-session-token"
