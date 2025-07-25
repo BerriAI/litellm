@@ -165,8 +165,8 @@ def build_single_message_attributes(
     Builds OpenInference-compliant LLM attributes for a single user or assistant message.
     """
     return {
-        f"llm.message.role": role,
-        f"llm.message.index": index,
+        "llm.message.role": role,
+        "llm.message.index": index,
         (
             SpanAttributes.INPUT_VALUE
             if role == "user"
