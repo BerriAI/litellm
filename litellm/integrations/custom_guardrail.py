@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Type, Union
 
 from litellm._logging import verbose_logger
+from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.guardrails import (
     DynamicGuardrailParams,
@@ -12,6 +13,8 @@ from litellm.types.guardrails import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import CallTypes, StandardLoggingGuardrailInformation
+
+dc = DualCache()
 
 
 class CustomGuardrail(CustomLogger):
@@ -134,10 +137,7 @@ class CustomGuardrail(CustomLogger):
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
 
-        from litellm.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
-
-        dc = DualCache()
 
         # should run guardrail
         litellm_guardrails = kwargs.get("litellm_guardrails")
