@@ -90,6 +90,7 @@ mcp_servers:
 
 **Configuration Options:**
 - **Server Name**: Use any descriptive name for your MCP server (e.g., `zapier_mcp`, `deepwiki_mcp`, `circleci_mcp`)
+- **Alias**: This name will be prefilled with the server name with "_" replacing spaces, else edit it to be the prefix in tool names
 - **URL**: The endpoint URL for your MCP server (required for HTTP/SSE transports)
 - **Transport**: Optional transport type (defaults to `sse`)
   - `sse` - SSE (Server-Sent Events) transport
@@ -221,10 +222,9 @@ You can choose to access specific MCP servers and only list their tools using th
 - Limit tool access to one or more specific MCP servers
 - Control which tools are available in different environments or use cases
 
-The header accepts a comma-separated list of server names: `"Zapier_Gmail,Server2,Server3"`
+The header accepts a comma-separated list of server aliases: `"Zapier_Gmail,Server2,Server3"`
 
 Notes:
-- Server names with spaces should be replaced with underscores
 - If the header is not provided, tools from all available MCP servers will be accessible
 
 <Tabs>

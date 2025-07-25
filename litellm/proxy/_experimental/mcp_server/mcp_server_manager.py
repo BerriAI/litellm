@@ -26,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     is_tool_name_prefixed,
     normalize_server_name,
     validate_mcp_server_name,
+    get_server_prefix,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -159,14 +160,17 @@ class MCPServerManager:
     def add_update_server(self, mcp_server: LiteLLM_MCPServerTable):
         if mcp_server.server_id not in self.get_registry():
             _mcp_info: MCPInfo = mcp_server.mcp_info or {}
-            
             # Use helper to deserialize environment dictionary
             # Safely access env field which may not exist on Prisma model objects
             env_data = getattr(mcp_server, 'env', None)
             env_dict = _deserialize_env_dict(env_data)
+            # Use alias for name if present, else server_name
+            name_for_prefix = mcp_server.alias or mcp_server.server_name or mcp_server.server_id
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
-                name=mcp_server.server_name or mcp_server.server_id,
+                name=name_for_prefix,
+                alias=getattr(mcp_server, 'alias', None),
+                server_name=getattr(mcp_server, 'server_name', None),
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
                 spec_version=cast(MCPSpecVersionType, mcp_server.spec_version),
@@ -183,7 +187,7 @@ class MCPServerManager:
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(
-                f"Added MCP Server: {mcp_server.server_name or mcp_server.server_id}"
+                f"Added MCP Server: {name_for_prefix}"
             )
 
     async def get_allowed_mcp_servers(
@@ -331,8 +335,10 @@ class MCPServerManager:
                 # Create new tools with prefixed names
                 prefixed_tools = []
                 for tool in tools:
-                    # Create prefixed tool name
-                    prefixed_name = add_server_prefix_to_tool_name(tool.name, server.name)
+                    # Always use alias for prefixing if present
+                    print(f"server 123123123: {server}")
+                    prefix = get_server_prefix(server)
+                    prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
 
                     # Create new tool with prefixed name
                     prefixed_tool = MCPTool(
@@ -343,8 +349,8 @@ class MCPServerManager:
                     prefixed_tools.append(prefixed_tool)
 
                     # Update tool to server mapping with both original and prefixed names
-                    self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_name] = server.name
+                    self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
                 return prefixed_tools
             except asyncio.CancelledError:

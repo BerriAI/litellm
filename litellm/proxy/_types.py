@@ -840,6 +840,7 @@ class SpecialMCPServerName(str, enum.Enum):
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
     server_name: Optional[str] = None
+    alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
@@ -871,6 +872,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
     server_name: Optional[str] = None
+    alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
     spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
@@ -904,6 +906,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
 
     server_id: str
     server_name: Optional[str] = None
+    alias: Optional[str] = None
     description: Optional[str] = None
     url: Optional[str] = None
     transport: MCPTransportType

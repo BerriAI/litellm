@@ -1,7 +1,7 @@
 """
 MCP Server Utilities
 """
-from typing import Tuple
+from typing import Tuple, Any
 
 import os
 import importlib
@@ -47,6 +47,16 @@ def add_server_prefix_to_tool_name(tool_name: str, server_name: str) -> str:
         separator=MCP_TOOL_PREFIX_SEPARATOR,
         tool_name=tool_name
     )
+
+def get_server_prefix(server: Any) -> str:
+    """Return the prefix for a server: alias if present, else server_name, else server_id"""
+    if hasattr(server, 'alias') and server.alias:
+        return server.alias
+    if hasattr(server, 'server_name') and server.server_name:
+        return server.server_name
+    if hasattr(server, 'server_id'):
+        return server.server_id
+    return ""
 
 def get_server_name_prefix_tool_mcp(prefixed_tool_name: str) -> Tuple[str, str]:
     """

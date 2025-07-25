@@ -28,6 +28,10 @@ export const mcpServerColumns = (
     header: "Name",
   },
   {
+    accessorKey: "alias",
+    header: "Alias",
+  },
+  {
     id: "url",
     header: "URL",
     cell: ({ row }) => {

@@ -20,6 +20,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [searchValue, setSearchValue] = useState<string>("");
+  const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false)
 
   // Initialize cost config from existing server data
   useEffect(() => {
@@ -121,7 +122,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
           description: values.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
         },
-        mcp_access_groups: accessGroups
+        mcp_access_groups: accessGroups,
+        alias: values.alias,
       };
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -148,6 +150,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
                   : Promise.resolve(),
             }]}>
               <TextInput />
+            </Form.Item>
+            <Form.Item label="Alias" name="alias" rules={[{
+                validator: (_, value) =>
+                  value && value.includes('-')
+                    ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+                    : Promise.resolve(),
+              }]}
+            >
+              <TextInput onChange={() => setAliasManuallyEdited(true)} />
             </Form.Item>
             <Form.Item label="Description" name="description">
               <TextInput />
