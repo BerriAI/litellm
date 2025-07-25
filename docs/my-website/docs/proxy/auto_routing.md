@@ -127,6 +127,44 @@ The `router.json` file supports the following structure:
   - **score_threshold**: Minimum similarity score to trigger this route (0.0-1.0)
   - **metadata**: Additional metadata for the route
 
+
+## LiteLLM Proxy Server
+
+### Setup
+
+Navigate to the LiteLLM UI and go to **Models+Endpoints** > **Add Model** > **Auto Router Tab**.
+
+Configure the following required fields:
+
+- **Auto Router Name** - The model name that developers will use when making LLM API requests to LiteLLM
+- **Default Model** - The fallback model used when no route is matched (e.g., if set to "gpt-4o-mini", unmatched requests will be routed to gpt-4o-mini)
+- **Embedding Model** - The model used to generate embeddings for input messages. These embeddings are used to semantically match input against the utterances defined in your routes
+
+#### Route Configuration
+
+<Image alt="Auto Router Setup" img={require('../../img/auto_router2.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
+
+<br />
+
+<br />
+
+Click **Add Route** to create a new routing rule. Each route consists of utterances that are matched against input messages to determine the target model.
+
+Configure each route with:
+
+- **Utterances** - Example phrases that will trigger this route. Use placeholders in brackets for variables:
+
+```json
+"how to code a program in [language]",
+"can you explain this [language] code",
+"can you explain this [language] script",
+"can you convert this [language] code to [target_language]"
+```
+
+- **Description** - A human-readable description of what this route handles
+- **Score Threshold** - The minimum similarity score (0.0-1.0) required to trigger this route
+
+
 ## How It Works
 
 1. When a request comes in, LiteLLM generates embeddings for the input message
