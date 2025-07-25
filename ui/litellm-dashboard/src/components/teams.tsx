@@ -1109,13 +1109,13 @@ const Teams: React.FC<TeamProps> = ({
                     Warning: This team has {keyCount} associated key{keyCount > 1 ? 's' : ''}.
                   </p>
                   <p className="text-base text-red-600 mt-2">
-                    Deleting the team will also delete all associated keys. This action is irreversible and may cause loss of access for users or services relying on these keys.
+                    Deleting the team will also delete all associated keys. This action is irreversible.
                   </p>
                 </div>
               </div>
             )}
             <p className="text-base text-gray-600 mb-5">
-              Please ensure you have reassigned or removed all keys if you do not want them deleted. Are you sure you want to force delete this team and all its keys?
+              Are you sure you want to force delete this team and all its keys?
             </p>
             <div className="mb-5">
               <label className="block text-base font-medium text-gray-700 mb-2">
