@@ -1,0 +1,67 @@
+name: Simple PyPI Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.74.10)'
+        required: true
+        type: string
+
+env:
+  TWINE_USERNAME: __token__
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.repository == 'BerriAI/litellm'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install toml build wheel twine
+
+      - name: Update version in pyproject.toml
+        run: |
+          python -c "
+          import toml
+          
+          with open('pyproject.toml', 'r') as f:
+              data = toml.load(f)
+          
+          data['tool']['poetry']['version'] = '${{ github.event.inputs.version }}'
+          
+          with open('pyproject.toml', 'w') as f:
+              toml.dump(data, f)
+          
+          print(f'Updated version to ${{ github.event.inputs.version }}')
+          "
+
+      - name: Copy model prices file
+        run: |
+          cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+
+      - name: Build package
+        run: |
+          rm -rf build dist
+          python -m build
+
+      - name: Publish to PyPI
+        env:
+          TWINE_PASSWORD: ${{ secrets.PYPI_PUBLISH_PASSWORD }}
+        run: |
+          twine upload dist/*
+
+      - name: Output success
+        run: |
+          echo "✅ Successfully published litellm v${{ github.event.inputs.version }} to PyPI"
+          echo "📦 Package: https://pypi.org/project/litellm/${{ github.event.inputs.version }}/" 
