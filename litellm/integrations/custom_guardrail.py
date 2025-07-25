@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -11,7 +11,7 @@ from litellm.types.guardrails import (
     PiiEntityType,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-from litellm.types.utils import StandardLoggingGuardrailInformation
+from litellm.types.utils import CallTypes, StandardLoggingGuardrailInformation
 
 
 class CustomGuardrail(CustomLogger):
@@ -129,6 +129,36 @@ class CustomGuardrail(CustomLogger):
                     return True
 
         return False
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
+    ) -> Optional[dict]:
+        from litellm.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        dc = DualCache()
+
+        # CHECK IF GUARDRAIL REJECTS THE REQUEST
+        if call_type == "completion":
+            result = await self.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id=kwargs.get("user_api_key_user_id"),
+                    team_id=kwargs.get("user_api_key_team_id"),
+                    end_user_id=kwargs.get("user_api_key_end_user_id"),
+                    api_key=kwargs.get("user_api_key_hash"),
+                    request_route=kwargs.get("user_api_key_request_route"),
+                ),
+                cache=dc,
+                data=kwargs,
+                call_type=call_type or "acompletion",  # type: ignore
+            )
+
+            if result is not None and isinstance(result, dict):
+                result_messages = result.get("messages")
+                if result_messages is not None:  # update for any pii / masking logic
+                    kwargs["messages"] = result_messages
+
+        return kwargs
 
     def should_run_guardrail(self, data, event_type: GuardrailEventHooks) -> bool:
         """
