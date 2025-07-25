@@ -1293,7 +1293,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ## GET MODEL ##
         model_response.model = model
 
-        if "responseId" in completion_response:
+        if (
+            "responseId" in completion_response
+        ):  # returning this is useful when the user is trying to debug the response
             model_response.id = cast(str, completion_response["responseId"])
 
         ## CHECK IF RESPONSE FLAGGED

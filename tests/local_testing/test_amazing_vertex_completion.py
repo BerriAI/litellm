@@ -3933,24 +3933,6 @@ def test_vertex_ai_gemini_audio_ogg():
     print(response)
 
 
-def test_vertex_ai_gemini_simple():
-    # load_vertex_ai_credentials()
-    response = completion(
-        model="vertex_ai/gemini-2.0-flash",
-        messages=[
-            {
-                "content": [
-                    {"text": "generate a transcript of the speech.", "type": "text"}
-                ],
-                "role": "user",
-            }
-        ],
-    )
-    print(response)
-
-    print(response._hidden_params)
-
-
 @pytest.mark.asyncio
 async def test_vertex_ai_deepseek():
     load_vertex_ai_credentials()
