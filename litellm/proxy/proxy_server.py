@@ -2518,9 +2518,6 @@ class ProxyConfig:
         config_data = await proxy_config.get_config()
         self._add_callbacks_from_db_config(config_data)
 
-        # we need to set env variables too
-        self._add_environment_variables_from_db_config(config_data)
-
         # router settings
         await self._add_router_settings_from_db_config(
             config_data=config_data, llm_router=llm_router, prisma_client=prisma_client
@@ -2569,13 +2566,6 @@ class ProxyConfig:
                     litellm.logging_callback_manager.add_litellm_failure_callback(
                         failure_callback
                     )
-
-    def _add_environment_variables_from_db_config(self, config_data: dict) -> None:
-        """
-        Adds environment variables from DB config to litellm
-        """
-        environment_variables = config_data.get("environment_variables", {})
-        self._decrypt_and_set_db_env_variables(environment_variables)
 
     def _encrypt_env_variables(
         self, environment_variables: dict, new_encryption_key: Optional[str] = None

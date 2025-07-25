@@ -41,10 +41,10 @@ def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
 
 def decrypt_value_helper(
     value: str,
-    key: str,
+    key: str,  # this is just for debug purposes, showing the k,v pair that's invalid. not a signing key.
     exception_type: Literal["debug", "error"] = "error",
 ):
-    signing_key = key or _get_salt_key()
+    signing_key = _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -61,6 +61,9 @@ def decrypt_value_helper(
             verbose_proxy_logger.debug(error_message)
             return None
 
+        verbose_proxy_logger.debug(
+            f"Unable to decrypt value={value} for key: {key}, returning None"
+        )
         verbose_proxy_logger.exception(error_message)
         # [Non-Blocking Exception. - this should not block decrypting other values]
         return None
