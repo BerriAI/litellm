@@ -47,7 +47,10 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
     && rm -rf /wheels
 
 # Install semantic_router without dependencies
+# #########################################################
 RUN pip install semantic_router --no-deps
+RUN pip install aurelio_sdk --no-deps
+# #########################################################
 
 # Ensure correct JWT library is used (pyjwt not jwt)
 RUN pip uninstall jwt -y && \
