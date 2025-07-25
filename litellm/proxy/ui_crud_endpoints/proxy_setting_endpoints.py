@@ -401,6 +401,7 @@ async def get_sso_settings():
         generic_userinfo_endpoint=get_env_value("GENERIC_USERINFO_ENDPOINT"),
         proxy_base_url=get_env_value("PROXY_BASE_URL"),
         user_email=proxy_admin_email,  # Get from config instead of environment
+        ui_access_mode=general_settings.get("ui_access_mode", None),
     )
 
     # Get the schema for UI display
