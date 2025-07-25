@@ -40,7 +40,6 @@ from .image_handling import convert_url_to_base64
 
 
 def default_pt(messages):
-    # Use list comprehension for better performance over generator in join
     return " ".join([msg["content"] for msg in messages])
 
 
