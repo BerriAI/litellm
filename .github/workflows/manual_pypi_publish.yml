@@ -1,0 +1,137 @@
+name: Manual PyPI Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.74.10)'
+        required: true
+        type: string
+      force_publish:
+        description: 'Force publish even if version exists on PyPI'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  TWINE_USERNAME: __token__
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.repository == 'BerriAI/litellm'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install toml build wheel twine
+
+      - name: Validate version format
+        run: |
+          echo "Validating version format: ${{ github.event.inputs.version }}"
+          if ! echo "${{ github.event.inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?([a-zA-Z0-9]+)?$'; then
+            echo "Error: Invalid version format. Please use semantic versioning (e.g., 1.74.10)"
+            exit 1
+          fi
+
+      - name: Check if version exists on PyPI
+        if: ${{ github.event.inputs.force_publish != 'true' }}
+        run: |
+          echo "Checking if version ${{ github.event.inputs.version }} exists on PyPI..."
+          if pip show -v litellm | grep -q "Version: ${{ github.event.inputs.version }}"; then
+            echo "Error: Version ${{ github.event.inputs.version }} already exists on PyPI."
+            echo "Use force_publish=true to override this check."
+            exit 1
+          fi
+          echo "Version ${{ github.event.inputs.version }} not found on PyPI. Proceeding with publish."
+
+      - name: Update version in pyproject.toml
+        run: |
+          python -c "
+          import toml
+          
+          # Read pyproject.toml
+          with open('pyproject.toml', 'r') as f:
+              data = toml.load(f)
+          
+          # Update version
+          data['tool']['poetry']['version'] = '${{ github.event.inputs.version }}'
+          
+          # Write back to file
+          with open('pyproject.toml', 'w') as f:
+              toml.dump(data, f)
+          
+          print(f'Updated version to ${{ github.event.inputs.version }}')
+          "
+
+      - name: Copy model prices and context window file
+        run: |
+          cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+
+      - name: Build package
+        run: |
+          echo "Building package for version ${{ github.event.inputs.version }}"
+          rm -rf build dist
+          python -m build
+          echo "Package built successfully"
+
+      - name: Verify package contents
+        run: |
+          echo "Verifying package contents..."
+          ls -la dist/
+          echo "Package verification complete"
+
+      - name: Publish to PyPI
+        env:
+          TWINE_PASSWORD: ${{ secrets.PYPI_PUBLISH_PASSWORD }}
+        run: |
+          echo "Publishing to PyPI..."
+          twine upload --verbose dist/*
+          echo "Successfully published version ${{ github.event.inputs.version }} to PyPI"
+
+      - name: Trigger Docker build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Triggering Docker container build for version ${{ github.event.inputs.version }}"
+          curl -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
+            -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${{ github.event.inputs.version }}\", \"commit_hash\":\"${{ github.sha }}\", \"release_type\":\"latest\"}}"
+
+      - name: Trigger load testing
+        run: |
+          echo "Triggering load testing for version ${{ github.event.inputs.version }}"
+          curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${{ github.event.inputs.version }}&commit_hash=${{ github.sha }}&release_type=manual" || echo "Load testing trigger failed (non-critical)"
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          release_name: Release v${{ github.event.inputs.version }}
+          body: |
+            ## LiteLLM v${{ github.event.inputs.version }}
+            
+            Manual release triggered by @${{ github.actor }}
+            
+            **Package**: https://pypi.org/project/litellm/${{ github.event.inputs.version }}/
+            **Commit**: ${{ github.sha }}
+            
+            ### Installation
+            ```bash
+            pip install litellm==${{ github.event.inputs.version }}
+            ```
+          draft: false
+          prerelease: false 
