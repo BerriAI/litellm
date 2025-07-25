@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Card, Form, Button, Input, InputNumber, Select as AntdSelect, Space, Tooltip, Collapse } from "antd";
 import { PlusOutlined, DeleteOutlined, InfoCircleOutlined, DownOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
@@ -42,10 +42,18 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({
   const [routes, setRoutes] = useState<Route[]>([]);
   const [showJsonPreview, setShowJsonPreview] = useState<boolean>(false);
   const [expandedRoutes, setExpandedRoutes] = useState<string[]>([]);
+  const isInternalUpdate = useRef<boolean>(false);
 
-  // Initialize routes from value prop
+  // Initialize routes from value prop only on initial load or external changes
   useEffect(() => {
-    if (value?.routes) {
+    // Skip if this is an internal update
+    if (isInternalUpdate.current) {
+      isInternalUpdate.current = false;
+      return;
+    }
+
+    // Only initialize if routes array is empty (initial load)
+    if (routes.length === 0 && value?.routes) {
       const initializedRoutes = value.routes.map((route: SavedRoute, index: number) => ({
         id: route.id || `route-${index}-${Date.now()}`,
         model: route.name || route.model || "", // handle both 'name' and 'model' fields
@@ -58,11 +66,12 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({
       // Set expanded routes for existing routes
       const routeIds = initializedRoutes.map(route => route.id);
       setExpandedRoutes(routeIds);
-    } else {
+    } else if (!value?.routes && routes.length > 0) {
+      // Clear routes if value is cleared externally
       setRoutes([]);
       setExpandedRoutes([]);
     }
-  }, [value]);
+  }, [value, routes.length]);
 
   // Handle adding a new route
   const addRoute = () => {
@@ -109,6 +118,8 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({
         score_threshold: route.score_threshold,
       })),
     };
+    // Mark as internal update to prevent useEffect from reinitializing
+    isInternalUpdate.current = true;
     onChange?.(config);
   };
 
