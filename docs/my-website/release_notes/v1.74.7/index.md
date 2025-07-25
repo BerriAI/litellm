@@ -48,8 +48,8 @@ pip install litellm==1.74.7.post1
 
 - **Vector Stores** - Support for Vertex RAG Engine, PG Vector, OpenAI & Azure OpenAI Vector Stores.
 - **Bulk Editing Users** - Bulk editing users on the UI.
-- **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
-- **New LLM Providers** - Added Moonshot API `moonshot` and `v0` provider support.
+- **Health Check Improvements** - Prevent unnecessary pod restarts during high traffic.
+- **New LLM Providers** - Added Moonshot AI and Vercel v0 provider support.
 
 ---
 
@@ -93,9 +93,11 @@ v1.74.7-stable introduces Bulk Editing Users on the UI. This is useful for:
 
 ## Health Check Server
 
-v1.74.7-stable allows you to run a separate health check app using Docker
-- Allows health check probe to run even when server is under huge load
-- Even while running on a separate ASGI app, if the main app goes unhealthy, the pod goes down killing the health app and notifiying the orchestrator using supervisord
+<Image alt="Separate Health App Architecture" img={require('../../img/separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
+
+This release brings reliability improvements that prevent unnecessary pod restarts during high traffic. Previously, when the main LiteLLM app was busy serving traffic, health endpoints would timeout even when pods were healthy. 
+ 
+Starting with this release, you can run health endpoints on an isolated process with a dedicated port. This ensures liveness and readiness probes remain responsive even when the main LiteLLM app is under heavy load.
 
 [Read More](https://docs.litellm.ai/docs/proxy/prod#10-use-a-separate-health-check-app)
 

@@ -11130,6 +11130,7 @@
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 5e-06,
         "litellm_provider": "openrouter",
+        "source": "https://openrouter.ai/qwen/qwen3-coder",
         "mode": "chat",
         "supports_tool_choice": true
     },
