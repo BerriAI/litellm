@@ -133,13 +133,14 @@ class CustomGuardrail(CustomLogger):
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
+
         from litellm.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
 
         dc = DualCache()
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
-        if call_type == "completion":
+        if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
             result = await self.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(
                     user_id=kwargs.get("user_api_key_user_id"),
@@ -150,7 +151,7 @@ class CustomGuardrail(CustomLogger):
                 ),
                 cache=dc,
                 data=kwargs,
-                call_type=call_type or "acompletion",  # type: ignore
+                call_type=call_type.value or "acompletion",  # type: ignore
             )
 
             if result is not None and isinstance(result, dict):

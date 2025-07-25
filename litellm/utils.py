@@ -904,7 +904,6 @@ def client(original_function):  # noqa: PLR0915
         modified_kwargs = kwargs.copy()
 
         for callback in litellm.callbacks:
-
             if isinstance(callback, CustomLogger):
                 result = await callback.async_pre_call_deployment_hook(
                     modified_kwargs, typed_call_type
