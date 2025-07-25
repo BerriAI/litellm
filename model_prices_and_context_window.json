@@ -11117,12 +11117,23 @@
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00021,
-        "output_cost_per_token": 0.00063,
+        "input_cost_per_token": 2.1e-04,
+        "output_cost_per_token": 6.3e-04,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
-    },      
+    },
+    "openrouter/qwen/qwen3-coder": {
+        "max_tokens": 1000000,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "source": "https://openrouter.ai/qwen/qwen3-coder",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "openrouter/switchpoint/router": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
