@@ -1,5 +1,5 @@
 ---
-title: "v1.74.7"
+title: "v1.74.7-stable"
 slug: "v1-74-7"
 date: 2025-07-19T10:00:00
 authors:
