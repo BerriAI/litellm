@@ -115,7 +115,7 @@ class MCPServerManager:
         
         for server_name, server_config in mcp_servers_config.items():
             validate_mcp_server_name(server_name)
-            _mcp_info: dict = server_config.get("mcp_info", None) or {}
+            _mcp_info: Dict[str, Any] = server_config.get("mcp_info", None) or {}
             mcp_info = MCPInfo(**_mcp_info)
             mcp_info["server_name"] = server_name
             mcp_info["description"] = server_config.get("description", None)
@@ -257,9 +257,15 @@ class MCPServerManager:
         self, 
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
     ) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
+
+        Args:
+            user_api_key_auth: User authentication
+            mcp_auth_header: MCP auth header (deprecated)
+            mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
 
         Returns:
             List[MCPTool]: Combined list of tools from all servers
@@ -274,17 +280,32 @@ class MCPServerManager:
             if server is None:
                 verbose_logger.warning(f"MCP Server {server_id} not found")
                 continue
+            
+            # Get server-specific auth header if available
+            server_auth_header = None
+            if mcp_server_auth_headers and server.alias:
+                server_auth_header = mcp_server_auth_headers.get(server.alias)
+            elif mcp_server_auth_headers and server.server_name:
+                server_auth_header = mcp_server_auth_headers.get(server.server_name)
+            
+            # Fall back to deprecated mcp_auth_header if no server-specific header found
+            if server_auth_header is None:
+                server_auth_header = mcp_auth_header
+            
             try:
                 tools = await self._get_tools_from_server(
                     server=server,
-                    mcp_auth_header=mcp_auth_header,
+                    mcp_auth_header=server_auth_header,
                 )
                 list_tools_result.extend(tools)
+                verbose_logger.info(f"Successfully fetched {len(tools)} tools from server {server.name}")
             except Exception as e:
-                verbose_logger.exception(
-                    f"Error listing tools from server {server.name}: {str(e)}"
+                verbose_logger.warning(
+                    f"Failed to list tools from server {server.name}: {str(e)}. Continuing with other servers."
                 )
+                # Continue with other servers instead of failing completely
 
+        verbose_logger.info(f"Successfully fetched {len(list_tools_result)} tools total from all servers")
         return list_tools_result
 
     #########################################################
@@ -345,7 +366,7 @@ class MCPServerManager:
             List[MCPTool]: List of tools available on the server with prefixed names
         """
         verbose_logger.debug(f"Connecting to url: {server.url}")
-        verbose_logger.info("_get_tools_from_server...")
+        verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
         client = None
         try:
@@ -356,13 +377,21 @@ class MCPServerManager:
 
             # Create a task for the client operations to ensure proper cancellation handling
             async def _list_tools_task():
-                async with client:
-                    tools = await client.list_tools()
-                    verbose_logger.debug(f"Tools from {server.name}: {tools}")
-                    return tools
+                try:
+                    async with client:
+                        tools = await client.list_tools()
+                        verbose_logger.debug(f"Tools from {server.name}: {tools}")
+                        return tools
+                except asyncio.CancelledError:
+                    verbose_logger.warning(f"Client operation cancelled for {server.name}")
+                    return []
+                except Exception as e:
+                    verbose_logger.warning(f"Client operation failed for {server.name}: {str(e)}")
+                    return []
 
             try:
-                tools = await _list_tools_task()
+                # Add timeout to prevent hanging
+                tools = await asyncio.wait_for(_list_tools_task(), timeout=30.0)
 
                 # Create new tools with prefixed names
                 prefixed_tools = []
@@ -383,15 +412,26 @@ class MCPServerManager:
                     self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
                     self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
+                verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
                 return prefixed_tools
+            except asyncio.TimeoutError:
+                verbose_logger.warning(f"Timeout while listing tools from {server.name}")
+                # Don't re-raise the exception, just return empty list
+                return []
             except asyncio.CancelledError:
                 verbose_logger.warning(f"Task cancelled while listing tools from {server.name}")
-                raise  # Re-raise the cancellation
+                # Don't re-raise cancellation, just return empty list
+                return []
+            except ConnectionError as e:
+                verbose_logger.warning(f"Connection error while listing tools from {server.name}: {str(e)}")
+                # Don't re-raise the exception, just return empty list
+                return []
             except Exception as e:
-                verbose_logger.exception(f"Error listing tools from {server.name}: {str(e)}")
-                raise
+                verbose_logger.warning(f"Error listing tools from {server.name}: {str(e)}")
+                # Don't re-raise the exception, just return empty list
+                return []
         except Exception as e:
-            verbose_logger.exception(f"Failed to get tools from server {server.name}: {str(e)}")
+            verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
             return []  # Return empty list on failure
         finally:
             if client:
@@ -406,6 +446,7 @@ class MCPServerManager:
             arguments: Dict[str, Any],
             user_api_key_auth: Optional[UserAPIKeyAuth] = None,
             mcp_auth_header: Optional[str] = None,
+            mcp_server_auth_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -414,7 +455,8 @@ class MCPServerManager:
             name: Tool name (can be prefixed with server name)
             arguments: Tool arguments
             user_api_key_auth: User authentication
-            mcp_auth_header: MCP auth header
+            mcp_auth_header: MCP auth header (deprecated)
+            mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
 
         Returns:
             CallToolResult from the MCP server
@@ -434,9 +476,20 @@ class MCPServerManager:
                 raise ValueError(
                     f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}")
 
+        # Get server-specific auth header if available
+        server_auth_header = None
+        if mcp_server_auth_headers and mcp_server.alias:
+            server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
+        elif mcp_server_auth_headers and mcp_server.server_name:
+            server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
+        
+        # Fall back to deprecated mcp_auth_header if no server-specific header found
+        if server_auth_header is None:
+            server_auth_header = mcp_auth_header
+
         client = self._create_mcp_client(
             server=mcp_server,
-            mcp_auth_header=mcp_auth_header,
+            mcp_auth_header=server_auth_header,
         )
         async with client:
             # Use the original tool name (without prefix) for the actual call
