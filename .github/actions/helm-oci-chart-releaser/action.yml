@@ -42,7 +42,9 @@ runs:
   steps:
     - name: Helm | Login
       shell: bash
-      run: echo ${{ inputs.registry_password }} | helm registry login -u ${{ inputs.registry_username }} --password-stdin ${{ inputs.registry }}
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: echo "::set-output name=chart_version::$(echo "$TAG_NAME" | sed 's/^v//')"
       env:
         HELM_EXPERIMENTAL_OCI: '1'
     
