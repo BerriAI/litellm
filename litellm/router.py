@@ -5929,6 +5929,7 @@ class Router:
             "fallbacks",
             "context_window_fallbacks",
             "model_group_retry_policy",
+            "retry_policy",
         ]
 
         for var in vars_to_include:
