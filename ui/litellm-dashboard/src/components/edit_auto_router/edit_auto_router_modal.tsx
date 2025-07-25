@@ -155,7 +155,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         <Button key="cancel" onClick={onCancel}>
           Cancel
         </Button>,
-        <Button key="submit" type="primary" loading={loading} onClick={handleSubmit}>
+        <Button key="submit" loading={loading} onClick={handleSubmit}>
           Save Changes
         </Button>,
       ]}
