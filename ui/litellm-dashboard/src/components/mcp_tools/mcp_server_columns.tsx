@@ -24,7 +24,7 @@ export const mcpServerColumns = (
     ),
   },
   {
-    accessorKey: "alias",
+    accessorKey: "server_name",
     header: "Name",
   },
   {

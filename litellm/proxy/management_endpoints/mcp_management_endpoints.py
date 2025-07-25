@@ -235,7 +235,7 @@ if MCP_AVAILABLE:
                 LIST_MCP_SERVERS.append(
                     LiteLLM_MCPServerTable(
                         server_id=_server_id,
-                        alias=_server_config.name,
+                        server_name=_server_config.name,
                         url=_server_config.url,
                         transport=_server_config.transport,
                         spec_version=_server_config.spec_version,
@@ -254,7 +254,7 @@ if MCP_AVAILABLE:
         LIST_MCP_SERVERS = [
             LiteLLM_MCPServerTable(
                 server_id=server.server_id,
-                alias=server.alias,
+                server_name=server.server_name,
                 description=server.description,
                 url=server.url,
                 transport=server.transport,
@@ -353,8 +353,8 @@ if MCP_AVAILABLE:
         )
 
         # Server name validation: disallow '-'
-        if payload.alias:
-            validate_mcp_server_name(payload.alias, raise_http_exception=True)
+        if payload.server_name:
+            validate_mcp_server_name(payload.server_name, raise_http_exception=True)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -497,8 +497,8 @@ if MCP_AVAILABLE:
         )
 
         # Server name validation: disallow '-'
-        if payload.alias:
-            validate_mcp_server_name(payload.alias, raise_http_exception=True)
+        if payload.server_name:
+            validate_mcp_server_name(payload.server_name, raise_http_exception=True)
 
         # Authz - restrict only admins to delete mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:

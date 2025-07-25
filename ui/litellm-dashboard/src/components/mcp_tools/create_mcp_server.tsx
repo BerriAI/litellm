@@ -64,8 +64,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               actualConfig = stdioConfig.mcpServers[firstServerName]
 
               // If no alias is provided, use the server name from the JSON
-              if (!formValues.alias) {
-                formValues.alias = firstServerName.replace(/-/g, "_") // Replace hyphens with underscores
+              if (!formValues.server_name) {
+                formValues.server_name = firstServerName.replace(/-/g, "_") // Replace hyphens with underscores
               }
             }
           }
@@ -90,7 +90,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // Remove the raw stdio_config field as we've extracted its components
         stdio_config: undefined,
         mcp_info: {
-          server_name: formValues.alias || formValues.url,
+          server_name: formValues.server_name || formValues.url,
           description: formValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
@@ -214,7 +214,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   </Tooltip>
                 </span>
               }
-              name="alias"
+              name="server_name"
               rules={[
                 { required: false, message: "Please enter a server name" },
                 {

@@ -145,9 +145,9 @@ class MCPServerManager:
         """
         Remove a server from the registry
         """
-        if mcp_server.alias in self.get_registry():
-            del self.registry[mcp_server.alias]
-            verbose_logger.debug(f"Removed MCP Server: {mcp_server.alias}")
+        if mcp_server.server_name in self.get_registry():
+            del self.registry[mcp_server.server_name]
+            verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_name}")
         elif mcp_server.server_id in self.get_registry():
             del self.registry[mcp_server.server_id]
             verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_id}")
@@ -164,16 +164,15 @@ class MCPServerManager:
             # Safely access env field which may not exist on Prisma model objects
             env_data = getattr(mcp_server, 'env', None)
             env_dict = _deserialize_env_dict(env_data)
-            
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
-                name=mcp_server.alias or mcp_server.server_id,
+                name=mcp_server.server_name or mcp_server.server_id,
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
                 spec_version=cast(MCPSpecVersionType, mcp_server.spec_version),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=MCPInfo(
-                    server_name=mcp_server.alias or mcp_server.server_id,
+                    server_name=mcp_server.server_name or mcp_server.server_id,
                     description=mcp_server.description,
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
@@ -184,7 +183,7 @@ class MCPServerManager:
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(
-                f"Added MCP Server: {mcp_server.alias or mcp_server.server_id}"
+                f"Added MCP Server: {mcp_server.server_name or mcp_server.server_id}"
             )
 
     async def get_allowed_mcp_servers(

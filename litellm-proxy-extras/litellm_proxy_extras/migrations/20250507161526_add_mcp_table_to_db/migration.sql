@@ -1,7 +1,7 @@
 -- CreateTable
 CREATE TABLE "LiteLLM_MCPServerTable" (
     "server_id" TEXT NOT NULL,
-    "alias" TEXT,
+    "server_name" TEXT,
     "description" TEXT,
     "url" TEXT NOT NULL,
     "transport" TEXT NOT NULL DEFAULT 'sse',
@@ -14,4 +14,7 @@ CREATE TABLE "LiteLLM_MCPServerTable" (
 
     CONSTRAINT "LiteLLM_MCPServerTable_pkey" PRIMARY KEY ("server_id")
 );
+
+-- Migration for existing tables: rename alias to server_name if upgrading
+ALTER TABLE "LiteLLM_MCPServerTable" RENAME COLUMN "alias" TO "server_name";
 
