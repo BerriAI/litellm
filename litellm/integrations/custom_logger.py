@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import MCPPostCallResponseObject
+    from litellm.types.router import PreRoutingHookResponse
 
     Span = Union[_Span, Any]
 else:
@@ -41,6 +42,7 @@ else:
     LiteLLMLoggingObj = Any
     UserAPIKeyAuth = Any
     MCPPostCallResponseObject = Any
+    PreRoutingHookResponse = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -125,6 +127,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
     """
 
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: Dict,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+    ) -> Optional[PreRoutingHookResponse]:
+        """
+        This hook is called before the routing decision is made.
+
+        Used for the litellm auto-router to modify the request before the routing decision is made.
+        """
+        return None
+
     async def async_filter_deployments(
         self,
         model: str,
@@ -153,6 +170,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
+        pass
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: dict,
+        response: LLMResponseTypes,
+        call_type: Optional[CallTypes],
+    ) -> Optional[LLMResponseTypes]:
+        """
+        Allow modifying / reviewing the response just after it's received from the deployment.
+        """
         pass
 
     #### Fallback Events - router/proxy only ####
@@ -355,18 +383,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
-    
+
     #########################################################
     # MCP TOOL CALL HOOKS
     #########################################################
-    async def async_post_mcp_tool_call_hook(self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time) -> Optional[MCPPostCallResponseObject]:
+    async def async_post_mcp_tool_call_hook(
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+    ) -> Optional[MCPPostCallResponseObject]:
         """
         This log gets called after the MCP tool call is made.
 
         Useful if you want to modiy the standard logging payload after the MCP tool call is made.
         """
         return None
-    
 
     # Useful helpers for custom logger classes
 

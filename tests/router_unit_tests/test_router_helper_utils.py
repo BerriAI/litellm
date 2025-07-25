@@ -14,6 +14,7 @@ import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
+from litellm.types.router import Deployment, LiteLLM_Params
 
 
 @pytest.fixture
@@ -1239,4 +1240,95 @@ def test_mock_router_testing_params_str_to_bool_conversion(
     
     # Verify other params remain unchanged
     assert kwargs["other_param"] == "should_remain"
+
+
+def test_is_auto_router_deployment(model_list):
+    """Test if the '_is_auto_router_deployment' function correctly identifies auto-router deployments"""
+    router = Router(model_list=model_list)
+    
+    # Test case 1: Model starts with "auto_router/" - should return True
+    litellm_params_auto = LiteLLM_Params(model="auto_router/my-auto-router")
+    assert router._is_auto_router_deployment(litellm_params_auto) is True
+    
+    # Test case 2: Model doesn't start with "auto_router/" - should return False
+    litellm_params_regular = LiteLLM_Params(model="gpt-3.5-turbo")
+    assert router._is_auto_router_deployment(litellm_params_regular) is False
+    
+    # Test case 3: Model is empty string - should return False
+    litellm_params_empty = LiteLLM_Params(model="")
+    assert router._is_auto_router_deployment(litellm_params_empty) is False
+    
+    # Test case 4: Model contains "auto_router/" but doesn't start with it - should return False
+    litellm_params_contains = LiteLLM_Params(model="prefix_auto_router/something")
+    assert router._is_auto_router_deployment(litellm_params_contains) is False
+
+
+
+@patch('litellm.router_strategy.auto_router.auto_router.AutoRouter')
+def test_init_auto_router_deployment_success(mock_auto_router, model_list):
+    """Test if the 'init_auto_router_deployment' function successfully initializes auto-router when all params provided"""
+    router = Router(model_list=model_list)
+    
+    # Create a mock AutoRouter instance
+    mock_auto_router_instance = MagicMock()
+    mock_auto_router.return_value = mock_auto_router_instance
+    
+    # Test case: All required parameters provided
+    litellm_params = LiteLLM_Params(
+        model="auto_router/test",
+        auto_router_config_path="/path/to/config",
+        auto_router_default_model="gpt-3.5-turbo",
+        auto_router_embedding_model="text-embedding-ada-002"
+    )
+    deployment = Deployment(
+        model_name="test-auto-router", 
+        litellm_params=litellm_params,
+        model_info={"id": "test-id"}
+    )
+    
+    # Should not raise any exception
+    router.init_auto_router_deployment(deployment)
+    
+    # Verify AutoRouter was called with correct parameters
+    mock_auto_router.assert_called_once_with(
+        model_name="test-auto-router",
+        auto_router_config_path="/path/to/config",
+        auto_router_config=None,
+        default_model="gpt-3.5-turbo",
+        embedding_model="text-embedding-ada-002",
+        litellm_router_instance=router,
+    )
+    
+    # Verify the auto-router was added to the router's auto_routers dict
+    assert "test-auto-router" in router.auto_routers
+    assert router.auto_routers["test-auto-router"] == mock_auto_router_instance
+
+
+@patch('litellm.router_strategy.auto_router.auto_router.AutoRouter')
+def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, model_list):
+    """Test if the 'init_auto_router_deployment' function raises ValueError when model_name already exists"""
+    router = Router(model_list=model_list)
+    
+    # Create a mock AutoRouter instance
+    mock_auto_router_instance = MagicMock()
+    mock_auto_router.return_value = mock_auto_router_instance
+    
+    # Add an existing auto-router
+    router.auto_routers["test-auto-router"] = mock_auto_router_instance
+    
+    # Try to add another auto-router with the same name
+    litellm_params = LiteLLM_Params(
+        model="auto_router/test",
+        auto_router_config_path="/path/to/config",
+        auto_router_default_model="gpt-3.5-turbo",
+        auto_router_embedding_model="text-embedding-ada-002"
+    )
+    deployment = Deployment(
+        model_name="test-auto-router", 
+        litellm_params=litellm_params,
+        model_info={"id": "test-id"}
+    )
+    
+    with pytest.raises(ValueError, match="Auto-router deployment test-auto-router already exists"):
+        router.init_auto_router_deployment(deployment)
 

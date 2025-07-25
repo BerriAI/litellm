@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from copy import deepcopy
 from typing import List, cast
 from unittest.mock import MagicMock, patch
@@ -921,3 +922,106 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
     print(result)
     assert isinstance(result[0], list)
     assert len(result[0]) == 1
+
+
+def test_vertex_ai_tool_call_id_format():
+    """
+    Test that tool call IDs have the correct format and length.
+    
+    The ID should be in format 'call_' + 28 hex characters (total 33 characters).
+    This test verifies the fix for keeping the code line under 40 characters.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.llms.vertex_ai import HttpxPartType
+
+    # Create parts with function calls
+    parts_with_functions = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_weather",
+                "args": {"location": "San Francisco", "unit": "celsius"},
+            }
+        ),
+        HttpxPartType(
+            functionCall={
+                "name": "get_time", 
+                "args": {"timezone": "PST"}
+            }
+        ),
+    ]
+
+    function, tools, updated_idx = VertexGeminiConfig._transform_parts(
+        parts=parts_with_functions, cumulative_tool_call_idx=0, is_function_call=False
+    )
+
+    # Verify tools were created
+    assert function is None
+    assert tools is not None
+    assert len(tools) == 2
+
+    # Test ID format for both tool calls
+    for tool in tools:
+        tool_id = tool["id"]
+        
+        # Should start with 'call_'
+        assert tool_id.startswith("call_"), f"ID should start with 'call_', got: {tool_id}"
+        
+        # Should have exactly 33 total characters (call_ + 28 hex chars)
+        assert len(tool_id) == 33, f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
+        
+        # The part after 'call_' should be 28 hex characters
+        hex_part = tool_id[5:]  # Remove 'call_' prefix
+        assert len(hex_part) == 28, f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
+        
+        # Should only contain valid hex characters
+        assert re.match(r'^[0-9a-f]{28}$', hex_part), f"Should contain only lowercase hex chars, got: {hex_part}"
+
+    # Verify IDs are unique
+    assert tools[0]["id"] != tools[1]["id"], "Tool call IDs should be unique"
+
+    # Test with multiple generations to ensure uniqueness
+    ids_generated = set()
+    for _ in range(10):
+        _, test_tools, _ = VertexGeminiConfig._transform_parts(
+            parts=[HttpxPartType(functionCall={"name": "test", "args": {}})],
+            cumulative_tool_call_idx=0,
+            is_function_call=False,
+        )
+        if test_tools:
+            ids_generated.add(test_tools[0]["id"])
+    
+    # All generated IDs should be unique
+    assert len(ids_generated) == 10, f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
+
+
+def test_vertex_ai_code_line_length():
+    """
+    Test that the specific code line generating tool call IDs is within character limit.
+    
+    This is a meta-test to ensure the code change meets the 40-character requirement.
+    """
+    import inspect
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    
+    # Get the source code of the _transform_parts method
+    source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split('\n')
+    
+    # Find the line that generates the ID
+    id_line = None
+    for line in source_lines:
+        if 'id=f"call_{uuid.uuid4().hex' in line:
+            id_line = line.strip()  # Remove indentation for length check
+            break
+    
+    assert id_line is not None, "Could not find the ID generation line in source code"
+    
+    # Check that the line is 40 characters or less (excluding indentation)
+    line_length = len(id_line)
+    assert line_length <= 40, f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
+    
+    # Verify it contains the expected UUID format
+    assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
