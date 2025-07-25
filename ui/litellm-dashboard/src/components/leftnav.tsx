@@ -23,6 +23,7 @@ import {
   LockOutlined,
   ToolOutlined,
   TagsOutlined,
+  BgColorsOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles, isAdminRole } from '../utils/roles';
 import UsageIndicator from './usage_indicator';
@@ -105,6 +106,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         { key: "11", page: "general-settings", label: "Router Settings", icon: <SettingOutlined />, roles: all_admin_roles },
         { key: "8", page: "settings", label: "Logging & Alerts", icon: <SettingOutlined />, roles: all_admin_roles },
         { key: "13", page: "admin-panel", label: "Admin Settings", icon: <SettingOutlined />, roles: all_admin_roles },
+        { key: "14", page: "ui-theme", label: "UI Theme", icon: <BgColorsOutlined />, roles: all_admin_roles },
       ]
     }
   ];
