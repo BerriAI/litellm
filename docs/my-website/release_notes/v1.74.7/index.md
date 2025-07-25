@@ -342,4 +342,4 @@ Starting with this release, you can run health endpoints on an isolated process 
 * @jlaurendi made their first contribution in https://github.com/BerriAI/litellm/pull/12704
 * @doublerr made their first contribution in https://github.com/BerriAI/litellm/pull/12661
 
-## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.3-stable...v1.74.6.rc)**
+## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.3-stable...v1.74.7-stable)**
