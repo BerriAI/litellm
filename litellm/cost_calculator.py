@@ -785,6 +785,14 @@ def completion_cost(  # noqa: PLR0915
                         raise TypeError(
                             "completion_response must be of type ImageResponse for bedrock image cost calculation"
                         )
+                    elif custom_llm_provider == litellm.LlmProviders.RECRAFT.value:
+                        from litellm.llms.recraft.cost_calculator import (
+                            cost_calculator as recraft_image_cost_calculator,
+                        )
+                        return recraft_image_cost_calculator(
+                            model=model,
+                            image_response=completion_response,
+                        )
                     else:
                         return default_image_cost_calculator(
                             model=model,
