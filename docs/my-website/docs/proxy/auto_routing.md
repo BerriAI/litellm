@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Auto Routing
 
@@ -163,6 +165,51 @@ Configure each route with:
 
 - **Description** - A human-readable description of what this route handles
 - **Score Threshold** - The minimum similarity score (0.0-1.0) required to trigger this route
+
+
+### Usage
+
+Once added developers need to select the model=`auto_router1` in the `model` field of the LLM API request.
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234", # replace with your LiteLLM API key
+    base_url="http://localhost:4000"
+)
+
+# This request will be auto-routed based on the content
+response = client.chat.completions.create(
+    model="auto_router1",
+    messages=[
+        {
+            "role": "user",
+            "content": "how to code a program in python"
+        }
+    ]
+)
+
+print(response)
+```
+</TabItem>
+
+<TabItem value="curl" label="Curl Request">
+
+```shell
+curl -X POST http://localhost:4000/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer $LITELLM_API_KEY" \
+-d '{
+    "model": "auto_router1",
+    "messages": [{"role": "user", "content": "how to code a program in python"}]
+}'
+```
+</TabItem>
+</Tabs>
+
 
 
 ## How It Works
