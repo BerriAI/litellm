@@ -78,17 +78,17 @@ export default function ModelInfoView({
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
 
   const canEditModel =
-    userRole === "Admin" || modelData.model_info.created_by === userID;
+    userRole === "Admin" || modelData?.model_info?.created_by === userID;
   const isAdmin = userRole === "Admin";
-  const isAutoRouter = modelData.litellm_params?.auto_router_config != null;
+  const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
   const usingExistingCredential =
-    modelData.litellm_params?.litellm_credential_name != null &&
-    modelData.litellm_params?.litellm_credential_name != undefined;
+    modelData?.litellm_params?.litellm_credential_name != null &&
+    modelData?.litellm_params?.litellm_credential_name != undefined;
   console.log("usingExistingCredential, ", usingExistingCredential);
   console.log(
     "modelData.litellm_params.litellm_credential_name, ",
-    modelData.litellm_params.litellm_credential_name
+    modelData?.litellm_params?.litellm_credential_name
   );
 
   useEffect(() => {
