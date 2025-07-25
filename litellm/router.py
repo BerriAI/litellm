@@ -4707,11 +4707,6 @@ class Router:
                 )
             
 
-            #########################################################
-            # Check if this is an auto-router deployment
-            #########################################################
-            if self._is_auto_router_deployment(litellm_params=litellm_params):
-                self.init_auto_router_deployment(deployment=deployment)
 
             ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
             _model_name = deployment.litellm_params.model
@@ -4953,6 +4948,12 @@ class Router:
             custom_llm_provider=custom_llm_provider,
             model=deployment.litellm_params.model,
         )
+
+        #########################################################
+        # Check if this is an auto-router deployment
+        #########################################################
+        if self._is_auto_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_auto_router_deployment(deployment=deployment)
 
         return deployment
 
