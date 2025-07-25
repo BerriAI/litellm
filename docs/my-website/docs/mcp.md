@@ -62,6 +62,13 @@ model_list:
       model: openai/gpt-4o
       api_key: sk-xxxxxxx
 
+litellm_settings:
+  # MCP Aliases - Map aliases to server names for easier tool access
+  mcp_aliases:
+    "github": "github_mcp_server"
+    "zapier": "zapier_mcp_server"
+    "deepwiki": "deepwiki_mcp_server"
+
 mcp_servers:
   # HTTP Streamable Server
   deepwiki_mcp:
@@ -102,6 +109,29 @@ mcp_servers:
 - **Description**: Optional description for the server
 - **Auth Type**: Optional authentication type
 - **Spec Version**: Optional MCP specification version (defaults to `2025-03-26`)
+
+### MCP Aliases
+
+You can define aliases for your MCP servers in the `litellm_settings` section. This allows you to:
+
+1. **Map friendly names to server names**: Use shorter, more memorable aliases
+2. **Override server aliases**: If a server doesn't have an alias defined, the system will use the first matching alias from `mcp_aliases`
+3. **Ensure uniqueness**: Only the first alias for each server is used, preventing conflicts
+
+**Example:**
+```yaml
+litellm_settings:
+  mcp_aliases:
+    "github": "github_mcp_server"      # Maps "github" alias to "github_mcp_server"
+    "zapier": "zapier_mcp_server"      # Maps "zapier" alias to "zapier_mcp_server"
+    "docs": "deepwiki_mcp_server"      # Maps "docs" alias to "deepwiki_mcp_server"
+    "github_alt": "github_mcp_server"  # This will be ignored since "github" already maps to this server
+```
+
+**Benefits:**
+- **Simplified tool access**: Use `github_create_issue` instead of `github_mcp_server_create_issue`
+- **Consistent naming**: Standardize alias patterns across your organization
+- **Easy migration**: Change server names without breaking existing tool references
 
 </TabItem>
 </Tabs>
@@ -222,7 +252,7 @@ You can choose to access specific MCP servers and only list their tools using th
 - Limit tool access to one or more specific MCP servers
 - Control which tools are available in different environments or use cases
 
-The header accepts a comma-separated list of server aliases: `"Zapier_Gmail,Server2,Server3"`
+The header accepts a comma-separated list of server aliases: `"alias_1,Server2,Server3"`
 
 Notes:
 - If the header is not provided, tools from all available MCP servers will be accessible
@@ -244,7 +274,7 @@ curl --location 'https://api.openai.com/v1/responses' \
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": "Zapier_Gmail"
+                "x-mcp-servers": "alias_1"
             }
         }
     ],
@@ -253,7 +283,7 @@ curl --location 'https://api.openai.com/v1/responses' \
 }'
 ```
 
-In this example, the request will only have access to tools from the "Zapier_Gmail" MCP server.
+In this example, the request will only have access to tools from the "alias_1" MCP server.
 
 </TabItem>
 
@@ -273,7 +303,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
-                "x-mcp-servers": "Zapier_Gmail,Server2"
+                "x-mcp-servers": "alias_1,Server2"
             }
         }
     ],
@@ -295,7 +325,7 @@ This configuration restricts the request to only use tools from the specified MC
       "url": "litellm_proxy",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
-        "x-mcp-servers": "Zapier_Gmail,Server2"
+        "x-mcp-servers": "alias_1,Server2"
       }
     }
   }

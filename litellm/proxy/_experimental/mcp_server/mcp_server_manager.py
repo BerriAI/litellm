@@ -100,11 +100,19 @@ class MCPServerManager:
         """
         return self.config_mcp_servers | self.registry
 
-    def load_servers_from_config(self, mcp_servers_config: Dict[str, Any]):
+    def load_servers_from_config(self, mcp_servers_config: Dict[str, Any], mcp_aliases: Optional[Dict[str, str]] = None):
         """
         Load the MCP Servers from the config
+        
+        Args:
+            mcp_servers_config: Dictionary of MCP server configurations
+            mcp_aliases: Optional dictionary mapping aliases to server names from litellm_settings
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
+        
+        # Track which aliases have been used to ensure only first occurrence is used
+        used_aliases = set()
+        
         for server_name, server_config in mcp_servers_config.items():
             validate_mcp_server_name(server_name)
             _mcp_info: dict = server_config.get("mcp_info", None) or {}
@@ -114,6 +122,16 @@ class MCPServerManager:
 
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)
+            
+            # Apply mcp_aliases mapping if provided
+            if mcp_aliases and alias is None:
+                # Check if this server_name has an alias in mcp_aliases
+                for alias_name, target_server_name in mcp_aliases.items():
+                    if target_server_name == server_name and alias_name not in used_aliases:
+                        alias = alias_name
+                        used_aliases.add(alias_name)
+                        verbose_logger.debug(f"Mapped alias '{alias_name}' to server '{server_name}'")
+                        break
             
             # Create a temporary server object to use with get_server_prefix utility
             temp_server = type('TempServer', (), {
