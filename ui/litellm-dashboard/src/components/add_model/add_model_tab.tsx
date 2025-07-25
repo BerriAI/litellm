@@ -101,7 +101,6 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   return (
     <>
-      <Title level={2}>Add new model</Title>
       <TabGroup className="w-full">
         <TabList className="mb-4">
           <Tab>Add Model</Tab>
@@ -109,6 +108,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
         </TabList>
         <TabPanels>
           <TabPanel>
+            <Title level={2}>Add Model</Title>
             <Card>
         <Form
           form={form}

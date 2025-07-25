@@ -35,6 +35,7 @@ import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
+import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -74,18 +75,20 @@ export default function ModelInfoView({
     useState<CredentialItem | null>(null);
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
+  const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
 
   const canEditModel =
-    userRole === "Admin" || modelData.model_info.created_by === userID;
+    userRole === "Admin" || modelData?.model_info?.created_by === userID;
   const isAdmin = userRole === "Admin";
+  const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
   const usingExistingCredential =
-    modelData.litellm_params?.litellm_credential_name != null &&
-    modelData.litellm_params?.litellm_credential_name != undefined;
+    modelData?.litellm_params?.litellm_credential_name != null &&
+    modelData?.litellm_params?.litellm_credential_name != undefined;
   console.log("usingExistingCredential, ", usingExistingCredential);
   console.log(
     "modelData.litellm_params.litellm_credential_name, ",
-    modelData.litellm_params.litellm_credential_name
+    modelData?.litellm_params?.litellm_credential_name
   );
 
   useEffect(() => {
@@ -271,6 +274,13 @@ export default function ModelInfoView({
     }
   };
 
+  const handleAutoRouterUpdate = (updatedModel: any) => {
+    setLocalModelData(updatedModel);
+    if (onModelUpdate) {
+      onModelUpdate(updatedModel);
+    }
+  };
+
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
@@ -430,15 +440,26 @@ export default function ModelInfoView({
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Model Settings</Title>
-                {canEditModel && !isEditing && (
-                  <TremorButton
-                    variant="secondary"
-                    onClick={() => setIsEditing(true)}
-                    className="flex items-center"
-                  >
-                    Edit Model
-                  </TremorButton>
-                )}
+                <div className="flex gap-2">
+                  {isAutoRouter && canEditModel && !isEditing && (
+                    <TremorButton
+                      variant="primary"
+                      onClick={() => setIsAutoRouterModalOpen(true)}
+                      className="flex items-center"
+                    >
+                      Edit Auto Router
+                    </TremorButton>
+                  )}
+                  {canEditModel && !isEditing && (
+                    <TremorButton
+                      variant="secondary"
+                      onClick={() => setIsEditing(true)}
+                      className="flex items-center"
+                    >
+                      Edit Model
+                    </TremorButton>
+                  )}
+                </div>
               </div>
               {localModelData ? (
                 <Form
@@ -916,6 +937,16 @@ export default function ModelInfoView({
           <Text>{modelData.litellm_params.litellm_credential_name}</Text>
         </Modal>
       )}
+
+      {/* Edit Auto Router Modal */}
+      <EditAutoRouterModal
+        isVisible={isAutoRouterModalOpen}
+        onCancel={() => setIsAutoRouterModalOpen(false)}
+        onSuccess={handleAutoRouterUpdate}
+        modelData={localModelData || modelData}
+        accessToken={accessToken || ""}
+        userRole={userRole || ""}
+      />
     </div>
   );
 }

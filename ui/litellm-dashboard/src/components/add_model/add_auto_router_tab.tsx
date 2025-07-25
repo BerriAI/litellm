@@ -211,21 +211,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               showSearch={true}
             />
           </Form.Item>
-          {showCustomDefaultModel && (
-            <Form.Item
-              label="Custom Default Model"
-              name="custom_default_model"
-              labelCol={{ span: 10 }}
-              labelAlign="left"
-            >
-              <TextInput 
-                placeholder="Enter custom model name"
-                onChange={(e) => {
-                  form.setFieldValue('auto_router_default_model', e.target.value);
-                }}
-              />
-            </Form.Item>
-          )}
 
           {/* Auto Router Embedding Model */}
           <Form.Item
@@ -255,22 +240,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               allowClear
             />
           </Form.Item>
-          {showCustomEmbeddingModel && (
-            <Form.Item
-              label="Custom Embedding Model"
-              name="custom_embedding_model"
-              labelCol={{ span: 10 }}
-              labelAlign="left"
-            >
-              <TextInput 
-                placeholder="Enter custom embedding model name"
-                onChange={(e) => {
-                  form.setFieldValue('auto_router_embedding_model', e.target.value);
-                }}
-              />
-            </Form.Item>
-          )}
-
           <div className="flex items-center my-4">
             <div className="flex-grow border-t border-gray-200"></div>
             <span className="px-4 text-gray-500 text-sm">Additional Settings</span>
