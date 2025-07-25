@@ -35,8 +35,6 @@ RUN pip install dist/*.whl
 
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-# install semantic_router without dependencies to avoid litellm conflict  
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ --no-deps semantic_router==0.1.10
 
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
