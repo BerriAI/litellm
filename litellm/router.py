@@ -165,9 +165,16 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.router_strategy.auto_router.auto_router import (
+        AutoRouter,
+        PreRoutingHookResponse,
+    )
+
     Span = Union[_Span, Any]
 else:
     Span = Any
+    AutoRouter = Any
+    PreRoutingHookResponse = Any
 
 
 class RoutingArgs(enum.Enum):
@@ -398,6 +405,7 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
+        self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         if model_list is not None:
             model_list = copy.deepcopy(model_list)
@@ -4674,10 +4682,11 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
+            litellm_params: LiteLLM_Params = LiteLLM_Params(**_litellm_params)
             deployment = Deployment(
                 **deployment_info,
                 model_name=_model_name,
-                litellm_params=LiteLLM_Params(**_litellm_params),
+                litellm_params=litellm_params,
                 model_info=_model_info,
             )
             for field in CustomPricingLiteLLMParams.model_fields.keys():
@@ -4692,6 +4701,13 @@ class Router:
                         model_id: _model_info,
                     }
                 )
+            
+
+            #########################################################
+            # Check if this is an auto-router deployment
+            #########################################################
+            if self._is_auto_router_deployment(litellm_params=litellm_params):
+                self.init_auto_router_deployment(deployment=deployment)
 
             ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
             _model_name = deployment.litellm_params.model
@@ -4730,6 +4746,46 @@ class Router:
                 return None
             else:
                 raise e
+    
+    def _is_auto_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """
+        Check if the deployment is an auto-router deployment.
+
+        Returns True if the litellm_params model starts with "auto_router/"
+        """
+        if litellm_params.model.startswith("auto_router/"):
+            return True
+        return False
+    
+    def init_auto_router_deployment(self, deployment: Deployment):
+        """
+        Initialize the auto-router deployment.
+
+        This will initialize the auto-router and add it to the auto-routers dictionary.
+        """
+        from litellm.router_strategy.auto_router.auto_router import AutoRouter
+        router_config_path: Optional[str] = deployment.litellm_params.auto_router_config_path
+        if router_config_path is None:
+            raise ValueError("auto_router_config_path is required for auto-router deployments. Please set it in the litellm_params")
+        
+        default_model: Optional[str] = deployment.litellm_params.auto_router_default_model
+        if default_model is None:
+            raise ValueError("auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params")
+        
+        embedding_model: Optional[str] = deployment.litellm_params.auto_router_embedding_model
+        if embedding_model is None:
+            raise ValueError("auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params")
+
+        autor_router: AutoRouter = AutoRouter(
+            model_name=deployment.model_name,
+            router_config_path=router_config_path,
+            default_model=default_model,
+            embedding_model=embedding_model,
+            litellm_router_instance=self,
+        )
+        if deployment.model_name in self.auto_routers:
+            raise ValueError(f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name.")
+        self.auto_routers[deployment.model_name] = autor_router
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
@@ -6458,6 +6514,25 @@ class Router:
             )
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
+            
+            #########################################################
+            # Execute Pre-Routing Hooks
+            # this hook can modify the model, messages before the routing decision is made
+            #########################################################
+            pre_routing_hook_response = await self.async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+            if pre_routing_hook_response is not None:
+                model = pre_routing_hook_response.model
+                messages = pre_routing_hook_response.messages
+            #########################################################
+
+            
+            
             healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
                 request_kwargs=request_kwargs,
@@ -6567,6 +6642,36 @@ class Router:
                         logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                     )
             raise e
+
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: Dict,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+    ) -> Optional[PreRoutingHookResponse]:
+        """
+        This hook is called before the routing decision is made.
+
+        Used for the litellm auto-router to modify the request before the routing decision is made.
+        """
+        #########################################################
+        # Check if any auto-router should be used
+        #########################################################
+        if model in self.auto_routers:
+            return await self.auto_routers[model].async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+        
+        return None
+
+
+
 
     def get_available_deployment(
         self,
