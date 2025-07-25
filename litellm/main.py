@@ -1235,6 +1235,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "thinking": thinking,
             "web_search_options": web_search_options,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            "metadata": metadata,
         }
         optional_params = get_optional_params(
             **optional_param_args, **non_default_params
@@ -1310,10 +1311,16 @@ def completion(  # type: ignore # noqa: PLR0915
             max_retries=max_retries,
             timeout=timeout,
         )
+        # Add metadata to processed_non_default_params for logging purposes
+        # This ensures metadata is available in logging even when not sent to the provider
+        logging_optional_params = processed_non_default_params.copy()
+        if metadata is not None:
+            logging_optional_params["metadata"] = metadata
+            
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
-            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
+            optional_params=logging_optional_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
@@ -1921,9 +1928,7 @@ def completion(  # type: ignore # noqa: PLR0915
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            if (
-                litellm.enable_preview_features and metadata is not None
-            ):  # [PREVIEW] allow metadata to be passed to OPENAI
+            if metadata is not None:
                 optional_params["metadata"] = add_openai_metadata(metadata)
 
             ## LOAD CONFIG - if set
