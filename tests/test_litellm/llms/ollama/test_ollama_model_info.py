@@ -1,8 +1,6 @@
-import json
 import os
 import sys
-import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -56,6 +54,7 @@ class TestOllamaModelInfo:
         get_models should extract and return sorted unique model names.
         """
         calls = []
+        call_headers = []
         sample = {
             "models": [
                 {"name": "zeta"},
@@ -65,8 +64,9 @@ class TestOllamaModelInfo:
             ]
         }
 
-        def mock_get(url):
+        def mock_get(url, headers):
             calls.append(url)
+            call_headers.append(headers)
             return DummyResponse(sample, status_code=200)
 
         monkeypatch.setattr(httpx, "get", mock_get)
@@ -76,6 +76,32 @@ class TestOllamaModelInfo:
         assert models == ["alpha", "zeta"]
         # Ensure correct endpoint was called
         assert calls and calls[0].endswith("/api/tags")
+        assert call_headers and call_headers[0] == {}
+
+    def test_get_models_from_dict_response_api_key(self, monkeypatch):
+        """
+        When the /api/tags endpoint returns a dict with a 'models' list,
+        get_models should extract and return sorted unique model names.
+        """
+        calls = []
+        call_headers = []
+
+        def mock_get(url, headers):
+            calls.append(url)
+            call_headers.append(headers)
+            return DummyResponse({}, status_code=200)
+
+        old_environ = dict(os.environ)
+        os.environ.update({"OLLAMA_API_KEY": "test_api_key"})
+        monkeypatch.setattr(httpx, "get", mock_get)
+        info = OllamaModelInfo()
+        models = info.get_models()
+        os.environ.clear()
+        os.environ.update(old_environ)
+        assert models == []
+        # Ensure correct endpoint was called
+        assert calls and calls[0].endswith("/api/tags")
+        assert call_headers and call_headers[0] == {'Authorization': 'Bearer test_api_key'}
 
     def test_get_models_from_list_response(self, monkeypatch):
         """
@@ -88,7 +114,7 @@ class TestOllamaModelInfo:
             {},  # no name/model key should be ignored
         ]
 
-        def mock_get(url):
+        def mock_get(url, headers):
             return DummyResponse(sample, status_code=200)
 
         monkeypatch.setattr(httpx, "get", mock_get)
@@ -102,7 +128,7 @@ class TestOllamaModelInfo:
         fall back to the static models_by_provider list prefixed by 'ollama/'.
         """
 
-        def mock_get(url):
+        def mock_get(url, headers):
             raise Exception("connection failure")
 
         monkeypatch.setattr(httpx, "get", mock_get)
