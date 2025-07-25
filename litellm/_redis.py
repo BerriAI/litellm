@@ -12,7 +12,7 @@ import json
 
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
-from typing import List, Optional, Union
+from typing import Any, Callable, List, Optional, Union
 
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
@@ -22,6 +22,116 @@ from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOU
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
+
+
+def _create_gcp_iam_auth_function(service_account: str) -> Callable:
+    """
+    Create a Google Cloud IAM authentication function for Redis.
+    
+    Args:
+        service_account: The service account email to use for authentication
+        
+    Returns:
+        A function that can be used as redis_connect_func
+    """
+    def iam_connect(connection):
+        """Initialize the connection and authenticate using Google Cloud IAM"""
+        try:
+            from google.cloud import iam_credentials_v1
+            from redis.utils import str_if_bytes
+            from redis.exceptions import (
+                AuthenticationWrongNumberOfArgsError,
+                AuthenticationError
+            )
+        except ImportError as e:
+            raise ImportError(
+                "Google Cloud IAM authentication requires the 'google-cloud-iam' package. "
+                "Install it with: pip install google-cloud-iam"
+            ) from e
+        
+        def generate_access_token():
+            """Generate access token using IAM credentials API"""
+            client = iam_credentials_v1.IAMCredentialsClient()
+            request = iam_credentials_v1.GenerateAccessTokenRequest(
+                name=service_account,
+                scope=['https://www.googleapis.com/auth/cloud-platform'],
+            )
+            response = client.generate_access_token(request=request)
+            return str(response.access_token)
+        
+        # Initialize the connection
+        connection._parser.on_connect(connection)
+        
+        # Authenticate with generated access token
+        auth_args = (generate_access_token(),)
+        connection.send_command("AUTH", *auth_args, check_health=False)
+        
+        try:
+            auth_response = connection.read_response()
+        except AuthenticationWrongNumberOfArgsError:
+            # Fallback for older Redis versions
+            connection.send_command("AUTH", auth_args[0], check_health=False)
+            auth_response = connection.read_response()
+        
+        if str_if_bytes(auth_response) != "OK":
+            raise AuthenticationError("Invalid Username or Password")
+    
+    return iam_connect
+
+
+def _create_gcp_iam_async_auth_function(service_account: str) -> Callable:
+    """
+    Create an async Google Cloud IAM authentication function for Redis.
+    
+    Args:
+        service_account: The service account email to use for authentication
+        
+    Returns:
+        An async function that can be used as redis_connect_func
+    """
+    async def iam_connect_async(connection):
+        """Initialize the connection and authenticate using Google Cloud IAM (async)"""
+        try:
+            from google.cloud import iam_credentials_v1
+            from redis.utils import str_if_bytes
+            from redis.exceptions import (
+                AuthenticationWrongNumberOfArgsError,
+                AuthenticationError
+            )
+        except ImportError as e:
+            raise ImportError(
+                "Google Cloud IAM authentication requires the 'google-cloud-iam' package. "
+                "Install it with: pip install google-cloud-iam"
+            ) from e
+        
+        def generate_access_token():
+            """Generate access token using IAM credentials API"""
+            client = iam_credentials_v1.IAMCredentialsClient()
+            request = iam_credentials_v1.GenerateAccessTokenRequest(
+                name=service_account,
+                scope=['https://www.googleapis.com/auth/cloud-platform'],
+            )
+            response = client.generate_access_token(request=request)
+            return str(response.access_token)
+        
+        # Initialize the connection
+        await connection._parser.on_connect(connection)
+        
+        # Authenticate with generated access token
+        auth_args = (generate_access_token(),)
+        await connection.send_command("AUTH", *auth_args, check_health=False)
+        
+        try:
+            auth_response = await connection.read_response()
+        except AuthenticationWrongNumberOfArgsError:
+            # Fallback for older Redis versions
+            await connection.send_command("AUTH", auth_args[0], check_health=False)
+            auth_response = await connection.read_response()
+        
+        if str_if_bytes(auth_response) != "OK":
+            raise AuthenticationError("Invalid Username or Password")
+    
+    return iam_connect_async
 
 
 def _get_redis_kwargs():
@@ -34,7 +144,7 @@ def _get_redis_kwargs():
         "retry",
     }
 
-    include_args = ["url"]
+    include_args = ["url", "gcp_iam_service_account", "redis_connect_func"]
 
     available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
 
@@ -127,6 +237,17 @@ def _get_redis_client_logic(**env_overrides):
         **_redis_kwargs_from_environment(),
         **env_overrides,
     }
+    
+    # Handle Google Cloud IAM authentication
+    gcp_iam_service_account = redis_kwargs.get("gcp_iam_service_account") or get_secret("REDIS_GCP_IAM_SERVICE_ACCOUNT")
+    if gcp_iam_service_account is not None:
+        redis_kwargs["gcp_iam_service_account"] = gcp_iam_service_account
+        # Create the IAM auth function if not already provided
+        if "redis_connect_func" not in redis_kwargs:
+            redis_kwargs["redis_connect_func"] = _create_gcp_iam_auth_function(gcp_iam_service_account)
+        # Also create async version for async clients
+        if "redis_connect_func_async" not in redis_kwargs:
+            redis_kwargs["redis_connect_func_async"] = _create_gcp_iam_async_auth_function(gcp_iam_service_account)
 
     _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
         "REDIS_CLUSTER_NODES"
@@ -189,14 +310,22 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
 
     args = _get_redis_cluster_kwargs()
     cluster_kwargs = {}
+    custom_connect_func = None
+    
     for arg in redis_kwargs:
         if arg in args:
             cluster_kwargs[arg] = redis_kwargs[arg]
+        elif arg == "redis_connect_func":
+            custom_connect_func = redis_kwargs[arg]
 
     new_startup_nodes: List[ClusterNode] = []
 
     for item in redis_kwargs["startup_nodes"]:
-        new_startup_nodes.append(ClusterNode(**item))
+        node = ClusterNode(**item)
+        # Apply custom connection function to each node if provided
+        if custom_connect_func:
+            node.redis_connect_func = custom_connect_func
+        new_startup_nodes.append(node)
 
     redis_kwargs.pop("startup_nodes")
     return redis.RedisCluster(startup_nodes=new_startup_nodes, **cluster_kwargs)  # type: ignore
@@ -252,6 +381,14 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
+    
+    # Extract custom parameters that aren't part of standard Redis client
+    custom_params = {}
+    if "redis_connect_func" in redis_kwargs:
+        custom_params["redis_connect_func"] = redis_kwargs.pop("redis_connect_func")
+    if "gcp_iam_service_account" in redis_kwargs:
+        redis_kwargs.pop("gcp_iam_service_account")  # Remove, not needed for client creation
+    
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs()
         url_kwargs = {}
@@ -259,22 +396,44 @@ def get_redis_client(**env_overrides):
             if arg in args:
                 url_kwargs[arg] = redis_kwargs[arg]
 
-        return redis.Redis.from_url(**url_kwargs)
-
-    if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
-        return init_redis_cluster(redis_kwargs)
-
-    # Check for Redis Sentinel
-    if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
-        return _init_redis_sentinel(redis_kwargs)
-
-    return redis.Redis(**redis_kwargs)
+        client = redis.Redis.from_url(**url_kwargs)
+    elif "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
+        client = init_redis_cluster(redis_kwargs)
+    elif "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
+        # Check for Redis Sentinel
+        client = _init_redis_sentinel(redis_kwargs)
+    else:
+        client = redis.Redis(**redis_kwargs)
+    
+    # Apply custom connection function if provided
+    if "redis_connect_func" in custom_params:
+        # For cluster clients, apply to all nodes
+        if hasattr(client, "startup_nodes"):
+            # This is a Redis cluster
+            for node in client.startup_nodes:
+                node.redis_connect_func = custom_params["redis_connect_func"]
+        else:
+            # Regular Redis client
+            client.redis_connect_func = custom_params["redis_connect_func"]
+    
+    return client
 
 
 def get_redis_async_client(
     **env_overrides,
 ) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
+    
+    # Extract custom parameters that aren't part of standard Redis client
+    custom_params = {}
+    if "redis_connect_func_async" in redis_kwargs:
+        custom_params["redis_connect_func"] = redis_kwargs.pop("redis_connect_func_async")
+    elif "redis_connect_func" in redis_kwargs:
+        # Fall back to sync version if async not available
+        custom_params["redis_connect_func"] = redis_kwargs.pop("redis_connect_func")
+    if "gcp_iam_service_account" in redis_kwargs:
+        redis_kwargs.pop("gcp_iam_service_account")  # Remove, not needed for client creation
+    
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
         url_kwargs = {}
@@ -287,9 +446,8 @@ def get_redis_async_client(
                         arg
                     )
                 )
-        return async_redis.Redis.from_url(**url_kwargs)
-
-    if "startup_nodes" in redis_kwargs:
+        client = async_redis.Redis.from_url(**url_kwargs)
+    elif "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
 
         args = _get_redis_cluster_kwargs()
@@ -303,17 +461,28 @@ def get_redis_async_client(
         for item in redis_kwargs["startup_nodes"]:
             new_startup_nodes.append(ClusterNode(**item))
         redis_kwargs.pop("startup_nodes")
-        return async_redis.RedisCluster(
+        client = async_redis.RedisCluster(
             startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
         )
-
-    # Check for Redis Sentinel
-    if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
-        return _init_async_redis_sentinel(redis_kwargs)
-    _pretty_print_redis_config(redis_kwargs=redis_kwargs)
-    return async_redis.Redis(
-        **redis_kwargs,
-    )
+    elif "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
+        # Check for Redis Sentinel
+        client = _init_async_redis_sentinel(redis_kwargs)
+    else:
+        _pretty_print_redis_config(redis_kwargs=redis_kwargs)
+        client = async_redis.Redis(**redis_kwargs)
+    
+    # Apply custom connection function if provided
+    if "redis_connect_func" in custom_params:
+        # For cluster clients, apply to all nodes
+        if hasattr(client, "startup_nodes"):
+            # This is a Redis cluster
+            for node in client.startup_nodes:
+                node.redis_connect_func = custom_params["redis_connect_func"]
+        else:
+            # Regular Redis client
+            client.redis_connect_func = custom_params["redis_connect_func"]
+    
+    return client
 
 
 def get_redis_connection_pool(**env_overrides):
