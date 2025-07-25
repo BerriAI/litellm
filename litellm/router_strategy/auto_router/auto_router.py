@@ -25,7 +25,7 @@ class AutoRouter(CustomLogger):
         default_model: str,
         embedding_model: str,
         litellm_router_instance: "Router",
-        router_config_path: Optional[str] = None,
+        auto_router_config_path: Optional[str] = None,
         auto_router_config: Optional[str] = None,
     ):  
         """
@@ -33,14 +33,15 @@ class AutoRouter(CustomLogger):
 
         Args:
             model_name: The name of the model to use for the auto-router. eg. if model = "auto-router1" then us this router.
-            router_config_path: The path to the router config file.
+            auto_router_config_path: The path to the router config file.
+            auto_router_config: The config to use for the auto-router. You can either use this or auto_router_config_path, not both.
             default_model: The default model to use if no route is found.
             embedding_model: The embedding model to use for the auto-router.
             litellm_router_instance: The instance of the LiteLLM Router.
         """
         from semantic_router.routers import SemanticRouter
 
-        self.router_config_path: Optional[str] = router_config_path
+        self.auto_router_config_path: Optional[str] = auto_router_config_path
         self.auto_router_config: Optional[str] = auto_router_config
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
         self.loaded_routes: List[Route] = self._load_semantic_routing_routes()
@@ -51,8 +52,8 @@ class AutoRouter(CustomLogger):
     
     def _load_semantic_routing_routes(self) -> List[Route]:
         from semantic_router.routers import SemanticRouter
-        if self.router_config_path:
-            return SemanticRouter.from_json(self.router_config_path).routes
+        if self.auto_router_config_path:
+            return SemanticRouter.from_json(self.auto_router_config_path).routes
         elif self.auto_router_config:
             return self._load_auto_router_routes_from_config_json()
         else:
