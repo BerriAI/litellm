@@ -906,6 +906,7 @@ jobs:
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
+            pip install "semantic_router==0.1.10"
       - setup_litellm_enterprise_pip
       # Run pytest and generate JUnit XML report
       - run:
