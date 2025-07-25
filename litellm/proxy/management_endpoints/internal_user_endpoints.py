@@ -1403,6 +1403,9 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _cleanup_members_with_roles,
+    )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
@@ -1451,6 +1454,34 @@ async def delete_user(
                     )
                 )
 
+        ## CLEANUP MEMBERS_WITH_ROLES
+        fetch_all_teams = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": user_row.teams}}
+        )
+        teams_to_update = []
+        for team in fetch_all_teams:
+            is_member_in_team, new_team_members = _cleanup_members_with_roles(
+                existing_team_row=LiteLLM_TeamTable(**team.model_dump()),
+                data=TeamMemberDeleteRequest(
+                    team_id=team.team_id,
+                    user_id=user_row.user_id,
+                    user_email=user_row.user_email,
+                ),
+            )
+            if is_member_in_team:
+                _db_new_team_members: List[dict] = [
+                    m.model_dump() for m in new_team_members
+                ]
+                team.members_with_roles = json.dumps(_db_new_team_members)
+                teams_to_update.append(team)
+
+        ## update teams
+
+        for team in teams_to_update:
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": team.team_id},
+                data={"members_with_roles": team.members_with_roles},
+            )
     # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
@@ -1465,6 +1496,11 @@ async def delete_user(
 
     ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
     await prisma_client.db.litellm_organizationmembership.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    ## DELETE ASSOCIATED TEAM MEMBERSHIPS
+    await prisma_client.db.litellm_teammembership.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
 

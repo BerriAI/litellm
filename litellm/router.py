@@ -3378,9 +3378,7 @@ class Router:
         ):
 
             def sync_wrapper(
-                custom_llm_provider: Optional[
-                    str
-                ] = None,
+                custom_llm_provider: Optional[str] = None,
                 client: Optional[Any] = None,
                 **kwargs,
             ):
@@ -3392,9 +3390,7 @@ class Router:
 
         # Handle asynchronous call types
         async def async_wrapper(
-            custom_llm_provider: Optional[
-                str
-            ] = None,
+            custom_llm_provider: Optional[str] = None,
             client: Optional[Any] = None,
             **kwargs,
         ):
@@ -3459,7 +3455,7 @@ class Router:
                 )
 
         return async_wrapper
-    
+
     async def _init_vector_store_api_endpoints(
         self,
         original_function: Callable,
@@ -5080,7 +5076,7 @@ class Router:
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.warning(
+                verbose_router_logger.debug(
                     f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
                 )
                 return None
