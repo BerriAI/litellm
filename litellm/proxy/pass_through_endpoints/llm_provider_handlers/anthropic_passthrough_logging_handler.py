@@ -155,6 +155,10 @@ class AnthropicPassthroughLoggingHandler:
         """
 
         model = request_body.get("model", "")
+        # Dheck if it's available in the logging object
+        if not model and hasattr(litellm_logging_obj, 'model_call_details') and litellm_logging_obj.model_call_details.get('model'):
+            model = litellm_logging_obj.model_call_details.get('model')
+
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
