@@ -336,7 +336,6 @@ class MCPServerManager:
                 prefixed_tools = []
                 for tool in tools:
                     # Always use alias for prefixing if present
-                    print(f"server 123123123: {server}")
                     prefix = get_server_prefix(server)
                     prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
 
