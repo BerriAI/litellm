@@ -40,9 +40,11 @@ def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
 
 
 def decrypt_value_helper(
-    value: str, exception_type: Literal["debug", "error"] = "error"
+    value: str,
+    key: str,
+    exception_type: Literal["debug", "error"] = "error",
 ):
-    signing_key = _get_salt_key()
+    signing_key = key or _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -53,7 +55,8 @@ def decrypt_value_helper(
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
-        error_message = f"Error decrypting value, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+
+        error_message = f"Error decrypting value for key: {key}, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
         if exception_type == "debug":
             verbose_proxy_logger.debug(error_message)
             return None

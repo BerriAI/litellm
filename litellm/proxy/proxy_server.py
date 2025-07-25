@@ -147,7 +147,6 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.realtime import RealtimeQueryParams
 from litellm.proxy._experimental.mcp_server.rest_endpoints import (
     router as mcp_rest_endpoints_router,
 )
@@ -367,6 +366,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
@@ -2418,7 +2418,7 @@ class ProxyConfig:
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
                         # decrypt value
-                        _value = decrypt_value_helper(value=v)
+                        _value = decrypt_value_helper(value=v, key=k)
                         if _value is None:
                             raise Exception("Unable to decrypt value={}".format(v))
                         # sanity check if string > size 0
@@ -2454,7 +2454,7 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    decrypted_value = decrypt_value_helper(value=v)
+                    decrypted_value = decrypt_value_helper(value=v, key=k)
                     _litellm_params[k] = decrypted_value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
@@ -2602,7 +2602,7 @@ class ProxyConfig:
         decrypted_env_vars = {}
         for k, v in environment_variables.items():
             try:
-                decrypted_value = decrypt_value_helper(value=v)
+                decrypted_value = decrypt_value_helper(value=v, key=k)
                 if decrypted_value is not None:
                     os.environ[k] = decrypted_value
                     decrypted_env_vars[k] = decrypted_value
@@ -2755,7 +2755,10 @@ class ProxyConfig:
         """
 
         if param_name == "environment_variables":
-            self._decrypt_and_set_db_env_variables(db_param_value)
+            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
+            current_config.setdefault("environment_variables", {}).update(
+                decrypted_env_vars
+            )
             return current_config
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
             for key, value in db_param_value.items():
@@ -2987,7 +2990,7 @@ class ProxyConfig:
 
         decrypted_credential_values = {}
         for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypt_value_helper(v) or v
+            decrypted_credential_values[k] = decrypt_value_helper(value=v, key=k) or v
 
         credential_object.credential_values = decrypted_credential_values
         return credential_object
@@ -3538,7 +3541,7 @@ class ProxyStartupEvent:
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
-        
+
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
@@ -3587,12 +3590,14 @@ class ProxyStartupEvent:
         scheduler.start()
 
     @classmethod
-    async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
+    async def _initialize_spend_tracking_background_jobs(
+        cls, scheduler: AsyncIOScheduler
+    ):
         """
         Initialize the spend tracking background jobs
         1. CloudZero Background Job
         2. Prometheus Background Job
-        
+
         Args:
             scheduler: The scheduler to add the background jobs to
         """
@@ -3606,7 +3611,7 @@ class ProxyStartupEvent:
 
         if await is_cloudzero_setup_in_db():
             await init_cloudzero_background_job()
-        
+
         ########################################################
         # Prometheus Background Job
         ########################################################
@@ -3617,7 +3622,6 @@ class ProxyStartupEvent:
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
-        
 
     @classmethod
     async def _setup_prisma_client(
@@ -4681,7 +4685,9 @@ from litellm import _arealtime
 async def websocket_endpoint(
     websocket: WebSocket,
     model: str,
-    intent: str = fastapi.Query(None, description="The intent of the websocket connection."),
+    intent: str = fastapi.Query(
+        None, description="The intent of the websocket connection."
+    ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     import websockets
@@ -8592,7 +8598,9 @@ async def get_config():  # noqa: PLR0915
                         env_vars_dict[_var] = None
                     else:
                         # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(value=env_variable)
+                        decrypted_value = decrypt_value_helper(
+                            value=env_variable, key=_var
+                        )
                         env_vars_dict[_var] = decrypted_value
 
                 _data_to_return.append({"name": _callback, "variables": env_vars_dict})
@@ -8609,7 +8617,9 @@ async def get_config():  # noqa: PLR0915
                         _langfuse_env_vars[_var] = None
                     else:
                         # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(value=env_variable)
+                        decrypted_value = decrypt_value_helper(
+                            value=env_variable, key=_var
+                        )
                         _langfuse_env_vars[_var] = decrypted_value
 
                 _data_to_return.append(
@@ -8631,7 +8641,9 @@ async def get_config():  # noqa: PLR0915
                     _slack_env_vars[_var] = _value
                 else:
                     # decode + decrypt the value
-                    _decrypted_value = decrypt_value_helper(value=env_variable)
+                    _decrypted_value = decrypt_value_helper(
+                        value=env_variable, key=_var
+                    )
                     _slack_env_vars[_var] = _decrypted_value
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
@@ -8667,7 +8679,7 @@ async def get_config():  # noqa: PLR0915
                 _email_env_vars[_var] = None
             else:
                 # decode + decrypt the value
-                _decrypted_value = decrypt_value_helper(value=env_variable)
+                _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
                 _email_env_vars[_var] = _decrypted_value
 
         alerting_data.append(
