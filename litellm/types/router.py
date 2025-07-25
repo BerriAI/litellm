@@ -212,7 +212,6 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     # auto-router params
     auto_router_config_path: Optional[str] = None
-    auto_router_config_path: Optional[str] = None
     auto_router_config: Optional[str] = None
     auto_router_default_model: Optional[str] = None
     auto_router_embedding_model: Optional[str] = None
