@@ -139,6 +139,11 @@ class CustomGuardrail(CustomLogger):
 
         dc = DualCache()
 
+        # should run guardrail
+        litellm_guardrails = kwargs.get("litellm_guardrails")
+        if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
+            return kwargs
+
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
             result = await self.async_pre_call_hook(
