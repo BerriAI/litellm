@@ -15,7 +15,7 @@ export const handleAddAutoRouterSubmit = async (
       model_name: values.auto_router_name,
       litellm_params: {
         model: `auto_router/${values.auto_router_name}`,
-        auto_router_config_path: values.auto_router_config_path,
+        auto_router_config: values.auto_router_config, // Use built JSON config instead of file path
         auto_router_default_model: values.auto_router_default_model,
       },
       model_info: {},

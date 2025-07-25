@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, Upload } from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, Upload, message } from "antd";
 import type { FormInstance } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import { UploadOutlined } from "@ant-design/icons";
@@ -10,6 +10,7 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import { all_admin_roles } from "@/utils/roles";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";
+import RouterConfigBuilder from "./router_config_builder";
 
 interface AddAutoRouterTabProps {
   form: FormInstance;
@@ -37,6 +38,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [showCustomDefaultModel, setShowCustomDefaultModel] = useState<boolean>(false);
   const [showCustomEmbeddingModel, setShowCustomEmbeddingModel] = useState<boolean>(false);
+  const [routerConfig, setRouterConfig] = useState<any>(null);
 
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
@@ -70,10 +72,31 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   // Auto router specific form submit handler
   const handleAutoRouterSubmit = () => {
+    // Custom validation for router config
+    if (!routerConfig || !routerConfig.routes || routerConfig.routes.length === 0) {
+      message.error("Please configure at least one route for the auto router");
+      return;
+    }
+
+    // Check if all routes have required fields
+    const invalidRoutes = routerConfig.routes.filter((route: any) => 
+      !route.name || !route.description || route.utterances.length === 0
+    );
+    
+    if (invalidRoutes.length > 0) {
+      message.error("Please ensure all routes have a target model, description, and at least one utterance");
+      return;
+    }
+
     form
       .validateFields()
       .then((values) => {
-        handleAddAutoRouterSubmit(values, accessToken, form, handleOk);
+        // Add the router config to form values
+        const submitValues = {
+          ...values,
+          auto_router_config: routerConfig,
+        };
+        handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -84,7 +107,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     <>
       <Title level={2}>Add Auto Router</Title>
       <Text className="text-gray-600 mb-6">
-        Add an auto router, this allows you to add auto routing logic to automatically select the best model
+        Create an auto router with intelligent routing logic that automatically selects the best model based on user input patterns and semantic matching.
       </Text>
       
       <Card>
@@ -107,16 +130,22 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <TextInput placeholder="e.g., auto_router_1, smart_routing" />
           </Form.Item>
 
-          {/* Auto Router Config Path */}
+          {/* Router Configuration Builder */}
           <Form.Item
-            rules={[{ required: true, message: "Config path is required" }]}
-            label="Config Path"
-            name="auto_router_config_path"
-            tooltip="Path to the router configuration file that defines routing logic"
-            labelCol={{ span: 10 }}
+            label="Router Configuration"
+            tooltip="Configure routing logic to automatically select the best model based on user input"
+            labelCol={{ span: 24 }}
             labelAlign="left"
+            className="mb-4"
           >
-            <TextInput placeholder="e.g., /path/to/router_config.json" />
+            <RouterConfigBuilder
+              modelInfo={modelInfo}
+              value={routerConfig}
+              onChange={(config) => {
+                setRouterConfig(config);
+                form.setFieldValue('auto_router_config', config);
+              }}
+            />
           </Form.Item>
 
           {/* Auto Router Default Model */}
