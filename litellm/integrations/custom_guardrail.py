@@ -357,7 +357,7 @@ class CustomGuardrail(CustomLogger):
         self,
         guardrail_json_response: Union[Exception, str, dict, List[dict]],
         request_data: dict,
-        guardrail_status: Literal["success", "failure"],
+        guardrail_status: Literal["success", "failure", "blocked"],
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,

@@ -244,13 +244,20 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         Override to store only the Model Armor API response, not the entire data dict.
         This prevents circular references in logging.
         """
-        # Extract the actual Model Armor response if available
-        guardrail_response = getattr(self, "_last_armor_response", {})
+        # Retrieve the Model Armor response & status stored on the per-request `metadata` object.
+        metadata = request_data.get("metadata", {}) if isinstance(request_data, dict) else {}
+
+        guardrail_response = metadata.get("_model_armor_response", {})
+
+        # Determine status – default to "success" but prefer the explicit value if present.
+        guardrail_status: Literal["success", "failure", "blocked"] = metadata.get(
+            "_model_armor_status", "success"
+        )  # type: ignore
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,
-            guardrail_status="success",
+            guardrail_status=guardrail_status,  # type: ignore – Literal extended at runtime
             duration=duration,
             start_time=start_time,
             end_time=end_time,
@@ -310,7 +317,19 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
 
             # Store the armor response for logging
-            self._last_armor_response = armor_response
+            # Attach Model Armor response + evaluation status directly to the per-request metadata to avoid
+            #   race-conditions between concurrent requests which share the same guardrail instance.
+            #   This ensures each request logs its own Model Armor response instead of a potentially stale value
+            #   overwritten by another coroutine.
+            if isinstance(data, dict):
+                metadata = data.setdefault("metadata", {})  # ensures metadata exists and is unique per request
+                metadata["_model_armor_response"] = armor_response
+                # Pre-compute guardrail status for downstream logging. A blocked response will eventually raise
+                #   an HTTPException, however in scenarios where the caller decides to ignore the exception (e.g.
+                #   fail_on_error=False) we still want the correct status reflected.
+                metadata["_model_armor_status"] = (
+                    "blocked" if self._should_block_content(armor_response) else "success"
+                )
 
             # Check if content should be blocked
             if self._should_block_content(armor_response):
@@ -388,8 +407,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 request_data=data,
             )
 
-            # Store the armor response for logging
-            self._last_armor_response = armor_response
+            # Attach Model Armor response & status to this request's metadata to prevent race conditions
+            if isinstance(data, dict):
+                metadata = data.setdefault("metadata", {})
+                metadata["_model_armor_response"] = armor_response
+                metadata["_model_armor_status"] = (
+                    "blocked" if self._should_block_content(armor_response) else "success"
+                )
 
             # Check if content should be blocked
             if self._should_block_content(armor_response):
@@ -458,8 +482,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                         request_data=request_data,
                     )
 
-                    # Store the armor response for logging
-                    self._last_armor_response = armor_response
+                    # Attach Model Armor response & status to this request's metadata to avoid race conditions
+                    if isinstance(request_data, dict):
+                        metadata = request_data.setdefault("metadata", {})
+                        metadata["_model_armor_response"] = armor_response
+                        metadata["_model_armor_status"] = (
+                            "blocked" if self._should_block_content(armor_response) else "success"
+                        )
 
                     # Check if blocked
                     if self._should_block_content(armor_response):
