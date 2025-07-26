@@ -5190,6 +5190,7 @@ export const callMCPTool = async (
   toolName: string,
   toolArguments: Record<string, any>,
   authValue: string,
+  serverAlias?: string,
 ) => {
   try {
     // Construct base URL
@@ -5204,13 +5205,22 @@ export const callMCPTool = async (
       toolArguments
     );
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        [MCP_AUTH_HEADER]: authValue,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         name: toolName,
         arguments: toolArguments,
