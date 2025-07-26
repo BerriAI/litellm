@@ -839,6 +839,7 @@ class SpecialMCPServerName(str, enum.Enum):
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
+    server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
@@ -870,6 +871,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
+    server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
@@ -903,6 +905,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_MCPServerTable record"""
 
     server_id: str
+    server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
     url: Optional[str] = None

@@ -2206,7 +2206,11 @@ class ProxyConfig:
                 global_mcp_server_manager,
             )
 
-            global_mcp_server_manager.load_servers_from_config(mcp_servers_config)
+            # Get mcp_aliases from litellm_settings if available
+            litellm_settings = config.get("litellm_settings", {})
+            mcp_aliases = litellm_settings.get("mcp_aliases", None)
+
+            global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
 
         ## VECTOR STORES
         vector_store_registry_config = config.get("vector_store_registry", None)

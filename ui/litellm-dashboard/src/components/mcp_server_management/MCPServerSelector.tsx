@@ -55,10 +55,10 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
       searchText: `${group} Access Group`
     })),
     ...mcpServers.map(server => ({
-      label: `${server.alias || server.server_id} (${server.server_id})`,
+      label: `${server.server_name || server.server_id} (${server.server_id})`,
       value: server.server_id,
       isAccessGroup: false,
-      searchText: `${server.alias || server.server_id} ${server.server_id} MCP Server`
+      searchText: `${server.server_name || server.server_id} ${server.server_id} MCP Server`
     }))
   ];
 

@@ -118,9 +118,12 @@ async def test_create_mcp_server_direct():
         server_id = str(uuid.uuid4())
         mcp_server_request = generate_mcpserver_create_request(server_id=server_id)
         
+        # The function will normalize the alias by replacing spaces with underscores
+        expected_alias = mcp_server_request.alias.replace(' ', '_') if mcp_server_request.alias else None
+        
         expected_response = LiteLLM_MCPServerTable(
             server_id=server_id,
-            alias=mcp_server_request.alias,
+            alias=expected_alias,  # Use the normalized alias
             description=mcp_server_request.description,
             url=mcp_server_request.url,
             transport=mcp_server_request.transport,
@@ -135,6 +138,7 @@ async def test_create_mcp_server_direct():
         
         # Mock the database calls
         mock_get_server.return_value = None  # Server doesn't exist yet
+        # Set up async mock for create_mcp_server
         mock_create.return_value = expected_response
         
         # Create mock user auth
@@ -152,7 +156,7 @@ async def test_create_mcp_server_direct():
         
         # Verify the result
         assert result.server_id == server_id
-        assert result.alias == mcp_server_request.alias
+        assert result.alias == expected_alias  # Check against normalized alias
         assert result.url == mcp_server_request.url
         assert result.transport == mcp_server_request.transport
         assert result.spec_version == mcp_server_request.spec_version
@@ -262,7 +266,8 @@ async def test_create_mcp_server_invalid_alias():
     """
     with mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE", True), \
          mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw") as mock_get_prisma, \
-         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server:
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server") as mock_get_server, \
+         mock.patch("litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server") as mock_create:
         
         from litellm.proxy.management_endpoints.mcp_management_endpoints import add_mcp_server
         from fastapi import HTTPException
@@ -278,6 +283,9 @@ async def test_create_mcp_server_invalid_alias():
         # Mock that server does not exist
         mock_get_server.return_value = None
         
+        # Mock create_mcp_server to prevent 500 error (this should not be called due to validation)
+        mock_create.return_value = None
+        
         user_auth = UserAPIKeyAuth(
             api_key=TEST_MASTER_KEY,
             user_id="test-user",
@@ -292,3 +300,25 @@ async def test_create_mcp_server_invalid_alias():
         
         assert exc_info.value.status_code == 400
         assert "Server name cannot contain '-'. Use an alternative character instead Found: invalid-alias" in str(exc_info.value.detail)
+
+def test_validate_mcp_server_name_direct():
+    """
+    Test the validation function directly to ensure it works.
+    """
+    from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
+    from fastapi import HTTPException
+    
+    # Test that valid names pass
+    validate_mcp_server_name("valid_name")
+    validate_mcp_server_name("valid name")
+    
+    # Test that invalid names with hyphens raise exceptions
+    with pytest.raises(Exception) as exc_info:
+        validate_mcp_server_name("invalid-name")
+    assert "cannot contain" in str(exc_info.value)
+    
+    # Test that invalid names with hyphens raise HTTPException when requested
+    with pytest.raises(HTTPException) as exc_info:
+        validate_mcp_server_name("invalid-name", raise_http_exception=True)
+    assert exc_info.value.status_code == 400
+    assert "cannot contain" in str(exc_info.value.detail)

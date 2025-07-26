@@ -66,6 +66,8 @@ def generate_mock_mcp_server_config_record(
     return MCPServer(
         server_id=server_id or str(uuid.uuid4()),
         name=name,
+        alias=name,  # Set alias to match the name for consistency with tests
+        server_name=name,
         url=url,
         transport=MCPTransport.http if transport == "http" else MCPTransport.sse,
         spec_version=(
