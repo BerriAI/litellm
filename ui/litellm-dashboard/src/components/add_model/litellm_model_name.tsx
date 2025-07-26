@@ -3,20 +3,21 @@ import { Form, Select as AntSelect } from "antd"
 import { TextInput, Text } from "@tremor/react"
 import { Row, Col } from "antd"
 import { Providers } from "../provider_info_helpers"
+import type { FormInstance } from "antd"
 
 interface LiteLLMModelNameFieldProps {
   selectedProvider: Providers
   providerModels: string[]
   getPlaceholder: (provider: Providers) => string
+  form?: FormInstance
 }
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
   selectedProvider,
   providerModels,
   getPlaceholder,
+  form = Form.useFormInstance(),
 }) => {
-  const form = Form.useFormInstance()
-
   const handleModelChange = (value: string | string[]) => {
     // Ensure value is always treated as an array
     const values = Array.isArray(value) ? value : [value]

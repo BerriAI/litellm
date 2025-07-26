@@ -59,6 +59,7 @@ import HealthCheckComponent from "./model_dashboard/HealthCheckComponent"
 import PassThroughSettings from "./pass_through_settings"
 import { all_admin_roles } from "@/utils/roles"
 import { Table as TableInstance } from "@tanstack/react-table"
+import ModelManagementTabs from "./add_model/model_management_tabs"
 
 interface ModelDashboardProps {
   accessToken: string | null
@@ -122,7 +123,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [form] = Form.useForm()
   const [modelMap, setModelMap] = useState<any>(null)
   const [lastRefreshed, setLastRefreshed] = useState("")
-
   const [providerModels, setProviderModels] = useState<Array<string>>([]) // Explicitly typing providerModels as a string array
 
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>([])
@@ -159,7 +159,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false)
   const [selectedAPIKey, setSelectedAPIKey] = useState<any | null>(null)
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null)
-
   const [allEndUsers, setAllEndUsers] = useState<any[]>([])
 
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([])
@@ -209,6 +208,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   ) => {
     console.log("Updating model metrics for group:", modelGroup)
     if (!accessToken || !userID || !userRole || !startTime || !endTime) {
+      return
       return
     }
     console.log("inside updateModelMetrics - startTime:", startTime, "endTime:", endTime)
@@ -265,7 +265,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       console.log("Model exceptions response:", modelExceptionsResponse)
       setModelExceptions(modelExceptionsResponse.data)
       setAllExceptions(modelExceptionsResponse.exception_types)
-
       const slowResponses = await modelMetricsSlowResponsesCall(
         accessToken,
         userID,
@@ -570,11 +569,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         let model_group_retry_policy = router_settings.model_group_retry_policy
         let default_retries = router_settings.num_retries
 
-        console.log("model_group_retry_policy:", model_group_retry_policy)
-        console.log("default_retries:", default_retries)
-        setModelGroupRetryPolicy(model_group_retry_policy)
-        setGlobalRetryPolicy(router_settings.retry_policy)
-        setDefaultRetry(default_retries)
+        console.log("model_group_retry_policy:", model_group_retry_policy);
+        console.log("default_retries:", default_retries);
+        setModelGroupRetryPolicy(model_group_retry_policy);
+        setGlobalRetryPolicy(router_settings.retry_policy);
+        setDefaultRetry(default_retries);
       } catch (error) {
         console.error("There was an error fetching the model data", error)
       }
@@ -1196,9 +1195,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   </Grid>
                 </TabPanel>
                 <TabPanel className="h-full">
-                  <AddModelTab
-                    form={form}
-                    handleOk={handleOk}
+                  <ModelManagementTabs
+                    form={form} // Keep this for backward compatibility
+                    handleOk={handleRefreshClick} // This becomes the success callback
                     selectedProvider={selectedProvider}
                     setSelectedProvider={setSelectedProvider}
                     providerModels={providerModels}
