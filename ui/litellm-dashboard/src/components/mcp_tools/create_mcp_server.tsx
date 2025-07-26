@@ -33,6 +33,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [isLoading, setIsLoading] = useState(false)
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({})
   const [formValues, setFormValues] = useState<Record<string, any>>({})
+  const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false)
   const [tools, setTools] = useState<any[]>([])
   const [transportType, setTransportType] = useState<string>("sse")
   const [searchValue, setSearchValue] = useState<string>("")
@@ -64,8 +65,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               actualConfig = stdioConfig.mcpServers[firstServerName]
 
               // If no alias is provided, use the server name from the JSON
-              if (!formValues.alias) {
-                formValues.alias = firstServerName.replace(/-/g, "_") // Replace hyphens with underscores
+              if (!formValues.server_name) {
+                formValues.server_name = firstServerName.replace(/-/g, "_") // Replace hyphens with underscores
               }
             }
           }
@@ -90,11 +91,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         // Remove the raw stdio_config field as we've extracted its components
         stdio_config: undefined,
         mcp_info: {
-          server_name: formValues.alias || formValues.url,
+          server_name: formValues.server_name || formValues.url,
           description: formValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
         mcp_access_groups: accessGroups,
+        alias: formValues.alias,
       }
 
       console.log(`Payload: ${JSON.stringify(payload)}`)
@@ -163,6 +165,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     return existingOptions
   }
 
+  // Auto-populate alias from server_name unless manually edited
+  React.useEffect(() => {
+    if (!aliasManuallyEdited && formValues.server_name) {
+      const normalized = formValues.server_name.replace(/\s+/g, "_")
+      form.setFieldsValue({ alias: normalized })
+      setFormValues((prev) => ({ ...prev, alias: normalized }))
+    }
+  }, [formValues.server_name])
+
   // rendering
   if (!isAdminRole(userRole)) {
     return null
@@ -214,7 +225,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   </Tooltip>
                 </span>
               }
-              name="alias"
+              name="server_name"
               rules={[
                 { required: false, message: "Please enter a server name" },
                 {
@@ -228,6 +239,33 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <TextInput
                 placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
                 className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span className="text-sm font-medium text-gray-700 flex items-center">
+                  Alias
+                  <Tooltip title="A short, unique identifier for this server. Defaults to the server name with spaces replaced by underscores.">
+                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                  </Tooltip>
+                </span>
+              }
+              name="alias"
+              rules={[
+                { required: false },
+                {
+                  validator: (_, value) =>
+                    value && value.includes("-")
+                      ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+                      : Promise.resolve(),
+                },
+              ]}
+            >
+              <TextInput
+                placeholder="e.g., GitHub_MCP, Zapier_MCP, etc."
+                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                onChange={() => setAliasManuallyEdited(true)}
               />
             </Form.Item>
 

@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
+from litellm.proxy._experimental.mcp_server.utils import validate_and_normalize_mcp_server_payload
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -235,7 +235,8 @@ if MCP_AVAILABLE:
                 LIST_MCP_SERVERS.append(
                     LiteLLM_MCPServerTable(
                         server_id=_server_id,
-                        alias=_server_config.name,
+                        server_name=_server_config.name,
+                        alias=_server_config.alias,
                         url=_server_config.url,
                         transport=_server_config.transport,
                         spec_version=_server_config.spec_version,
@@ -254,6 +255,7 @@ if MCP_AVAILABLE:
         LIST_MCP_SERVERS = [
             LiteLLM_MCPServerTable(
                 server_id=server.server_id,
+                server_name=server.server_name,
                 alias=server.alias,
                 description=server.description,
                 url=server.url,
@@ -352,9 +354,8 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy"
         )
 
-        # Server name validation: disallow '-'
-        if payload.alias:
-            validate_mcp_server_name(payload.alias, raise_http_exception=True)
+        # Validate and normalize payload fields
+        validate_and_normalize_mcp_server_payload(payload)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -496,9 +497,8 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-        # Server name validation: disallow '-'
-        if payload.alias:
-            validate_mcp_server_name(payload.alias, raise_http_exception=True)
+        # Validate and normalize payload fields
+        validate_and_normalize_mcp_server_payload(payload)
 
         # Authz - restrict only admins to delete mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:

@@ -37,7 +37,9 @@ litellm_settings:
   content_policy_fallbacks: [{"gpt-3.5-turbo-small": ["claude-opus"]}] # fallbacks for ContentPolicyErrors
   context_window_fallbacks: [{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}] # fallbacks for ContextWindowExceededErrors
 
-
+  # MCP Aliases - Map aliases to MCP server names for easier tool access
+  mcp_aliases: { "github": "github_mcp_server", "zapier": "zapier_mcp_server", "deepwiki": "deepwiki_mcp_server" } # Maps friendly aliases to MCP server names. Only the first alias for each server is used.
+ 
 
   # Caching settings
   cache: true 
@@ -127,6 +129,7 @@ general_settings:
 | modify_params | boolean | If true, allows modifying the parameters of the request before it is sent to the LLM provider |
 | enable_preview_features | boolean | If true, enables preview features - e.g. Azure O1 Models with streaming support.|
 | redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
+| mcp_aliases | object | Maps friendly aliases to MCP server names for easier tool access. Only the first alias for each server is used. [MCP Aliases](../mcp#mcp-aliases) |
 | langfuse_default_tags | array of strings | Default tags for Langfuse Logging. Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields as tags. [Further docs](./logging#litellm-specific-tags-on-langfuse---cache_hit-cache_key) |
 | set_verbose | boolean | If true, sets litellm.set_verbose=True to view verbose debug logs. DO NOT LEAVE THIS ON IN PRODUCTION |
 | json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
