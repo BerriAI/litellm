@@ -2411,6 +2411,7 @@ def get_optional_params_transcription(
         "prompt": None,
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
+        "timestamp_granularities": None
     }
 
     non_default_params = {
