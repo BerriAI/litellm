@@ -342,7 +342,8 @@ class LiteLLM_Params(GenericLiteLLMParams):
         args.pop("__class__", None)
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
-        super().__init__(max_retries=max_retries, **args, **params)
+        args["max_retries"] = max_retries
+        super().__init__(**{ **args, **params })
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
