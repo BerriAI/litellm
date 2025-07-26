@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -30,7 +30,7 @@ class MCPRequestHandler:
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
 
     @staticmethod
-    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]]]:
+    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]], Optional[Dict[str, str]]]:
         """
         Process and validate MCP request headers from the ASGI scope.
         This includes:
@@ -43,8 +43,9 @@ class MCPRequestHandler:
 
         Returns:
             UserAPIKeyAuth containing validated authentication information
-            mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server
+            mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server (deprecated)
             mcp_servers: Optional[List[str]] List of MCP servers and access groups to use
+            mcp_server_auth_headers: Optional[Dict[str, str]] Server-specific auth headers in format {server_alias: auth_value}
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -53,8 +54,13 @@ class MCPRequestHandler:
         litellm_api_key = (
             MCPRequestHandler.get_litellm_api_key_from_headers(headers) or ""
         )
+        
+        # Get the old mcp_auth_header for backward compatibility
         mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
         
+        # Get the new server-specific auth headers
+        mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+
         # Parse MCP servers from header
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
         verbose_logger.debug(f"Raw MCP servers header: {mcp_servers_header}")
@@ -76,7 +82,7 @@ class MCPRequestHandler:
         validated_user_api_key_auth = await user_api_key_auth(
             api_key=litellm_api_key, request=request
         )
-        return validated_user_api_key_auth, mcp_auth_header, mcp_servers
+        return validated_user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers
     
 
     @staticmethod
@@ -91,9 +97,52 @@ class MCPRequestHandler:
         Support this auth: https://docs.litellm.ai/docs/mcp#using-your-mcp-with-client-side-credentials
 
         If you want to use a different header name, you can set the `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` in the secret manager or `mcp_client_side_auth_header_name` in the general settings.
+        
+        DEPRECATED: This method is deprecated in favor of server-specific auth headers using the format x-mcp-{{server_alias}}-{{header_name}} instead.
         """
         mcp_client_side_auth_header_name: str = MCPRequestHandler._get_mcp_client_side_auth_header_name()
-        return headers.get(mcp_client_side_auth_header_name)
+        auth_header = headers.get(mcp_client_side_auth_header_name)
+        if auth_header:
+            verbose_logger.warning(
+                f"The '{mcp_client_side_auth_header_name}' header is deprecated. "
+                f"Please use server-specific auth headers in the format 'x-mcp-{{server_alias}}-{{header_name}}' instead."
+            )
+        return auth_header
+    
+    @staticmethod
+    def _get_mcp_server_auth_headers_from_headers(headers: Headers) -> Dict[str, str]:
+        """
+        Parse server-specific MCP auth headers from the request headers.
+        
+        Looks for headers in the format: x-mcp-{server_alias}-{header_name}
+        Examples:
+        - x-mcp-github-authorization: Bearer token123
+        - x-mcp-zapier-x-api-key: api_key_456
+        - x-mcp-deepwiki-authorization: Basic base64_encoded_creds
+        
+        Returns:
+            Dict[str, str]: Mapping of server alias to auth value
+        """
+        server_auth_headers = {}
+        prefix = "x-mcp-"
+        
+        for header_name, header_value in headers.items():
+            if header_name.lower().startswith(prefix):
+                # Skip the access groups header as it's not a server auth header
+                if header_name.lower() == MCPRequestHandler.LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME.lower() or header_name.lower() == MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME.lower():
+                    continue
+                    
+                # Extract server_alias and header_name from x-mcp-{server_alias}-{header_name}
+                remaining = header_name[len(prefix):].lower()
+                if '-' in remaining:
+                    # Split on the last dash to separate server_alias from header_name
+                    parts = remaining.rsplit('-', 1)
+                    if len(parts) == 2:
+                        server_alias, auth_header_name = parts
+                        server_auth_headers[server_alias] = header_value
+                        verbose_logger.debug(f"Found server auth header: {server_alias} -> {auth_header_name}: {header_value[:10]}...")
+        
+        return server_auth_headers
     
     @staticmethod
     def _get_mcp_client_side_auth_header_name() -> str:

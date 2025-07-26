@@ -70,6 +70,150 @@ async def test_mcp_server_tool_call_body_contains_request_data():
 
 
 @pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
+    """Test that _get_tools_from_mcp_servers continues when one server fails"""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock user auth
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+
+    # Mock servers
+    working_server = MagicMock()
+    working_server.name = "working_server"
+    working_server.alias = "working"
+    
+    failing_server = MagicMock()
+    failing_server.name = "failing_server"
+    failing_server.alias = "failing"
+
+    # Mock global_mcp_server_manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["working_server", "failing_server"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: (
+        working_server if server_id == "working_server" else failing_server
+    )
+    
+    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+        if server.name == "working_server":
+            # Working server returns tools
+            tool1 = MagicMock()
+            tool1.name = "working_tool_1"
+            tool1.description = "Working tool 1"
+            tool1.inputSchema = {}
+            return [tool1]
+        else:
+            # Failing server raises an exception
+            raise Exception("Server connection failed")
+    
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.verbose_logger",
+        ) as mock_logger:
+            # Test with server-specific auth headers
+            mcp_server_auth_headers = {
+                "working": "Bearer working-token",
+                "failing": "Bearer failing-token"
+            }
+            
+            result = await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=None,
+                mcp_server_auth_headers=mcp_server_auth_headers
+            )
+            
+            # Verify that tools from the working server are returned
+            assert len(result) == 1
+            assert result[0].name == "working_tool_1"
+            
+            # Verify failure logging
+            mock_logger.exception.assert_any_call("Error getting tools from server failing_server: Server connection failed")
+            
+            # Verify success logging
+            mock_logger.info.assert_any_call("Successfully fetched 1 tools total from all MCP servers")
+
+
+@pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
+    """Test that _get_tools_from_mcp_servers handles all servers failing gracefully"""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    # Mock user auth
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    set_auth_context(user_api_key_auth)
+
+    # Mock servers
+    failing_server1 = MagicMock()
+    failing_server1.name = "failing_server1"
+    failing_server1.alias = "failing1"
+    
+    failing_server2 = MagicMock()
+    failing_server2.name = "failing_server2"
+    failing_server2.alias = "failing2"
+
+    # Mock global_mcp_server_manager
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["failing_server1", "failing_server2"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: (
+        failing_server1 if server_id == "failing_server1" else failing_server2
+    )
+    
+    async def mock_get_tools_from_server(server, mcp_auth_header=None):
+        # All servers fail
+        raise Exception(f"Server {server.name} connection failed")
+    
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+        mock_manager,
+    ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.verbose_logger",
+        ) as mock_logger:
+            # Test with server-specific auth headers
+            mcp_server_auth_headers = {
+                "failing1": "Bearer failing1-token",
+                "failing2": "Bearer failing2-token"
+            }
+            
+            result = await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=None,
+                mcp_server_auth_headers=mcp_server_auth_headers
+            )
+            
+            # Verify that empty list is returned
+            assert len(result) == 0
+            
+            # Verify failure logging for both servers
+            mock_logger.exception.assert_any_call("Error getting tools from server failing_server1: Server failing_server1 connection failed")
+            mock_logger.exception.assert_any_call("Error getting tools from server failing_server2: Server failing_server2 connection failed")
+            
+            # Verify total logging
+            mock_logger.info.assert_any_call("Successfully fetched 0 tools total from all MCP servers")
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_call_body_with_none_arguments():
     """Test that proxy_server_request body handles None arguments correctly"""
     try:
