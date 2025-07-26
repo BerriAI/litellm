@@ -36,7 +36,6 @@ import {
   fetchMCPAccessGroups,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -874,12 +873,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         className="mt-4"
                         help="Select vector stores this key can access. Leave empty for access to all vector stores"
                       >
-                        <PremiumVectorStoreSelector
-                          onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        <VectorStoreSelector
+                          onChange={(values: string[]) => form.setFieldValue('allowed_vector_store_ids', values)}
                           value={form.getFieldValue('allowed_vector_store_ids')}
                           accessToken={accessToken}
                           placeholder="Select vector stores (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
 
