@@ -9,7 +9,7 @@ import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
-import { CredentialItem, modelAvailableCall } from "../networking";
+import { CredentialItem, getGuardrailsList, modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
@@ -60,9 +60,28 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
+
+
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    fetchGuardrails();
+  }, [accessToken]);
+  
   // Test connection when button is clicked
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
@@ -334,6 +353,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               showAdvancedSettings={showAdvancedSettings}
               setShowAdvancedSettings={setShowAdvancedSettings}
               teams={teams}
+              guardrailsList={guardrailsList}
             />
 
             <div className="flex justify-between items-center mb-4">
