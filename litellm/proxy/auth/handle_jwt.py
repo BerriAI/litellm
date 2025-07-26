@@ -163,7 +163,7 @@ class JWTHandler:
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
         if self.litellm_jwtauth.team_ids_jwt_field is not None:
-            team_ids = get_nested_value(
+            team_ids: List[str] = get_nested_value(
                 data=token,
                 key_path=self.litellm_jwtauth.team_ids_jwt_field,
                 default=[],
@@ -228,7 +228,8 @@ class JWTHandler:
                         return self.litellm_jwtauth.team_id_default
                     else:
                         return default_value
-                return team_id
+                # At this point, team_id is not the sentinel, so it should be a string
+                return team_id  # type: ignore[return-value]
             elif self.litellm_jwtauth.team_id_default is not None:
                 team_id = self.litellm_jwtauth.team_id_default
             else:
