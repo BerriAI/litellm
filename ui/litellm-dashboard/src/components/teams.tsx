@@ -70,11 +70,11 @@ import { CogIcon } from "@heroicons/react/outline";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
-import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
 import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { AlertTriangleIcon, XIcon } from 'lucide-react';
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -1454,8 +1454,8 @@ const Teams: React.FC<TeamProps> = ({
                         className="mt-8"
                         help="Select MCP servers or access groups this team can access. "
                       >
-                        <PremiumMCPSelector
-                          onChange={(val) =>
+                        <MCPServerSelector
+                          onChange={(val: any) =>
                             form.setFieldValue(
                               "allowed_mcp_servers_and_groups",
                               val
@@ -1466,7 +1466,6 @@ const Teams: React.FC<TeamProps> = ({
                           )}
                           accessToken={accessToken || ""}
                           placeholder="Select MCP servers or access groups (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
                     </AccordionBody>
