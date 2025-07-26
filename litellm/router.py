@@ -3621,11 +3621,11 @@ class Router:
                         return response
 
                     else:
-                        error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                        error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallbacks' - https://docs.litellm.ai/docs/proxy/reliability".format(
                             model_group, context_window_fallbacks, fallbacks
                         )
                         verbose_router_logger.info(
-                            msg="Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
+                            msg="Got 'ContextWindowExceededError'. No context_window_fallbacks set. Defaulting \
                             to fallbacks, if available.{}".format(
                                 error_message
                             )
@@ -3656,11 +3656,11 @@ class Router:
                         )
                         return response
                     else:
-                        error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                        error_message = "model={}. content_policy_fallbacks={}. fallbacks={}.\n\nSet 'content_policy_fallbacks' - https://docs.litellm.ai/docs/proxy/reliability".format(
                             model_group, content_policy_fallbacks, fallbacks
                         )
                         verbose_router_logger.info(
-                            msg="Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
+                            msg="Got 'ContentPolicyViolationError'. No content_policy_fallbacks set. Defaulting \
                             to fallbacks, if available.{}".format(
                                 error_message
                             )
