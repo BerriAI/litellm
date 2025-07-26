@@ -1,0 +1,97 @@
+# DeepWiki MCP Guardrail Test Configuration
+# This file demonstrates MCP guardrails with a simple server that has no authentication
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+# DeepWiki MCP Server Configuration (no auth required)
+mcp_servers:
+  - server_name: deepwiki
+    url: "https://deepwiki.com/mcp"
+    transport: "http"
+    auth_type: "none"  # No authentication required
+    mcp_info:
+      server_name: "DeepWiki MCP Server"
+      logo_url: "https://deepwiki.com/logo.png"
+      description: "DeepWiki knowledge base integration via MCP"
+      mcp_server_cost_info:
+        cost_per_1k_tokens: 0.0
+
+# MCP Guardrails Configuration for DeepWiki
+guardrails:
+  # DeepWiki-specific guardrails
+  - guardrail_name: "deepwiki-content-guard"
+    guardrail_type: "mcp"
+    mcp_server_name: "deepwiki"
+    block_on_error: true
+    timeout: 30.0
+    validation_rules:
+      max_query_length: 1000
+      max_results_count: 50
+      forbidden_keywords: ["password", "secret", "api_key", "token"]
+      allowed_search_types: ["article", "topic", "concept"]
+    custom_validation_function: "cookbook.deepwiki_validation:validate_deepwiki_request"
+    event_hooks:
+      - "pre_call"
+      - "post_call"
+
+  # DeepWiki search-specific guardrails
+  - guardrail_name: "deepwiki-search-guard"
+    guardrail_type: "mcp"
+    mcp_server_name: "deepwiki"
+    tool_name: "search_wikipedia"
+    block_on_error: false  # Don't block, just log warnings
+    timeout: 45.0
+    validation_rules:
+      min_query_length: 3
+      max_query_length: 500
+      forbidden_search_terms: ["admin", "internal", "private"]
+    custom_validation_function: "cookbook.deepwiki_validation:validate_search_request"
+    event_hooks:
+      - "pre_call"
+      - "during_call"
+      - "post_call"
+
+  # General MCP guardrails for DeepWiki
+  - guardrail_name: "deepwiki-general-guard"
+    guardrail_type: "mcp"
+    mcp_server_name: "deepwiki"
+    block_on_error: false
+    timeout: 60.0
+    validation_rules:
+      max_argument_size: 2048  # 2KB
+      allowed_tool_patterns: ["search_*", "get_*", "list_*"]
+      forbidden_tool_patterns: ["delete_*", "modify_*", "admin_*"]
+    custom_validation_function: "cookbook.deepwiki_validation:validate_general_deepwiki"
+    event_hooks:
+      - "pre_call"
+      - "post_call"
+
+# Proxy Configuration
+general_settings:
+  master_key: os.environ/PROXY_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+
+# Logging Configuration
+logging:
+  level: "DEBUG"  # Set to DEBUG to see guardrail activity
+  format: "json"
+  handlers:
+    - type: "file"
+      filename: "logs/litellm_deepwiki_test.log"
+    - type: "console"
+
+# Rate Limiting
+rate_limiting:
+  enabled: true
+  requests_per_minute: 100
+  requests_per_hour: 1000
+
+# Caching
+caching:
+  type: "redis"
+  ttl: 3600 

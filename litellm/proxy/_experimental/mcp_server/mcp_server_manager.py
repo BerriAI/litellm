@@ -11,6 +11,7 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional, cast
 
+import litellm
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
@@ -480,6 +481,19 @@ class MCPServerManager:
                 raise ValueError(
                     f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}")
 
+        # Prepare data for guardrail processing
+        guardrail_data = {
+            "name": original_tool_name,
+            "arguments": arguments,
+            "mcp_server_name": mcp_server.server_name,
+            "mcp_server_id": mcp_server.server_id,
+        }
+
+        # Apply pre-call guardrails
+        guardrail_data = await self._apply_mcp_pre_call_guardrails(
+            guardrail_data, user_api_key_auth
+        )
+
         # Get server-specific auth header if available
         server_auth_header = None
         if mcp_server_auth_headers and mcp_server.alias:
@@ -495,13 +509,135 @@ class MCPServerManager:
             server=mcp_server,
             mcp_auth_header=server_auth_header,
         )
+        
         async with client:
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
-                name=original_tool_name,
-                arguments=arguments,
+                name=guardrail_data["name"],
+                arguments=guardrail_data["arguments"],
             )
-            return await client.call_tool(call_tool_params)
+            
+            # Apply during-call guardrails
+            await self._apply_mcp_during_call_guardrails(
+                guardrail_data, user_api_key_auth
+            )
+            
+            # Make the actual tool call
+            result = await client.call_tool(call_tool_params)
+            
+            # Apply post-call guardrails
+            result = await self._apply_mcp_post_call_guardrails(
+                guardrail_data, user_api_key_auth, result
+            )
+            
+            return result
+
+    #########################################################
+    # MCP Guardrail Integration Methods
+    #########################################################
+    
+    async def _apply_mcp_pre_call_guardrails(
+        self, 
+        data: Dict[str, Any], 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None
+    ) -> Dict[str, Any]:
+        """Apply pre-call guardrails to MCP tool calls."""
+        try:
+            # Apply pre-call guardrails
+            for callback in litellm.callbacks:
+                # Check if this is a guardrail callback with the required method
+                if (isinstance(callback, str) or 
+                    not hasattr(callback, 'async_pre_call_hook') or 
+                    not callable(getattr(callback, 'async_pre_call_hook', None))):
+                    continue
+                
+                try:
+                    # Check if this is an MCP-specific guardrail
+                    if hasattr(callback, 'mcp_server_name') or hasattr(callback, 'tool_name'):
+                        result = await callback.async_pre_call_hook(
+                            user_api_key_dict=user_api_key_auth or UserAPIKeyAuth(),
+                            cache=self._get_cache(),
+                            data=data,
+                            call_type="completion"  # MCP calls are treated as completion calls
+                        )
+                        if result is not None and isinstance(result, dict):
+                            data = result
+                except Exception as e:
+                    verbose_logger.error(f"Error in MCP pre-call guardrail: {e}")
+                    # Continue with other guardrails even if one fails
+                    continue
+        except Exception as e:
+            verbose_logger.error(f"Error applying MCP pre-call guardrails: {e}")
+        
+        return data
+
+    async def _apply_mcp_during_call_guardrails(
+        self, 
+        data: Dict[str, Any], 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None
+    ):
+        """Apply during-call guardrails to MCP tool calls."""
+        try:
+            # Apply during-call guardrails
+            for callback in litellm.callbacks:
+                # Check if this is a guardrail callback with the required method
+                if (isinstance(callback, str) or 
+                    not hasattr(callback, 'async_moderation_hook') or 
+                    not callable(getattr(callback, 'async_moderation_hook', None))):
+                    continue
+                
+                try:
+                    # Check if this is an MCP-specific guardrail
+                    if hasattr(callback, 'mcp_server_name') or hasattr(callback, 'tool_name'):
+                        await callback.async_moderation_hook(
+                            data=data,
+                            user_api_key_dict=user_api_key_auth or UserAPIKeyAuth(),
+                            call_type="completion"  # MCP calls are treated as completion calls
+                        )
+                except Exception as e:
+                    verbose_logger.error(f"Error in MCP during-call guardrail: {e}")
+                    # Continue with other guardrails even if one fails
+                    continue
+        except Exception as e:
+            verbose_logger.error(f"Error applying MCP during-call guardrails: {e}")
+
+    async def _apply_mcp_post_call_guardrails(
+        self, 
+        data: Dict[str, Any], 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        result: Any = None
+    ) -> Any:
+        """Apply post-call guardrails to MCP tool calls."""
+        try:
+            # Apply post-call guardrails
+            for callback in litellm.callbacks:
+                # Check if this is a guardrail callback with the required method
+                if (isinstance(callback, str) or 
+                    not hasattr(callback, 'async_post_call_success_hook') or 
+                    not callable(getattr(callback, 'async_post_call_success_hook', None))):
+                    continue
+                
+                try:
+                    # Check if this is an MCP-specific guardrail
+                    if hasattr(callback, 'mcp_server_name') or hasattr(callback, 'tool_name'):
+                        result = await callback.async_post_call_success_hook(
+                            data=data,
+                            user_api_key_dict=user_api_key_auth or UserAPIKeyAuth(),
+                            response=result
+                        )
+                except Exception as e:
+                    verbose_logger.error(f"Error in MCP post-call guardrail: {e}")
+                    # Continue with other guardrails even if one fails
+                    continue
+        except Exception as e:
+            verbose_logger.error(f"Error applying MCP post-call guardrails: {e}")
+        
+        return result
+
+    def _get_cache(self):
+        """Get a cache instance for guardrail operations."""
+        from litellm.caching.caching import DualCache
+        return DualCache()
 
     #########################################################
     # End of Methods that call the upstream MCP servers

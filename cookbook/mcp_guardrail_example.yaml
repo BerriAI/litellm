@@ -1,0 +1,108 @@
+# MCP Guardrail Example Configuration
+# This file demonstrates how to set up MCP guardrails for different use cases
+
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+# MCP Servers Configuration
+mcp_servers:
+  - server_name: github
+    url: "https://api.github.com/mcp"
+    transport: "http"
+    auth_type: "bearer_token"
+    authentication_token: os.environ/GITHUB_TOKEN
+    mcp_info:
+      server_name: "GitHub MCP Server"
+      logo_url: "https://github.com/github.png"
+      description: "GitHub API integration via MCP"
+      mcp_server_cost_info:
+        cost_per_1k_tokens: 0.0
+
+  - server_name: zapier
+    url: "https://actions.zapier.com/mcp/sk-ak-2ew3bofIeQIkNoeKIdXrF1Hhhp/sse"
+    transport: "sse"
+    auth_type: "bearer_token"
+    authentication_token: os.environ/ZAPIER_TOKEN
+    mcp_info:
+      server_name: "Zapier MCP Server"
+      logo_url: "https://zapier.com/zapier.png"
+      description: "Zapier automation integration via MCP"
+      mcp_server_cost_info:
+        cost_per_1k_tokens: 0.0
+
+# MCP Guardrails Configuration
+guardrails:
+  # GitHub-specific guardrails
+  - guardrail_name: "github-security"
+    guardrail_type: "mcp"
+    mcp_server_name: "github"
+    block_on_error: true
+    timeout: 30.0
+    validation_rules:
+      max_title_length: 256
+      max_body_length: 65536
+      allowed_repositories: ["my-org/repo1", "my-org/repo2"]
+      forbidden_keywords: ["password", "secret", "api_key"]
+    custom_validation_function: "cookbook.my_validation:validate_github_request"
+    event_hooks:
+      - "pre_call"
+      - "post_call"
+
+  # Zapier-specific guardrails
+  - guardrail_name: "zapier-safety"
+    guardrail_type: "mcp"
+    mcp_server_name: "zapier"
+    tool_name: "create_webhook"
+    block_on_error: true
+    timeout: 60.0
+    validation_rules:
+      allowed_webhook_urls: ["https://my-app.com/webhook", "https://api.myapp.com/events"]
+      max_webhook_count: 10
+    custom_validation_function: "cookbook.my_validation:validate_zapier_webhook"
+    event_hooks:
+      - "pre_call"
+      - "during_call"
+      - "post_call"
+
+  # General MCP guardrails
+  - guardrail_name: "mcp-general"
+    guardrail_type: "mcp"
+    block_on_error: false
+    timeout: 45.0
+    validation_rules:
+      max_argument_size: 10240  # 10KB
+      allowed_tool_patterns: ["get_*", "list_*", "create_*"]
+      forbidden_tool_patterns: ["delete_*", "admin_*"]
+    custom_validation_function: "cookbook.my_validation:validate_general_mcp"
+    event_hooks:
+      - "pre_call"
+      - "post_call"
+
+# Proxy Configuration
+general_settings:
+  master_key: os.environ/PROXY_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  redis_url: os.environ/REDIS_URL
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "json"
+  handlers:
+    - type: "file"
+      filename: "logs/litellm.log"
+    - type: "console"
+
+# Rate Limiting
+rate_limiting:
+  enabled: true
+  requests_per_minute: 100
+  requests_per_hour: 1000
+
+# Caching
+caching:
+  type: "redis"
+  ttl: 3600 

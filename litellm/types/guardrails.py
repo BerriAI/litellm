@@ -9,6 +9,32 @@ from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation imp
     OpenAIModerationGuardrailConfigModel,
 )
 
+# MCP Guardrail Configuration Model
+class MCPGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the MCP guardrail"""
+    
+    mcp_server_name: Optional[str] = Field(
+        default=None, description="Server name of the MCP server to apply guardrails to"
+    )
+    mcp_server_id: Optional[str] = Field(
+        default=None, description="ID of the MCP server to apply guardrails to"
+    )
+    tool_name: Optional[str] = Field(
+        default=None, description="Specific tool name to apply guardrails to (if None, applies to all tools)"
+    )
+    block_on_error: Optional[bool] = Field(
+        default=True, description="Whether to block the request if the MCP guardrail encounters an error"
+    )
+    timeout: Optional[float] = Field(
+        default=30.0, description="Timeout for MCP guardrail operations in seconds"
+    )
+    custom_validation_function: Optional[str] = Field(
+        default=None, description="Path to custom validation function (e.g., 'my_module.my_function')"
+    )
+    validation_rules: Optional[Dict[str, Any]] = Field(
+        default=None, description="Custom validation rules to apply"
+    )
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
@@ -40,6 +66,7 @@ class SupportedGuardrailIntegrations(Enum):
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
+    MCP = "mcp"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -445,6 +472,7 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
+    MCPGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
