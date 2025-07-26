@@ -1,0 +1,164 @@
+model_list:
+  # Example 1: Automatic cost lookup from global model cost map (most common)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: sk-your-openai-key-1
+      # Cost is automatically looked up from LiteLLM's global model cost map
+      # No need to specify input_cost_per_token or output_cost_per_token
+    # Multi-window rate limiting
+    rpm: 60          # 60 requests per minute
+    tpm: 60000       # 60,000 tokens per minute
+    rph: 3000        # 3,000 requests per hour (NEW)
+    tph: 3000000     # 3 million tokens per hour (NEW)
+    rpd: 50000       # 50,000 requests per day (NEW)
+    tpd: 50000000    # 50 million tokens per day (NEW)
+
+  # Example 2: User override cost in litellm_params (highest priority)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: sk-your-openai-key-2
+      # Override cost information (takes priority over global cost map and model_info)
+      input_cost_per_token: 0.0000015   # Custom input cost per token
+      output_cost_per_token: 0.000002   # Custom output cost per token
+    # Conservative limits for free API keys
+    rpm: 3           # 3 requests per minute
+    rph: 200         # 200 requests per hour
+    rpd: 1000        # 1,000 requests per day
+    tpm: 4000        # 4,000 tokens per minute
+    tph: 200000      # 200,000 tokens per hour
+    tpd: 1000000     # 1 million tokens per day
+
+  # Example 3: Free model using model_info cost (second priority)
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: your-gemini-api-key
+      # No cost specified in litellm_params, will check model_info next
+    # Rate limits for free tier
+    rpm: 10          # 10 requests per minute
+    rph: 200         # 200 requests per hour
+    rpd: 1000        # 1,000 requests per day
+    tpm: 250000      # 250,000 tokens per minute
+    tph: 5000000     # 5 million tokens per hour
+    tpd: 50000000    # 50 million tokens per day
+    # Cost information in model_info (second priority after litellm_params)
+    model_info:
+      input_cost_per_token: 0.0    # Free model - explicit zero cost
+      output_cost_per_token: 0.0   # Free model - explicit zero cost
+
+  # Example 4: Paid tier with automatic cost lookup
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: sk-your-openai-key-4
+      # GPT-4 cost automatically looked up from global model cost map
+    # Higher limits for paid tier
+    rpm: 500         # 500 requests per minute
+    rph: 10000       # 10,000 requests per hour
+    rpd: 100000      # 100,000 requests per day
+    tpm: 150000      # 150,000 tokens per minute
+    tph: 5000000     # 5 million tokens per hour
+    tpd: 100000000   # 100 million tokens per day
+
+  # Example 5: Backward compatibility - only minute limits
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: sk-your-openai-key-5
+      # Cost automatically looked up from global model cost map
+    # Only traditional minute-based limits (hour/day limits will be infinite)
+    rpm: 10
+    tpm: 10000
+
+
+  # Example 6: Azure OpenAI with rate limits
+  - model_name: gpt-35-turbo
+    litellm_params:
+      model: azure/gpt-35-turbo
+      api_key: your-azure-key
+      api_base: https://your-resource.openai.azure.com/
+      api_version: "2024-02-15-preview"
+    # Azure-specific rate limits
+    rpm: 240         # 240 requests per minute (Azure limit)
+    rph: 10000       # 10,000 requests per hour
+    rpd: 100000      # 100,000 requests per day
+    tpm: 240000      # 240,000 tokens per minute
+    tph: 10000000    # 10 million tokens per hour
+    tpd: 200000000   # 200 million tokens per day
+
+    # Azure pricing (same as OpenAI for gpt-3.5-turbo)
+    model_info:
+      input_cost_per_token: 0.0000015   # $0.0015 per 1K input tokens
+      output_cost_per_token: 0.000002   # $0.002 per 1K output tokens
+
+# Router configuration
+router_settings:
+  routing_strategy: "free-key-optimization"
+  routing_strategy_args:
+    ttl: 60          # Cache TTL for minute windows (seconds)
+    hour_ttl: 3600   # Cache TTL for hour windows (seconds)
+    day_ttl: 86400   # Cache TTL for day windows (seconds)
+
+
+# Example usage patterns:
+#
+# 1. Free API Key Optimization:
+#    - Use conservative per-minute limits (3-5 RPM).  Base this on provider documentation.
+#    - Set reasonable hourly limits (200-500 RPH).  Base this on provider documentation.
+#    - Set daily limits to prevent quota exhaustion.  Base this on provider documentation.
+#
+# 2. Paid Tier Management:
+#    - Higher per-minute limits for responsiveness
+#    - Generous hourly limits for sustained usage
+#    - Daily limits as safety nets
+#
+# 3. Multi-Provider Load Balancing:
+#    - Different rate limits per provider
+#    - Automatic failover when limits exceeded
+#    - Optimal resource utilization
+#
+# 4. Cost Control:
+#    - Daily token limits to control costs
+#    - Hourly limits for burst protection
+#    - Per-minute limits for responsiveness
+#
+# Free Key Optimization Strategy Logic:
+#
+# 1. RATE LIMIT ENFORCEMENT (Multi-Window):
+#    - ALL configured limits must be respected simultaneously (AND logic)
+#    - Supports minute, hour, and day windows: rpm/tpm, rph/tph, rpd/tpd
+#    - If ANY limit is exceeded, deployment is excluded from selection
+#    - Backward compatible: deployments with only minute limits still work
+#
+# 2. COST-BASED SELECTION:
+#    - Selects deployment with lowest estimated cost for the current request
+#    - Cost = (input_tokens × input_cost_per_token) + (estimated_output_tokens × output_cost_per_token)
+#    - Assumes 1:1 input:output token ratio for cost estimation
+#
+# 3. COST INFORMATION LOOKUP (Priority Order):
+#    a) litellm_params override (highest priority)
+#       - input_cost_per_token and output_cost_per_token in litellm_params
+#       - Supports explicit 0.0 costs for free models
+#    b) model_info configuration (second priority)
+#       - input_cost_per_token and output_cost_per_token in model_info
+#       - Supports explicit 0.0 costs for free models
+#    c) Global LiteLLM model cost map (third priority)
+#       - Automatic lookup based on model name
+#    d) Token usage fallback (lowest priority)
+#       - Uses current TPM when no cost data is available
+#
+# 4. ERROR HANDLING:
+#    - Graceful degradation when cost calculation fails
+#
+# Cache Key Format:
+# - Minute: {deployment_id}:{model}:rpm:minute:{HH-MM}
+# - Hour:   {deployment_id}:{model}:rpm:hour:{YYYY-MM-DD-HH}
+# - Day:    {deployment_id}:{model}:rpm:day:{YYYY-MM-DD}
+# - Similar format for TPM (tokens per minute/hour/day)
+#
+# TTL Values:
+# - Minute keys: 60 seconds
+# - Hour keys: 3600 seconds (1 hour)
+# - Day keys: 86400 seconds (24 hours)
