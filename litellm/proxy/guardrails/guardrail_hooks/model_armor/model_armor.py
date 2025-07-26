@@ -250,9 +250,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         guardrail_response = metadata.get("_model_armor_response", {})
 
         # Determine status – default to "success" but prefer the explicit value if present.
-        guardrail_status: Literal["success", "failure", "blocked"] = metadata.get(
+        # mypy may complain because `metadata.get` returns `Any`; ignore that.
+        guardrail_status: Literal["success", "failure", "blocked"] = metadata.get(  # type: ignore
             "_model_armor_status", "success"
-        )  # type: ignore
+        )
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
