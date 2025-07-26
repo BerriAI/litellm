@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, message } from "antd";
 import type { FormInstance } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
@@ -20,7 +20,7 @@ import AddAutoRouterTab from "./add_auto_router_tab";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 
 interface AddModelTabProps {
-  form: FormInstance;
+  form: FormInstance; // For the Add Model tab
   handleOk: () => void;
   selectedProvider: Providers;
   setSelectedProvider: (provider: Providers) => void;
@@ -56,6 +56,8 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   userRole,
   premiumUser,
 }) => {
+  // Create separate form instance for auto router
+  const [autoRouterForm] = Form.useForm();
   // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
@@ -108,10 +110,10 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   const isAdmin = all_admin_roles.includes(userRole);
 
   const handleAutoRouterOk = () => {
-    form
+    autoRouterForm
       .validateFields()
       .then((values) => {
-        handleAddAutoRouterSubmit(values, accessToken, form, handleOk);
+        handleAddAutoRouterSubmit(values, accessToken, autoRouterForm, handleOk);
       })
       .catch((error) => {
         console.error("Validation failed:", error);
@@ -131,7 +133,13 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             <Card>
         <Form
           form={form}
-          onFinish={handleOk}
+          onFinish={(values) => {
+            console.log("🔥 Form onFinish triggered with values:", values);
+            handleOk();
+          }}
+          onFinishFailed={(errorInfo) => {
+            console.log("💥 Form onFinishFailed triggered:", errorInfo);
+          }}
           labelCol={{ span: 10 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -373,7 +381,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
           </TabPanel>
           <TabPanel>
             <AddAutoRouterTab
-              form={form}
+              form={autoRouterForm}
               handleOk={handleAutoRouterOk}
               accessToken={accessToken}
               userRole={userRole}
