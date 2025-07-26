@@ -47,8 +47,6 @@ spec:
             - name: DATABASE_URL
               value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
             {{- end }}
-            - name: DISABLE_SCHEMA_UPDATE
-              value: "false" # always run the migration from the Helm PreSync hook, override the value set
             {{- if .Values.envVars }}
             {{- range $key, $val := .Values.envVars }}
             - name: {{ $key }}
@@ -58,6 +56,8 @@ spec:
             {{- with .Values.extraEnvVars }}
               {{- toYaml . | nindent 12 }}
             {{- end }}
+            - name: DISABLE_SCHEMA_UPDATE
+              value: "false" # always run the migration from the Helm PreSync hook, override the value set
           {{- with .Values.volumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}
