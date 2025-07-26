@@ -68,7 +68,9 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     )
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, exception_type="debug")
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
     # Check that decrypted_token is not None before using json.loads
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)

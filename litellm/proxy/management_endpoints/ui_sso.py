@@ -58,7 +58,12 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import CustomOpenID
-from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
+from litellm.proxy.utils import (
+    PrismaClient,
+    ProxyLogging,
+    get_custom_url,
+    get_server_root_path,
+)
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *
 
@@ -162,14 +167,8 @@ async def serve_login_page(
         </div>
         """
 
-    # Get the base URL for form action - CHANGE THIS TO POINT TO /login
-    proxy_base_url = os.getenv("PROXY_BASE_URL", "")
-    server_root_path = os.getenv("SERVER_ROOT_PATH", "")
-    if server_root_path != "":
-        proxy_base_url += server_root_path
-    form_action = (
-        proxy_base_url + "/sso/key/generate"
-    )  # CHANGE BACK to /sso/key/generate
+    # Get the base URL for form action using proper URL construction
+    form_action = get_custom_url(request_base_url=str(request.base_url), route="login")
 
     unified_login_html = f"""
 <!DOCTYPE html>
@@ -1045,9 +1044,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            user_defined_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1246,9 +1245,9 @@ class SSOAuthenticationHandler:
                 if state:
                     redirect_params["state"] = state
                 elif "okta" in generic_authorization_endpoint:
-                    redirect_params[
-                        "state"
-                    ] = uuid.uuid4().hex  # set state param for okta - required
+                    redirect_params["state"] = (
+                        uuid.uuid4().hex
+                    )  # set state param for okta - required
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -1769,9 +1768,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[
-                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
-            ] = user_team_ids
+            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
+                user_team_ids
+            )
             return original_msft_result or {}
 
         result = MicrosoftSSOHandler.openid_from_response(
@@ -1839,9 +1838,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[
-                str
-            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            next_link: Optional[str] = (
+                MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            )
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
