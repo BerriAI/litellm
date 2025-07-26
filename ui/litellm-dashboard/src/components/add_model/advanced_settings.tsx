@@ -144,7 +144,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               }
               name="guardrails" 
               className="mt-4"
-              help="Select existing guardrails or enter new ones"
+              help="Select existing guardrails. Go to 'Guardrails' tab to create new guardrails."
             >
               <Select
                 mode="tags"
