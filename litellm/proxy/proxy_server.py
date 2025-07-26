@@ -3240,6 +3240,7 @@ async def async_data_generator(
     verbose_proxy_logger.debug("inside generator")
     try:
         str_so_far = ""
+        error_message: Optional[str] = None
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -3265,6 +3266,9 @@ async def async_data_generator(
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+            elif isinstance(chunk, str) and chunk.startswith("data: "):
+                error_message = chunk
+                break
 
             try:
                 yield f"data: {chunk}\n\n"
@@ -3272,6 +3276,8 @@ async def async_data_generator(
                 yield f"data: {str(e)}\n\n"
 
         # Streaming is done, yield the [DONE] chunk
+        if error_message is not None:
+            yield error_message
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
