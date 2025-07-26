@@ -163,12 +163,12 @@ class JWTHandler:
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
         if self.litellm_jwtauth.team_ids_jwt_field is not None:
-            team_ids: List[str] = get_nested_value(
+            team_ids = get_nested_value(
                 data=token,
                 key_path=self.litellm_jwtauth.team_ids_jwt_field,
                 default=[],
             )
-            return team_ids if team_ids is not None else []
+            return team_ids or []
 
         return []
 
