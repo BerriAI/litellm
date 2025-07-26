@@ -24,7 +24,7 @@ The Langfuse OpenTelemetry integration allows you to send LiteLLM traces and obs
 2. **API Keys**: Get your public and secret keys from your Langfuse project settings
 3. **Dependencies**: Install required packages:
    ```bash
-   pip install litellm opentelemetry-api opentelemetry-sdk
+   pip install litellm opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
    ```
 
 ## Configuration
@@ -146,6 +146,41 @@ The integration automatically collects the following data:
 - **Timing Information**: Request duration, time to first token
 - **Metadata**: User ID, session ID, custom tags (if provided)
 - **Error Information**: Exception details and stack traces (if errors occur)
+
+## Metadata Support
+
+All metadata fields available in the vanilla Langfuse integration are now **fully supported** when you use the OTEL integration.
+
+- Any key you pass in the `metadata` dictionary (`generation_name`, `trace_id`, `session_id`, `tags`, and the rest) is exported as an OpenTelemetry span attribute.
+- Attribute names are prefixed with `langfuse.` so you can filter or search for them easily in your observability backend.
+  Examples: `langfuse.generation.name`, `langfuse.trace.id`, `langfuse.trace.session_id`.
+
+### Passing Metadata – Example
+
+```python
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello!"}],
+    metadata={
+        "generation_name": "welcome-message",
+        "trace_id": "trace-123",
+        "session_id": "sess-42",
+        "tags": ["prod", "beta-user"]
+    }
+)
+```
+
+The resulting span will contain attributes similar to:
+
+```
+langfuse.generation.name   = "welcome-message"
+langfuse.trace.id          = "trace-123"
+langfuse.trace.session_id  = "sess-42"
+langfuse.trace.tags        = ["prod", "beta-user"]
+```
+
+Use the **Langfuse UI** (Traces tab) to search, filter and analyse spans that contain the `langfuse.*` attributes.
+The OTEL exporter in this integration sends data directly to Langfuse’s OTLP HTTP endpoint; it is **not** intended for Grafana, Honeycomb, Datadog, or other generic OTEL back-ends.
 
 ## Authentication
 
