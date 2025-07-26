@@ -2318,6 +2318,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    HEROKU = "heroku"
     AUTO_ROUTER = "auto_router"
 
 
