@@ -14966,37 +14966,106 @@
         "max_tokens": 3072,
         "max_input_tokens": 3072,
         "max_output_tokens": 3072,
-        "input_cost_per_token": 1.923e-06,
-        "output_cost_per_token": 1.923e-06,
+        "input_cost_per_token": 0.000001923,
+        "output_cost_per_token": 0.000001923,
         "litellm_provider": "cloudflare",
-        "mode": "chat"
+        "mode": "chat",
+        "source": "https://developers.cloudflare.com/workers-ai/models/llama-2-7b-chat-fp16/"
     },
     "cloudflare/@cf/meta/llama-2-7b-chat-int8": {
         "max_tokens": 2048,
         "max_input_tokens": 2048,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 1.923e-06,
-        "output_cost_per_token": 1.923e-06,
+        "input_cost_per_token": 0.000001923,
+        "output_cost_per_token": 0.000001923,
         "litellm_provider": "cloudflare",
-        "mode": "chat"
+        "mode": "chat",
+        "source": "https://developers.cloudflare.com/workers-ai/models/llama-2-7b-chat-int8/"
     },
     "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 1.923e-06,
-        "output_cost_per_token": 1.923e-06,
+        "input_cost_per_token": 0.000001923,
+        "output_cost_per_token": 0.000001923,
         "litellm_provider": "cloudflare",
-        "mode": "chat"
+        "mode": "chat",
+        "source": "https://developers.cloudflare.com/workers-ai/models/mistral-7b-instruct-v0.1/"
     },
     "cloudflare/@hf/thebloke/codellama-7b-instruct-awq": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
         "max_output_tokens": 4096,
-        "input_cost_per_token": 1.923e-06,
-        "output_cost_per_token": 1.923e-06,
+        "input_cost_per_token": 0.000001923,
+        "output_cost_per_token": 0.000001923,
         "litellm_provider": "cloudflare",
-        "mode": "chat"
+        "mode": "chat",
+        "source": "https://developers.cloudflare.com/workers-ai/models/codellama-7b-instruct-awq/"
+    },
+    "cloudflare/@cf/meta/llama-4-scout-17b-16e-instruct": {
+        "max_tokens": 131000,
+        "max_input_tokens": 131000,
+        "max_output_tokens": 131000,
+        "input_cost_per_token": 0.00000027,
+        "output_cost_per_token": 0.00000085,
+        "litellm_provider": "cloudflare",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "source": "https://developers.cloudflare.com/workers-ai/models/llama-4-scout-17b-16e-instruct/"
+    },
+    "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
+        "max_tokens": 24000,
+        "max_input_tokens": 24000,
+        "max_output_tokens": 24000,
+        "input_cost_per_token": 0.00000029,
+        "output_cost_per_token": 0.00000225,
+        "litellm_provider": "cloudflare",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://developers.cloudflare.com/workers-ai/models/llama-3.3-70b-instruct-fp8-fast/"
+    },
+    "cloudflare/@cf/baai/bge-m3": {
+        "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 0,
+        "input_cost_per_token": 0.000000012,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "cloudflare",
+        "mode": "embedding",
+        "source": "https://developers.cloudflare.com/workers-ai/models/bge-m3/"
+    },
+    "cloudflare/@cf/baai/bge-large-en-v1.5": {
+        "max_tokens": 512,
+        "max_input_tokens": 512,
+        "max_output_tokens": 0,
+        "input_cost_per_token": 0.0000002,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "cloudflare",
+        "mode": "embedding",
+        "source": "https://developers.cloudflare.com/workers-ai/models/bge-large-en-v1.5/"
+    },
+    "cloudflare/@cf/baai/bge-small-en-v1.5": {
+        "max_tokens": 512,
+        "max_input_tokens": 512,
+        "max_output_tokens": 0,
+        "input_cost_per_token": 0.00000002,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "cloudflare",
+        "mode": "embedding",
+        "source": "https://developers.cloudflare.com/workers-ai/models/bge-small-en-v1.5/"
+    },
+    "cloudflare/@cf/baai/bge-base-en-v1.5": {
+        "max_tokens": 512,
+        "max_input_tokens": 512,
+        "max_output_tokens": 0,
+        "input_cost_per_token": 0.000000067,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "cloudflare",
+        "mode": "embedding",
+        "source": "https://developers.cloudflare.com/workers-ai/models/bge-base-en-v1.5/"
     },
     "v0/v0-1.0-md": {
         "max_tokens": 128000,

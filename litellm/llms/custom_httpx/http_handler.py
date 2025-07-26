@@ -742,6 +742,11 @@ class HTTPHandler:
         logging_obj: Optional[LiteLLMLoggingObject] = None,
     ):
         try:
+            # Use content parameter for raw bytes/text to avoid httpx deprecation warning
+            if isinstance(data, (str, bytes)) and content is None:
+                content = data
+                data = None
+
             if timeout is not None:
                 req = self.client.build_request(
                     "POST",

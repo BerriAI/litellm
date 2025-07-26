@@ -3228,18 +3228,173 @@ def get_optional_params(  # noqa: PLR0915
 ):
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
-    non_default_params = pre_process_non_default_params(
-        passed_params=passed_params,
-        special_params=special_params,
-        custom_llm_provider=custom_llm_provider,
-        additional_drop_params=additional_drop_params,
-        model=model,
-    )
-    optional_params = pre_process_optional_params(
-        passed_params=passed_params,
-        non_default_params=non_default_params,
-        custom_llm_provider=custom_llm_provider,
-    )
+    for k, v in special_params.items():
+        if k.startswith("aws_") and (
+            custom_llm_provider != "bedrock"
+            and not custom_llm_provider.startswith("sagemaker")
+        ):  # allow dynamically setting boto3 init logic
+            continue
+        elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
+            continue
+        elif (
+            k.startswith("vertex_")
+            and custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "vertex_ai_beta"
+        ):  # allow dynamically setting vertex ai init logic
+            continue
+        passed_params[k] = v
+
+    optional_params: Dict = {}
+
+    common_auth_dict = litellm.common_cloud_provider_auth_params
+    if custom_llm_provider in common_auth_dict["providers"]:
+        """
+        Check if params = ["project", "region_name", "token"]
+        and correctly translate for = ["azure", "vertex_ai", "watsonx", "aws"]
+        """
+        if custom_llm_provider == "azure":
+            optional_params = litellm.AzureOpenAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "bedrock":
+            optional_params = (
+                litellm.AmazonBedrockGlobalConfig().map_special_auth_params(
+                    non_default_params=passed_params, optional_params=optional_params
+                )
+            )
+        elif (
+            custom_llm_provider == "vertex_ai"
+            or custom_llm_provider == "vertex_ai_beta"
+        ):
+            optional_params = litellm.VertexAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+        elif custom_llm_provider == "watsonx":
+            optional_params = litellm.IBMWatsonXAIConfig().map_special_auth_params(
+                non_default_params=passed_params, optional_params=optional_params
+            )
+
+    default_params = {
+        "functions": None,
+        "function_call": None,
+        "temperature": None,
+        "top_p": None,
+        "top_k": None,
+        "n": None,
+        "stream": None,
+        "stream_options": None,
+        "stop": None,
+        "max_tokens": None,
+        "max_completion_tokens": None,
+        "modalities": None,
+        "prediction": None,
+        "audio": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+        "repetition_penalty": None,
+        "logit_bias": None,
+        "user": None,
+        "model": None,
+        "custom_llm_provider": "",
+        "response_format": None,
+        "seed": None,
+        "tools": None,
+        "tool_choice": None,
+        "max_retries": None,
+        "logprobs": None,
+        "top_logprobs": None,
+        "extra_headers": None,
+        "api_version": None,
+        "parallel_tool_calls": None,
+        "drop_params": None,
+        "allowed_openai_params": None,
+        "additional_drop_params": None,
+        "messages": None,
+        "reasoning_effort": None,
+        "thinking": None,
+        "web_search_options": None,
+    }
+
+    # filter out those parameters that were passed with non-default values
+
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if (
+            k != "model"
+            and k != "custom_llm_provider"
+            and k != "api_version"
+            and k != "drop_params"
+            and k != "allowed_openai_params"
+            and k != "additional_drop_params"
+            and k != "messages"
+            and k in default_params
+            and v != default_params[k]
+            and _should_drop_param(k=k, additional_drop_params=additional_drop_params)
+            is False
+        )
+    }
+
+    ## raise exception if function calling passed in for a provider that doesn't support it
+    if (
+        "functions" in non_default_params
+        or "function_call" in non_default_params
+        or "tools" in non_default_params
+    ):
+        if (
+            custom_llm_provider == "ollama"
+            and custom_llm_provider != "text-completion-openai"
+            and custom_llm_provider != "azure"
+            and custom_llm_provider != "vertex_ai"
+            and custom_llm_provider != "anyscale"
+            and custom_llm_provider != "together_ai"
+            and custom_llm_provider != "groq"
+            and custom_llm_provider != "nvidia_nim"
+            and custom_llm_provider != "cerebras"
+            and custom_llm_provider != "xai"
+            and custom_llm_provider != "ai21_chat"
+            and custom_llm_provider != "volcengine"
+            and custom_llm_provider != "deepseek"
+            and custom_llm_provider != "codestral"
+            and custom_llm_provider != "mistral"
+            and custom_llm_provider != "anthropic"
+            and custom_llm_provider != "cohere_chat"
+            and custom_llm_provider != "cohere"
+            and custom_llm_provider != "bedrock"
+            and custom_llm_provider != "ollama_chat"
+            and custom_llm_provider != "openrouter"
+            and custom_llm_provider != "cloudflare"
+            and custom_llm_provider not in litellm.openai_compatible_providers
+        ):
+            if custom_llm_provider == "ollama":
+                # ollama actually supports json output
+                optional_params["format"] = "json"
+                litellm.add_function_to_prompt = (
+                    True  # so that main.py adds the function call to the prompt
+                )
+                if "tools" in non_default_params:
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
+                    non_default_params.pop(
+                        "tool_choice", None
+                    )  # causes ollama requests to hang
+                elif "functions" in non_default_params:
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
+            elif (
+                litellm.add_function_to_prompt
+            ):  # if user opts to add it to prompt instead
+                optional_params["functions_unsupported_model"] = non_default_params.pop(
+                    "tools", non_default_params.pop("functions", None)
+                )
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=f"Function calling is not supported by {custom_llm_provider}.",
+                )
+
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
@@ -3247,6 +3402,37 @@ def get_optional_params(  # noqa: PLR0915
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)
         )
+    if "response_format" in non_default_params:
+        if provider_config is not None:
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
+            )
+        else:
+            non_default_params["response_format"] = type_to_response_format_param(
+                response_format=non_default_params["response_format"]
+            )
+
+    if "tools" in non_default_params and isinstance(
+        non_default_params, list
+    ):  # fixes https://github.com/BerriAI/litellm/issues/4933
+        tools = non_default_params["tools"]
+        for (
+            tool
+        ) in (
+            tools
+        ):  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+            tool_function = tool.get("function", {})
+            parameters = tool_function.get("parameters", None)
+            if parameters is not None:
+                new_parameters = copy.deepcopy(parameters)
+                if (
+                    "additionalProperties" in new_parameters
+                    and new_parameters["additionalProperties"] is False
+                ):
+                    new_parameters.pop("additionalProperties", None)
+                tool_function["parameters"] = new_parameters
 
     def _check_valid_arg(supported_params: List[str]):
         """
@@ -6936,6 +7122,12 @@ class ProviderConfigManager:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
+        elif litellm.LlmProviders.CLOUDFLARE == provider:
+            from litellm.llms.cloudflare.embed.transformation import (
+                CloudflareEmbeddingConfig,
+            )
+
+            return CloudflareEmbeddingConfig()
         return None
 
     @staticmethod
