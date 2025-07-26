@@ -79,5 +79,6 @@ class TestVolcEngineConfig:
             mock_create.assert_called_once()
             print(mock_create.call_args.kwargs)
             assert mock_create.call_args.kwargs["extra_body"] == {
+                "json_schema": None,
                 "thinking": {"type": "disabled"},
             }
