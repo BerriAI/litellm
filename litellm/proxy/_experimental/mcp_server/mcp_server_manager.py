@@ -514,7 +514,6 @@ class MCPServerManager:
         guardrail_data = await self._apply_mcp_pre_call_guardrails(
             guardrail_data, user_api_key_auth
         )
-
         # Get server-specific auth header if available
         server_auth_header = None
         if mcp_server_auth_headers and mcp_server.alias:
