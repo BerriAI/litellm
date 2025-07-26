@@ -1,7 +1,7 @@
 """
 MCP Server Utilities
 """
-from typing import Tuple, Any, Union
+from typing import Tuple, Any
 
 import os
 import importlib
