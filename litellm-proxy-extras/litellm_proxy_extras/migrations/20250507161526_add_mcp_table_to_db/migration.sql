@@ -1,7 +1,6 @@
 -- CreateTable
 CREATE TABLE "LiteLLM_MCPServerTable" (
     "server_id" TEXT NOT NULL,
-    "server_name" TEXT,
     "alias" TEXT,
     "description" TEXT,
     "url" TEXT NOT NULL,
@@ -17,7 +16,12 @@ CREATE TABLE "LiteLLM_MCPServerTable" (
 );
 
 -- Migration for existing tables: rename alias to server_name if upgrading
-ALTER TABLE "LiteLLM_MCPServerTable" RENAME COLUMN "alias" TO "server_name";
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'LiteLLM_MCPServerTable' AND column_name = 'alias') THEN
+        ALTER TABLE "LiteLLM_MCPServerTable" RENAME COLUMN "alias" TO "server_name";
+    END IF;
+END $$;
 -- Migration for existing tables: add alias column if upgrading
 ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "alias" TEXT;
 
