@@ -40,7 +40,6 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         from litellm.utils import supports_url_context
 
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
 
         litellm._turn_on_debug()
 

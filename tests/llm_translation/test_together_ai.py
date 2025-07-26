@@ -37,7 +37,6 @@ class TestTogetherAI(BaseLLMChatTest):
         self, model: str, expected_bool: bool
     ) -> None:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
         optional_params = litellm.get_supported_openai_params(
             model, custom_llm_provider="together_ai"
         )

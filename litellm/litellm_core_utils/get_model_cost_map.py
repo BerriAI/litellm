@@ -12,11 +12,13 @@ import os
 
 import httpx
 
+from functools import cache
 
+
+@cache
 def get_model_cost_map(url: str) -> dict:
     if (
         os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False)
-        or os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", False) == "True"
     ):
         import importlib.resources
         import json

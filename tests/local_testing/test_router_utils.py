@@ -179,7 +179,6 @@ async def test_update_kwargs_before_fallbacks(call_type):
 
 def test_router_get_model_info_wildcard_routes():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     router = Router(
         model_list=[
             {
@@ -201,7 +200,6 @@ def test_router_get_model_info_wildcard_routes():
 @pytest.mark.asyncio
 async def test_router_get_model_group_usage_wildcard_routes():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     router = Router(
         model_list=[
             {
@@ -298,7 +296,6 @@ async def test_call_router_callbacks_on_failure():
 @pytest.mark.asyncio
 async def test_router_model_group_headers():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.types.utils import OPENAI_RESPONSE_HEADERS
 
     router = Router(
@@ -331,7 +328,6 @@ async def test_router_model_group_headers():
 @pytest.mark.asyncio
 async def test_get_remaining_model_group_usage():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
     from litellm.types.utils import OPENAI_RESPONSE_HEADERS
 
     router = Router(
