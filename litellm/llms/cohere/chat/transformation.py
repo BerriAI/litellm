@@ -263,6 +263,7 @@ class CohereChatConfig(BaseConfig):
                 content=None,
             )
             model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].finish_reason = "tool_calls"
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
         billed_units = raw_response_json.get("meta", {}).get("billed_units", {})
