@@ -166,6 +166,7 @@ model LiteLLM_ObjectPermissionTable {
 // Holds the MCP server configuration 
 model LiteLLM_MCPServerTable {
   server_id    String         @id @default(uuid())
+  server_name  String?
   alias        String?
   description  String?
   url          String?

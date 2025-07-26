@@ -30,6 +30,9 @@ def _prepare_mcp_server_data(
 
     # Convert model to dict
     data_dict = data.model_dump()
+    # Ensure alias is always present in the dict (even if None)
+    if 'alias' not in data_dict:
+        data_dict['alias'] = getattr(data, 'alias', None)
     
     # Handle mcp_info serialization
     if data.mcp_info is not None:
