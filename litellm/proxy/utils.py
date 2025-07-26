@@ -1115,10 +1115,16 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        await _callback.async_post_call_streaming_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            response=complete_response,
+                        potential_error_response = (
+                            await _callback.async_post_call_streaming_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=complete_response,
+                            )
                         )
+                        if isinstance(
+                            potential_error_response, str
+                        ) and potential_error_response.startswith("data: "):
+                            return potential_error_response
                 except Exception as e:
                     raise e
         return response
@@ -1156,27 +1162,6 @@ class ProxyLogging:
                         request_data=request_data,
                     )
         return response
-
-    async def post_call_streaming_hook(
-        self,
-        response: str,
-        user_api_key_dict: UserAPIKeyAuth,
-    ):
-        """
-        - Check outgoing streaming response uptil that point
-        - Run through moderation check
-        - Reject request if it fails moderation check
-        """
-        new_response = copy.deepcopy(response)
-        for callback in litellm.callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    await callback.async_post_call_streaming_hook(
-                        user_api_key_dict=user_api_key_dict, response=new_response
-                    )
-            except Exception as e:
-                raise e
-        return new_response
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
