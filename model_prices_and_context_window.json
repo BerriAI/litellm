@@ -11163,7 +11163,7 @@
         "input_cost_per_token": 1.18e-07,
         "output_cost_per_token": 1.18e-07,
         "litellm_provider": "openrouter",
-        "source": "https://openrouter.ai/qwen/qwen3-235b-a22b-2507",
+        "source": "https://openrouter.ai/qwen/qwen3-235b-a22b-thinking-2507",
         "mode": "chat",
         "supports_tool_choice": true
     },
