@@ -146,6 +146,27 @@ class MCPServerManager:
             })()
             name_for_prefix = get_server_prefix(temp_server)
 
+            # Use alias for name if present, else server_name
+            alias = server_config.get("alias", None)
+            
+            # Apply mcp_aliases mapping if provided
+            if mcp_aliases and alias is None:
+                # Check if this server_name has an alias in mcp_aliases
+                for alias_name, target_server_name in mcp_aliases.items():
+                    if target_server_name == server_name and alias_name not in used_aliases:
+                        alias = alias_name
+                        used_aliases.add(alias_name)
+                        verbose_logger.debug(f"Mapped alias '{alias_name}' to server '{server_name}'")
+                        break
+            
+            # Create a temporary server object to use with get_server_prefix utility
+            temp_server = type('TempServer', (), {
+                'alias': alias,
+                'server_name': server_name,
+                'server_id': None
+            })()
+            name_for_prefix = get_server_prefix(temp_server)
+
             # Generate stable server ID based on parameters
             server_id = self._generate_stable_server_id(
                 server_name=server_name,

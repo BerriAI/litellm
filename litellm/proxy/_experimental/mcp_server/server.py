@@ -292,9 +292,11 @@ if MCP_AVAILABLE:
                 for server_id in allowed_mcp_servers
                 if any(
                     server_alias.lower() in mcp_servers_lower
+                    for server in [global_mcp_server_manager.get_mcp_server_by_id(server_id)]
+                    if server is not None
                     for server_alias in [
-                        global_mcp_server_manager.get_mcp_server_by_id(server_id).alias,
-                        global_mcp_server_manager.get_mcp_server_by_id(server_id).server_name,
+                        server.alias,
+                        server.server_name,
                         server_id,
                     ]
                     if server_alias is not None
@@ -365,7 +367,18 @@ if MCP_AVAILABLE:
         )
 
         # Get tools from local registry
-        local_tools = global_mcp_tool_registry.list_tools()
+        local_tools_raw = global_mcp_tool_registry.list_tools()
+        
+        # Convert local tools to MCPTool format
+        local_tools = []
+        for tool in local_tools_raw:
+            # Convert from litellm.types.mcp_server.tool_registry.MCPTool to mcp.types.Tool
+            mcp_tool = MCPTool(
+                name=tool.name,
+                description=tool.description,
+                inputSchema=tool.input_schema
+            )
+            local_tools.append(mcp_tool)
 
         # Combine all tools
         all_tools = managed_tools + local_tools
