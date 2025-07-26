@@ -18,10 +18,12 @@ import TeamDropdown from "../common_components/team_dropdown"
 import { all_admin_roles } from "@/utils/roles"
 import AddAutoRouterTab from "./add_auto_router_tab"
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit"
+import { handleAddModelSubmit } from "./handle_add_model_submit"
 
-interface AddModelTabProps {
-  form: FormInstance
-  handleOk: () => void
+// Keep the exact same interface as AddModelTabProps for backward compatibility
+interface ModelManagementTabsProps {
+  form: FormInstance // Keep for backward compatibility but won't use
+  handleOk: () => void // This becomes onSuccess
   selectedProvider: Providers
   setSelectedProvider: (provider: Providers) => void
   providerModels: string[]
@@ -39,9 +41,9 @@ interface AddModelTabProps {
 
 const { Title, Link } = Typography
 
-const AddModelTab: React.FC<AddModelTabProps> = ({
-  form,
-  handleOk,
+const ModelManagementTabs: React.FC<ModelManagementTabsProps> = ({
+  form, // Keep for compatibility but create our own forms
+  handleOk, // This is our success callback
   selectedProvider,
   setSelectedProvider,
   providerModels,
@@ -56,14 +58,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   userRole,
   premiumUser,
 }) => {
-  // State for test mode and connection testing
+  // Create separate form instances for each tab
+  const [addModelForm] = Form.useForm()
+  const [autoRouterForm] = Form.useForm()
+
+  // State for test mode and connection testing - EXACT same as before
   const [testMode, setTestMode] = useState<string>("chat")
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false)
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false)
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("")
 
-  // Test connection when button is clicked
+  // Test connection when button is clicked - EXACT same as before
   const handleTestConnection = async () => {
     setIsTestingConnection(true)
     // Generate a new test ID (using timestamp for uniqueness)
@@ -73,11 +79,12 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
     setIsResultModalVisible(true)
   }
 
-  // State for team-only switch
+  // State for team-only switch - EXACT same as before
   const [isTeamOnly, setIsTeamOnly] = useState<boolean>(false)
 
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([])
 
+  // EXACT same useEffect as before
   useEffect(() => {
     const fetchModelAccessGroups = async () => {
       const response = await modelAvailableCall(accessToken, "", "", false, null, true, true)
@@ -88,17 +95,57 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole)
 
-  const handleAutoRouterOk = () => {
-    form
+  // Handler for Add Model form submission (uses addModelForm)
+  const handleAddModelOk = () => {
+    console.log("=== ADD MODEL HANDLEOK CALLED ===")
+    console.log("Add Model form values:", addModelForm.getFieldsValue())
+
+    addModelForm
       .validateFields()
       .then((values) => {
-        handleAddAutoRouterSubmit(values, accessToken, form, handleOk)
+        console.log("=== ADD MODEL VALIDATION PASSED ===")
+        console.log("Validated values:", values)
+        handleAddModelSubmit(values, accessToken, addModelForm, handleOk)
+      })
+      .catch((error) => {
+        console.log("=== ADD MODEL VALIDATION FAILED ===")
+        console.error("Validation error:", error)
+
+        if (error.errorFields && error.errorFields.length > 0) {
+          const missingFields = error.errorFields.map((field: any) => {
+            const fieldName = field.name[0]
+            const friendlyNames: { [key: string]: string } = {
+              custom_llm_provider: "Provider",
+              model: "LiteLLM Model Name",
+              custom_model_name: "Custom Model Name",
+              api_key: "API Key",
+              api_base: "API Base",
+              vertex_project: "Vertex Project",
+              vertex_location: "Vertex Location",
+              aws_access_key_id: "AWS Access Key ID",
+              aws_secret_access_key: "AWS Secret Access Key",
+              aws_region_name: "AWS Region Name",
+            }
+            return friendlyNames[fieldName] || fieldName
+          })
+          console.error(`Missing required fields: ${missingFields.join(", ")}`)
+        }
+      })
+  }
+
+  // Handler for Auto Router form submission (uses autoRouterForm) - EXACT same as before
+  const handleAutoRouterOk = () => {
+    autoRouterForm
+      .validateFields()
+      .then((values) => {
+        handleAddAutoRouterSubmit(values, accessToken, autoRouterForm, handleOk)
       })
       .catch((error) => {
         console.error("Validation failed:", error)
       })
   }
 
+  // EXACT same return structure as before, just using different form instances
   return (
     <>
       <TabGroup className="w-full">
@@ -110,9 +157,15 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
           <TabPanel>
             <Title level={2}>Add Model</Title>
             <Card>
-              <Form form={form} onFinish={handleOk} labelCol={{ span: 10 }} wrapperCol={{ span: 16 }} labelAlign="left">
+              <Form
+                form={addModelForm} // Use separate form for Add Model
+                onFinish={handleAddModelOk}
+                labelCol={{ span: 10 }}
+                wrapperCol={{ span: 16 }}
+                labelAlign="left"
+              >
                 <>
-                  {/* Provider Selection */}
+                  {/* Provider Selection - EXACT same as before */}
                   <Form.Item
                     rules={[{ required: true, message: "Required" }]}
                     label="Provider:"
@@ -127,7 +180,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                       onChange={(value) => {
                         setSelectedProvider(value)
                         setProviderModelsFn(value)
-                        form.setFieldsValue({
+                        addModelForm.setFieldsValue({
                           model: [],
                           model_name: undefined,
                         })
@@ -165,10 +218,10 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     getPlaceholder={getPlaceholder}
                   />
 
-                  {/* Conditionally Render "Public Model Name" */}
+                  {/* Conditionally Render "Public Model Name" - EXACT same as before */}
                   <ConditionalPublicModelName />
 
-                  {/* Select Mode */}
+                  {/* Select Mode - EXACT same as before */}
                   <Form.Item label="Mode" name="mode" className="mb-1">
                     <AntdSelect
                       style={{ width: "100%" }}
@@ -189,7 +242,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     </Col>
                   </Row>
 
-                  {/* Credentials */}
+                  {/* Credentials - EXACT same as before */}
                   <div className="mb-4">
                     <Typography.Text className="text-sm text-gray-500 mb-2">
                       Either select existing credentials OR enter new provider credentials below
@@ -247,7 +300,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     <span className="px-4 text-gray-500 text-sm">Additional Model Info Settings</span>
                     <div className="flex-grow border-t border-gray-200"></div>
                   </div>
-                  {/* Team-only Model Switch */}
+                  {/* Team-only Model Switch - EXACT same as before */}
                   <Form.Item
                     label="Team-BYOK Model"
                     tooltip="Only use this model + credential combination for this team. Useful when teams want to onboard their own OpenAI keys."
@@ -266,7 +319,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                         onChange={(checked) => {
                           setIsTeamOnly(checked)
                           if (!checked) {
-                            form.setFieldValue("team_id", undefined)
+                            addModelForm.setFieldValue("team_id", undefined)
                           }
                         }}
                         disabled={!premiumUser}
@@ -274,7 +327,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
                     </Tooltip>
                   </Form.Item>
 
-                  {/* Conditional Team Selection */}
+                  {/* Conditional Team Selection - EXACT same as before */}
                   {isTeamOnly && (
                     <Form.Item
                       label="Select Team"
@@ -337,12 +390,17 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             </Card>
           </TabPanel>
           <TabPanel>
-            <AddAutoRouterTab form={form} handleOk={handleAutoRouterOk} accessToken={accessToken} userRole={userRole} />
+            <AddAutoRouterTab
+              form={autoRouterForm} // Use separate form for Auto Router
+              handleOk={handleAutoRouterOk}
+              accessToken={accessToken}
+              userRole={userRole}
+            />
           </TabPanel>
         </TabPanels>
       </TabGroup>
 
-      {/* Test Connection Results Modal */}
+      {/* Test Connection Results Modal - EXACT same as before */}
       <Modal
         title="Connection Test Results"
         open={isResultModalVisible}
@@ -368,10 +426,10 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
           <ConnectionErrorDisplay
             // The key prop tells React to create a fresh component instance when it changes
             key={connectionTestId}
-            formValues={form.getFieldsValue()}
+            formValues={addModelForm.getFieldsValue()} // Use addModelForm for connection test
             accessToken={accessToken}
             testMode={testMode}
-            modelName={form.getFieldValue("model_name") || form.getFieldValue("model")}
+            modelName={addModelForm.getFieldValue("model_name") || addModelForm.getFieldValue("model")}
             onClose={() => {
               setIsResultModalVisible(false)
               setIsTestingConnection(false)
@@ -384,4 +442,4 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   )
 }
 
-export default AddModelTab
+export default ModelManagementTabs
