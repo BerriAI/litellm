@@ -972,25 +972,31 @@ celery_fn = None  # Redis Queue for handling requests
 db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
 
+async def check_request_disconnection(request: Request, llm_api_call_task):
+    """
+    Asynchronously checks if the request is disconnected at regular intervals.
+    If the request is disconnected, cancels the provided llm_api_call_task.
+    """
+    while True:
+        if await request.is_disconnected():
+            verbose_proxy_logger.debug(
+                f"Request disconnected, cancelling llm api call task"
+            )
+            llm_api_call_task.cancel()
+            break
+        await asyncio.sleep(0.1)  # Check every 100ms
+
 
 async def check_request_disconnection(request: Request, llm_api_call_task):
     """
     Asynchronously checks if the request is disconnected at regular intervals.
-    If the request is disconnected
-    - cancel the litellm.router task
-    - raises an HTTPException with status code 499 and detail "Client disconnected the request".
-
-    Parameters:
-    - request: Request: The request object to check for disconnection.
-    Returns:
-    - None
+    If the request is disconnected, cancels the provided llm_api_call_task.
     """
-
-    # only run this function for 10 mins -> if these don't get cancelled -> we don't want the server to have many while loops
-    start_time = time.time()
-    while time.time() - start_time < 600:
-        await asyncio.sleep(1)
+    while True:
         if await request.is_disconnected():
+            verbose_proxy_logger.debug(
+                f"Request disconnected, cancelling llm api call task"
+            )
             # cancel the LLM API Call task if any passed - this is passed from individual providers
             # Example OpenAI, Azure, VertexAI etc
             llm_api_call_task.cancel()
@@ -999,6 +1005,7 @@ async def check_request_disconnection(request: Request, llm_api_call_task):
                 status_code=499,
                 detail="Client disconnected the request",
             )
+        await asyncio.sleep(0.1)  # Check every 100ms
 
 
 def _resolve_typed_dict_type(typ):
@@ -2264,7 +2271,6 @@ class ProxyConfig:
                     )
                     if _logger is not None:
                         litellm.logging_callback_manager.add_litellm_callback(_logger)
-        pass
 
     def initialize_secret_manager(self, key_management_system: Optional[str]):
         """
