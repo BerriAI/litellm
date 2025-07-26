@@ -90,7 +90,6 @@ async def test_strict_input_filtering_02():
         call_type="completion",
     )
 
-
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="beta feature - local testing is failing")
 async def test_loose_input_filtering_01():
