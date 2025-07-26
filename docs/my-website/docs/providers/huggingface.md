@@ -47,7 +47,7 @@ To use a Hugging Face model, specify both the provider and model you want to use
 huggingface/<provider>/<hf_org_or_user>/<hf_model>
 ```
 Where `<hf_org_or_user>/<hf_model>` is the Hugging Face model ID and `<provider>` is the inference provider.  
-By default, if you don't specify a provider, LiteLLM will use the [HF Inference API](https://huggingface.co/docs/api-inference/en/index).
+By default, if you don't specify a provider, LiteLLM will use the `auto` mode, which will selects the first available provider for the model based on your priority settings at https://hf.co/settings/inference-providers.
 
 Examples:
 
