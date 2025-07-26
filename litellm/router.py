@@ -3596,6 +3596,45 @@ class Router:
 
                     return response
 
+                                
+                if isinstance(e, litellm.MidStreamFallbackError):
+                    fallbacks_source = fallbacks
+                    if fallbacks_source is None:
+                        fallbacks_source = []
+
+                    verbose_router_logger.info(
+                        f"Got MidStreamFallbackError. Pre-first chunk: {e.is_pre_first_chunk}, Generated content: {len(e.generated_content)} chars"
+                    )
+
+                    fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=fallbacks_source,
+                        model_group=model_group,
+                    )
+                    if fallback_model_group is None:
+                        raise original_exception
+                    
+                    input_kwargs.update(
+                        {
+                            "fallback_model_group": fallback_model_group,
+                            "original_model_group": original_model_group,
+                            "is_mid_stream_fallback": True,
+                            "previous_content": e.generated_content,
+                        }
+                    )
+
+                    verbose_router_logger.info(
+                        f"Attempting {'pre-stream' if e.is_pre_first_chunk else 'mid-stream'} fallback. "
+                        f"Already generated: {len(e.generated_content)} characters"
+                    )
+
+                    response = await run_async_fallback(
+                        *args,
+                        **input_kwargs,
+                    )
+                    return response
+
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
                         fallback_model_group: Optional[List[str]] = (
