@@ -60,8 +60,6 @@ class MCPRequestHandler:
         
         # Get the new server-specific auth headers
         mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
-        
-        print(f"mcp_server_auth_headers: {mcp_server_auth_headers}")
 
         # Parse MCP servers from header
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
