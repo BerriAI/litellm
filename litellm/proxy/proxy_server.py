@@ -3273,7 +3273,7 @@ async def async_data_generator(
 
         # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
-            yield f"data: {error_message}\n\n"
+            yield error_message
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
