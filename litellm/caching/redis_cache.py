@@ -55,6 +55,7 @@ class RedisCache(BaseCache):
         namespace: Optional[str] = None,
         startup_nodes: Optional[List] = None,  # for redis-cluster
         socket_timeout: Optional[float] = 5.0,  # default 5 second timeout
+        gcp_iam_service_account: Optional[str] = None,  # for Google Cloud IAM auth
         **kwargs,
     ):
         from litellm._service_logger import ServiceLogging
@@ -72,6 +73,8 @@ class RedisCache(BaseCache):
             redis_kwargs["startup_nodes"] = startup_nodes
         if socket_timeout is not None:
             redis_kwargs["socket_timeout"] = socket_timeout
+        if gcp_iam_service_account is not None:
+            redis_kwargs["gcp_iam_service_account"] = gcp_iam_service_account
 
         ### HEALTH MONITORING OBJECT ###
         if kwargs.get("service_logger_obj", None) is not None and isinstance(
