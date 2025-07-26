@@ -40,6 +40,31 @@ class VertexImageGeneration(VertexLLM):
         model_response.data = response_data
         return model_response
 
+    def transform_optional_params(self, optional_params: Optional[dict]) -> dict:
+        """
+        Transform the optional params to the format expected by the Vertex AI API.
+        For example, "aspect_ratio" is transformed to "aspectRatio".
+        """
+        if optional_params is None:
+            return {
+                "sampleCount": 1,
+            }
+
+        def snake_to_camel(snake_str: str) -> str:
+            """Convert snake_case to camelCase"""
+            components = snake_str.split("_")
+            return components[0] + "".join(word.capitalize() for word in components[1:])
+
+        transformed_params = {}
+        for key, value in optional_params.items():
+            if "_" in key:
+                camel_case_key = snake_to_camel(key)
+                transformed_params[camel_case_key] = value
+            else:
+                transformed_params[key] = value
+
+        return transformed_params
+
     def image_generation(
         self,
         prompt: str,
@@ -108,6 +133,9 @@ class VertexImageGeneration(VertexLLM):
         optional_params = optional_params or {
             "sampleCount": 1
         }  # default optional params
+
+        # Transform optional params to camelCase format
+        optional_params = self.transform_optional_params(optional_params)
 
         request_data = {
             "instances": [{"prompt": prompt}],
@@ -211,9 +239,9 @@ class VertexImageGeneration(VertexLLM):
             should_use_v1beta1_features=False,
             mode="image_generation",
         )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
+
+        # Transform optional params to camelCase format
+        optional_params = self.transform_optional_params(optional_params)
 
         request_data = {
             "instances": [{"prompt": prompt}],

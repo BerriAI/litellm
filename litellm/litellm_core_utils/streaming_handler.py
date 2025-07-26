@@ -745,6 +745,24 @@ class CustomStreamWrapper:
         else:
             return False
 
+    def strip_role_from_delta(
+        self, model_response: ModelResponseStream
+    ) -> ModelResponseStream:
+        """
+        Strip the role from the delta.
+        """
+        if self.sent_first_chunk is False:
+            model_response.choices[0].delta["role"] = "assistant"
+            self.sent_first_chunk = True
+        elif self.sent_first_chunk is True and hasattr(
+            model_response.choices[0].delta, "role"
+        ):
+            _initial_delta = model_response.choices[0].delta.model_dump()
+
+            _initial_delta.pop("role", None)
+            model_response.choices[0].delta = Delta(**_initial_delta)
+        return model_response
+
     def return_processed_chunk_logic(  # noqa
         self,
         completion_obj: Dict[str, Any],
@@ -770,11 +788,12 @@ class CustomStreamWrapper:
                 chunk=completion_obj["content"],
                 finish_reason=model_response.choices[0].finish_reason,
             )  # filter out bos/eos tokens from openai-compatible hf endpoints
-            print_verbose(f"hold - {hold}, model_response_str - {model_response_str}")
+
             if hold is False:
                 ## check if openai/azure chunk
                 original_chunk = response_obj.get("original_chunk", None)
                 if original_chunk:
+
                     if len(original_chunk.choices) > 0:
                         choices = []
                         for choice in original_chunk.choices:
@@ -791,6 +810,7 @@ class CustomStreamWrapper:
                         print_verbose(f"choices in streaming: {choices}")
                         setattr(model_response, "choices", choices)
                     else:
+
                         return
                     model_response.system_fingerprint = (
                         original_chunk.system_fingerprint
@@ -804,19 +824,10 @@ class CustomStreamWrapper:
                         model_response=model_response,
                         original_chunk=original_chunk,
                     )
-                    print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
-                    if self.sent_first_chunk is False:
-                        model_response.choices[0].delta["role"] = "assistant"
-                        self.sent_first_chunk = True
-                    elif self.sent_first_chunk is True and hasattr(
-                        model_response.choices[0].delta, "role"
-                    ):
-                        _initial_delta = model_response.choices[0].delta.model_dump()
 
-                        _initial_delta.pop("role", None)
-                        model_response.choices[0].delta = Delta(**_initial_delta)
+                    model_response = self.strip_role_from_delta(model_response)
                     verbose_logger.debug(
-                        f"model_response.choices[0].delta: {model_response.choices[0].delta}"
+                        f"model_response.choices[0].delta inside is_chunk_non_empty: {model_response.choices[0].delta}"
                     )
                 else:
                     ## else
@@ -836,7 +847,7 @@ class CustomStreamWrapper:
                 self._optional_combine_thinking_block_in_choices(
                     model_response=model_response
                 )
-                print_verbose(f"returning model_response: {model_response}")
+
                 return model_response
             else:
                 return
@@ -878,15 +889,15 @@ class CustomStreamWrapper:
             model_response.choices[0].delta.tool_calls is not None
             or model_response.choices[0].delta.function_call is not None
         ):
-            if self.sent_first_chunk is False:
-                model_response.choices[0].delta["role"] = "assistant"
-                self.sent_first_chunk = True
+            model_response = self.strip_role_from_delta(model_response)
+
             return model_response
         elif (
             len(model_response.choices) > 0
             and hasattr(model_response.choices[0].delta, "audio")
             and model_response.choices[0].delta.audio is not None
         ):
+            model_response = self.strip_role_from_delta(model_response)
             return model_response
         else:
             if hasattr(model_response, "usage"):
