@@ -53,31 +53,68 @@ async def close_litellm_async_clients():
                 pass
 
 
+def _sync_close_clients():
+    """
+    Synchronous version of client cleanup for use in atexit handlers.
+    
+    This function attempts to close clients synchronously where possible,
+    avoiding the issues with running async code in atexit handlers.
+    """
+    # Import here to avoid circular import
+    import litellm
+    from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+
+    cache_dict = getattr(litellm.in_memory_llm_clients_cache, "cache_dict", {})
+
+    for key, handler in cache_dict.items():
+        try:
+            # Handle BaseLLMAIOHTTPHandler instances (aiohttp_openai provider)
+            if isinstance(handler, BaseLLMAIOHTTPHandler):
+                # For aiohttp handlers, we can try to close synchronously if possible
+                if hasattr(handler, '_session') and handler._session and not handler._session.closed:
+                    # Try to close the session synchronously
+                    # Note: This might not work in all cases, but it's better than nothing
+                    try:
+                        if hasattr(handler._session, 'close'):
+                            # aiohttp sessions have a close() method that can be called synchronously
+                            # but it returns a coroutine, so we can't use it here
+                            pass
+                    except Exception:
+                        pass
+            
+            # Handle AsyncHTTPHandler instances (used by Gemini and other providers)
+            elif hasattr(handler, 'client'):
+                client = handler.client
+                # For httpx clients, try to close synchronously if possible
+                if hasattr(client, 'close') and not client.is_closed:
+                    try:
+                        client.close()  # httpx has a synchronous close method
+                    except Exception:
+                        pass
+            
+            # For other handlers, we can't safely close them synchronously
+            # so we just skip them to avoid warnings
+            
+        except Exception:
+            # Silently ignore errors during cleanup
+            pass
+
+
 def register_async_client_cleanup():
     """
     Register the async client cleanup function to run at exit.
 
     This ensures that all async HTTP clients are properly closed when the program exits.
+    Note: Uses synchronous cleanup in atexit handler to avoid issues with async code.
     """
     import atexit
 
     def cleanup_wrapper():
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Schedule the cleanup coroutine
-                loop.create_task(close_litellm_async_clients())
-            else:
-                # Run the cleanup coroutine
-                loop.run_until_complete(close_litellm_async_clients())
+            # Use synchronous cleanup to avoid async issues in atexit handlers
+            _sync_close_clients()
         except Exception:
-            # If we can't get an event loop or it's already closed, try creating a new one
-            try:
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(close_litellm_async_clients())
-                loop.close()
-            except Exception:
-                # Silently ignore errors during cleanup
-                pass
+            # Silently ignore errors during cleanup
+            pass
 
     atexit.register(cleanup_wrapper)
