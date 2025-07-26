@@ -253,3 +253,34 @@ class TestReasoningContentFinalResponse:
         ]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
+
+
+def test_streaming_chunk_id_raw():
+    """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""
+    chunk = ModelResponseStream(
+        id="chunk-123",
+        created=1234567890,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello", role="assistant"),
+            )
+        ],
+    )
+
+    iterator = LiteLLMCompletionStreamingIterator(
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+        custom_llm_provider="openai",
+        litellm_metadata={"model_info": {"id": "gpt-4"}},
+    )
+
+    result = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+
+    # Streaming chunk IDs should be raw (like OpenAI's msg_xxx format)
+    assert result.item_id == "chunk-123"  # Should be raw, not encoded
+    assert not result.item_id.startswith("resp_")  # Should NOT have resp_ prefix
