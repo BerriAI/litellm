@@ -319,6 +319,78 @@ def test_cost_openai_image_gen():
     assert cost == 0.019922944
 
 
+def test_cost_gpt_image_1_token_based():
+    """Test GPT-image-1 token-based cost calculation with mock response data"""
+    import json
+    from litellm import ImageResponse, Usage
+    
+    try:
+        # Load the local model cost map directly
+        with open('model_prices_and_context_window.json', 'r') as f:
+            litellm.model_cost = json.load(f)
+        
+        # Create mock image response with actual token usage for medium quality
+        # Using only one mock response to avoid expensive API calls
+        medium_response = ImageResponse(
+            created=1234567890,
+            data=[{"url": "http://example.com/image.png"}]
+        )
+        medium_response.usage = Usage(prompt_tokens=50, completion_tokens=1056, total_tokens=1106)
+        
+        # Test medium quality with mock response data
+        cost_medium = litellm.completion_cost(
+            model="gpt-image-1",
+            completion_response=medium_response,
+            size="1024x1024",
+            quality="medium",
+            n=1,
+            call_type="image_generation",
+        )
+        
+        # Test expected value based on token-based pricing
+        # Medium: 50 text tokens * 5e-06 + 1056 output tokens * 4e-05 = 0.000250 + 0.04224 = 0.04249
+        expected_medium = 50 * 5e-06 + 1056 * 4e-05 
+        assert abs(cost_medium - expected_medium) < 1e-6
+        
+        # Test other quality levels using fallback estimation (no API calls)
+        from litellm.cost_calculator import default_image_cost_calculator
+        
+        # Test low quality with fallback estimation
+        cost_low = default_image_cost_calculator(
+            model="gpt-image-1",
+            quality="low",
+            size="1024x1024",
+            n=1,
+            prompt_tokens=50,
+            completion_tokens=272
+        )
+        expected_low = 50 * 5e-06 + 272 * 4e-05
+        assert abs(cost_low - expected_low) < 1e-6
+        
+        # Test high quality with fallback estimation
+        cost_high = default_image_cost_calculator(
+            model="gpt-image-1",
+            quality="high",
+            size="1024x1024",
+            n=1,
+            prompt_tokens=50,
+            completion_tokens=4160
+        )
+        expected_high = 50 * 5e-06 + 4160 * 4e-05
+        assert abs(cost_high - expected_high) < 1e-6
+        
+        # Verify costs increase with quality
+        assert cost_low < cost_medium < cost_high
+        
+    except Exception as e:
+        # Skip test if there are API errors or rate limits
+        import pytest
+        if "rate limit" in str(e).lower() or "internal server error" in str(e).lower():
+            pytest.skip(f"Skipping test due to API error: {e}")
+        else:
+            raise
+
+
 def test_cost_bedrock_pricing():
     """
     - get pricing specific to region for a model
