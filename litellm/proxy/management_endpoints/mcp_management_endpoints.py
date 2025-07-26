@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
+from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name, validate_and_normalize_mcp_server_payload
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -354,19 +354,8 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy"
         )
 
-        # Server name validation: disallow '-'
-        if payload.server_name:
-            validate_mcp_server_name(payload.server_name, raise_http_exception=True)
-        # Alias validation: disallow '-'
-        if payload.alias:
-            validate_mcp_server_name(payload.alias, raise_http_exception=True)
-        # Alias normalization and defaulting
-        alias = payload.alias
-        if not alias and payload.server_name:
-            alias = payload.server_name.replace(' ', '_')
-        elif alias:
-            alias = alias.replace(' ', '_')
-        payload.alias = alias
+        # Validate and normalize payload fields
+        validate_and_normalize_mcp_server_payload(payload)
 
         # AuthZ - restrict only proxy admins to create mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
@@ -508,19 +497,8 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-        # Server name validation: disallow '-'
-        if payload.server_name:
-            validate_mcp_server_name(payload.server_name, raise_http_exception=True)
-        # Alias validation: disallow '-'
-        if payload.alias:
-            validate_mcp_server_name(payload.alias, raise_http_exception=True)
-        # Alias normalization and defaulting
-        alias = payload.alias
-        if not alias and payload.server_name:
-            alias = payload.server_name.replace(' ', '_')
-        elif alias:
-            alias = alias.replace(' ', '_')
-        payload.alias = alias
+        # Validate and normalize payload fields
+        validate_and_normalize_mcp_server_payload(payload)
 
         # Authz - restrict only admins to delete mcp servers
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
