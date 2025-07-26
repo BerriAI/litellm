@@ -588,7 +588,7 @@ general_settings:
 To disable the Swagger docs from the base url, set 
 
 ```env
-NO_DOCS="True"
+NO_DOCS=True
 ```
 
 in your environment, and restart the proxy. 
@@ -598,7 +598,7 @@ in your environment, and restart the proxy.
 To disable the Redoc docs (defaults to `<your-proxy-url>/redoc`), set 
 
 ```env
-NO_REDOC="True"
+NO_REDOC=True
 ```
 
 in your environment, and restart the proxy. 
