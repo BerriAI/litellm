@@ -10444,6 +10444,20 @@
         "supports_tool_choice": true,
         "supports_prompt_caching": true
     },
+    "openrouter/x-ai/grok-4":{
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://openrouter.ai/x-ai/grok-4",
+        "supports_web_search": true
+    },
     "openrouter/bytedance/ui-tars-1.5-7b":{
         "max_tokens": 2048,
         "max_input_tokens": 131072,
