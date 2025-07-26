@@ -7,8 +7,7 @@ through pre-call, during-call, and post-call hooks.
 
 import asyncio
 import importlib
-import inspect
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -18,7 +17,6 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import StandardLoggingMCPToolCall
 
 
 class MCPGuardrail(CustomGuardrail):
