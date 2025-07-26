@@ -116,9 +116,13 @@ class MCPServerManager:
         for server_name, server_config in mcp_servers_config.items():
             validate_mcp_server_name(server_name)
             _mcp_info: Dict[str, Any] = server_config.get("mcp_info", None) or {}
-            mcp_info = MCPInfo(**_mcp_info)
-            mcp_info["server_name"] = server_name
-            mcp_info["description"] = server_config.get("description", None)
+            # Convert Dict[str, Any] to MCPInfo properly
+            mcp_info: MCPInfo = {
+                "server_name": _mcp_info.get("server_name", server_name),
+                "description": _mcp_info.get("description", server_config.get("description", None)),
+                "logo_url": _mcp_info.get("logo_url", None),
+                "mcp_server_cost_info": _mcp_info.get("mcp_server_cost_info", None),
+            }
 
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)

@@ -310,9 +310,9 @@ if MCP_AVAILABLE:
 
             # Get server-specific auth header if available
             server_auth_header = None
-            if mcp_server_auth_headers and server.alias:
+            if mcp_server_auth_headers and server.alias is not None:
                 server_auth_header = mcp_server_auth_headers.get(server.alias)
-            elif mcp_server_auth_headers and server.server_name:
+            elif mcp_server_auth_headers and server.server_name is not None:
                 server_auth_header = mcp_server_auth_headers.get(server.server_name)
             
             # Fall back to deprecated mcp_auth_header if no server-specific header found
