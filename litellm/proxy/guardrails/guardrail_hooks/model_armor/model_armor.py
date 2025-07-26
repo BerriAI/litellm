@@ -257,7 +257,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,
             request_data=request_data,
-            guardrail_status=guardrail_status,  # type: ignore – Literal extended at runtime
+            guardrail_status=guardrail_status,  # type: ignore
             duration=duration,
             start_time=start_time,
             end_time=end_time,
