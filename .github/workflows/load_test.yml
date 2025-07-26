@@ -12,9 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@50fbc622fc4ef5163becd7fab6573eac35f8462e  # v1
       - name: Setup Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@e9aba2c848f5ebd159c070c61ea2c4e2b122355e  # v2
         with:
           python-version: '3.x'
 
@@ -33,7 +33,7 @@ jobs:
         working-directory: ${{ github.workspace }}
       - name: Run Load Test
         id: locust_run
-        uses: BerriAI/locust-github-action@master
+        uses: BerriAI/locust-github-action@082d1007562640155ca96950949b8764f6924c64  # master
         with:
           LOCUSTFILE: ".github/workflows/locustfile.py"
           URL:  "https://post-release-load-test-proxy.onrender.com/"
@@ -49,7 +49,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: ${{ github.workspace }}
       - name: Upload CSV as Asset to Latest Release
-        uses: xresloader/upload-to-github-release@v1
+        uses: xresloader/upload-to-github-release@2bcae85344d41e21f7fc4c47fa2ed68223afdb49  # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
