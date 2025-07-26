@@ -66,7 +66,10 @@ COPY --from=builder /wheels/ /wheels/
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
 # Install semantic_router without dependencies
+# #########################################################
 RUN pip install semantic_router --no-deps
+RUN pip install aurelio_sdk --no-deps
+# #########################################################
 
 # Generate prisma client
 RUN prisma generate
