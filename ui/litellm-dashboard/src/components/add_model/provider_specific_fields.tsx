@@ -417,6 +417,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
             rules={field.required ? [{ required: true, message: "Required" }] : undefined}
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
+            initialValue={field.defaultValue}
           >
             {field.type === "select" ? (
               <Select 
