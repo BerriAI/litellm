@@ -238,9 +238,7 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
                     item["title"] = title
                 if description:
                     item["description"] = description
-            return {"anyOf": any_of}
-        else:
-            return schema_dict
+        return {"anyOf": any_of}
     return schema_dict
 
 
