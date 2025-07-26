@@ -532,9 +532,19 @@ class MCPServerManager:
         
         async with client:
             # Use the original tool name (without prefix) for the actual call
+            # Ensure the guardrail data has the correct types after processing
+            tool_name = guardrail_data["name"]
+            tool_arguments = guardrail_data["arguments"]
+            
+            # Type checking to ensure we have the correct types
+            if not isinstance(tool_name, str):
+                raise ValueError(f"Expected tool name to be a string, got {type(tool_name)}")
+            if not isinstance(tool_arguments, dict):
+                raise ValueError(f"Expected tool arguments to be a dict, got {type(tool_arguments)}")
+            
             call_tool_params = MCPCallToolRequestParams(
-                name=guardrail_data["name"],
-                arguments=guardrail_data["arguments"],
+                name=tool_name,
+                arguments=tool_arguments,
             )
             
             # Apply during-call guardrails
