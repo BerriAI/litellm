@@ -1,8 +1,9 @@
 import React from "react";
-import { Form, Switch, Select, Input } from "antd";
+import { Form, Switch, Select, Input, Tooltip } from "antd";
 import { Text, Button, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tremor/react";
 import { Row, Col, Typography, Card } from "antd";
 import TextArea from "antd/es/input/TextArea";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { Team } from "../key_team_helpers/key_list";
 import TeamDropdown from "../common_components/team_dropdown";
 import CacheControlSettings from "./cache_control_settings";
@@ -12,17 +13,21 @@ interface AdvancedSettingsProps {
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
   teams?: Team[] | null;
+  guardrailsList: string[];
 }
 
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   showAdvancedSettings,
   setShowAdvancedSettings,
   teams,
+  guardrailsList,
 }) => {
   const [form] = Form.useForm();
   const [customPricing, setCustomPricing] = React.useState(false);
   const [pricingModel, setPricingModel] = React.useState<'per_token' | 'per_second'>('per_token');
   const [showCacheControl, setShowCacheControl] = React.useState(false);
+  
+  
 
   // Add validation function for numbers
   const validateNumber = (_: any, value: string) => {
@@ -121,6 +126,35 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               <Switch onChange={handleCustomPricingChange} className="bg-gray-600" />
             </Form.Item>
 
+            <Form.Item 
+              label={
+                <span>
+                  Guardrails{' '}
+                  <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
+                    <a 
+                      href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                    >
+                      <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                    </a>  
+                  </Tooltip>
+                </span>
+              }
+              name="guardrails" 
+              className="mt-4"
+              help="Select existing guardrails. Go to 'Guardrails' tab to create new guardrails."
+            >
+              <Select
+                mode="tags"
+                style={{ width: '100%' }}
+                placeholder="Select or enter guardrails"
+                options={guardrailsList.map(name => ({ value: name, label: name }))}
+              />
+            </Form.Item>
+
+            
             {customPricing && (
               <div className="ml-6 pl-4 border-l-2 border-gray-200">
                 <Form.Item

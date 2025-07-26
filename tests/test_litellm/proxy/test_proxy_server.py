@@ -940,3 +940,106 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
             mock_file_open.return_value.__enter__.return_value,
             default_flow_style=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_midstream_error():
+    """
+    Test async_data_generator handles midstream error from async_post_call_streaming_hook
+    Specifically testing the case where Azure Content Safety Guardrail returns an error
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    # Create mock objects
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+    }
+
+    # Mock response chunks - simulating normal streaming that gets interrupted
+    mock_chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+        {"choices": [{"delta": {"content": " this"}}]},
+    ]
+
+    # Mock the proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+
+    # Mock async_post_call_streaming_iterator_hook to yield chunks
+    async def mock_streaming_iterator(*args, **kwargs):
+        for chunk in mock_chunks:
+            yield chunk
+
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = (
+        mock_streaming_iterator
+    )
+
+    # Mock async_post_call_streaming_hook to return error on third chunk
+    def mock_streaming_hook(*args, **kwargs):
+        chunk = kwargs.get("response")
+        # Return error message for the third chunk (simulating guardrail trigger)
+        if chunk == mock_chunks[2]:
+            return 'data: {"error": {"error": "Azure Content Safety Guardrail: Hate crossed severity 2, Got severity: 2"}}'
+        # Return normal chunks for first two
+        return chunk
+
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(
+        side_effect=mock_streaming_hook
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    # Mock the global proxy_logging_obj
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        # Create a mock response object
+        mock_response = MagicMock()
+
+        # Collect all yielded data from the generator
+        yielded_data = []
+        try:
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+        except Exception as e:
+            # If there's an exception, that's also part of what we want to test
+            pass
+
+    # Verify the results
+    assert (
+        len(yielded_data) >= 3
+    ), f"Expected at least 3 chunks, got {len(yielded_data)}: {yielded_data}"
+
+    # First two chunks should be normal data
+    assert yielded_data[0].startswith(
+        "data: "
+    ), f"First chunk should start with 'data: ', got: {yielded_data[0]}"
+    assert yielded_data[1].startswith(
+        "data: "
+    ), f"Second chunk should start with 'data: ', got: {yielded_data[1]}"
+
+    # The error message should be yielded
+    error_found = False
+    done_found = False
+
+    for data in yielded_data:
+        if "Azure Content Safety Guardrail: Hate crossed severity 2" in data:
+            error_found = True
+        if "data: [DONE]" in data:
+            done_found = True
+
+    assert (
+        error_found
+    ), f"Error message should be found in yielded data. Got: {yielded_data}"
+    assert done_found, f"[DONE] message should be found at the end. Got: {yielded_data}"
+
+    # Verify that the streaming hook was called for each chunk
+    assert mock_proxy_logging_obj.async_post_call_streaming_hook.call_count == len(
+        mock_chunks
+    )
+
+    # Verify that post_call_failure_hook was NOT called (since this is not an exception case)
+    mock_proxy_logging_obj.post_call_failure_hook.assert_not_called()
