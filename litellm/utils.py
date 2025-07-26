@@ -3224,6 +3224,7 @@ def get_optional_params(  # noqa: PLR0915
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    metadata=None,
     **kwargs,
 ):
     passed_params = locals().copy()
