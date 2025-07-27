@@ -64,6 +64,7 @@ class CustomStreamWrapper:
         stream_options=None,
         make_call: Optional[Callable] = None,
         _response_headers: Optional[dict] = None,
+        filter_tool_calls: Optional[bool] = None,
     ):
         self.model = model
         self.make_call = make_call
@@ -72,6 +73,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self.filter_tool_calls = filter_tool_calls or False
 
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams(
             **self.logging_obj.model_call_details.get("litellm_params", {})
@@ -85,9 +87,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[str] = (
-            None  # finish reasons that show up mid-stream
-        )
+        self.intermittent_finish_reason: Optional[
+            str
+        ] = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -1334,9 +1336,9 @@ class CustomStreamWrapper:
                             _json_delta = delta.model_dump()
                             print_verbose(f"_json_delta: {_json_delta}")
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta["role"] = (
-                                    "assistant"  # mistral's api returns role as None
-                                )
+                                _json_delta[
+                                    "role"
+                                ] = "assistant"  # mistral's api returns role as None
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1564,6 +1566,36 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         response._hidden_params["usage"] = usage
+
+                    # FILTER TOOL CALLS if enabled
+                    if self.filter_tool_calls:
+                        # Check if this chunk contains tool calls
+                        has_tool_calls = False
+                        if hasattr(response, "choices") and len(response.choices) > 0:
+                            choice = response.choices[0]
+                            if hasattr(choice, "delta") and choice.delta:
+                                if (
+                                    hasattr(choice.delta, "tool_calls")
+                                    and choice.delta.tool_calls
+                                ):
+                                    has_tool_calls = True
+                                elif (
+                                    hasattr(choice.delta, "function_call")
+                                    and choice.delta.function_call
+                                ):
+                                    has_tool_calls = True
+
+                        # Check finish reason
+                        finish_reason = None
+                        if hasattr(response, "choices") and len(response.choices) > 0:
+                            choice = response.choices[0]
+                            if hasattr(choice, "finish_reason"):
+                                finish_reason = choice.finish_reason
+
+                        # Skip chunks with tool calls unless it's the final response (finish_reason != "tool_calls")
+                        if has_tool_calls and finish_reason != "stop":
+                            continue
+
                     # RETURN RESULT
                     return response
 
@@ -1714,6 +1746,42 @@ class CustomStreamWrapper:
 
                         # Create a new object without the removed attribute
                         processed_chunk = self.model_response_creator(chunk=obj_dict)
+
+                    # FILTER TOOL CALLS if enabled
+                    if self.filter_tool_calls:
+                        # Check if this chunk contains tool calls
+                        has_tool_calls = False
+                        if (
+                            hasattr(processed_chunk, "choices")
+                            and len(processed_chunk.choices) > 0
+                        ):
+                            choice = processed_chunk.choices[0]
+                            if hasattr(choice, "delta") and choice.delta:
+                                if (
+                                    hasattr(choice.delta, "tool_calls")
+                                    and choice.delta.tool_calls
+                                ):
+                                    has_tool_calls = True
+                                elif (
+                                    hasattr(choice.delta, "function_call")
+                                    and choice.delta.function_call
+                                ):
+                                    has_tool_calls = True
+
+                        # Check finish reason
+                        finish_reason = None
+                        if (
+                            hasattr(processed_chunk, "choices")
+                            and len(processed_chunk.choices) > 0
+                        ):
+                            choice = processed_chunk.choices[0]
+                            if hasattr(choice, "finish_reason"):
+                                finish_reason = choice.finish_reason
+
+                        # Skip chunks with tool calls unless it's the final response (finish_reason != "tool_calls")
+                        if has_tool_calls and finish_reason != "stop":
+                            continue
+
                     print_verbose(f"final returned processed chunk: {processed_chunk}")
                     return processed_chunk
                 raise StopAsyncIteration
@@ -1728,9 +1796,9 @@ class CustomStreamWrapper:
                         chunk = next(self.completion_stream)
                     if chunk is not None and chunk != b"":
                         print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
-                        processed_chunk: Optional[ModelResponseStream] = (
-                            self.chunk_creator(chunk=chunk)
-                        )
+                        processed_chunk: Optional[
+                            ModelResponseStream
+                        ] = self.chunk_creator(chunk=chunk)
                         print_verbose(
                             f"PROCESSED CHUNK POST CHUNK CREATOR: {processed_chunk}"
                         )
@@ -1747,6 +1815,42 @@ class CustomStreamWrapper:
                         self.rules.post_call_rules(
                             input=self.response_uptil_now, model=self.model
                         )
+
+                        # FILTER TOOL CALLS if enabled
+                        if self.filter_tool_calls:
+                            # Check if this chunk contains tool calls
+                            has_tool_calls = False
+                            if (
+                                hasattr(processed_chunk, "choices")
+                                and len(processed_chunk.choices) > 0
+                            ):
+                                choice = processed_chunk.choices[0]
+                                if hasattr(choice, "delta") and choice.delta:
+                                    if (
+                                        hasattr(choice.delta, "tool_calls")
+                                        and choice.delta.tool_calls
+                                    ):
+                                        has_tool_calls = True
+                                    elif (
+                                        hasattr(choice.delta, "function_call")
+                                        and choice.delta.function_call
+                                    ):
+                                        has_tool_calls = True
+
+                            # Check finish reason
+                            finish_reason = None
+                            if (
+                                hasattr(processed_chunk, "choices")
+                                and len(processed_chunk.choices) > 0
+                            ):
+                                choice = processed_chunk.choices[0]
+                                if hasattr(choice, "finish_reason"):
+                                    finish_reason = choice.finish_reason
+
+                            # Skip chunks with tool calls unless it's the final response (finish_reason != "tool_calls")
+                            if has_tool_calls and finish_reason != "stop":
+                                continue
+
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
                         return processed_chunk
