@@ -80,7 +80,9 @@ def validate_first_format(chunk):
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
-        assert isinstance(choice["delta"]["role"], str), "'role' should be a string."
+        assert isinstance(
+            choice["delta"]["role"], str
+        ), f"'role' should be a string. Got {choice['delta']['role']}"
         assert "messages" not in choice
         # openai v1.0.0 returns content as None
         assert (choice["finish_reason"] is None) or isinstance(
@@ -672,7 +674,6 @@ def test_completion_model_stream(model):
         pytest.fail(f"Error occurred: {e}")
 
 
-
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],
@@ -888,6 +889,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
         # if "429 Resource has been exhausted":
         #     return
         pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.flaky(retries=3, delay=1)
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():
