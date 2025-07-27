@@ -689,14 +689,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     </div>
                   </div>
                 </Option>
-                <Option value="read_only" label="Read Only">
-                  <div style={{ padding: '4px 0' }}>
-                    <div style={{ fontWeight: 500 }}>Read Only</div>
-                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                      Can only call only info routes (e.g. /key/info, /user/info, /team/info)
-                    </div>
-                  </div>
-                </Option>
               </Select>
             </Form.Item>
             
