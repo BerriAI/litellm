@@ -491,20 +491,37 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
             # get average latency or average ttft (depending on streaming/non-streaming)
             total: float = 0.0
+            used_ttft = False
+            effective_latency_list = item_latency
+            
             if (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
             ):
+                # Use TTFT data for streaming requests when available
                 for _call_latency in item_ttft_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
+                used_ttft = True
+                effective_latency_list = item_ttft_latency
             else:
+                # Use regular latency data for non-streaming requests
                 for _call_latency in item_latency:
                     if isinstance(_call_latency, float):
                         total += _call_latency
-            item_latency = total / len(item_latency)
+                effective_latency_list = item_latency
+            
+            # Calculate average latency with safe division
+            if len(effective_latency_list) > 0:
+                item_latency = total / len(effective_latency_list)
+            else:
+                # Use default latency when no data is available
+                item_latency = 0.0
+                verbose_logger.debug(
+                    f"No latency data available for deployment {item}, using default latency 0.0"
+                )
 
             # -------------- #
             # Debugging Logic
