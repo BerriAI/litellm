@@ -118,6 +118,8 @@ jobs:
             pip install "jsonschema==4.22.0"
             pip install "pytest-xdist==3.6.1"
             pip install "websockets==13.1.0"
+            pip install semantic_router --no-deps
+            pip install aurelio_sdk --no-deps
             pip uninstall posthog -y
       - setup_litellm_enterprise_pip
       - save_cache:
@@ -458,6 +460,8 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
+            pip install semantic_router --no-deps
+            pip install aurelio_sdk --no-deps
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -906,6 +910,7 @@ jobs:
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
+            pip install "semantic_router==0.1.10"
       - setup_litellm_enterprise_pip
       # Run pytest and generate JUnit XML report
       - run:

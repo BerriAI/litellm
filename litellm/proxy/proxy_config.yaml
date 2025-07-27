@@ -7,17 +7,6 @@ model_list:
       model: openai/*
 
 
-guardrails:
-  - guardrail_name: "bedrock-post-guard"
-    litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
-      mode: "post_call"
-      guardrailIdentifier: ff6ujrregl1q
-      guardrailVersion: "DRAFT"
-      default_on: true
-
-
-
 litellm_settings:
   callbacks: ["datadog_llm_observability"]
   cache: true

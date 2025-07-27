@@ -20,6 +20,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
   const [searchValue, setSearchValue] = useState<string>("");
+  const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false)
 
   // Initialize cost config from existing server data
   useEffect(() => {
@@ -53,7 +54,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       // Prepare the MCP server config from existing server data
       const mcpServerConfig = {
         server_id: mcpServer.server_id,
-        alias: mcpServer.alias,
+        server_name: mcpServer.server_name,
         url: mcpServer.url,
         transport: mcpServer.transport,
         spec_version: mcpServer.spec_version,
@@ -117,11 +118,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         ...values,
         server_id: mcpServer.server_id,
         mcp_info: {
-          server_name: values.alias || values.url,
+          server_name: values.server_name || values.url,
           description: values.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
         },
-        mcp_access_groups: accessGroups
+        mcp_access_groups: accessGroups,
+        alias: values.alias,
       };
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -141,13 +143,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       <TabPanels className="mt-6">
         <TabPanel>
           <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
-            <Form.Item label="MCP Server Name" name="alias" rules={[{
+            <Form.Item label="MCP Server Name" name="server_name" rules={[{
               validator: (_, value) =>
                 value && value.includes('-')
                   ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
                   : Promise.resolve(),
             }]}>
               <TextInput />
+            </Form.Item>
+            <Form.Item label="Alias" name="alias" rules={[{
+                validator: (_, value) =>
+                  value && value.includes('-')
+                    ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+                    : Promise.resolve(),
+              }]}
+            >
+              <TextInput onChange={() => setAliasManuallyEdited(true)} />
             </Form.Item>
             <Form.Item label="Description" name="description">
               <TextInput />
