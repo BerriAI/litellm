@@ -56,7 +56,8 @@ class BulkTeamMemberAddRequest(BaseModel):
     """Request for bulk team member addition"""
 
     team_id: str
-    members: List[Member]  # List of members to add
+    members: Optional[List[Member]] = None  # List of members to add
+    all_users: Optional[bool] = False  # Flag to add all users on Proxy to the team
     max_budget_in_team: Optional[float] = None
 
 
