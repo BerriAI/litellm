@@ -67,19 +67,35 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
     assert len(optional_params) == expected_count
 
 
-
-
 def test_get_optional_params_with_allowed_openai_params():
     """
     Test if use can dynamically pass in allowed_openai_params to override default behavior
     """
     litellm.drop_params = True
-    tools = [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Get the current time in a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name, e.g. San Francisco",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
     response_format = {"type": "json"}
     reasoning_effort = "low"
     optional_params = get_optional_params(
-        model="cf/llama-3.1-70b-instruct", 
-        custom_llm_provider="cloudflare", 
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
         allowed_openai_params=["tools", "reasoning_effort", "response_format"],
         tools=tools,
         response_format=response_format,
@@ -88,7 +104,7 @@ def test_get_optional_params_with_allowed_openai_params():
     print(f"optional_params: {optional_params}")
     assert optional_params["tools"] == tools
     assert optional_params["response_format"] == response_format
-    assert optional_params["reasoning_effort"] == reasoning_effort  
+    assert optional_params["reasoning_effort"] == reasoning_effort
 
 
 def test_bedrock_optional_params_embeddings():
@@ -460,6 +476,7 @@ def test_dynamic_drop_params_e2e():
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
 
+
 def test_dynamic_pass_additional_params():
     with patch(
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
@@ -618,7 +635,10 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock(return_value={"max_retries": 0})) as mock_client:
+    with patch(
+        "litellm.main.get_optional_params",
+        new=MagicMock(return_value={"max_retries": 0}),
+    ) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -1425,13 +1445,18 @@ def test_azure_modalities_param():
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
 
+
 def test_litellm_proxy_thinking_param():
     optional_params = get_optional_params(
         model="gpt-4o",
         custom_llm_provider="litellm_proxy",
         thinking={"type": "enabled", "budget_tokens": 1024},
     )
-    assert optional_params["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert optional_params["extra_body"]["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 1024,
+    }
+
 
 def test_gemini_modalities_param():
     optional_params = get_optional_params(
@@ -1441,18 +1466,34 @@ def test_gemini_modalities_param():
     )
 
     assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
-    
-
 
 
 def test_azure_response_format_param():
     optional_params = litellm.get_optional_params(
         model="azure/o_series/test-o3-mini",
         custom_llm_provider="azure/o_series",
-        tools= [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_time",
+                    "description": "Get the current time in a given location.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city name, e.g. San Francisco",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
     )
 
-    
+
 @pytest.mark.parametrize(
     "model, provider",
     [
@@ -1471,7 +1512,6 @@ def test_anthropic_unified_reasoning_content(model, provider):
     assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
 
 
-
 def test_azure_response_format(monkeypatch):
     monkeypatch.setenv("AZURE_API_VERSION", "2025-02-01")
     optional_params = get_optional_params(
@@ -1481,6 +1521,7 @@ def test_azure_response_format(monkeypatch):
     )
     assert optional_params["response_format"] == {"type": "json_object"}
 
+
 def test_cohere_embed_dimensions_param():
     optional_params = get_optional_params_embeddings(
         model="embed-multilingual-v3.0",
@@ -1489,24 +1530,35 @@ def test_cohere_embed_dimensions_param():
     )
     assert optional_params["embedding_types"] == ["float"]
 
+
 def test_optional_params_with_additional_drop_params():
     optional_params = get_optional_params(
         model="gpt-4o",
         custom_llm_provider="openai",
         additional_drop_params=["red"],
         drop_params=True,
-        red="blue"
+        red="blue",
     )
     print(f"optional_params: {optional_params}")
     assert "red" not in optional_params
     assert "red" not in optional_params["extra_body"]
+
 
 def test_azure_ai_cohere_embed_input_type_param():
     optional_params = get_optional_params_embeddings(
         model="embed-v-4-0",
         custom_llm_provider="azure_ai",
         input_type="text",
-        dimensions=1536
+        dimensions=1536,
     )
     assert optional_params["dimensions"] == 1536
     assert optional_params["extra_body"]["input_type"] == "text"
+
+
+def test_optional_params_image_gen_with_aspect_ratio():
+    optional_params = get_optional_params_image_gen(
+        model="imagen-4.0-ultra-generate-preview-06-06",
+        custom_llm_provider="vertex_ai",
+        aspect_ratio="16:9",
+    )
+    assert optional_params["aspect_ratio"] == "16:9"
