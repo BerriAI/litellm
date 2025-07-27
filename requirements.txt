@@ -1,5 +1,5 @@
 # LITELLM PROXY DEPENDENCIES #
-anyio==4.8.0 # openai + http req.
+anyio==4.9.0 # openai + http req.
 httpx==0.28.1
 openai==1.81.0  # openai req.
 fastapi==0.115.5 # server dep
@@ -14,6 +14,9 @@ prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
+google-api-core==2.25.1
+google-auth==2.40.3
+proto-plus==1.26.1
 google-genai==1.22.0
 anthropic[vertex]==0.54.0
 mcp==1.10.1    # for MCP server
