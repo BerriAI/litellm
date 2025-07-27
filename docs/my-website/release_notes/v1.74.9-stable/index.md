@@ -124,56 +124,43 @@ This release is not live yet.
 ## Management Endpoints / UI
 
 #### Features
-- **Keys**
-    - Regenerate Key State Management improvements - [PR #12729](https://github.com/BerriAI/litellm/pull/12729)
+- **Usage**
+    - Support viewing usage by model group - [PR #12890](https://github.com/BerriAI/litellm/pull/12890)
+- **Virtual Keys**
+    - New `key_type` field on `/key/generate` - allows specifying if key can call LLM API vs. Management routes - [PR #12909](https://github.com/BerriAI/litellm/pull/12909)
 - **Models**
-    - Wildcard model filter support - [PR #12597](https://github.com/BerriAI/litellm/pull/12597)
-    - Fixes for handling team only models on UI - [PR #12632](https://github.com/BerriAI/litellm/pull/12632)
-- **Usage Page**
-    - Fix Y-axis labels overlap on Spend per Tag chart - [PR #12754](https://github.com/BerriAI/litellm/pull/12754)
-- **Teams**
-    - Allow setting custom key duration + show key creation stats - [PR #12722](https://github.com/BerriAI/litellm/pull/12722)
-    - Enable team admins to update member roles - [PR #12629](https://github.com/BerriAI/litellm/pull/12629)
-- **Users**
-    - New `/user/bulk_update` endpoint - [PR #12720](https://github.com/BerriAI/litellm/pull/12720)
-- **Logs Page**
-    - Add `end_user` filter on UI Logs Page - [PR #12663](https://github.com/BerriAI/litellm/pull/12663)
-- **MCP Servers**
-    - Copy MCP Server name functionality - [PR #12760](https://github.com/BerriAI/litellm/pull/12760)
-- **Vector Stores**
-    - UI support for clicking into Vector Stores - [PR #12741](https://github.com/BerriAI/litellm/pull/12741)
-    - Allow adding Vertex RAG Engine, OpenAI, Azure through UI - [PR #12752](https://github.com/BerriAI/litellm/pull/12752)
-- **General**
-    - Add Copy-on-Click for all IDs (Key, Team, Organization, MCP Server) - [PR #12615](https://github.com/BerriAI/litellm/pull/12615)
-- **[SCIM](../../docs/proxy/scim)**
-    - Add GET /ServiceProviderConfig endpoint - [PR #12664](https://github.com/BerriAI/litellm/pull/12664)
+    - Add ‘auto router’ on UI - [PR #12960](https://github.com/BerriAI/litellm/pull/12960)
+    - Show global retry policy on UI - [PR #12969](https://github.com/BerriAI/litellm/pull/12969)
+    - Add model-level guardrails on create + update - [PR #13006](https://github.com/BerriAI/litellm/pull/13006)
 
 #### Bugs
-- **Teams**
-    - Ensure user id correctly added when creating new teams - [PR #12719](https://github.com/BerriAI/litellm/pull/12719)
-    - Fixes for handling team-only models on UI - [PR #12632](https://github.com/BerriAI/litellm/pull/12632)
-
+- **SSO**
+    - Fix logout when SSO is enabled - [PR #12703](https://github.com/BerriAI/litellm/pull/12703)
+    - Fix reset SSO when ui_access_mode is updated - [PR #13011](https://github.com/BerriAI/litellm/pull/13011)
+- **Guardrails**
+    - Show correct guardrails when editing a team - [PR #12823](https://github.com/BerriAI/litellm/pull/12823)
+- **Virtual Keys**
+    - Get updated token on regenerate key - [PR #12788](https://github.com/BerriAI/litellm/pull/12788)
+    - Fix CVE with key injection - [PR #12840](https://github.com/BerriAI/litellm/pull/12840)
 ---
 
 ## Logging / Guardrail Integrations
 
 #### Features
-- **[Google Cloud Model Armor](../../docs/proxy/guardrails/google_cloud_model_armor)**
-    - New guardrails integration - [PR #12492](https://github.com/BerriAI/litellm/pull/12492)
-- **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
-    - Allow disabling exception on 'BLOCKED' action - [PR #12693](https://github.com/BerriAI/litellm/pull/12693)
-- **[Guardrails AI](../../docs/proxy/guardrails/guardrails_ai)**
-    - Support `llmOutput` based guardrails as pre-call hooks - [PR #12674](https://github.com/BerriAI/litellm/pull/12674)
-- **[DataDog LLM Observability](../../docs/proxy/logging#datadog)**
-    - Add support for tracking the correct span type based on LLM Endpoint used - [PR #12652](https://github.com/BerriAI/litellm/pull/12652)
-- **[Custom Logging](../../docs/proxy/logging)**
-    - Allow reading custom logger python scripts from S3 or GCS Bucket - [PR #12623](https://github.com/BerriAI/litellm/pull/12623)
+- **[Google Cloud Model Armor](../../docs/proxy/guardrails/model_armor)**
+    - Document new guardrail - [PR #12492](https://github.com/BerriAI/litellm/pull/12492)
+- **[Pillar Security](../../docs/proxy/guardrails/pillar_security)**
+    - New LLM Guardrail - [PR #12791](https://github.com/BerriAI/litellm/pull/12791)
+- **CloudZero**
+    - Allow exporting spend to cloudzero - [PR #12908](https://github.com/BerriAI/litellm/pull/12908)
+- **Model-level Guardrails**
+    - Support model-level guardrails - [PR #12968](https://github.com/BerriAI/litellm/pull/12968)
 
 #### Bugs
-- **[General Logging](../../docs/proxy/logging)**
-    - StandardLoggingPayload on cache_hits should track custom llm provider - [PR #12652](https://github.com/BerriAI/litellm/pull/12652)
-- **[S3 Buckets](../../docs/proxy/logging#s3-buckets)**
-    - S3 v2 log uploader crashes when using with guardrails - [PR #12733](https://github.com/BerriAI/litellm/pull/12733)
+- **[Prometheus](../../docs/proxy/prometheus)**
+    - Fix `[tag]=false` when tag is set for tag-based metrics - [PR #12916](https://github.com/BerriAI/litellm/pull/12916)
+- **[Guardrails AI](../../docs/proxy/guardrails/guardrails_ai)**
+    - Use ‘validatedOutput’ to allow usage of “fix” guards - [PR #12891](https://github.com/BerriAI/litellm/pull/12891) s/o @[DmitriyAlergant](https://github.com/DmitriyAlergant)
 
 ---
 
