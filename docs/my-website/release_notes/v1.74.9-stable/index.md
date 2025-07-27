@@ -51,7 +51,7 @@ This release is not live yet.
 | Google AI Studio | `gemini/gemini-2.0-flash-live-001` | 1,048,576 | $0.35 | $1.5 | 
 | Google AI Studio | `gemini/gemini-2.5-flash-lite` | 1,048,576 | $0.1 | $0.4 | 
 | VertexAI | `vertex_ai/gemini-2.0-flash-lite-001` | 1,048,576 | $0.35 | $1.5 | 
-
+| OpenAI | `gpt-4o-realtime-preview-2025-06-03` | 128k | $5 | $20 |
 
 #### Features
 
@@ -71,7 +71,6 @@ This release is not live yet.
 - **[Hyperbolic](../../docs/providers/hyperbolic)**
     - New LLM API provider - [PR #12826](https://github.com/BerriAI/litellm/pull/12826)
 - **[OpenAI](../../docs/providers/openai)**
-    - Add “gpt-4o-realtime-preview-2025-06-03” cost tracking - [PR #12838](https://github.com/BerriAI/litellm/pull/12838)
     - `/realtime` API - pass through intent query param - [PR #12838](https://github.com/BerriAI/litellm/pull/12838)
 - **[Bedrock](../../docs/providers/bedrock)**
     - Add inpainting support for Amazon Nova Canvas - [PR #12949](https://github.com/BerriAI/litellm/pull/12949) s/o @[SantoshDhaladhuli](https://github.com/SantoshDhaladhuli)
