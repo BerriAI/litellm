@@ -38,6 +38,11 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
 )
 from litellm.proxy.proxy_server import app
 from litellm.router import Router
+from litellm.types.proxy.management_endpoints.team_endpoints import (
+    BulkTeamMemberAddRequest,
+    BulkTeamMemberAddResponse,
+    TeamMemberAddResult,
+)
 
 # Setup TestClient
 client = TestClient(app)
@@ -1172,3 +1177,294 @@ async def test_update_team_team_member_budget_not_passed_to_db():
         print(
             "✅ All test cases passed: team_member_budget is properly excluded from database update operations"
         )
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_add_success():
+    """
+    Test bulk_team_member_add with successful addition of multiple members
+    """
+    from litellm.proxy._types import (
+        LiteLLM_TeamMembership,
+        LiteLLM_UserTable,
+        TeamAddMemberResponse,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import bulk_team_member_add
+
+    # Create test data
+    test_members = [
+        Member(user_email="user1@example.com", role="user"),
+        Member(user_email="user2@example.com", role="admin"),
+    ]
+
+    bulk_request = BulkTeamMemberAddRequest(
+        team_id="test-team-123",
+        members=test_members,
+        max_budget_in_team=100.0,
+    )
+
+    # Mock successful team_member_add response using MagicMock for simplicity
+    mock_user_1 = MagicMock(spec=LiteLLM_UserTable)
+    mock_user_1.user_id = "user-1"
+    mock_user_1.user_email = "user1@example.com"
+    mock_user_1.model_dump.return_value = {
+        "user_id": "user-1",
+        "user_email": "user1@example.com",
+    }
+
+    mock_user_2 = MagicMock(spec=LiteLLM_UserTable)
+    mock_user_2.user_id = "user-2"
+    mock_user_2.user_email = "user2@example.com"
+    mock_user_2.model_dump.return_value = {
+        "user_id": "user-2",
+        "user_email": "user2@example.com",
+    }
+
+    mock_updated_users = [mock_user_1, mock_user_2]
+
+    mock_membership_1 = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership_1.user_id = "user-1"
+    mock_membership_1.team_id = "test-team-123"
+    mock_membership_1.model_dump.return_value = {
+        "user_id": "user-1",
+        "team_id": "test-team-123",
+    }
+
+    mock_membership_2 = MagicMock(spec=LiteLLM_TeamMembership)
+    mock_membership_2.user_id = "user-2"
+    mock_membership_2.team_id = "test-team-123"
+    mock_membership_2.model_dump.return_value = {
+        "user_id": "user-2",
+        "team_id": "test-team-123",
+    }
+
+    mock_updated_memberships = [mock_membership_1, mock_membership_2]
+
+    # Create a mock response that has model_dump method
+    mock_team_response = MagicMock()
+    mock_team_response.team_id = "test-team-123"
+    mock_team_response.team_alias = "Test Team"
+    mock_team_response.updated_users = mock_updated_users
+    mock_team_response.updated_team_memberships = mock_updated_memberships
+    mock_team_response.model_dump.return_value = {
+        "team_id": "test-team-123",
+        "team_alias": "Test Team",
+        "updated_users": [u.model_dump() for u in mock_updated_users],
+        "updated_team_memberships": [m.model_dump() for m in mock_updated_memberships],
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=AsyncMock,
+        return_value=mock_team_response,
+    ) as mock_team_member_add:
+
+        mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        result = await bulk_team_member_add(
+            data=bulk_request,
+            user_api_key_dict=mock_auth,
+        )
+
+        # Verify the result structure
+        assert isinstance(result, BulkTeamMemberAddResponse)
+        assert result.team_id == "test-team-123"
+        assert result.total_requested == 2
+        assert result.successful_additions == 2
+        assert result.failed_additions == 0
+        assert len(result.results) == 2
+
+        # Verify individual results
+        for i, member_result in enumerate(result.results):
+            assert isinstance(member_result, TeamMemberAddResult)
+            assert member_result.success is True
+            assert member_result.error is None
+            assert member_result.user_email == test_members[i].user_email
+
+        # Verify team_member_add was called with correct data
+        mock_team_member_add.assert_called_once()
+        call_args = mock_team_member_add.call_args[1]["data"]
+        assert call_args.team_id == "test-team-123"
+        assert call_args.member == test_members
+        assert call_args.max_budget_in_team == 100.0
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_add_no_members_error():
+    """
+    Test bulk_team_member_add raises error when no members provided
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import bulk_team_member_add
+
+    bulk_request = BulkTeamMemberAddRequest(
+        team_id="test-team-123",
+        members=[],  # Empty list
+    )
+
+    mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bulk_team_member_add(
+            data=bulk_request,
+            user_api_key_dict=mock_auth,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "At least one member is required" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_add_batch_size_limit():
+    """
+    Test bulk_team_member_add enforces maximum batch size limit
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import bulk_team_member_add
+
+    # Create more than 500 members (the max batch size)
+    large_member_list = [
+        Member(user_email=f"user{i}@example.com", role="user") for i in range(501)
+    ]
+
+    bulk_request = BulkTeamMemberAddRequest(
+        team_id="test-team-123",
+        members=large_member_list,
+    )
+
+    mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await bulk_team_member_add(
+            data=bulk_request,
+            user_api_key_dict=mock_auth,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Maximum 500 members can be added at once" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_add_all_users_flag():
+    """
+    Test bulk_team_member_add with all_users flag set to True
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, TeamAddMemberResponse
+    from litellm.proxy.management_endpoints.team_endpoints import bulk_team_member_add
+
+    bulk_request = BulkTeamMemberAddRequest(
+        team_id="test-team-123",
+        all_users=True,
+        max_budget_in_team=50.0,
+    )
+
+    # Mock database users
+    mock_db_users = [
+        MagicMock(user_id="user-1", user_email="user1@example.com"),
+        MagicMock(user_id="user-2", user_email="user2@example.com"),
+    ]
+
+    mock_team_response = TeamAddMemberResponse(
+        team_id="test-team-123",
+        team_alias="Test Team",
+        updated_users=[],
+        updated_team_memberships=[],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=AsyncMock,
+        return_value=mock_team_response,
+    ) as mock_team_member_add:
+
+        # Mock the database find_many call
+        mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+            return_value=mock_db_users
+        )
+
+        mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        result = await bulk_team_member_add(
+            data=bulk_request,
+            user_api_key_dict=mock_auth,
+        )
+
+        # Verify that find_many was called to get all users
+        mock_prisma.db.litellm_usertable.find_many.assert_called_once_with(
+            order={"created_at": "desc"}
+        )
+
+        # Verify team_member_add was called with users from database
+        mock_team_member_add.assert_called_once()
+        call_args = mock_team_member_add.call_args[1]["data"]
+        assert call_args.team_id == "test-team-123"
+        assert len(call_args.member) == 2  # Should have 2 members from mock_db_users
+        assert call_args.max_budget_in_team == 50.0
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_add_failure_scenario():
+    """
+    Test bulk_team_member_add handles failures gracefully
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import bulk_team_member_add
+
+    test_members = [
+        Member(user_email="user1@example.com", role="user"),
+        Member(user_email="user2@example.com", role="admin"),
+    ]
+
+    bulk_request = BulkTeamMemberAddRequest(
+        team_id="test-team-123",
+        members=test_members,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new_callable=AsyncMock,
+        side_effect=Exception("Database connection failed"),
+    ) as mock_team_member_add:
+
+        mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        result = await bulk_team_member_add(
+            data=bulk_request,
+            user_api_key_dict=mock_auth,
+        )
+
+        # Verify failure response structure
+        assert isinstance(result, BulkTeamMemberAddResponse)
+        assert result.team_id == "test-team-123"
+        assert result.total_requested == 2
+        assert result.successful_additions == 0
+        assert result.failed_additions == 2
+        assert result.updated_team is None
+
+        # Verify all members marked as failed
+        assert len(result.results) == 2
+        for member_result in result.results:
+            assert member_result.success is False
+            assert member_result.error == "Database connection failed"
+
+
+@pytest.mark.asyncio
+async def test_bulk_team_member_add_no_db_connection():
+    """
+    Test bulk_team_member_add handles missing database connection
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import bulk_team_member_add
+
+    bulk_request = BulkTeamMemberAddRequest(
+        team_id="test-team-123",
+        members=[Member(user_email="user1@example.com", role="user")],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await bulk_team_member_add(
+                data=bulk_request,
+                user_api_key_dict=mock_auth,
+            )
+
+        assert exc_info.value.status_code == 500
+        assert "DB not connected" in str(exc_info.value.detail)
