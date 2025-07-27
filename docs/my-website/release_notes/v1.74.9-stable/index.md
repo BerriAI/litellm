@@ -76,52 +76,48 @@ This release is not live yet.
     - Add inpainting support for Amazon Nova Canvas - [PR #12949](https://github.com/BerriAI/litellm/pull/12949) s/o @[SantoshDhaladhuli](https://github.com/SantoshDhaladhuli)
 
 #### Bugs
+- **Gemini ([Google AI Studio](../../docs/providers/gemini) + [VertexAI](../../docs/providers/vertex))**
+    - Fix leaking file descriptor error on sync calls - [PR #12824](https://github.com/BerriAI/litellm/pull/12824)
+- **IBM Watsonx**
+    - use correct parameter name for tool choice - [PR #9980](https://github.com/BerriAI/litellm/pull/9980)
 - **[Anthropic](../../docs/providers/anthropic)**
-    - Fix streaming + response_format + tools bug - [PR #12463](https://github.com/BerriAI/litellm/pull/12463)
-- **[XAI](../../docs/providers/xai)**
-    - grok-4 does not support the `stop` param - [PR #12646](https://github.com/BerriAI/litellm/pull/12646)
-- **[AWS](../../docs/providers/bedrock)**
-    - Role chaining with web authentication for AWS Bedrock - [PR #12607](https://github.com/BerriAI/litellm/pull/12607)
-- **[VertexAI](../../docs/providers/vertex)**
-    - Add project_id to cached credentials - [PR #12661](https://github.com/BerriAI/litellm/pull/12661)
-- **[Bedrock](../../docs/providers/bedrock)**
-    - Fix bedrock nova micro and nova lite context window info in [PR #12619](https://github.com/BerriAI/litellm/pull/12619)
+    - Only show ‘reasoning_effort’ for supported models - [PR #12847](https://github.com/BerriAI/litellm/pull/12847)
+    - Handle $id and $schema in tool call requests (Anthropic API stopped accepting them) - [PR #12959](https://github.com/BerriAI/litellm/pull/12959)
+- **[Openrouter](../../docs/providers/openrouter)**
+    - filter out cache_control flag for non-anthropic models (allows usage with claude code) https://github.com/BerriAI/litellm/pull/12850
+- **[Gemini](../../docs/providers/gemini)**
+    - Shorten Gemini tool_call_id for Open AI compatibility - [PR #12941](https://github.com/BerriAI/litellm/pull/12941) s/o @[tonga54](https://github.com/tonga54)
 
 ---
 
 ## LLM API Endpoints
 
 #### Features
-- **[/chat/completions](../../docs/completion/input)** 
-    - Include tool calls in output of trim_messages - [PR #11517](https://github.com/BerriAI/litellm/pull/11517)
-- **[/v1/vector_stores](../../docs/vector_stores/search)**
-    - New OpenAI-compatible vector store endpoints - [PR #12699](https://github.com/BerriAI/litellm/pull/12699), [Get Started](../../docs/vector_stores/search)
-    - Vector store search endpoint - [PR #12749](https://github.com/BerriAI/litellm/pull/12749), [Get Started](../../docs/vector_stores/search)
-    - Support for using PG Vector as a vector store - [PR #12667](https://github.com/BerriAI/litellm/pull/12667), [Get Started](../../docs/completion/knowledgebase)
-- **[/streamGenerateContent](../../docs/generateContent)**
-    - Non-gemini model support - [PR #12647](https://github.com/BerriAI/litellm/pull/12647)
+
+- **[Passthrough endpoints](../../docs/pass_through/)**
+    - Make key/user/team cost tracking OSS - [PR #12847](https://github.com/BerriAI/litellm/pull/12847)
+- **[/v1/models](../../docs/providers/passthrough)**
+    - Return fallback models as part of api response - [PR #12811](https://github.com/BerriAI/litellm/pull/12811) s/o @[murad-khafizov](https://github.com/murad-khafizov)
+- **[/vector_stores](../../docs/providers/passthrough)**
+    - Make permission management OSS - [PR #12990](https://github.com/BerriAI/litellm/pull/12990)
 
 #### Bugs
-- **[/vector_stores](../../docs/vector_stores/search)**
-    - Knowledge Base Call returning error when passing as `tools` - [PR #12628](https://github.com/BerriAI/litellm/pull/12628)
+1. `/batches`
+    1. Skip invalid batch during cost tracking check (prev. Would stop all checks) - [PR #12782](https://github.com/BerriAI/litellm/pull/12782)
+2. `/chat/completions`
+    1. Fix async retryer on .acompletion() - [PR #12886](https://github.com/BerriAI/litellm/pull/12886)
 
 ---
 
 ## [MCP Gateway](../../docs/mcp)
 
 #### Features
-- **[Access Groups](../../docs/mcp#grouping-mcps-access-groups)**
-    - Allow MCP access groups to be added via litellm proxy config.yaml - [PR #12654](https://github.com/BerriAI/litellm/pull/12654)
-    - List tools from access list for keys - [PR #12657](https://github.com/BerriAI/litellm/pull/12657)
-- **[Namespacing](../../docs/mcp#mcp-namespacing)**
-    - URL-based namespacing for better segregation - [PR #12658](https://github.com/BerriAI/litellm/pull/12658)
-    - Make MCP_TOOL_PREFIX_SEPARATOR configurable from env - [PR #12603](https://github.com/BerriAI/litellm/pull/12603)
-- **[Gateway Features](../../docs/mcp#mcp-gateway-features)**
-    - Allow using MCPs with all LLM APIs (VertexAI, Gemini, Groq, etc.) when using /responses - [PR #12546](https://github.com/BerriAI/litellm/pull/12546)
-
-#### Bugs
-    - Fix to update object permission on update/delete key/team - [PR #12701](https://github.com/BerriAI/litellm/pull/12701)
-    - Include /mcp in list of available routes on proxy - [PR #12612](https://github.com/BerriAI/litellm/pull/12612)
+- **[Permission Management](../../docs/mcp#grouping-mcps-access-groups)**
+    - Make permission management by key/team OSS - [PR #12988](https://github.com/BerriAI/litellm/pull/12988)
+- **[MCP Alias](../../docs/mcp#mcp-aliases)**
+    - Support mcp server aliases (useful for calling long mcp server names on Cursor) - [PR #12994](https://github.com/BerriAI/litellm/pull/12994)
+- **Header Propagation**
+    - Support propagating headers from client to backend MCP (useful for sending personal access tokens to backend MCP) - [PR #13003](https://github.com/BerriAI/litellm/pull/13003)
 
 ---
 
