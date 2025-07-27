@@ -1018,6 +1018,69 @@ async def user_update(
         )
 
 
+async def bulk_update_processed_users(
+    users_to_update: List[UpdateUserRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> BulkUpdateUserResponse:
+    results: List[UserUpdateResult] = []
+    successful_updates = 0
+    failed_updates = 0
+
+    # Process each user update independently
+    try:
+        for user_request in users_to_update:
+            try:
+                response = await _update_single_user_helper(
+                    user_request=user_request,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                )
+                # Record success
+                results.append(
+                    UserUpdateResult(
+                        user_id=(
+                            response.get("user_id")
+                            if response
+                            else user_request.user_id
+                        ),
+                        user_email=user_request.user_email,
+                        success=True,
+                        updated_user=response,
+                    )
+                )
+                successful_updates += 1
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
+                )
+                # Record failure
+                error_message = str(e)
+                verbose_proxy_logger.error(
+                    f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
+                )
+
+                results.append(
+                    UserUpdateResult(
+                        user_id=user_request.user_id,
+                        user_email=user_request.user_email,
+                        success=False,
+                        error=error_message,
+                    )
+                )
+                failed_updates += 1
+
+        return BulkUpdateUserResponse(
+            results=results,
+            total_requested=len(users_to_update),
+            successful_updates=successful_updates,
+            failed_updates=failed_updates,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to update users: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 @router.post(
     "/user/bulk_update",
     tags=["Internal User management"],
@@ -1213,62 +1276,11 @@ async def bulk_user_update(
             },
         )
 
-    results: List[UserUpdateResult] = []
-    successful_updates = 0
-    failed_updates = 0
-
-    # Process each user update independently
-    try:
-        for user_request in users_to_update:
-            try:
-                response = await _update_single_user_helper(
-                    user_request=user_request,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_changed_by=litellm_changed_by,
-                )
-                # Record success
-                results.append(
-                    UserUpdateResult(
-                        user_id=(
-                            response.get("user_id")
-                            if response
-                            else user_request.user_id
-                        ),
-                        user_email=user_request.user_email,
-                        success=True,
-                        updated_user=response,
-                    )
-                )
-                successful_updates += 1
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
-                )
-                # Record failure
-                error_message = str(e)
-                verbose_proxy_logger.error(
-                    f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
-                )
-
-                results.append(
-                    UserUpdateResult(
-                        user_id=user_request.user_id,
-                        user_email=user_request.user_email,
-                        success=False,
-                        error=error_message,
-                    )
-                )
-                failed_updates += 1
-
-        return BulkUpdateUserResponse(
-            results=results,
-            total_requested=len(users_to_update),
-            successful_updates=successful_updates,
-            failed_updates=failed_updates,
-        )
-    except Exception as e:
-        verbose_proxy_logger.exception(f"Failed to update users: {e}")
-        raise HTTPException(status_code=500, detail={"error": str(e)})
+    return await bulk_update_processed_users(
+        users_to_update=cast(List[UpdateUserRequest], users_to_update),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
 
 
 async def get_user_key_counts(
