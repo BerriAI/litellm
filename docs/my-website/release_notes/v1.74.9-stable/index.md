@@ -29,11 +29,6 @@ This release is not live yet.
 
 ---
 
-## Key Highlights 
-
-
----
-
 ## New Models / Updated Models
 
 #### Pricing / Context Window Updates
@@ -167,63 +162,55 @@ This release is not live yet.
 ## Performance / Loadbalancing / Reliability improvements
 
 #### Features
-- **Health Checks**
-    - Separate health app for liveness probes - [PR #12669](https://github.com/BerriAI/litellm/pull/12669)
-    - Health check app on separate port - [PR #12718](https://github.com/BerriAI/litellm/pull/12718)
-- **Caching**
-    - Add Azure Blob cache support - [PR #12587](https://github.com/BerriAI/litellm/pull/12587)
-- **Router**
-    - Handle ZeroDivisionError with zero completion tokens in lowest_latency strategy - [PR #12734](https://github.com/BerriAI/litellm/pull/12734)
+- **[Auto-Router](../../docs/proxy/auto_routing)**
+    - New auto-router powered by `semantic-router` - [PR #12955](https://github.com/BerriAI/litellm/pull/12955)
 
 #### Bugs
-- **Database**
-    - Use upsert for managed object table to avoid UniqueViolationError - [PR #11795](https://github.com/BerriAI/litellm/pull/11795)
-    - Refactor to support use_prisma_migrate for helm hook - [PR #12600](https://github.com/BerriAI/litellm/pull/12600)
-- **Cache**
-    - Fix: redis caching for embedding response models - [PR #12750](https://github.com/BerriAI/litellm/pull/12750)
-
+- **forward_clientside_headers**
+    - Filter out `content-length` from headers (caused backend requests to hang) - [PR #12886](https://github.com/BerriAI/litellm/pull/12886/files)
+- **Message Redaction**
+    - Fix cannot pickle coroutine object error - [PR #13005](https://github.com/BerriAI/litellm/pull/13005)
 ---
-
-## Helm Chart
-
-- DB Migration Hook: refactor to support use_prisma_migrate - for helm hook [PR](https://github.com/BerriAI/litellm/pull/12600)
-- Add envVars and extraEnvVars support to Helm migrations job - [PR #12591](https://github.com/BerriAI/litellm/pull/12591)
 
 ## General Proxy Improvements
 
 #### Features
-- **Control Plane + Data Plane Architecture**
-    - Control Plane + Data Plane support - [PR #12601](https://github.com/BerriAI/litellm/pull/12601)
-- **Proxy CLI**
-    - Add "keys import" command to CLI - [PR #12620](https://github.com/BerriAI/litellm/pull/12620)
-- **Swagger Documentation**
-    - Add swagger docs for LiteLLM /chat/completions, /embeddings, /responses - [PR #12618](https://github.com/BerriAI/litellm/pull/12618)
-- **Dependencies**
-    - Loosen rich version from ==13.7.1 to >=13.7.1 - [PR #12704](https://github.com/BerriAI/litellm/pull/12704)
-
-
+- **Benchmarks**
+    - Updated litellm proxy benchmarks (p50, p90, p99 overhead) - [PR #12842](https://github.com/BerriAI/litellm/pull/12842)
+- **Request Headers**
+    - Added new `x-litellm-num-retries` request header 
+- **Swagger**
+    - Support local swagger on custom root paths - [PR #12911](https://github.com/BerriAI/litellm/pull/12911)
+- **Health**
+    - Track cost + add tags for health checks done by LiteLLM Proxy - [PR #12880](https://github.com/BerriAI/litellm/pull/12880)
 #### Bugs
 
-- Verbose log is enabled by default fix - [PR #12596](https://github.com/BerriAI/litellm/pull/12596)
-
-- Add support for disabling callbacks in request body - [PR #12762](https://github.com/BerriAI/litellm/pull/12762)
-- Handle circular references in spend tracking metadata JSON serialization - [PR #12643](https://github.com/BerriAI/litellm/pull/12643)
+- **Proxy Startup**
+    - Fixes issue on startup where team member budget is None would block startup - [PR #12843](https://github.com/BerriAI/litellm/pull/12843)
+- **Docker**
+    - Move non-root docker to chain guard image (fewer vulnerabilities) - [PR #12707](https://github.com/BerriAI/litellm/pull/12707)
+    - add azure-keyvault==4.2.0 to Docker img - [PR #12873](https://github.com/BerriAI/litellm/pull/12873)
+- **Separate Health App**
+    - Pass through cmd args via supervisord (enables user config to still work via docker) - [PR #12871](https://github.com/BerriAI/litellm/pull/12871)
+- **Swagger**
+    - Bump DOMPurify version (fixes vulnerability) - [PR #12911](https://github.com/BerriAI/litellm/pull/12911)
+    - Add back local swagger bundle (enables swagger to work in air gapped env.) - [PR #12911](https://github.com/BerriAI/litellm/pull/12911)
+- **Request Headers**
+    - Make ‘user_header_name’ field check case insensitive (fixes customer budget enforcement for OpenWebUi) - [PR #12950](https://github.com/BerriAI/litellm/pull/12950)
+- **SpendLogs**
+    - Fix issues writing to DB when custom_llm_provider is None - [PR #13001](https://github.com/BerriAI/litellm/pull/13001)
 
 ---
 
 ## New Contributors
-* @AntonioKL made their first contribution in https://github.com/BerriAI/litellm/pull/12591
-* @marcelodiaz558 made their first contribution in https://github.com/BerriAI/litellm/pull/12541
-* @dmcaulay made their first contribution in https://github.com/BerriAI/litellm/pull/12463
-* @demoray made their first contribution in https://github.com/BerriAI/litellm/pull/12587
-* @staeiou made their first contribution in https://github.com/BerriAI/litellm/pull/12631
-* @stefanc-ai2 made their first contribution in https://github.com/BerriAI/litellm/pull/12622
-* @RichardoC made their first contribution in https://github.com/BerriAI/litellm/pull/12607
-* @yeahyung made their first contribution in https://github.com/BerriAI/litellm/pull/11795
-* @mnguyen96 made their first contribution in https://github.com/BerriAI/litellm/pull/12619
-* @rgambee made their first contribution in https://github.com/BerriAI/litellm/pull/11517
-* @jvanmelckebeke made their first contribution in https://github.com/BerriAI/litellm/pull/12725
-* @jlaurendi made their first contribution in https://github.com/BerriAI/litellm/pull/12704
-* @doublerr made their first contribution in https://github.com/BerriAI/litellm/pull/12661
+* @magicalne made their first contribution in https://github.com/BerriAI/litellm/pull/12804
+* @pavangudiwada made their first contribution in https://github.com/BerriAI/litellm/pull/12798
+* @mdiloreto made their first contribution in https://github.com/BerriAI/litellm/pull/12707
+* @murad-khafizov made their first contribution in https://github.com/BerriAI/litellm/pull/12811
+* @eagle-p made their first contribution in https://github.com/BerriAI/litellm/pull/12791
+* @apoorv-sharma made their first contribution in https://github.com/BerriAI/litellm/pull/12920
+* @SantoshDhaladhuli made their first contribution in https://github.com/BerriAI/litellm/pull/12949
+* @tonga54 made their first contribution in https://github.com/BerriAI/litellm/pull/12941
+* @sings-to-bees-on-wednesdays made their first contribution in https://github.com/BerriAI/litellm/pull/12950
 
-## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.3-stable...v1.74.7-stable)**
+## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.7-stable...v1.74.9.rc-draft)**
