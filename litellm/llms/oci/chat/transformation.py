@@ -86,12 +86,16 @@ class OCIChatConfig(BaseConfig):
 
         self.openai_to_oci_param_map = {
             "stream": "stream",
-            "max_tokens": "max_new_tokens",
-            "max_completion_tokens": "max_new_tokens",
+            "max_tokens": "max_tokens",
+            "max_completion_tokens": "max_tokens",
             "temperature": "temperature",
-            "top_p": "top_p",
-            "n": "num_return_sequences",
-            "max_retries": "max_retries",
+            "tools": "tools",
+            # "top_p": "top_p",
+            # "n": "num_return_sequences",
+            # "max_retries": "max_retries",
+            "top_p": False,
+            "n": False,
+            "max_retries": False,
             "seed": False,  # TODO requires backend changes
             "stop": False,  # TODO requires backend changes
             "logit_bias": False,  # TODO requires backend changes
@@ -102,7 +106,6 @@ class OCIChatConfig(BaseConfig):
             "modalities": False,
             "prediction": False,
             "stream_options": False,
-            "tools": False,
             "tool_choice": False,
             "function_call": False,
             "functions": False,
@@ -300,7 +303,8 @@ class OCIChatConfig(BaseConfig):
                 "kwarg `oci_compartment_id` is required for OCI requests"
             )
         temperature = optional_params.get("temperature", None)
-        max_new_tokens = optional_params.get("max_new_tokens", None)
+        max_tokens = optional_params.get("max_tokens", None)
+        tools = optional_params.get("tools", None)
 
         # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
         if optional_params.get("stream"):
@@ -323,8 +327,10 @@ class OCIChatConfig(BaseConfig):
             data["chatRequest"]["temperature"] = temperature
         if stream:
             data["chatRequest"]["isStream"] = True
-        if max_new_tokens:
-            data["chatRequest"]["maxTokens"] = max_new_tokens
+        if max_tokens:
+            data["chatRequest"]["maxTokens"] = max_tokens
+        if tools:
+            data["chatRequest"]["tools"] = adapt_tools_to_oci_standard(tools)
 
         return data
 
@@ -378,7 +384,7 @@ class OCIChatConfig(BaseConfig):
         if "content" in response_message and isinstance(response_message["content"], list):
             message.content = response_message["content"][0]["text"]
         if "toolCalls" in response_message:
-            message.tool_calls = response_message["toolCalls"]
+            message.tool_calls = adapt_tools_to_openai_standard(response_message["toolCalls"])
 
         usage = Usage(
             prompt_tokens=output["usage"]["promptTokens"],
@@ -388,13 +394,6 @@ class OCIChatConfig(BaseConfig):
         model_response.usage = usage  # type: ignore
 
         model_response._hidden_params["additional_headers"] = raw_response.headers
-        message.provider_specific_fields = {
-            "ratelimit-limit": raw_response.headers.get("ratelimit-limit"),
-            "ratelimit-remaining": raw_response.headers.get("ratelimit-remaining"),
-            "ratelimit-reset": raw_response.headers.get("ratelimit-reset"),
-            "inference-meter": raw_response.headers.get("inference-meter"),
-            "inference-time": raw_response.headers.get("inference-time"),
-        }
 
         return model_response
 
@@ -617,21 +616,38 @@ def _adapt_string_only_content_to_lists(messages: List[Dict]):
     return new_messages
 
 
-# TODO get this from the api instead of doing it here, will require backend work
-def get_tokens_from_messages(messages: List[dict]):
-    total = 0
+def adapt_tools_to_oci_standard(tools: List[Dict]):
+    new_tools = []
+    for tool in tools:
+        if tool["type"] != "function":
+            raise Exception("OCI only supports function tools")
+        
+        new_tool = {
+            "type": "FUNCTION",
+            "name": tool["function"]["name"],
+            "description": tool["function"].get("description", ""),
+            "parameters": tool["function"]["parameters"],
+        }
 
-    for message in messages:
-        content: List[dict] = message["content"]
+        new_tools.append(new_tool)
+    
+    return new_tools
 
-        for content_item in content:
-            type = content_item["type"]
-            if type == "text":
-                value: str = content_item["text"]
-                words = value.split(" ")
-                total += len(words)
-                continue
-            # we'll count media as single tokens for now
-            total += 1
+def adapt_tools_to_openai_standard(tools: List[Dict]):
+    new_tools = []
+    for tool in tools:
+        if tool["type"] != "FUNCTION":
+            raise Exception("OCI only supports function tools")
+        
+        new_tool = {
+            "type": "function",
+            "id": tool["id"],
+            "function": {
+                "name": tool["name"],
+                "arguments": tool.get("arguments", ""),
+            }
+        }
 
-    return total
+        new_tools.append(new_tool)
+    
+    return new_tools
