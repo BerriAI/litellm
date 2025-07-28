@@ -1483,13 +1483,13 @@ files = [
 
 [[package]]
 name = "huggingface-hub"
-version = "0.34.1"
+version = "0.34.2"
 description = "Client library to download and publish models, datasets and other repos on the huggingface.co hub"
 optional = false
 python-versions = ">=3.8.0"
 files = [
-    {file = "huggingface_hub-0.34.1-py3-none-any.whl", hash = "sha256:60d843dcb7bc335145b20e7d2f1dfe93910f6787b2b38a936fb772ce2a83757c"},
-    {file = "huggingface_hub-0.34.1.tar.gz", hash = "sha256:6978ed89ef981de3c78b75bab100a214843be1cc9d24f8e9c0dc4971808ef1b1"},
+    {file = "huggingface_hub-0.34.2-py3-none-any.whl", hash = "sha256:699843fc58d3d257dbd3cb014e0cd34066a56372246674322ba0909981ec239c"},
+    {file = "huggingface_hub-0.34.2.tar.gz", hash = "sha256:a27c1ba3d2a70b378dce546c8be3a90349a64e6bd5d7a806679d4bf5e5d2d8fe"},
 ]
 
 [package.dependencies]
@@ -1846,13 +1846,13 @@ files = [
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.2.11"
+version = "0.2.12"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 files = [
-    {file = "litellm_proxy_extras-0.2.11-py3-none-any.whl", hash = "sha256:228143e484f3cf350cd056543bca8331db1829fa637bcc11bb0a7058e5772ba2"},
-    {file = "litellm_proxy_extras-0.2.11.tar.gz", hash = "sha256:62a0bee722ccf90abf81f78464057b4d865952a0f45e8ce55e26948a8c6e089b"},
+    {file = "litellm_proxy_extras-0.2.12-py3-none-any.whl", hash = "sha256:e6762ad9cc276b8ef5134e059bd7fbdcf08fb23601039e35b216bf7172c52924"},
+    {file = "litellm_proxy_extras-0.2.12.tar.gz", hash = "sha256:df3254d607ee7bcfe70d518f49f20e21e99862c3ea0930748bcf4f91d07c208b"},
 ]
 
 [[package]]
@@ -4832,4 +4832,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "8b91674bc6235bcafc75d8ca14105f8e9eb74cdff758e55c7503cc2fad6bc34a"
+content-hash = "61c4079cd69909b30d5b710d33966ca03ec7ed3c19e8c281e6a756c9a2226418"
