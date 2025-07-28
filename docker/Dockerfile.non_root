@@ -13,13 +13,8 @@ USER root
 RUN apk add --no-cache build-base bash \
     && pip install --no-cache-dir --upgrade pip build
 
-# Copy only necessary files for build
-COPY requirements.txt .
-COPY pyproject.toml .
-COPY setup.py .
-COPY litellm/ ./litellm/
-COPY docker/ ./docker/
-COPY schema.prisma .
+# Copy project files
+COPY . .
 
 # Build Admin UI
 RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
