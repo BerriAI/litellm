@@ -34,6 +34,7 @@ from .redis_cache import RedisCache
 from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
+from .gcs_cache import GCSCache
 
 
 def print_verbose(print_statement):
@@ -92,6 +93,9 @@ class Cache:
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
         s3_path: Optional[str] = None,
+        gcs_bucket_name: Optional[str] = None,
+        gcs_path_service_account: Optional[str] = None,
+        gcs_path: Optional[str] = None,
         redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
@@ -139,6 +143,11 @@ class Cache:
             s3_aws_secret_access_key (str, optional): The aws secret access key for the s3 cache. Defaults to None.
             s3_aws_session_token (str, optional): The aws session token for the s3 cache. Defaults to None.
             s3_config (dict, optional): The config for the s3 cache. Defaults to None.
+
+            # GCS Cache Args
+            gcs_bucket_name (str, optional): The bucket name for the gcs cache. Defaults to None.
+            gcs_path_service_account (str, optional): Path to the service account json.
+            gcs_path (str, optional): Folder path inside the bucket to store cache files.
 
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
@@ -203,6 +212,12 @@ class Cache:
                 s3_config=s3_config,
                 s3_path=s3_path,
                 **kwargs,
+            )
+        elif type == LiteLLMCacheType.GCS:
+            self.cache = GCSCache(
+                bucket_name=gcs_bucket_name,
+                path_service_account=gcs_path_service_account,
+                gcs_path=gcs_path,
             )
         elif type == LiteLLMCacheType.AZURE_BLOB:
             self.cache = AzureBlobCache(
