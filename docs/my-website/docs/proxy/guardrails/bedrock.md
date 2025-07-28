@@ -20,7 +20,7 @@ model_list:
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera", "mcp"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q      # your guardrail ID on bedrock
       guardrailVersion: "DRAFT"              # your guardrail version on bedrock

@@ -560,7 +560,7 @@ The `pii_masking` guardrail ran on this request because api key=sk-jNm1Zar7XfNdZ
 guardrails:
   - guardrail_name: string     # Required: Name of the guardrail
     litellm_params:            # Required: Configuration parameters
-      guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "presidio", "hide-secrets"
+      guardrail: string        # Required: One of "aporia", "bedrock", "guardrails_ai", "lakera", "mcp", "presidio", "hide-secrets"
       mode: Union[string, List[string], Mode]             # Required: One or more of "pre_call", "post_call", "during_call", "logging_only"
       api_key: string          # Required: API key for the guardrail service
       api_base: string         # Optional: Base URL for the guardrail service

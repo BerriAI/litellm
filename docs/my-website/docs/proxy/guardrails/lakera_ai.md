@@ -19,13 +19,13 @@ model_list:
 guardrails:
   - guardrail_name: "lakera-guard"
     litellm_params:
-      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera", "mcp"
       mode: "during_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
   - guardrail_name: "lakera-pre-guard"
     litellm_params:
-      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera", "mcp"
       mode: "pre_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
@@ -134,7 +134,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 guardrails:
   - guardrail_name: "lakera-guard"
     litellm_params:
-      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera"
+      guardrail: lakera_v2  # supported values: "aporia", "bedrock", "lakera", "mcp"
       mode: "during_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE

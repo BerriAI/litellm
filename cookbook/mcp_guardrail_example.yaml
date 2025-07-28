@@ -46,7 +46,7 @@ guardrails:
       max_body_length: 65536
       allowed_repositories: ["my-org/repo1", "my-org/repo2"]
       forbidden_keywords: ["password", "secret", "api_key"]
-    custom_validation_function: "cookbook.my_validation:validate_github_request"
+    custom_validation_function: "cookbook.mcp_validation:validate_github_request"
     event_hooks:
       - "pre_call"
       - "post_call"
@@ -61,7 +61,7 @@ guardrails:
     validation_rules:
       allowed_webhook_urls: ["https://my-app.com/webhook", "https://api.myapp.com/events"]
       max_webhook_count: 10
-    custom_validation_function: "cookbook.my_validation:validate_zapier_webhook"
+    custom_validation_function: "cookbook.mcp_validation:validate_zapier_webhook"
     event_hooks:
       - "pre_call"
       - "during_call"
@@ -76,7 +76,7 @@ guardrails:
       max_argument_size: 10240  # 10KB
       allowed_tool_patterns: ["get_*", "list_*", "create_*"]
       forbidden_tool_patterns: ["delete_*", "admin_*"]
-    custom_validation_function: "cookbook.my_validation:validate_general_mcp"
+    custom_validation_function: "cookbook.mcp_validation:validate_general_mcp"
     event_hooks:
       - "pre_call"
       - "post_call"
