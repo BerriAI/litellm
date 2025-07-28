@@ -389,7 +389,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "litellm_proxy",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -418,7 +418,7 @@ curl --location '<your-litellm-proxy-base-url>/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "litellm_proxy",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
@@ -441,7 +441,7 @@ This configuration restricts the request to only use tools from the specified MC
 {
   "mcpServers": {
     "LiteLLM": {
-      "url": "litellm_proxy",
+      "url": "<your-litellm-proxy-base-url>/mcp/",
       "headers": {
         "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
         "x-mcp-servers": "alias_1,Server2"
@@ -483,7 +483,7 @@ curl --location 'https://api.openai.com/v1/responses' \
         {
             "type": "mcp",
             "server_label": "litellm",
-            "server_url": "litellm_proxy",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/",
             "require_approval": "never",
             "headers": {
                 "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
