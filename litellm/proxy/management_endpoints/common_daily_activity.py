@@ -80,6 +80,44 @@ def update_breakdown_metrics(
             )
         )
 
+    # Update model group breakdown
+    if record.model_group and record.model_group not in breakdown.model_groups:
+        breakdown.model_groups[record.model_group] = MetricWithMetadata(
+            metrics=SpendMetrics(),
+            metadata=model_metadata.get(record.model_group, {}),
+        )
+    if record.model_group:
+        breakdown.model_groups[record.model_group].metrics = update_metrics(
+            breakdown.model_groups[record.model_group].metrics, record
+        )
+
+        # Update API key breakdown for this model
+        if (
+            record.api_key
+            not in breakdown.model_groups[record.model_group].api_key_breakdown
+        ):
+            breakdown.model_groups[record.model_group].api_key_breakdown[
+                record.api_key
+            ] = KeyMetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata=KeyMetadata(
+                    key_alias=api_key_metadata.get(record.api_key, {}).get(
+                        "key_alias", None
+                    ),
+                    team_id=api_key_metadata.get(record.api_key, {}).get(
+                        "team_id", None
+                    ),
+                ),
+            )
+        breakdown.model_groups[record.model_group].api_key_breakdown[
+            record.api_key
+        ].metrics = update_metrics(
+            breakdown.model_groups[record.model_group]
+            .api_key_breakdown[record.api_key]
+            .metrics,
+            record,
+        )
+
     if record.mcp_namespaced_tool_name:
         if record.mcp_namespaced_tool_name not in breakdown.mcp_servers:
             breakdown.mcp_servers[record.mcp_namespaced_tool_name] = MetricWithMetadata(
@@ -294,22 +332,6 @@ async def get_daily_activity(
             skip=(page - 1) * page_size,
             take=page_size,
         )
-
-        # # for 50% of the records, set the mcp_server_id to a random value
-        # mcp_server_dict = {"Zapier_Gmail_MCP", "Stripe_MCP"}
-        # import random
-
-        # for idx, record in enumerate(daily_spend_data):
-        #     record = LiteLLM_DailyUserSpend(**record.model_dump())
-        #     if random.random() < 0.5:
-        #         record.mcp_server_id = random.choice(list(mcp_server_dict))
-        #         record.model = None
-        #         record.model_group = None
-        #         record.prompt_tokens = 0
-        #         record.completion_tokens = 0
-        #         record.cache_read_input_tokens = 0
-        #         record.cache_creation_input_tokens = 0
-        #     daily_spend_data[idx] = record
 
         # Get all unique API keys from the spend data
         api_keys = set()
