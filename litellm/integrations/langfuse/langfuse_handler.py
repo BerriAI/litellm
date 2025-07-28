@@ -12,6 +12,10 @@ from litellm.litellm_core_utils.litellm_logging import StandardCallbackDynamicPa
 
 from .langfuse import LangFuseLogger, LangfuseLoggingConfig
 
+from httpx._client import ClientState
+
+from litellm._logging import verbose_logger
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 else:
@@ -60,7 +64,7 @@ class LangFuseHandler:
         )
 
         # if not cached, create a new langfuse logger and cache it
-        if temp_langfuse_logger is None:
+        if temp_langfuse_logger is None or not LangFuseHandler._logger_httpx_client_is_unclosed(temp_langfuse_logger):
             temp_langfuse_logger = (
                 LangFuseHandler._create_langfuse_logger_from_credentials(
                     credentials=credentials_dict,
@@ -83,7 +87,7 @@ class LangFuseHandler:
         If no Global LangfuseLogger is set, it will check in_memory_dynamic_logger_cache for a cached LangFuseLogger
         This function is used to return the globalLangfuseLogger if it exists, otherwise it will check in_memory_dynamic_logger_cache for a cached LangFuseLogger
         """
-        if globalLangfuseLogger is not None:
+        if globalLangfuseLogger is not None and LangFuseHandler._logger_httpx_client_is_unclosed(globalLangfuseLogger):
             return globalLangfuseLogger
 
         credentials_dict: Dict[
@@ -95,7 +99,7 @@ class LangFuseHandler:
             credentials=credentials_dict,
             service_name="langfuse",
         )
-        if globalLangfuseLogger is None:
+        if globalLangfuseLogger is None or not LangFuseHandler._logger_httpx_client_is_unclosed(globalLangfuseLogger):
             globalLangfuseLogger = (
                 LangFuseHandler._create_langfuse_logger_from_credentials(
                     credentials=credentials_dict,
@@ -167,4 +171,23 @@ class LangFuseHandler:
             or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
         ):
             return True
+        return False
+
+    @staticmethod
+    def _logger_httpx_client_is_unclosed(
+        logger: LangFuseLogger,
+    ) -> bool:
+        """
+        This function checks if the httpx client used by the logger is not closed.
+
+        Args:
+            logger (LangFuseLogger): The LangFuseLogger instance to check.
+
+        Returns:
+            bool: True if the httpx client is not closed, False otherwise.
+        """
+        verbose_logger.debug(f"LangFuseLogger's httpx client state: {logger.Langfuse.httpx_client._state}")
+        if logger is not None and logger.Langfuse.httpx_client._state != ClientState.CLOSED:
+            return True
+        verbose_logger.error("LangFuseLogger's httpx client is closed or logger is None.")
         return False
