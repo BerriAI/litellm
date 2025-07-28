@@ -51,17 +51,15 @@ class HerokuChatConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(self, api_base: Optional[str], api_key: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or os.getenv("HEROKU_API_BASE")
-        if not api_base:
-            raise HerokuError("No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable.")
-        
         api_key = api_key or os.getenv("HEROKU_API_KEY")
-        if not api_key:
-            raise HerokuError("No api key was set. Please provide an api_key, or set the HEROKU_API_KEY environment variable.")
-        
+            
         return api_base, api_key
 
     def get_complete_url(self, api_base: Optional[str], api_key: Optional[str], model: str, optional_params: dict, litellm_params: dict, stream: Optional[bool] = None) -> str:
         api_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
+
+        if not api_base:
+            raise HerokuError("No api base was set. Please provide an api_base, or set the HEROKU_API_BASE environment variable.")
         
         if not api_base.endswith("/v1/chat/completions"):
             api_base = f"{api_base}/v1/chat/completions"    
