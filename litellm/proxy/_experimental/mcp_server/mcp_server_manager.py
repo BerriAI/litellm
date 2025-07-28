@@ -508,6 +508,7 @@ class MCPServerManager:
             "arguments": arguments,
             "mcp_server_name": mcp_server.server_name,
             "mcp_server_id": mcp_server.server_id,
+            "metadata": {},  # Add metadata field for guardrail logging
         }
 
         # Apply pre-call guardrails
@@ -573,17 +574,22 @@ class MCPServerManager:
     ) -> Dict[str, Any]:
         """Apply pre-call guardrails to MCP tool calls."""
         try:
+            verbose_logger.debug(f"Applying pre-call guardrails to MCP tool calls: {data}")
             # Apply pre-call guardrails
             for callback in litellm.callbacks:
+                verbose_logger.debug(f"Checking callback: {callback}")
                 # Check if this is a guardrail callback with the required method
                 if (isinstance(callback, str) or 
                     not hasattr(callback, 'async_pre_call_hook') or 
                     not callable(getattr(callback, 'async_pre_call_hook', None))):
+                    verbose_logger.debug(f"Skipping callback: {callback}")
                     continue
                 
                 try:
+                    verbose_logger.debug(f"Applying pre-call guardrail: {callback}")
                     # Check if this is an MCP-specific guardrail
                     if hasattr(callback, 'mcp_server_name') or hasattr(callback, 'tool_name'):
+                        verbose_logger.debug(f"Applying pre-call guardrail with data: {data}")
                         result = await callback.async_pre_call_hook(
                             user_api_key_dict=user_api_key_auth or UserAPIKeyAuth(),
                             cache=self._get_cache(),
@@ -594,10 +600,12 @@ class MCPServerManager:
                             data = result
                 except Exception as e:
                     verbose_logger.error(f"Error in MCP pre-call guardrail: {e}")
-                    # Continue with other guardrails even if one fails
-                    continue
+                    # Re-raise the exception to block the request when guardrail fails
+                    raise e
         except Exception as e:
             verbose_logger.error(f"Error applying MCP pre-call guardrails: {e}")
+            # Re-raise the exception to block the request when guardrail fails
+            raise e
         
         return data
 

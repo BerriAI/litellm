@@ -79,12 +79,16 @@ class MCPGuardrail(CustomGuardrail):
 
     def _should_apply_to_tool(self, tool_name: str, server_name: Optional[str] = None) -> bool:
         """Check if this guardrail should be applied to the given tool."""
+        verbose_proxy_logger.debug(f"MCP Guardrail: Checking if should apply to tool '{tool_name}' on server '{server_name}'")
+        
         # If specific tool name is set, only apply to that tool
         if self.tool_name and tool_name != self.tool_name:
+            verbose_proxy_logger.debug(f"MCP Guardrail: Skipping - tool name mismatch. Expected: {self.tool_name}, Got: {tool_name}")
             return False
         
         # If specific server name is set, only apply to that server
         if self.mcp_server_name and server_name != self.mcp_server_name:
+            verbose_proxy_logger.debug(f"MCP Guardrail: Skipping - server name mismatch. Expected: {self.mcp_server_name}, Got: {server_name}")
             return False
         
         # Check for forbidden tool patterns
@@ -152,15 +156,17 @@ class MCPGuardrail(CustomGuardrail):
                     if keyword.lower() in value_lower:
                         raise ValueError(f"Forbidden keyword '{keyword}' found in argument '{key}'")
         
-        # Check query length limits
-        if "query" in arguments and isinstance(arguments["query"], str):
-            max_query_length = self.validation_rules.get("max_query_length")
-            if max_query_length and len(arguments["query"]) > max_query_length:
-                raise ValueError(f"Query exceeds maximum length of {max_query_length} characters")
-            
-            min_query_length = self.validation_rules.get("min_query_length")
-            if min_query_length and len(arguments["query"]) < min_query_length:
-                raise ValueError(f"Query must be at least {min_query_length} characters long")
+        # Check query length limits (support both "query" and "question" fields)
+        query_fields = ["query", "question"]
+        for field in query_fields:
+            if field in arguments and isinstance(arguments[field], str):
+                max_query_length = self.validation_rules.get("max_query_length")
+                if max_query_length and len(arguments[field]) > max_query_length:
+                    raise ValueError(f"{field.capitalize()} exceeds maximum length of {max_query_length} characters")
+                
+                min_query_length = self.validation_rules.get("min_query_length")
+                if min_query_length and len(arguments[field]) < min_query_length:
+                    raise ValueError(f"{field.capitalize()} must be at least {min_query_length} characters long")
         
         # Check title length limits
         if "title" in arguments and isinstance(arguments["title"], str):
@@ -182,13 +188,15 @@ class MCPGuardrail(CustomGuardrail):
             if min_body_length and len(arguments["body"]) < min_body_length:
                 raise ValueError(f"Body must be at least {min_body_length} characters long")
         
-        # Check for forbidden search terms
-        if "query" in arguments and isinstance(arguments["query"], str):
-            forbidden_search_terms = self.validation_rules.get("forbidden_search_terms", [])
-            query_lower = arguments["query"].lower()
-            for term in forbidden_search_terms:
-                if term.lower() in query_lower:
-                    raise ValueError(f"Forbidden search term '{term}' found in query")
+        # Check for forbidden search terms (support both "query" and "question" fields)
+        query_fields = ["query", "question"]
+        for field in query_fields:
+            if field in arguments and isinstance(arguments[field], str):
+                forbidden_search_terms = self.validation_rules.get("forbidden_search_terms", [])
+                query_lower = arguments[field].lower()
+                for term in forbidden_search_terms:
+                    if term.lower() in query_lower:
+                        raise ValueError(f"Forbidden search term '{term}' found in {field}")
         
         # Check for potentially unsafe content
         for key, value in arguments.items():
@@ -314,6 +322,8 @@ class MCPGuardrail(CustomGuardrail):
         arguments = data.get("arguments", {})
         server_name = data.get("mcp_server_name")
 
+        verbose_proxy_logger.debug(f"MCP Guardrail: Tool name: {tool_name}, Server name: {server_name}, Expected server: {self.mcp_server_name}")
+
         if not tool_name:
             verbose_proxy_logger.warning("MCP Guardrail: No tool name found in request")
             return data
@@ -324,6 +334,8 @@ class MCPGuardrail(CustomGuardrail):
                 f"MCP Guardrail: Skipping validation for tool {tool_name} (not in scope)"
             )
             return data
+
+        verbose_proxy_logger.debug(f"MCP Guardrail: Applying validation to tool {tool_name}")
 
         try:
             # Validate tool arguments
@@ -340,7 +352,15 @@ class MCPGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"MCP Guardrail: Pre-call validation failed: {e}")
             if self.block_on_error:
-                raise ValueError(f"MCP Guardrail pre-call validation failed: {e}")
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "MCP Guardrail validation failed",
+                        "guardrail_name": self.guardrail_name,
+                        "validation_error": str(e),
+                    }
+                )
             return data
 
     @log_guardrail_information
@@ -401,7 +421,15 @@ class MCPGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"MCP Guardrail: During-call monitoring failed: {e}")
             if self.block_on_error:
-                raise ValueError(f"MCP Guardrail during-call monitoring failed: {e}")
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "MCP Guardrail during-call monitoring failed",
+                        "guardrail_name": self.guardrail_name,
+                        "validation_error": str(e),
+                    }
+                )
             return data
 
     @log_guardrail_information
@@ -451,7 +479,15 @@ class MCPGuardrail(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error(f"MCP Guardrail: Post-call validation failed: {e}")
             if self.block_on_error:
-                raise ValueError(f"MCP Guardrail post-call validation failed: {e}")
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "MCP Guardrail post-call validation failed",
+                        "guardrail_name": self.guardrail_name,
+                        "validation_error": str(e),
+                    }
+                )
             return response
 
     @staticmethod

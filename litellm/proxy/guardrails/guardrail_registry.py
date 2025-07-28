@@ -25,6 +25,7 @@ from .guardrail_initializers import (
     initialize_hide_secrets,
     initialize_lakera,
     initialize_lakera_v2,
+    initialize_mcp,
     initialize_presidio,
 )
 
@@ -32,6 +33,7 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
+    SupportedGuardrailIntegrations.MCP.value: initialize_mcp,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
 }

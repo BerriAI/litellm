@@ -32,7 +32,8 @@ guardrails:
   # MCP-specific security policies
   - guardrail_name: "mcp-security-guard"
     litellm_params:
-      guardrail_type: "mcp"
+      guardrail: "mcp"
+      mode: "pre_call"
       mcp_server_name: "github"
       validation_rules:
         forbidden_keywords: [
@@ -113,7 +114,8 @@ Protect sensitive data and enforce content policies:
 guardrails:
   - guardrail_name: "content-protection-guard"
     litellm_params:
-      guardrail_type: "mcp"
+      guardrail: "mcp"
+      mode: "pre_call"
       mcp_server_name: "deepwiki"
       validation_rules:
         forbidden_keywords: [
@@ -161,7 +163,8 @@ mcp_servers:
 guardrails:
   - guardrail_name: "github-security-guard"
     litellm_params:
-      guardrail_type: "mcp"
+      guardrail: "mcp"
+      mode: "pre_call"
       mcp_server_name: "github"
       tool_name: "search_repositories"
       validation_rules:
@@ -173,7 +176,8 @@ guardrails:
 
   - guardrail_name: "deepwiki-content-guard"
     litellm_params:
-      guardrail_type: "mcp"
+      guardrail: "mcp"
+      mode: "pre_call"
       mcp_server_name: "deepwiki"
       validation_rules:
         forbidden_search_terms: ["admin", "password", "secret"]
@@ -226,7 +230,8 @@ litellm --config config.yaml --detailed_debug
 
 | Parameter | Type | Description | Required |
 |-----------|------|-------------|----------|
-| `guardrail_type` | string | Must be "mcp" for MCP guardrails | Required |
+| `guardrail` | string | Must be "mcp" for MCP guardrails | Required |
+| `mode` | string | Guardrail mode ("pre_call", "during_call", "post_call") | Required |
 | `mcp_server_name` | string | MCP server to apply guardrails to | Optional |
 | `tool_name` | string | Specific tool to apply guardrails to | Optional |
 | `validation_rules` | dict | Rules for input validation | Optional |
@@ -467,7 +472,8 @@ For detailed API documentation, see the [MCP Guardrail API Reference](../api/gua
 guardrails:
   - guardrail_name: "github-search-guard"
     litellm_params:
-      guardrail_type: "mcp"
+      guardrail: "mcp"
+      mode: "pre_call"
       mcp_server_name: "github"
       tool_name: "search_repositories"
       validation_rules:
@@ -484,7 +490,8 @@ guardrails:
 guardrails:
   - guardrail_name: "wikipedia-content-guard"
     litellm_params:
-      guardrail_type: "mcp"
+      guardrail: "mcp"
+      mode: "pre_call"
       mcp_server_name: "deepwiki"
       validation_rules:
         forbidden_search_terms: ["admin", "password", "secret"]
