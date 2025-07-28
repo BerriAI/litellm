@@ -67,9 +67,6 @@ from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_request_utils import (
-    pick_cheapest_chat_models_from_llm_provider,
-)
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -5457,35 +5454,6 @@ def speech(  # noqa: PLR0915
 
 ##### Health Endpoints #######################
 
-
-async def ahealth_check_wildcard_models(
-    model: str,
-    custom_llm_provider: str,
-    model_params: dict,
-    litellm_logging_obj: Logging,
-) -> dict:
-    # this is a wildcard model, we need to pick a random model from the provider
-    cheapest_models = pick_cheapest_chat_models_from_llm_provider(
-        custom_llm_provider=custom_llm_provider, n=3
-    )
-    if len(cheapest_models) == 0:
-        raise Exception(
-            f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-        )
-    if len(cheapest_models) > 1:
-        fallback_models = cheapest_models[
-            1:
-        ]  # Pick the last 2 models from the shuffled list
-    else:
-        fallback_models = None
-    model_params["model"] = cheapest_models[0]
-    model_params["litellm_logging_obj"] = litellm_logging_obj
-    model_params["fallbacks"] = fallback_models
-    model_params["max_tokens"] = 1
-    await acompletion(**model_params)
-    return {}
-
-
 async def ahealth_check(
     model_params: dict,
     mode: Optional[
@@ -5514,7 +5482,12 @@ async def ahealth_check(
             "x-ms-region": str,
         }
     """
+    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+
     # Map modes to their corresponding health check calls
+    #########################################################
+    # Init request with tracking information
+    #########################################################
     litellm_logging_obj = Logging(
         model="",
         messages=[],
@@ -5525,6 +5498,9 @@ async def ahealth_check(
         function_id="1234",
         log_raw_request_response=True,
     )
+    model_params["litellm_logging_obj"] = litellm_logging_obj
+    model_params = HealthCheckHelpers._update_model_params_with_health_check_tracking_information(model_params=model_params)
+    #########################################################
     try:
         model: Optional[str] = model_params.get("model", None)
         if model is None:
@@ -5542,13 +5518,12 @@ async def ahealth_check(
         }  # don't used cached responses for making health check calls
         mode = mode or "chat"
         if "*" in model:
-            return await ahealth_check_wildcard_models(
+            return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
                 litellm_logging_obj=litellm_logging_obj,
             )
-        model_params["litellm_logging_obj"] = litellm_logging_obj
 
         mode_handlers = {
             "chat": lambda: litellm.acompletion(

@@ -80,7 +80,9 @@ def validate_first_format(chunk):
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
-        assert isinstance(choice["delta"]["role"], str), "'role' should be a string."
+        assert isinstance(
+            choice["delta"]["role"], str
+        ), f"'role' should be a string. Got {choice['delta']['role']}"
         assert "messages" not in choice
         # openai v1.0.0 returns content as None
         assert (choice["finish_reason"] is None) or isinstance(
@@ -642,7 +644,6 @@ def test_completion_ollama_hosted_stream():
     "model",
     [
         # "claude-3-5-haiku-20241022",
-        # "claude-2",
         # "mistral/mistral-small-latest",
         "openrouter/openai/gpt-4o-mini",
     ],

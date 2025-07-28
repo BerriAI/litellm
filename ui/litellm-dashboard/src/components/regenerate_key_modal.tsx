@@ -7,11 +7,13 @@ import { KeyResponse } from "./key_team_helpers/key_list";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 
 interface RegenerateKeyModalProps {
-  selectedToken: KeyResponse | null;
-  visible: boolean;
-  onClose: () => void;
-  accessToken: string | null;
-  premiumUser: boolean;
+  selectedToken: KeyResponse | null
+  visible: boolean
+  onClose: () => void
+  accessToken: string | null
+  premiumUser: boolean
+  setAccessToken?: (token: string) => void
+  onKeyUpdate?: (updatedKeyData: Partial<KeyResponse>) => void
 }
 
 export function RegenerateKeyModal({
@@ -20,37 +22,53 @@ export function RegenerateKeyModal({
   onClose,
   accessToken,
   premiumUser,
+  setAccessToken,
+  onKeyUpdate,
 }: RegenerateKeyModalProps) {
-  const [form] = Form.useForm();
-  const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
-  const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
-  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
-  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [form] = Form.useForm()
+  const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null)
+  const [regenerateFormData, setRegenerateFormData] = useState<any>(null)
+  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null)
+  const [isRegenerating, setIsRegenerating] = useState(false)
+
+  // Track whether this is the user's own authentication key
+  const [isOwnKey, setIsOwnKey] = useState<boolean>(false)
+
+  // Keep track of the current valid access token locally
+  const [currentAccessToken, setCurrentAccessToken] = useState<string | null>(null)
 
   useEffect(() => {
-    if (visible && selectedToken) {
+    if (visible && selectedToken && accessToken) {
       form.setFieldsValue({
         key_alias: selectedToken.key_alias,
         max_budget: selectedToken.max_budget,
         tpm_limit: selectedToken.tpm_limit,
         rpm_limit: selectedToken.rpm_limit,
         duration: selectedToken.duration || "",
-      });
+      })
+
+      // Initialize the current access token
+      setCurrentAccessToken(accessToken)
+
+      // Check if this is the user's own authentication key by comparing the key values
+      const isUserOwnKey = selectedToken.key_name === accessToken
+      setIsOwnKey(isUserOwnKey)
     }
-  }, [visible, selectedToken, form]);
+  }, [visible, selectedToken, form, accessToken])
 
   useEffect(() => {
     if (!visible) {
       // Reset states when modal is closed
-      setRegeneratedKey(null);
-      setIsRegenerating(false);
-      form.resetFields();
+      setRegeneratedKey(null)
+      setIsRegenerating(false)
+      setIsOwnKey(false)
+      setCurrentAccessToken(null)
+      form.resetFields()
     }
-  }, [visible, form]);
+  }, [visible, form])
 
-  useEffect(() => {
-    const calculateNewExpiryTime = (duration: string | undefined) => {
-      if (!duration) return null;
+  const calculateNewExpiryTime = (duration: string | undefined): string | null => {
+    if (!duration) return null
 
       try {
         const now = new Date();
@@ -72,6 +90,7 @@ export function RegenerateKeyModal({
       }
     };
 
+  useEffect(() => {
     if (regenerateFormData?.duration) {
       setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
     } else {
@@ -80,14 +99,48 @@ export function RegenerateKeyModal({
   }, [regenerateFormData?.duration]);
 
   const handleRegenerateKey = async () => {
-    if (!selectedToken || !accessToken) return;
+    if (!selectedToken || !currentAccessToken) return
 
     setIsRegenerating(true);
     try {
-      const formValues = await form.validateFields();
-      const response = await regenerateKeyCall(accessToken, selectedToken.token, formValues);
-      setRegeneratedKey(response.key);
-      message.success("API Key regenerated successfully");
+      const formValues = await form.validateFields()
+
+      // Use the current access token for the API call
+      const response = await regenerateKeyCall(currentAccessToken, selectedToken.token || selectedToken.token_id, formValues)
+      setRegeneratedKey(response.key)
+      message.success("API Key regenerated successfully")
+
+      console.log("Full regenerate response:", response) // Debug log to see what's returned
+
+      // Create updated key data with ALL new values from the response
+      const updatedKeyData: Partial<KeyResponse> = {
+        // Use the new token/key ID from the response (this is what was missing!)
+        token: response.token || response.key_id || selectedToken.token, // Try different possible field names
+        key_name: response.key, // This is the new secret key string
+        max_budget: formValues.max_budget,
+        tpm_limit: formValues.tpm_limit,
+        rpm_limit: formValues.rpm_limit,
+        expires: formValues.duration ? calculateNewExpiryTime(formValues.duration) : selectedToken.expires,
+        // Include any other fields that might be returned by the API
+        ...response, // Spread the entire response to capture all updated fields
+      }
+
+      console.log("Updated key data with new token:", updatedKeyData) // Debug log
+
+      // If user regenerated their own auth key, update both local and global access tokens
+      if (isOwnKey) {
+        setCurrentAccessToken(response.key) // Update local token immediately
+        if (setAccessToken) {
+          setAccessToken(response.key) // Update global token
+        }
+      }
+
+      // Update the parent component with new key data
+      if (onKeyUpdate) {
+        onKeyUpdate(updatedKeyData)
+      }
+
+      setIsRegenerating(false)
     } catch (error) {
       console.error("Error regenerating key:", error);
       message.error("Failed to regenerate API Key");
@@ -96,11 +149,13 @@ export function RegenerateKeyModal({
   };
 
   const handleClose = () => {
-    setRegeneratedKey(null);
-    setIsRegenerating(false);
-    form.resetFields();
-    onClose();
-  };
+    setRegeneratedKey(null)
+    setIsRegenerating(false)
+    setIsOwnKey(false)
+    setCurrentAccessToken(null)
+    form.resetFields()
+    onClose()
+  }
 
   return (
     <Modal
