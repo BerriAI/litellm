@@ -73,40 +73,7 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
 ) -> Tuple[Any, httpx.Headers]:
-        # Handle raw httpx.AsyncClient by normalizing to Anthropic SDK
-    if client is not None and isinstance(client, httpx.AsyncClient):
-        from litellm.litellm_core_utils.core_helpers import (
-            get_client_or_fallback_to_global,
-            normalize_httpx_client_for_anthropic
-        )
-        
-        # Get API key and base from environment if not provided
-        import os
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        api_base = os.getenv("ANTHROPIC_BASE_URL")
-        
-        normalized_client = normalize_httpx_client_for_anthropic(
-            client=client,
-            is_async=True,
-            api_key=api_key,
-            api_base=api_base,
-        )
-        
-        if normalized_client is not None:
-            # Use the normalized Anthropic SDK client directly
-            try:
-                response = await normalized_client.messages.create(
-                    model=model,
-                    messages=messages,
-                    headers=headers,
-                    max_tokens=max_tokens,
-                    timeout=timeout,
-                    **optional_params,
-                )
-                return response, response._request.headers if hasattr(response, '_request') else httpx.Headers()
-            except Exception as e:
-                raise e
-    elif client is None:
+    if client is None:
         client = litellm.module_level_aclient
 
     try:
@@ -280,11 +247,6 @@ class AnthropicChatCompletion(BaseLLM):
         if client is not None and isinstance(client, httpx.AsyncClient):
             from litellm.litellm_core_utils.core_helpers import normalize_httpx_client_for_anthropic
             
-            # Get API key and base from environment if not provided
-            import os
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            api_base = os.getenv("ANTHROPIC_BASE_URL")
-            
             normalized_client = normalize_httpx_client_for_anthropic(
                 client=client,
                 is_async=True,
@@ -293,6 +255,9 @@ class AnthropicChatCompletion(BaseLLM):
             )
             
             if normalized_client is not None:
+                # Extract max_tokens from data or optional_params
+                max_tokens = data.get("max_tokens") or optional_params.get("max_tokens", 4096)
+                
                 # Use the normalized Anthropic SDK client directly
                 response = await normalized_client.messages.create(
                     model=model,
@@ -300,7 +265,7 @@ class AnthropicChatCompletion(BaseLLM):
                     headers=headers,
                     max_tokens=max_tokens,
                     timeout=timeout,
-                    **optional_params,
+                    **{k: v for k, v in optional_params.items() if k != "max_tokens"},
                 )
                 return response
         
