@@ -40,7 +40,6 @@ const sidebars = {
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
           "proxy/guardrails/model_armor",
-          "proxy/guardrails/mcp_guardrail",
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
@@ -263,7 +262,14 @@ const sidebars = {
         "text_completion",
         "embedding/supported_embedding",
         "anthropic_unified",
-        "mcp",
+        {
+          type: "category",
+          label: "MCP",
+          items: [
+            "mcp",
+            "proxy/guardrails/mcp_guardrail",
+          ]
+        },
         "generateContent",
         {
           type: "category",
