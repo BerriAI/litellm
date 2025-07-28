@@ -6,6 +6,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.gemini import GeminiImageGenerationRequest
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
@@ -143,15 +144,19 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
           }
         }
         """
-        request_body = {
-            "instances": [
-                {
-                    "prompt": prompt
-                }
+        from litellm.types.llms.gemini import (
+            GeminiImageGenerationInstance,
+            GeminiImageGenerationParameters,
+        )
+        request_body: GeminiImageGenerationRequest = GeminiImageGenerationRequest(
+            instances=[
+                GeminiImageGenerationInstance(
+                    prompt=prompt
+                )
             ],
-            "parameters": optional_params
-        }
-        return request_body
+            parameters=GeminiImageGenerationParameters(**optional_params)
+        )
+        return request_body.model_dump(exclude_none=True)
 
     def transform_image_generation_response(
         self,
