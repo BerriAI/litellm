@@ -32,8 +32,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         return [
             "n",
-            "size",
-            "response_format"
+            "size"
         ]
     
     def map_openai_params(
@@ -54,33 +53,25 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                         mapped_params["sampleCount"] = v
                     elif k == "size":
                         # Map OpenAI size format to Google aspectRatio
-                        aspect_ratio_map = {
-                            "1024x1024": "1:1",
-                            "1792x1024": "16:9", 
-                            "1024x1792": "9:16",
-                            "1280x896": "4:3",
-                            "896x1280": "3:4"
-                        }
-                        mapped_params["aspectRatio"] = aspect_ratio_map.get(v, "1:1")
+                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
                     else:
-                        mapped_params[k] = v
-                elif drop_params:
-                    pass
-                else:
-                    raise ValueError(
-                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
-                    )
-
-        # Set default values
-        if "sampleCount" not in mapped_params:
-            mapped_params["sampleCount"] = 4
-        if "aspectRatio" not in mapped_params:
-            mapped_params["aspectRatio"] = "1:1"
-            
-        # Add default person generation policy
-        mapped_params["personGeneration"] = "allow_adult"
-        
+                        mapped_params[k] = v        
         return mapped_params
+    
+
+    def _map_size_to_aspect_ratio(self, size: str) -> str:
+        """
+        https://ai.google.dev/gemini-api/docs/image-generation
+
+        """
+        aspect_ratio_map = {
+            "1024x1024": "1:1",
+            "1792x1024": "16:9", 
+            "1024x1792": "9:16",
+            "1280x896": "4:3",
+            "896x1280": "3:4"
+        }
+        return aspect_ratio_map.get(size, "1:1")
 
     def get_complete_url(
         self,
