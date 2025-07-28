@@ -90,21 +90,22 @@ interface ModelLimitModalProps {
 
 // Define the props type
 interface ViewKeyTableProps {
-  userID: string;
-  userRole: string | null;
-  accessToken: string;
-  selectedTeam: any | null;
+  userID: string | null
+  userRole: string | null
+  accessToken: string | null
+  selectedTeam: Team | null
   setSelectedTeam: React.Dispatch<React.SetStateAction<any | null>>;
-  data: any[] | null;
+  data: KeyResponse[] | null
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
   teams: Team[] | null;
   premiumUser: boolean;
   currentOrg: Organization | null;
   organizations: Organization[] | null;
   setCurrentOrg: React.Dispatch<React.SetStateAction<Organization | null>>;
-  selectedKeyAlias: string | null;
-  setSelectedKeyAlias: Setter<string | null>;
-  createClicked: boolean;
+  selectedKeyAlias: string | null
+  setSelectedKeyAlias: Setter<string | null>
+  createClicked: boolean
+  setAccessToken?: (token: string) => void
 }
 
 interface ItemData {
@@ -155,7 +156,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   setCurrentOrg,
   selectedKeyAlias,
   setSelectedKeyAlias,
-  createClicked
+  createClicked,
+  setAccessToken,
 }) => {
   const [isButtonClicked, setIsButtonClicked] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -178,10 +180,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   // Pass filters into the hook so the API call includes these query parameters.
   const { keys, isLoading, error, pagination, refresh, setKeys } = useKeyList({
-    selectedTeam,
+    selectedTeam: selectedTeam || undefined,
     currentOrg,
     selectedKeyAlias,
-    accessToken,
+    accessToken: accessToken || "",
     createClicked,
   });
 
@@ -292,7 +294,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
 
     try {
-      await keyDeleteCall(accessToken, keyToDelete);
+      if (!accessToken) return
+      await keyDeleteCall(accessToken, keyToDelete)
       // Successfully completed the deletion. Update the state to trigger a rerender.
       const filteredData = data.filter((item) => item.token !== keyToDelete);
       setData(filteredData);
@@ -345,13 +348,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     }
 
     try {
-      const formValues = await regenerateForm.validateFields();
-      const response = await regenerateKeyCall(
-        accessToken,
-        selectedToken.token,
-        formValues
-      );
-      setRegeneratedKey(response.key);
+      const formValues = await regenerateForm.validateFields()
+      if (!accessToken) return;
+      const response = await regenerateKeyCall(accessToken, selectedToken.token || selectedToken.token_id, formValues)
+      setRegeneratedKey(response.key)
 
       // Update the data state with the new key_name
       if (data) {
@@ -375,7 +375,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   return (
     <div>
-      <AllKeysTable 
+      <AllKeysTable
         keys={keys}
         setKeys={setKeys}
         isLoading={isLoading}
@@ -394,6 +394,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         selectedKeyAlias={selectedKeyAlias}
         setSelectedKeyAlias={setSelectedKeyAlias}
         premiumUser={premiumUser}
+        setAccessToken={setAccessToken}
       />
 
       {isDeleteModalOpen && (

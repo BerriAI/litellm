@@ -3700,8 +3700,9 @@ export const teamMemberAddCall = async (
 export const teamBulkMemberAddCall = async (
   accessToken: string,
   teamId: string,
-  members: Member[],
-  maxBudgetInTeam?: number
+  members: Member[] | null,
+  maxBudgetInTeam?: number,
+  allUsers?: boolean
 ) => {
   try {
     console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
@@ -3710,10 +3711,15 @@ export const teamBulkMemberAddCall = async (
       ? `${proxyBaseUrl}/team/bulk_member_add`
       : `/team/bulk_member_add`;
 
-    const requestBody: any = {
+    let requestBody: any = {
       team_id: teamId,
-      members: members,
     };
+
+    if (allUsers) {
+      requestBody.all_users = true;
+    } else {
+      requestBody.members = members;
+    }
 
     if (maxBudgetInTeam !== undefined && maxBudgetInTeam !== null) {
       requestBody.max_budget_in_team = maxBudgetInTeam;
@@ -4017,7 +4023,8 @@ export const userUpdateUserCall = async (
 export const userBulkUpdateUserCall = async (
   accessToken: string,
   formValues: any, // Assuming formValues is an object
-  userIds: string[]
+  userIds?: string[], // Optional - if not provided, will update all users
+  allUsers: boolean = false // Flag to update all users
 ) => {
   try {
     console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
@@ -4025,16 +4032,31 @@ export const userBulkUpdateUserCall = async (
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/user/bulk_update`
       : `/user/bulk_update`;
-    let request_body = [] 
-    for (const user_id of userIds) {
-      request_body.push({
-        user_id: user_id,
-        ...formValues,
+    
+    let request_body_json: string;
+    
+    if (allUsers) {
+      // Update all users mode
+      request_body_json = JSON.stringify({
+        all_users: true,
+        user_updates: formValues,
       });
+    } else if (userIds && userIds.length > 0) {
+      // Update specific users mode
+      let request_body = [] 
+      for (const user_id of userIds) {
+        request_body.push({
+          user_id: user_id,
+          ...formValues,
+        });
+      }
+      request_body_json = JSON.stringify({
+        users: request_body,
+      });
+    } else {
+      throw new Error("Must provide either userIds or set allUsers=true");
     }
-    let request_body_json = JSON.stringify({
-      users: request_body,
-    });
+    
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -4052,8 +4074,16 @@ export const userBulkUpdateUserCall = async (
     }
 
     const data = (await response.json()) as {
-      user_id: string;
-      data: UserInfo;
+      results: Array<{
+        user_id?: string;
+        user_email?: string;
+        success: boolean;
+        error?: string;
+        updated_user?: any;
+      }>;
+      total_requested: number;
+      successful_updates: number;
+      failed_updates: number;
     };
     console.log("API Response:", data);
     //message.success("User role updated");
@@ -5190,6 +5220,7 @@ export const callMCPTool = async (
   toolName: string,
   toolArguments: Record<string, any>,
   authValue: string,
+  serverAlias?: string,
 ) => {
   try {
     // Construct base URL
@@ -5204,13 +5235,22 @@ export const callMCPTool = async (
       toolArguments
     );
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        [MCP_AUTH_HEADER]: authValue,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         name: toolName,
         arguments: toolArguments,

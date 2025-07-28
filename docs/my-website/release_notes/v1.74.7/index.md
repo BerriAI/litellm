@@ -1,5 +1,5 @@
 ---
-title: "[Pre Release] v1.74.7"
+title: "v1.74.7-stable"
 slug: "v1-74-7"
 date: 2025-07-19T10:00:00
 authors:
@@ -28,14 +28,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.7
+ghcr.io/berriai/litellm:v1.74.7-stable.patch.1
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.74.7
+pip install litellm==1.74.7.post2
 ```
 
 </TabItem>
@@ -47,12 +47,16 @@ pip install litellm==1.74.7
 
 
 - **Vector Stores** - Support for Vertex RAG Engine, PG Vector, OpenAI & Azure OpenAI Vector Stores.
-- **Health Check Improvements** - Separate health check app on dedicated port for better Kubernetes liveness probes.
-- **New LLM Providers** - Added Moonshot API `moonshot` and `v0` provider support.
+- **Bulk Editing Users** - Bulk editing users on the UI.
+- **Health Check Improvements** - Prevent unnecessary pod restarts during high traffic.
+- **New LLM Providers** - Added Moonshot AI and Vercel v0 provider support.
 
 ---
 
 ## Vector Stores API
+
+<Image img={require('../../img/release_notes/vector_stores.png')} />
+
 
 This release introduces support for using VertexAI RAG Engine, PG Vector, Bedrock Knowledge Bases, and OpenAI Vector Stores with LiteLLM.
 
@@ -71,6 +75,31 @@ This brings the following benefits for LiteLLM users:
 
 
 [Get started](../../docs/completion/knowledgebase)
+
+
+---
+
+## Bulk Editing Users
+
+<Image img={require('../../img/bulk_edit_graphic.png')} />
+
+v1.74.7-stable introduces Bulk Editing Users on the UI. This is useful for:
+- granting all existing users to a default team (useful for controlling access / tracking spend by team)
+- controlling personal model access for existing users
+
+[Read more](https://docs.litellm.ai/docs/proxy/ui/bulk_edit_users)
+
+---
+
+## Health Check Server
+
+<Image alt="Separate Health App Architecture" img={require('../../img/separate_health_app_architecture.png')} style={{ borderRadius: '8px', marginBottom: '1em', maxWidth: '100%' }} />
+
+This release brings reliability improvements that prevent unnecessary pod restarts during high traffic. Previously, when the main LiteLLM app was busy serving traffic, health endpoints would timeout even when pods were healthy. 
+ 
+Starting with this release, you can run health endpoints on an isolated process with a dedicated port. This ensures liveness and readiness probes remain responsive even when the main LiteLLM app is under heavy load.
+
+[Read More](https://docs.litellm.ai/docs/proxy/prod#10-use-a-separate-health-check-app)
 
 
 ---
@@ -313,4 +342,4 @@ This brings the following benefits for LiteLLM users:
 * @jlaurendi made their first contribution in https://github.com/BerriAI/litellm/pull/12704
 * @doublerr made their first contribution in https://github.com/BerriAI/litellm/pull/12661
 
-## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.3-stable...v1.74.6.rc)**
+## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.3-stable...v1.74.7-stable)**

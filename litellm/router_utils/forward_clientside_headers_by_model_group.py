@@ -31,6 +31,18 @@ class ForwardClientSideHeadersByModelGroup(CustomLogger):
             "model_group_alias": model_group_alias,
         }
 
+    def filter_headers(self, headers: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter the headers to only include the headers that are forwarded to the LLM API.
+
+        E.g. passing 'connection': 'keep-alive' will cause the request to hang, and not be acknowledged on the other side.
+        """
+        return {
+            k: v
+            for k, v in headers.items()
+            if k.lower() not in ["connection", "content-length"]
+        }
+
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
@@ -66,7 +78,7 @@ class ForwardClientSideHeadersByModelGroup(CustomLogger):
                     in litellm.model_group_settings.forward_client_headers_to_llm_api
                 ):
                     kwargs.setdefault("headers", {}).update(
-                        kwargs["secret_fields"]["raw_headers"]
+                        self.filter_headers(kwargs["secret_fields"]["raw_headers"])
                     )
 
         return kwargs

@@ -1,23 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal } from "antd";
+import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, message } from "antd";
 import type { FormInstance } from "antd";
 import type { UploadProps } from "antd/es/upload";
+import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import LiteLLMModelNameField from "./litellm_model_name";
 import ConditionalPublicModelName from "./conditional_public_model_name";
 import ProviderSpecificFields from "./provider_specific_fields";
 import AdvancedSettings from "./advanced_settings";
 import { Providers, providerLogoMap, getPlaceholder } from "../provider_info_helpers";
 import type { Team } from "../key_team_helpers/key_list";
-import { CredentialItem, modelAvailableCall } from "../networking";
+import { CredentialItem, getGuardrailsList, modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { TEST_MODES } from "./add_model_modes";
 import { Row, Col } from "antd";
 import { Text, TextInput, Switch } from "@tremor/react";
 import TeamDropdown from "../common_components/team_dropdown";
 import { all_admin_roles } from "@/utils/roles";
+import AddAutoRouterTab from "./add_auto_router_tab";
+import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 
 interface AddModelTabProps {
-  form: FormInstance;
+  form: FormInstance; // For the Add Model tab
   handleOk: () => void;
   selectedProvider: Providers;
   setSelectedProvider: (provider: Providers) => void;
@@ -53,13 +56,34 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
   userRole,
   premiumUser,
 }) => {
+  // Create separate form instance for auto router
+  const [autoRouterForm] = Form.useForm();
   // State for test mode and connection testing
   const [testMode, setTestMode] = useState<string>("chat");
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   // Using a unique ID to force the ConnectionErrorDisplay to remount and run a fresh test
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
+
+
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    fetchGuardrails();
+  }, [accessToken]);
+  
   // Test connection when button is clicked
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
@@ -85,13 +109,37 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 
   const isAdmin = all_admin_roles.includes(userRole);
 
+  const handleAutoRouterOk = () => {
+    autoRouterForm
+      .validateFields()
+      .then((values) => {
+        handleAddAutoRouterSubmit(values, accessToken, autoRouterForm, handleOk);
+      })
+      .catch((error) => {
+        console.error("Validation failed:", error);
+      });
+  };
+
   return (
     <>
-      <Title level={2}>Add new model</Title>
-      <Card>
+      <TabGroup className="w-full">
+        <TabList className="mb-4">
+          <Tab>Add Model</Tab>
+          <Tab>Add Auto Router</Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <Title level={2}>Add Model</Title>
+            <Card>
         <Form
           form={form}
-          onFinish={handleOk}
+          onFinish={(values) => {
+            console.log("🔥 Form onFinish triggered with values:", values);
+            handleOk();
+          }}
+          onFinishFailed={(errorInfo) => {
+            console.log("💥 Form onFinishFailed triggered:", errorInfo);
+          }}
           labelCol={{ span: 10 }}
           wrapperCol={{ span: 16 }}
           labelAlign="left"
@@ -313,6 +361,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
               showAdvancedSettings={showAdvancedSettings}
               setShowAdvancedSettings={setShowAdvancedSettings}
               teams={teams}
+              guardrailsList={guardrailsList}
             />
 
             <div className="flex justify-between items-center mb-4">
@@ -328,7 +377,18 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             </div>
           </>
         </Form>
-      </Card>
+            </Card>
+          </TabPanel>
+          <TabPanel>
+            <AddAutoRouterTab
+              form={autoRouterForm}
+              handleOk={handleAutoRouterOk}
+              accessToken={accessToken}
+              userRole={userRole}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
       
       {/* Test Connection Results Modal */}
       <Modal
