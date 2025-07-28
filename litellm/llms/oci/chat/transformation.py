@@ -294,18 +294,37 @@ class OCIChatConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         stream = optional_params.get("stream", False)
+        oci_compartment_id = optional_params.get("oci_compartment_id", None)
+        if not oci_compartment_id:
+            raise Exception(
+                "kwarg `oci_compartment_id` is required for OCI requests"
+            )
+        temperature = optional_params.get("temperature", None)
+        max_new_tokens = optional_params.get("max_new_tokens", None)
 
         # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
         if optional_params.get("stream"):
             del optional_params["stream"]
 
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
+        messages = adapt_messages_to_oci_standard(messages=messages)  # type: ignore
 
         data = {
-            "messages": messages,
-            "stream": stream,
-            "params": optional_params,
+            "compartmentId": oci_compartment_id,
+            "servingMode": {
+                "servingType": "ON_DEMAND",
+                "modelId": model,
+            },
+            "chatRequest": {
+                "apiFormat": "GENERIC",
+                "messages": messages,
+            },
         }
+        if temperature:
+            data["chatRequest"]["temperature"] = temperature
+        if stream:
+            data["chatRequest"]["isStream"] = True
+        if max_new_tokens:
+            data["chatRequest"]["maxTokens"] = max_new_tokens
 
         return data
 
@@ -333,35 +352,39 @@ class OCIChatConfig(BaseConfig):
                 message=str(json["error"]),
                 status_code=raw_response.status_code,
             )
+        output = json.get("chatResponse")
+        if not output:
+            raise OCIError(
+                message="Invalid response format from OCI",
+                status_code=raw_response.status_code,
+            )
 
         # set meta data here
-        model_response.created = int(time.time())
-        model_response.model = model
+        iso_str = output["timeCreated"]
+        dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        model_response.created = int(dt.timestamp())
+        model_response.model = json.get("modelId", model)
 
         # Add the output
-        output = json.get("output")
+        if not output or not isinstance(output, dict):
+            raise OCIError(
+                message="Invalid response format from OCI",
+                status_code=raw_response.status_code,
+            )
 
         message = model_response.choices[0].message  # type: ignore
 
-        message.content = output["content"][0]["text"]
-
-        messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
-
-        # NOTE We are approximating tokens, to get the true values we will need to update our BE
-        prompt_tokens = get_tokens_from_messages(messages)  # type: ignore
-
-        output_messages = adapt_messages_to_bytez_standard(messages=[output])
-
-        completion_tokens = get_tokens_from_messages(output_messages)
-
-        total_tokens = prompt_tokens + completion_tokens
+        response_message = output["choices"][0]["message"]
+        if "content" in response_message and isinstance(response_message["content"], list):
+            message.content = response_message["content"][0]["text"]
+        if "toolCalls" in response_message:
+            message.tool_calls = response_message["toolCalls"]
 
         usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
+            prompt_tokens=output["usage"]["promptTokens"],
+            completion_tokens=output["usage"]["completionTokens"],
+            total_tokens=output["usage"]["totalTokens"],
         )
-
         model_response.usage = usage  # type: ignore
 
         model_response._hidden_params["additional_headers"] = raw_response.headers
@@ -372,10 +395,6 @@ class OCIChatConfig(BaseConfig):
             "inference-meter": raw_response.headers.get("inference-meter"),
             "inference-time": raw_response.headers.get("inference-time"),
         }
-
-        # TODO additional data when supported
-        # message.tool_calls
-        # message.function_call
 
         return model_response
 
@@ -506,8 +525,8 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
 
 
 # litellm/types/llms/openai.py is a good reference for what is supported
-open_ai_to_bytez_content_item_map = {
-    "text": {"type": "text", "value_name": "text"},
+open_ai_to_oci_content_item_map = {
+    "text": {"type": "TEXT", "value_name": "text"},
     "image_url": {"type": "image", "value_name": "url"},
     "input_audio": {"type": "audio", "value_name": "url"},
     "video_url": {"type": "video", "value_name": "url"},
@@ -515,18 +534,19 @@ open_ai_to_bytez_content_item_map = {
     "file": None,
 }
 
+open_ai_to_oci_role_map = {
+    "system": "SYSTEM",
+    "user": "USER",
+    "assistant": "ASSISTANT",
+}
 
-def adapt_messages_to_bytez_standard(messages: List[Dict]):
-
+def adapt_messages_to_oci_standard(messages: List[Dict]):
     messages = _adapt_string_only_content_to_lists(messages)
-
     new_messages = []
 
     for message in messages:
-
         role = message["role"]
         content: list = message["content"]
-
         new_content = []
 
         for content_item in content:
@@ -535,7 +555,7 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
             if not type:
                 raise Exception("Prop `type` is not a string")
 
-            content_item_map = open_ai_to_bytez_content_item_map[type]
+            content_item_map = open_ai_to_oci_content_item_map[type]
 
             if not content_item_map:
                 raise Exception(f"Prop `{type}` is not supported")
@@ -551,7 +571,7 @@ def adapt_messages_to_bytez_standard(messages: List[Dict]):
 
             new_content.append({"type": new_type, value_name: value})
 
-        new_messages.append({"role": role, "content": new_content})
+        new_messages.append({"role": open_ai_to_oci_role_map[role], "content": new_content})
 
     return new_messages
 
