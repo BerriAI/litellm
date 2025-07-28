@@ -116,29 +116,6 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "extra_field" not in result["file"]
         assert "another_field" not in result["file"]
 
-    def test_transform_input_file_item_to_file_item_ignores_other_fields(self):
-        """Test that transformation only includes file_id and file_data, ignoring other fields"""
-        # Setup
-        input_item = {
-            "type": "input_file",
-            "file_id": "file-abc123xyz",
-            "extra_field": "should_be_ignored",
-            "another_field": 123,
-        }
-
-        # Execute
-        result = (
-            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
-                input_item
-            )
-        )
-
-        # Assert
-        expected = {"type": "file", "file": {"file_id": "file-abc123xyz"}}
-        assert result == expected
-        assert "extra_field" not in result["file"]
-        assert "another_field" not in result["file"]
-
     def test_transform_input_image_item_to_image_item_with_image_url(self):
         """Test transformation of input_image item with image_url to Chat Completion image format"""
         # Setup
