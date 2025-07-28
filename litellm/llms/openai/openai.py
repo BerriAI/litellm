@@ -343,9 +343,31 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: Union[float, httpx.Timeout] = httpx.Timeout(None),
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
-        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        client: Optional[Union[OpenAI, AsyncOpenAI, httpx.Client, httpx.AsyncClient]] = None,
     ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
         client_initialization_params: Dict = locals()
+        
+        # Handle global client sessions and normalize raw httpx clients
+        from litellm.litellm_core_utils.core_helpers import (
+            get_client_or_fallback_to_global,
+            normalize_httpx_client_for_openai
+        )
+        
+        client = get_client_or_fallback_to_global(client, is_async)
+        normalized_client = normalize_httpx_client_for_openai(
+            client=client,
+            is_async=is_async,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+        )
+        
+        # If we got a normalized SDK client, return it directly
+        if normalized_client is not None:
+            return normalized_client
+        
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -392,6 +414,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             return _new_client
 
         else:
+            # Client is already provider-specific (OpenAI/AsyncOpenAI)
             self._set_dynamic_params_on_client(
                 client=client,
                 organization=organization,

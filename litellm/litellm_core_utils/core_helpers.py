@@ -203,3 +203,65 @@ def preserve_upstream_non_openai_attributes(
     for key, value in original_chunk.model_dump().items():
         if key not in expected_keys:
             setattr(model_response, key, value)
+
+
+def normalize_httpx_client_for_openai(
+    client: Optional[Union[httpx.Client, httpx.AsyncClient, Any]],
+    is_async: bool,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    **sdk_kwargs: Any,
+) -> Any:
+    """
+    Normalize raw httpx.Client to OpenAI SDK client if needed.
+    
+    This is a minimal helper for Issue #13049 - prevents AttributeError when
+    users pass httpx.Client objects directly to litellm.completion().
+    
+    Returns:
+        - None if client is None
+        - Original client if already OpenAI SDK instance  
+        - New OpenAI SDK client wrapping httpx client if raw httpx
+    """
+    if client is None:
+        return None
+        
+    # Pass through non-httpx clients (assume they're already provider SDKs)
+    if not isinstance(client, (httpx.Client, httpx.AsyncClient)):
+        return client
+    
+    # Import here to avoid circular dependencies
+    try:
+        from openai import AsyncOpenAI, OpenAI
+        
+        if is_async:
+            if not isinstance(client, httpx.AsyncClient):
+                raise ValueError("Expected httpx.AsyncClient for async operation")
+            return AsyncOpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=client,
+                **sdk_kwargs
+            )
+        else:
+            if not isinstance(client, httpx.Client):
+                raise ValueError("Expected httpx.Client for sync operation")
+            return OpenAI(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=client,
+                **sdk_kwargs
+            )
+    except ImportError:
+        raise ValueError("openai package required for custom httpx client support")
+
+
+def get_client_or_fallback_to_global(
+    client: Optional[Any], 
+    is_async: bool
+) -> Optional[Any]:
+    """Get client with fallback to global litellm sessions."""
+    if client is not None:
+        return client
+    import litellm
+    return litellm.aclient_session if is_async else litellm.client_session

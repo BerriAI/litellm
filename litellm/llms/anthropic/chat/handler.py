@@ -73,7 +73,18 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
 ) -> Tuple[Any, httpx.Headers]:
-    if client is None:
+        # Handle raw httpx.AsyncClient by creating a wrapper
+    if client is not None and isinstance(client, httpx.AsyncClient):
+        # Create a simple wrapper that implements the AsyncHTTPHandler interface
+        class CustomAsyncHTTPHandler:
+            def __init__(self, client):
+                self.client = client
+            
+            async def post(self, url, headers=None, data=None, stream=False, timeout=None, **kwargs):
+                return await self.client.post(url, headers=headers, content=data, timeout=timeout, **kwargs)
+                            
+        client = CustomAsyncHTTPHandler(client)
+    elif client is None:
         client = litellm.module_level_aclient
 
     try:
@@ -243,9 +254,24 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
-        async_handler = client or get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.ANTHROPIC
-        )
+        # Handle raw httpx.AsyncClient by creating a wrapper
+        if client is not None and isinstance(client, httpx.AsyncClient):
+            # Create a simple wrapper that implements the AsyncHTTPHandler interface
+            class CustomAsyncHTTPHandler:
+                def __init__(self, client):
+                    self.client = client
+                
+                async def post(self, url, headers=None, json=None, timeout=None, **kwargs):
+                    return await self.client.post(url, headers=headers, json=json, timeout=timeout, **kwargs)
+                    
+                async def aclose(self):
+                    await self.client.aclose()
+            
+            async_handler = CustomAsyncHTTPHandler(client)
+        else:
+            async_handler = client or get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.ANTHROPIC
+            )
 
         try:
             response = await async_handler.post(
@@ -433,12 +459,19 @@ class AnthropicChatCompletion(BaseLLM):
                 )
 
             else:
-                if client is None or not isinstance(client, HTTPHandler):
+                # Handle raw httpx clients by wrapping them in HTTPHandler
+                if client is not None and isinstance(client, httpx.Client):
+                    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+                    client = HTTPHandler(
+                        timeout=timeout,
+                        concurrent_limit=1000,
+                        client=client,  # Pass the custom httpx client
+                    )
+                elif client is None or not isinstance(client, HTTPHandler):
                     client = _get_httpx_client(
                         params={"timeout": timeout}
                     )
-                else:
-                    client = client
+                # If client is already HTTPHandler, use as-is
 
                 try:
                     response = client.post(

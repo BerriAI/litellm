@@ -434,7 +434,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_key: Optional[str],
         api_base: Optional[str],
         api_version: Optional[str] = None,
-        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None,
+        client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI, httpx.Client, httpx.AsyncClient]] = None,
         litellm_params: Optional[dict] = None,
         _is_async: bool = False,
         model: Optional[str] = None,
@@ -442,6 +442,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         openai_client: Optional[Union[AzureOpenAI, AsyncAzureOpenAI]] = None
         client_initialization_params: dict = locals()
         client_initialization_params["is_async"] = _is_async
+        
         if client is None:
             cached_client = self.get_cached_openai_client(
                 client_initialization_params=client_initialization_params,
@@ -466,6 +467,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             else:
                 openai_client = AzureOpenAI(**azure_client_params)  # type: ignore
         else:
+            # Client is already provider-specific (AzureOpenAI/AsyncAzureOpenAI)
             openai_client = client
             if api_version is not None and isinstance(
                 openai_client._custom_query, dict
