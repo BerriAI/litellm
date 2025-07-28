@@ -32,7 +32,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         return [
             "n",
-            "size"
+            "size",
+            "response_format"
         ]
     
     def map_openai_params(
