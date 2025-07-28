@@ -64,7 +64,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                     parsed_body = json.loads(body_str)
 
         # Cache the parsed result
-        _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
+        # _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
     except (json.JSONDecodeError, orjson.JSONDecodeError):
