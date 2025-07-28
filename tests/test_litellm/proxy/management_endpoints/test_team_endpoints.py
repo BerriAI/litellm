@@ -561,7 +561,7 @@ def test_team_member_add_duplication_check_raises_proxy_exception():
 
     # Verify the exception details
     assert exc_info.value.type == ProxyErrorTypes.team_member_already_in_team
-    assert exc_info.value.param == "user_id"
+    assert exc_info.value.param == "member"
     assert exc_info.value.code == "400"
     assert "existing-user-id" in str(exc_info.value.message)
     assert "already in team" in str(exc_info.value.message)
