@@ -371,7 +371,7 @@ class MCPServerManager:
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
                 stdio_config=stdio_config,
-                protocol_version=protocol_version or server.spec_version,
+                protocol_version=cast(MCPSpecVersionType, protocol_version or server.spec_version),
             )
         else:
             # For HTTP/SSE transports
@@ -382,7 +382,7 @@ class MCPServerManager:
                 auth_type=server.auth_type,
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
-                protocol_version=protocol_version or server.spec_version,
+                protocol_version=cast(MCPSpecVersionType, protocol_version or server.spec_version),
             )
 
     async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None, mcp_protocol_version: Optional[str] = None) -> List[MCPTool]:
