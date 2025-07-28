@@ -10,7 +10,6 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.llms.recraft import RecraftImageGenerationRequestParams
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
@@ -22,20 +21,18 @@ else:
 
 
 class GoogleImageGenConfig(BaseImageGenerationConfig):
-    DEFAULT_BASE_URL: str = "https://external.api.recraft.ai"
-    IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
+    DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
-        https://www.recraft.ai/docs#generate-image
+        Google AI Imagen API supported parameters
+        https://ai.google.dev/gemini-api/docs/imagen
         """
         return [
             "n",
-            "response_format",
-            "size",
-            "style"
+            "size"
         ]
     
     def map_openai_params(
@@ -46,10 +43,26 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
+        mapped_params = {}
+        
+        for k, v in non_default_params.items():
             if k not in optional_params.keys():
                 if k in supported_params:
-                    optional_params[k] = non_default_params[k]
+                    # Map OpenAI parameters to Google format
+                    if k == "n":
+                        mapped_params["sampleCount"] = v
+                    elif k == "size":
+                        # Map OpenAI size format to Google aspectRatio
+                        aspect_ratio_map = {
+                            "1024x1024": "1:1",
+                            "1792x1024": "16:9", 
+                            "1024x1792": "9:16",
+                            "1280x896": "4:3",
+                            "896x1280": "3:4"
+                        }
+                        mapped_params["aspectRatio"] = aspect_ratio_map.get(v, "1:1")
+                    else:
+                        mapped_params[k] = v
                 elif drop_params:
                     pass
                 else:
@@ -57,7 +70,16 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                         f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
                     )
 
-        return optional_params
+        # Set default values
+        if "sampleCount" not in mapped_params:
+            mapped_params["sampleCount"] = 4
+        if "aspectRatio" not in mapped_params:
+            mapped_params["aspectRatio"] = "1:1"
+            
+        # Add default person generation policy
+        mapped_params["personGeneration"] = "allow_adult"
+        
+        return mapped_params
 
     def get_complete_url(
         self,
@@ -70,17 +92,17 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
     ) -> str:
         """
         Get the complete url for the request
-
-        Some providers need `model` in `api_base`
+        
+        Google AI API format: https://generativelanguage.googleapis.com/v1beta/models/{model}:predict
         """
         complete_url: str = (
             api_base 
-            or get_secret_str("RECRAFT_API_BASE") 
+            or get_secret_str("GEMINI_API_BASE") 
             or self.DEFAULT_BASE_URL
         )
 
         complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
+        complete_url = f"{complete_url}/models/{model}:predict"
         return complete_url
 
     def validate_environment(
@@ -95,15 +117,14 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
     ) -> dict:
         final_api_key: Optional[str] = (
             api_key or 
-            get_secret_str("RECRAFT_API_KEY")
+            get_secret_str("GEMINI_API_KEY")
         )
         if not final_api_key:
-            raise ValueError("RECRAFT_API_KEY is not set")
+            raise ValueError("GEMINI_API_KEY is not set")
         
-        headers["Authorization"] = f"Bearer {final_api_key}"        
+        headers["x-goog-api-key"] = final_api_key
+        headers["Content-Type"] = "application/json"
         return headers
-
-
 
     def transform_image_generation_request(
         self,
@@ -114,16 +135,31 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform the image generation request to the recraft image generation request body
-
-        https://www.recraft.ai/docs#generate-image
+        Transform the image generation request to Google AI Imagen format
+        
+        Google AI API format:
+        {
+          "instances": [
+            {
+              "prompt": "Robot holding a red skateboard"
+            }
+          ],
+          "parameters": {
+            "sampleCount": 4,
+            "aspectRatio": "1:1",
+            "personGeneration": "allow_adult"
+          }
+        }
         """
-        recratft_image_generation_request_body: RecraftImageGenerationRequestParams = RecraftImageGenerationRequestParams(
-            prompt=prompt,
-            model=model,
-            **optional_params,
-        )
-        return dict(recratft_image_generation_request_body)
+        request_body = {
+            "instances": [
+                {
+                    "prompt": prompt
+                }
+            ],
+            "parameters": optional_params
+        }
+        return request_body
 
     def transform_image_generation_response(
         self,
@@ -139,9 +175,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         json_mode: Optional[bool] = None,
     ) -> ImageResponse:
         """
-        Transform the image generation response to the litellm image response
-
-        https://www.recraft.ai/docs#generate-image
+        Transform Google AI Imagen response to litellm ImageResponse format
         """
         try:
             response_data = raw_response.json()
@@ -151,13 +185,19 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        
         if not model_response.data:
             model_response.data = []
         
-        for image_data in response_data["data"]:
-            model_response.data.append(ImageObject(
-                url=image_data.get("url", None),
-                b64_json=image_data.get("b64_json", None),
-            ))
+        # Google AI returns predictions with generated images
+        predictions = response_data.get("predictions", [])
+        for prediction in predictions:
+            # Google AI returns base64 encoded images in the prediction
+            generated_images = prediction.get("generatedImages", [])
+            for image_data in generated_images:
+                model_response.data.append(ImageObject(
+                    b64_json=image_data.get("bytesBase64Encoded", None),
+                    url=None,  # Google AI returns base64, not URLs
+                ))
         
         return model_response
