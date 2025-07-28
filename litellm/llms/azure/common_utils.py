@@ -507,18 +507,20 @@ class BaseAzureLLM(BaseOpenAILLM):
         else:
             # Client is already provider-specific (AzureOpenAI/AsyncAzureOpenAI)
             openai_client = client
-            if api_version is not None and isinstance(
-                openai_client._custom_query, dict
-            ):
+            if (api_version is not None 
+                and openai_client is not None 
+                and hasattr(openai_client, '_custom_query')
+                and isinstance(openai_client._custom_query, dict)):
                 # set api_version to version passed by user
                 openai_client._custom_query.setdefault("api-version", api_version)
 
         # save client in-memory cache
-        self.set_cached_openai_client(
-            openai_client=openai_client,
-            client_initialization_params=client_initialization_params,
-            client_type="azure",
-        )
+        if openai_client is not None:
+            self.set_cached_openai_client(
+                openai_client=openai_client,
+                client_initialization_params=client_initialization_params,
+                client_type="azure",
+            )
         return openai_client
 
     def initialize_azure_sdk_client(
