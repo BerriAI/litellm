@@ -124,6 +124,7 @@ custom_client = httpx.Client(proxy="http://proxy.com:8080")
 # OpenAI: openai.OpenAI(http_client=custom_client)
 # Anthropic: anthropic.Anthropic(http_client=custom_client)  
 # Azure: openai.AzureOpenAI(http_client=custom_client)
+# Gemini: Uses httpx client directly via HTTPHandler wrapper
 ```
 
 ## Notes

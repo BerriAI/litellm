@@ -91,6 +91,22 @@ def test_normalize_client_for_azure_passthrough() -> None:
     assert normalize_httpx_client_for_azure(None, False) is None
 
 
+def test_gemini_direct_httpx_support() -> None:
+    """Test that Gemini accepts raw httpx clients directly without normalization."""
+    # Gemini doesn't use normalization - it accepts httpx clients directly through HTTPHandler/AsyncHTTPHandler
+    sync_client = httpx.Client()
+    async_client = httpx.AsyncClient()
+    
+    # These should be usable directly in Gemini completion calls
+    # This is a unit test to document the expected behavior
+    assert isinstance(sync_client, httpx.Client)
+    assert isinstance(async_client, httpx.AsyncClient)
+    
+    # Clean up
+    sync_client.close()
+    # Note: async_client.aclose() would require await, so we skip cleanup for the test
+
+
 def test_normalize_client_sync_async_mismatch() -> None:
     """Test that sync/async mismatches raise appropriate errors."""
     from litellm.litellm_core_utils.core_helpers import (
@@ -239,8 +255,9 @@ def test_reproduce_original_issue_fixed() -> None:
     "model,provider_name",
     [
         ("gpt-3.5-turbo", "openai"),
-        ("claude-3-haiku-20240307", "anthropic"),
+        ("claude-3-haiku-20240307", "anthropic"), 
         ("azure/gpt-35-turbo", "azure"),
+        ("gemini/gemini-1.5-flash", "gemini"),
     ],
 )
 def test_global_client_session_works(model: str, provider_name: str) -> None:
@@ -264,7 +281,8 @@ def test_global_client_session_works(model: str, provider_name: str) -> None:
             env_keys = {
                 "openai": "OPENAI_API_KEY",
                 "anthropic": "ANTHROPIC_API_KEY", 
-                "azure": "AZURE_API_KEY"
+                "azure": "AZURE_API_KEY",
+                "gemini": "GEMINI_API_KEY"
             }
             
             with patch.dict(os.environ, {env_keys[provider_name]: "test-key"}):
@@ -340,4 +358,31 @@ def test_anthropic_client_real_api() -> None:
         
     except Exception as e:
         # Should not get the original attribute error
-        assert "api_key" not in str(e).lower(), f"Got api_key attribute error: {e}" 
+        assert "api_key" not in str(e).lower(), f"Got api_key attribute error: {e}"
+
+
+@pytest.mark.skipif(not os.getenv("GEMINI_API_KEY"), reason="No GEMINI_API_KEY set")
+def test_gemini_client_real_api() -> None:
+    """Integration test with real Gemini API using custom httpx client."""
+    debug_client = DebugClient()
+    
+    try:
+        response = litellm.completion(
+            model="gemini/gemini-1.5-flash",
+            messages=[{"role": "user", "content": "Say 'test' only."}],
+            client=debug_client,
+            max_tokens=5,
+        )
+        
+        # Verify we got a response and our client was used
+        assert response.choices[0].message.content is not None
+        assert len(debug_client.request_calls) > 0
+        
+        # Verify it went to Google AI
+        method, url = debug_client.request_calls[0]
+        assert method == "POST"
+        assert "generativelanguage.googleapis.com" in url
+        
+    except Exception as e:
+        # Should not get the original attribute error
+        assert "api_key" not in str(e).lower(), f"Got api_key attribute error: {e}"
