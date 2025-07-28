@@ -1,17 +1,17 @@
 # this workflow is triggered by an API call when there is a new PyPI release of LiteLLM
 name: Build, Publish LiteLLM Docker Image. New Release
-on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "The tag version you want to build"
-      release_type:
-        description: "The release type you want to build. Can be 'latest', 'stable', 'dev', 'rc'"
-        type: string
-        default: "latest"
-      commit_hash:
-        description: "Commit hash"
-        required: true
+on: {}
+  # workflow_dispatch:
+  #   inputs:
+  #     tag:
+  #       description: "The tag version you want to build"
+  #     release_type:
+  #       description: "The release type you want to build. Can be 'latest', 'stable', 'dev', 'rc'"
+  #       type: string
+  #       default: "latest"
+  #     commit_hash:
+  #       description: "Commit hash"
+  #       required: true
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:

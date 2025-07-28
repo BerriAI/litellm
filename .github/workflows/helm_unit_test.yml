@@ -1,7 +1,7 @@
 name: Helm unit test
 
-on:
-  workflow_dispatch:
+on: {}
+  # workflow_dispatch:
 
 jobs:
   unit-test:

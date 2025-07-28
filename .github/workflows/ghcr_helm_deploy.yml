@@ -1,10 +1,10 @@
 # this workflow is triggered by an API call when there is a new PyPI release of LiteLLM
 name: Build, Publish LiteLLM Helm Chart. New Release
-on:
-  workflow_dispatch:
-    inputs:
-      chartVersion:
-        description: "Update the helm chart's version to this"
+on: {}
+  # workflow_dispatch:
+  #   inputs:
+  #     chartVersion:
+  #       description: "Update the helm chart's version to this"
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
