@@ -1247,7 +1247,7 @@ def test_cost_azure_openai_prompt_caching():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    model = "azure/o1-mini"
+    model = "azure/o4-mini"
 
     ## LLM API CALL ## (MORE EXPENSIVE)
     response_1 = ModelResponse(

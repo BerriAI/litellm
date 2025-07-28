@@ -17,7 +17,7 @@ from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 @pytest.mark.asyncio
 async def test_azure_chat_o_series_transformation():
     provider_config = AzureOpenAIO1Config()
-    model = "o_series/web-interface-o1-mini"
+    model = "o_series/web-interface-o4-mini"
     messages = [{"role": "user", "content": "Hello, how are you?"}]
     optional_params = {}
     litellm_params = {}
@@ -27,4 +27,4 @@ async def test_azure_chat_o_series_transformation():
         model, messages, optional_params, litellm_params, headers
     )
     print(response)
-    assert response["model"] == "web-interface-o1-mini"
+    assert response["model"] == "web-interface-o4-mini"

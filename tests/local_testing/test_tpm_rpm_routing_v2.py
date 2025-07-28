@@ -684,8 +684,8 @@ def test_return_potential_deployments():
                 "litellm_params": {
                     "rpm": 10,
                     "api_key": "sk-1234",
-                    "model": "openai/o1-mini",
-                    "mock_response": "Hello, world, it's o1!",
+                    "model": "openai/o4-mini",
+                    "mock_response": "Hello, world, it's o4!",
                 },
                 "model_info": {
                     "id": "e13a56981607e1749b1433e6968ffc7df5552540ad3faa44b0b44ba4f3443bfe",

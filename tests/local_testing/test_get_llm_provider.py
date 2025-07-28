@@ -117,13 +117,13 @@ def test_get_llm_provider_cohere_chat_test2():
     assert model == "command-r-plus"
 
 
-def test_get_llm_provider_azure_o1():
+def test_get_llm_provider_azure_o4():
 
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-        model="azure/o1-mini",
+        model="azure/o4-mini",
     )
     assert custom_llm_provider == "azure"
-    assert model == "o1-mini"
+    assert model == "o4-mini"
 
 
 def test_default_api_base():

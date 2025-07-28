@@ -1991,7 +1991,7 @@ def test_openai_chat_completion_complete_response_call():
         "claude-3-haiku-20240307",
         "o1-preview",
         "o1",
-        "azure/fake-o1-mini",
+        "azure/fake-o4-mini",
     ],
 )
 @pytest.mark.parametrize(

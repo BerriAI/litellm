@@ -27,7 +27,7 @@ from litellm.types.utils import Usage
 
 
 def test_reasoning_tokens_no_price_set():
-    model = "o1-mini"
+    model = "o4-mini"
     custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
