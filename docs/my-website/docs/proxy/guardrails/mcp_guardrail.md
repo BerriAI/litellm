@@ -60,15 +60,20 @@ guardrails:
           "secret",
           "private"
         ]
-      custom_validation_function: "security.mcp_validation:validate_security"
+      # custom_validation_function: "security.mcp_validation:validate_security"  # OPTIONAL - for advanced validation
       block_on_error: true
 ```
 
-**Custom Security Validation Function:**
+**Note:** The guardrail will automatically block forbidden keywords and apply validation rules without needing a custom validation function. The custom function is only needed for advanced security logic beyond the built-in rules.
+```
+
+**Optional: Custom Security Validation Function (Advanced)**
 ```python
 # security/mcp_validation.py
+# This is OPTIONAL - the guardrail will work without this custom function
+# Built-in validation rules handle forbidden keywords automatically
 def validate_security(tool_name: str, arguments: dict, validation_rules: dict) -> dict:
-    """Comprehensive security validation for MCP tools"""
+    """Advanced security validation for MCP tools (OPTIONAL)"""
     
     # Check for prompt injection patterns
     prompt_injection_patterns = [
