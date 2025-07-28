@@ -9,7 +9,7 @@ on:
         type: string
         default: "latest"
       commit_hash:
-        description: "Commit hash"
+        description: "Commit hash or branch name"
         required: true
 
 env:
