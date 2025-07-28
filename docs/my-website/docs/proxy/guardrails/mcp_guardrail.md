@@ -19,13 +19,15 @@ Protect MCP tools from security threats and prompt injection attacks:
 
 ```yaml
 guardrails:
-  # Prompt injection protection using existing services
-  - guardrail_name: "prompt-injection-guard"
+  # Prompt injection protection using AWS Bedrock
+  - guardrail_name: "bedrock-prompt-injection-guard"
     litellm_params:
-      guardrail: "aporia"  # or "lakera", "bedrock"
+      guardrail: "bedrock"
       mode: "pre_call"
-      api_key: os.environ/APORIA_API_KEY
-      api_base: os.environ/APORIA_API_BASE
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+      bedrock_model_id: "anthropic.claude-3-sonnet-20240229-v1:0"
 
   # MCP-specific security policies
   - guardrail_name: "mcp-security-guard"
