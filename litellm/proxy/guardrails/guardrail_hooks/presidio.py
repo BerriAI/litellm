@@ -336,6 +336,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     presidio_config=presidio_config,
                     request_data=request_data,
                 )
+
                 verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
                 ####################################################
@@ -403,6 +404,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 LitellmCallTypes.completion.value,
                 LitellmCallTypes.acompletion.value,
             ]:
+
                 messages = data["messages"]
                 tasks = []
 

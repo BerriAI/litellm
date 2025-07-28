@@ -48,7 +48,6 @@ import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingSettingsView from "../logging_settings_view";
@@ -698,7 +697,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <Form.Item label="Vector Stores" name="vector_stores">
                     <VectorStoreSelector
-                      onChange={(values) =>
+                      onChange={(values: string[]) =>
                          form.setFieldValue("vector_stores", values)
                       }
                       value={form.getFieldValue("vector_stores")}

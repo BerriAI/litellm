@@ -15,6 +15,7 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
+from litellm.types.realtime import RealtimeQueryParams
 from ..utils import client as wrapper_client
 
 azure_realtime = AzureOpenAIRealtime()
@@ -32,6 +33,7 @@ async def _arealtime(
     azure_ad_token: Optional[str] = None,
     client: Optional[Any] = None,
     timeout: Optional[float] = None,
+    query_params: Optional[RealtimeQueryParams] = None,
     **kwargs,
 ):
     """
@@ -132,6 +134,7 @@ async def _arealtime(
             api_key=api_key,
             client=None,
             timeout=timeout,
+            query_params=query_params,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
@@ -170,7 +173,7 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", model=model
+            api_base=api_base or "https://api.openai.com/", query_params=RealtimeQueryParams(model=model)
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

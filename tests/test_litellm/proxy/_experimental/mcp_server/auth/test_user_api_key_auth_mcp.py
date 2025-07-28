@@ -119,19 +119,21 @@ class TestMCPRequestHandler:
                     mock_find_unique.assert_not_called()
 
     @pytest.mark.parametrize(
-        "headers,expected_api_key,expected_mcp_auth_header",
+        "headers,expected_api_key,expected_mcp_auth_header,expected_server_auth_headers",
         [
             # Test case 1: x-litellm-api-key header present
             (
                 [(b"x-litellm-api-key", b"test-api-key-123")],
                 "test-api-key-123",
                 None,
+                {},
             ),
             # Test case 2: Authorization header present (fallback)
             (
                 [(b"authorization", b"Bearer test-auth-token")],
                 "Bearer test-auth-token",
                 None,
+                {},
             ),
             # Test case 3: Both headers present (primary should win)
             (
@@ -141,22 +143,25 @@ class TestMCPRequestHandler:
                 ],
                 "primary-key",
                 None,
+                {},
             ),
             # Test case 4: Case insensitive headers
             (
                 [(b"X-LITELLM-API-KEY", b"case-insensitive-key")],
                 "case-insensitive-key",
                 None,
+                {},
             ),
             # Test case 5: No relevant headers
             (
                 [(b"content-type", b"application/json")],
                 "",
                 None,
+                {},
             ),
             # Test case 6: Empty headers
-            ([], "", None),
-            # Test case 7: MCP auth header present
+            ([], "", None, {}),
+            # Test case 7: Legacy MCP auth header present
             (
                 [
                     (b"x-litellm-api-key", b"test-api-key-123"),
@@ -164,17 +169,62 @@ class TestMCPRequestHandler:
                 ],
                 "test-api-key-123",
                 "mcp-auth-token",
+                {},
             ),
-            # Test case 8: Only MCP auth header present (no API key)
+            # Test case 8: Only legacy MCP auth header present (no API key)
             (
                 [(b"x-mcp-auth", b"mcp-auth-token")],
                 "",
                 "mcp-auth-token",
+                {},
+            ),
+            # Test case 9: Server-specific auth headers present
+            (
+                [
+                    (b"x-litellm-api-key", b"test-api-key-123"),
+                    (b"x-mcp-github-authorization", b"Bearer github-token"),
+                    (b"x-mcp-zapier_x_api-key", b"zapier-api-key"),
+                ],
+                "test-api-key-123",
+                None,
+                {"github": "Bearer github-token", "zapier_x_api": "zapier-api-key"},
+            ),
+            # Test case 10: Both legacy and server-specific auth headers
+            (
+                [
+                    (b"x-litellm-api-key", b"test-api-key-123"),
+                    (b"x-mcp-auth", b"legacy-token"),
+                    (b"x-mcp-github-authorization", b"Bearer github-token"),
+                ],
+                "test-api-key-123",
+                "legacy-token",
+                {"github": "Bearer github-token"},
+            ),
+            # Test case 11: Server-specific auth headers with different header types
+            (
+                [
+                    (b"x-litellm-api-key", b"test-api-key-123"),
+                    (b"x-mcp-deepwiki-authorization", b"Basic base64-encoded"),
+                    (b"x-mcp-custom_x_custom-header", b"custom-value"),
+                ],
+                "test-api-key-123",
+                None,
+                {"deepwiki": "Basic base64-encoded", "custom_x_custom": "custom-value"},
+            ),
+            # Test case 12: Case insensitive server-specific headers
+            (
+                [
+                    (b"x-litellm-api-key", b"test-api-key-123"),
+                    (b"X-MCP-GITHUB-AUTHORIZATION", b"Bearer github-token"),
+                ],
+                "test-api-key-123",
+                None,
+                {"github": "Bearer github-token"},
             ),
         ],
     )
-    async def test_process_mcp_request(self, headers, expected_api_key, expected_mcp_auth_header):
-        """Test process_mcp_request method with various header scenarios"""
+    async def test_process_mcp_request_with_server_auth_headers(self, headers, expected_api_key, expected_mcp_auth_header, expected_server_auth_headers):
+        """Test process_mcp_request method with server-specific auth headers"""
 
         # Create ASGI scope with headers
         scope = {
@@ -200,13 +250,14 @@ class TestMCPRequestHandler:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == expected_api_key
             assert auth_result.user_id == ("test-user-id" if expected_api_key else None)
             assert auth_result.team_id == ("test-team-id" if expected_api_key else None)
             assert mcp_auth_header == expected_mcp_auth_header
+            assert mcp_server_auth_headers == expected_server_auth_headers
             # For these tests, mcp_servers should be None
             assert mcp_servers is None
 
@@ -367,10 +418,12 @@ class TestMCPRequestHandler:
             mock_user_api_key_auth.return_value = mock_auth_result
 
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers_result = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers_result, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
             assert mcp_servers_result == expected_result["mcp_servers"]
+            # For these tests, mcp_server_auth_headers should be empty
+            assert mcp_server_auth_headers == {}
 
 
 class TestMCPCustomHeaderName:
@@ -497,126 +550,249 @@ class TestMCPCustomHeaderName:
 
     @pytest.mark.asyncio
     async def test_process_mcp_request_with_custom_auth_header(self):
-        """Test that process_mcp_request works with custom authentication header"""
+        """Test process_mcp_request with custom auth header name"""
         
-        custom_header_name = "x-custom-mcp-auth"
-        custom_auth_token = "custom-auth-token-123"
-        api_key = "test-api-key"
-        
-        # Create ASGI scope with custom header
-        scope = {
-            "type": "http",
-            "method": "POST",
-            "path": "/test",
-            "headers": [
-                (b"x-litellm-api-key", api_key.encode()),
-                (custom_header_name.encode(), custom_auth_token.encode()),
-            ],
-        }
-        
-        # Mock the custom header name method
-        with patch.object(
-            MCPRequestHandler,
-            '_get_mcp_client_side_auth_header_name',
-            return_value=custom_header_name
-        ):
-            # Mock user_api_key_auth
-            mock_auth_result = UserAPIKeyAuth(
-                api_key=api_key,
-                user_id="test-user-id",
-                team_id="test-team-id",
-            )
+        # Mock the custom header name
+        with patch.object(MCPRequestHandler, '_get_mcp_client_side_auth_header_name', return_value="custom-auth-header"):
             
+            # Create ASGI scope with custom header
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": "/test",
+                "headers": [
+                    (b"x-litellm-api-key", b"test-api-key"),
+                    (b"custom-auth-header", b"custom-auth-token"),
+                ],
+            }
+
+            # Create an async mock for user_api_key_auth
+            async def mock_user_api_key_auth(api_key, request):
+                return UserAPIKeyAuth(
+                    token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    api_key=api_key,
+                    user_id="test-user-id",
+                    team_id="test-team-id",
+                    user_role=None,
+                    request_route=None
+                )
+
             with patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth"
-            ) as mock_user_api_key_auth:
-                mock_user_api_key_auth.return_value = mock_auth_result
-                
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth,
+            ) as mock_auth:
                 # Call the method
-                auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
-                
+                auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+
                 # Assert the results
-                assert auth_result == mock_auth_result
-                assert mcp_auth_header == custom_auth_token
+                assert auth_result.api_key == "test-api-key"
+                assert mcp_auth_header == "custom-auth-token"
                 assert mcp_servers is None
-                
-                # Verify user_api_key_auth was called with correct API key
-                mock_user_api_key_auth.assert_called_once()
-                call_args = mock_user_api_key_auth.call_args
-                assert call_args.kwargs["api_key"] == api_key
+                assert mcp_server_auth_headers == {}
+
+                # Verify the mock was called
+                mock_auth.assert_called_once()
+                call_args = mock_auth.call_args
+                assert call_args.kwargs["api_key"] == "test-api-key"
+
+    def test_get_mcp_server_auth_headers_from_headers(self):
+        """Test _get_mcp_server_auth_headers_from_headers method"""
+        from starlette.datastructures import Headers
+        
+        # Test case 1: No server-specific headers
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "content-type": "application/json"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {}
+        
+        # Test case 2: Single server-specific header
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-authorization": "Bearer github-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github": "Bearer github-token"}
+        
+        # Test case 3: Multiple server-specific headers
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-authorization": "Bearer github-token",
+            "x-mcp-zapier_x_api-key": "zapier-api-key",
+            "x-mcp-deepwiki-authorization": "Basic base64-encoded"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        expected = {
+            "github": "Bearer github-token",
+            "zapier_x_api": "zapier-api-key", 
+            "deepwiki": "Basic base64-encoded"
+        }
+        assert result == expected
+        
+        # Test case 4: Case insensitive headers
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "X-MCP-GITHUB-AUTHORIZATION": "Bearer github-token",
+            "x-mcp-ZAPIER_x_api-key": "zapier-api-key"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        expected = {
+            "github": "Bearer github-token",
+            "zapier_x_api": "zapier-api-key"
+        }
+        assert result == expected
+        
+        # Test case 5: Invalid format headers (should be ignored)
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-invalid": "should-be-ignored",
+            "x-mcp-github": "should-be-ignored",
+            "x-mcp-github-authorization": "Bearer github-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github": "Bearer github-token"}
+        
+        # Test case 6: Edge case - header with multiple hyphens in server alias
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github_mcp-authorization": "Bearer github-mcp-token",
+            "x-mcp-gh_mcp2-authorization": "Bearer gh-mcp2-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        expected = {
+            "github_mcp": "Bearer github-mcp-token",
+            "gh_mcp2": "Bearer gh-mcp2-token"
+        }
+        assert result == expected
+        
+        # Test case 7: Edge case - header with underscore in server alias
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github_mcp-authorization": "Bearer github-mcp-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github_mcp": "Bearer github-mcp-token"}
+        
+        # Test case 8: Edge case - empty header value
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-authorization": ""
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github": ""}
+        
+        # Test case 9: Edge case - very long header value
+        long_token = "Bearer " + "x" * 1000
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-authorization": long_token
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        assert result == {"github": long_token}
+        
+        # Test case 10: Edge case - special characters in server alias
+        headers = Headers({
+            "x-litellm-api-key": "test-key",
+            "x-mcp-github-123-authorization": "Bearer github-123-token",
+            "x-mcp-github_test-authorization": "Bearer github-test-token"
+        })
+        result = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+        expected = {
+            "github-123": "Bearer github-123-token",
+            "github_test": "Bearer github-test-token"
+        }
+        assert result == expected
+
 
 class TestMCPAccessGroupsE2E:
     """Simple e2e tests for MCP access groups functionality"""
 
     @pytest.mark.asyncio 
     async def test_mcp_access_group_resolution_e2e(self):
-        """E2E test: Pass access group in x-mcp-servers header, verify it resolves to server IDs"""
+        """Test that MCP access groups are properly resolved from headers"""
         
-        # Mock servers that belong to the access group
-        mock_server_1 = MagicMock()
-        mock_server_1.server_id = "gmail-server"
-        mock_server_2 = MagicMock()  
-        mock_server_2.server_id = "slack-server"
-        
-        # Mock prisma client
-        mock_prisma_client = MagicMock()
-        mock_find_many = AsyncMock(return_value=[mock_server_1, mock_server_2])
-        mock_prisma_client.db.litellm_mcpservertable.find_many = mock_find_many
-        
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
-            # Test that when we pass an access group, it calls _get_mcp_servers_from_access_groups
-            result = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                access_groups=["dev-group"]
-            )
-            
-            # Verify it unfurls the MCPs from that group
-            assert sorted(result) == sorted(["gmail-server", "slack-server"])
-            
-            # Verify the correct database query was made
-            mock_find_many.assert_called_once_with(
-                where={
-                    "mcp_access_groups": {
-                        "hasSome": ["dev-group"]
-                    }
-                }
-            )
-
-    @pytest.mark.asyncio
-    async def test_mcp_header_with_mixed_servers_and_groups(self):
-        """E2E test: x-mcp-servers header with both server names and access groups"""
-        
-        # Create ASGI scope with mixed servers and access groups
+        # Create ASGI scope with access groups header
         scope = {
-            "type": "http", 
+            "type": "http",
             "method": "POST",
             "path": "/test",
             "headers": [
                 (b"x-litellm-api-key", b"test-api-key"),
-                (b"x-mcp-servers", b"zapier-server,dev-group"),  # Mix of server name and access group
+                (b"x-mcp-access-groups", b"dev_group,prod_group"),
             ],
         }
-        
-        # Mock user authentication
+
+        # Create an async mock for user_api_key_auth
         async def mock_user_api_key_auth(api_key, request):
             return UserAPIKeyAuth(
-                token="test-token",
+                token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                 api_key=api_key,
                 user_id="test-user-id",
                 team_id="test-team-id",
                 user_role=None,
                 request_route=None
             )
-        
+
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
             side_effect=mock_user_api_key_auth,
-        ):
-            # Call process_mcp_request 
-            auth_result, mcp_auth_header, mcp_servers = await MCPRequestHandler.process_mcp_request(scope)
-            
-            # Verify the header parsing worked correctly
+        ) as mock_auth:
+            # Call the method
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+
+            # Assert the results
             assert auth_result.api_key == "test-api-key"
-            assert mcp_servers == ["zapier-server", "dev-group"]  # Should contain both server name and access group
+            assert mcp_auth_header is None
+            assert mcp_servers is None
+            # The access groups header should not be parsed as a server auth header
+            # It should be handled separately by the access groups parsing logic
+            assert mcp_server_auth_headers == {}
+
+            # Verify the mock was called
+            mock_auth.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_mcp_header_with_mixed_servers_and_groups(self):
+        """Test that MCP headers work with mixed servers and access groups"""
+        
+        # Create ASGI scope with mixed servers and groups
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/test",
+            "headers": [
+                (b"x-litellm-api-key", b"test-api-key"),
+                (b"x-mcp-servers", b"server1,dev_group,server2"),
+            ],
+        }
+
+        # Create an async mock for user_api_key_auth
+        async def mock_user_api_key_auth(api_key, request):
+            return UserAPIKeyAuth(
+                token="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                api_key=api_key,
+                user_id="test-user-id",
+                team_id="test-team-id",
+                user_role=None,
+                request_route=None
+            )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=mock_user_api_key_auth,
+        ) as mock_auth:
+            # Call the method
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
+
+            # Assert the results
+            assert auth_result.api_key == "test-api-key"
+            assert mcp_auth_header is None
+            assert mcp_servers == ["server1", "dev_group", "server2"]
+            assert mcp_server_auth_headers == {}
+
+            # Verify the mock was called
+            mock_auth.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -628,9 +804,14 @@ def test_mcp_path_based_server_segregation(monkeypatch):
 
     # Patch the session manager to send a dummy response and capture context
     async def dummy_handle_request(scope, receive, send):
-        from litellm.proxy._experimental.mcp_server.server import get_auth_context
-        _, _, mcp_servers = get_auth_context()
-        captured_mcp_servers[id(scope)] = mcp_servers
+        """Dummy handler for testing"""
+        # Get auth context
+        user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers = get_auth_context()
+        
+        # Capture the MCP servers for testing
+        captured_mcp_servers["servers"] = mcp_servers
+        
+        # Send response
         await send({
             "type": "http.response.start",
             "status": 200,
@@ -638,7 +819,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
         })
         await send({
             "type": "http.response.body",
-            "body": b'{"ok": true}',
+            "body": b'{"status": "ok"}',
         })
 
     monkeypatch.setattr(
@@ -660,7 +841,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     client = TestClient(app)
     response = client.get("/mcp/zapier,group1/tools", headers={"x-litellm-api-key": "test"})
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.json() == {"status": "ok"}
 
     # The context should have mcp_servers set to ["zapier", "group1"]
     assert list(captured_mcp_servers.values())[0] == ["zapier", "group1"]

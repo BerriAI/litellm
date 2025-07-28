@@ -89,3 +89,119 @@ def test_proxy_admin_viewer_config_update_route_rejected():
     assert exc_info.value.status_code == 403
     assert "user not allowed to access this route" in str(exc_info.value.detail)
     assert "role= proxy_admin_viewer" in str(exc_info.value.detail)
+
+
+def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
+    """Test that virtual key is allowed to call routes when allowed_routes contains LiteLLMRoutes member name"""
+
+    # Create a UserAPIKeyAuth with allowed_routes containing a LiteLLMRoutes member name
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["openai_routes"],  # This is a member name in LiteLLMRoutes enum
+    )
+
+    # Test that a route from the openai_routes group is allowed
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/chat/completions",  # This is in LiteLLMRoutes.openai_routes.value
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
+def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
+    """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
+
+    # Create a UserAPIKeyAuth with allowed_routes containing a LiteLLMRoutes member name
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["info_routes"],  # This is a member name in LiteLLMRoutes enum
+    )
+
+    # Test that a route NOT in the info_routes group raises an exception
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/chat/completions",  # This is NOT in LiteLLMRoutes.info_routes.value
+            valid_token=valid_token,
+        )
+
+    # Verify the exception message
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value)
+    assert "Only allowed to call routes: ['info_routes']" in str(exc_info.value)
+    assert "Tried to call route: /chat/completions" in str(exc_info.value)
+
+
+def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
+    """Test that virtual key works with multiple LiteLLMRoutes member names in allowed_routes"""
+
+    # Create a UserAPIKeyAuth with multiple LiteLLMRoutes member names
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user", allowed_routes=["openai_routes", "info_routes"]
+    )
+
+    # Test that routes from both groups are allowed
+    result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/chat/completions", valid_token=valid_token  # This is in openai_routes
+    )
+
+    result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/user/info", valid_token=valid_token  # This is in info_routes
+    )
+
+    assert result1 is True
+    assert result2 is True
+
+
+def test_virtual_key_allowed_routes_with_mixed_member_names_and_explicit_routes():
+    """Test that virtual key works with both LiteLLMRoutes member names and explicit routes"""
+
+    # Create a UserAPIKeyAuth with both member names and explicit routes
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=[
+            "info_routes",
+            "/custom/route",
+        ],  # Mix of member name and explicit route
+    )
+
+    # Test that both info routes and explicit custom route are allowed
+    result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/user/info", valid_token=valid_token  # This is in info_routes
+    )
+
+    result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/custom/route", valid_token=valid_token  # This is explicitly listed
+    )
+
+    assert result1 is True
+    assert result2 is True
+
+
+def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
+    """Test that virtual key works when allowed_routes contains only explicit routes (no member names)"""
+
+    # Create a UserAPIKeyAuth with only explicit routes (no LiteLLMRoutes member names)
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["/chat/completions", "/custom/route"],  # Only explicit routes
+    )
+
+    # Test that explicit routes are allowed
+    result1 = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/chat/completions", valid_token=valid_token
+    )
+
+    result2 = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/custom/route", valid_token=valid_token
+    )
+
+    assert result1 is True
+    assert result2 is True
+
+    # Test that non-allowed route raises exception
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/user/info", valid_token=valid_token  # Not in allowed routes
+        )
+
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value)

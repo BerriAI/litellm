@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
+import { Button, TextInput, Grid, Col, Select as TremorSelect, SelectItem } from "@tremor/react";
 import {
   Card,
   Metric,
@@ -36,8 +36,6 @@ import {
   fetchMCPAccessGroups,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
-import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -49,6 +47,7 @@ import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 
 
 const { Option } = Select;
@@ -182,12 +181,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
+  const [keyType, setKeyType] = useState<string>("default");
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
   };
 
   const handleCancel = () => {
@@ -197,6 +198,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
   };
 
   useEffect(() => {
@@ -591,31 +593,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             >
               <TextInput placeholder="" />
             </Form.Item>
-            
-            <Form.Item
-              label={
-                <span>
-                  Models{' '}
-                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              }
-              name="models"
-              rules={[{ required: true, message: "Please select a model" }]}
-              help="required"
-              className="mt-4"
-            >
-              <Select
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
-                onChange={(values) => {
-                  if (values.includes("all-team-models")) {
-                    form.setFieldsValue({ models: ["all-team-models"] });
-                  }
-                }}
-              >
+
+                         <Form.Item
+               label={
+                 <span>
+                   Models{' '}
+                   <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                     <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                   </Tooltip>
+                 </span>
+               }
+               name="models"
+               rules={
+                 keyType === "management" || keyType === "read_only" 
+                   ? []
+                   : [{ required: true, message: "Please select a model" }]
+               }
+               help={
+                 keyType === "management" || keyType === "read_only"
+                   ? "Models field is disabled for this key type"
+                   : "required"
+               }
+               className="mt-4"
+             >
+               <Select
+                 mode="multiple"
+                 placeholder="Select models"
+                 style={{ width: "100%" }}
+                 disabled={keyType === "management" || keyType === "read_only"}
+                 onChange={(values) => {
+                   if (values.includes("all-team-models")) {
+                     form.setFieldsValue({ models: ["all-team-models"] });
+                   }
+                 }}
+               >
                 <Option key="all-team-models" value="all-team-models">
                   All Team Models
                 </Option>
@@ -626,6 +637,61 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 ))}
               </Select>
             </Form.Item>
+
+
+            <Form.Item
+              label={
+                <span>
+                  Key Type{' '}
+                  <Tooltip title="Select the type of key to determine what routes and operations this key can access">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
+              name="key_type"
+              initialValue="default"
+              className="mt-4"
+            >
+              <Select 
+                defaultValue="default" 
+                placeholder="Select key type" 
+                style={{ width: "100%" }}
+                optionLabelProp="label"
+                onChange={(value) => {
+                  setKeyType(value);
+                  // Clear models field and disable if management or read_only
+                  if (value === "management" || value === "read_only") {
+                    form.setFieldsValue({ models: [] });
+                  }
+                }}
+              >
+                <Option value="default" label="Default">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call LLM API + Management routes
+                    </div>
+                  </div>
+                </Option>
+                <Option value="llm_api" label="LLM API">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>LLM API</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only LLM API routes (chat/completions, embeddings, etc.)
+                    </div>
+                  </div>
+                </Option>
+                <Option value="management" label="Management">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Management</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only management routes (user/team/key management)
+                    </div>
+                  </div>
+                </Option>
+              </Select>
+            </Form.Item>
+            
           </div>
           )}
 
@@ -799,12 +865,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         className="mt-4"
                         help="Select vector stores this key can access. Leave empty for access to all vector stores"
                       >
-                        <PremiumVectorStoreSelector
-                          onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        <VectorStoreSelector
+                          onChange={(values: string[]) => form.setFieldValue('allowed_vector_store_ids', values)}
                           value={form.getFieldValue('allowed_vector_store_ids')}
                           accessToken={accessToken}
                           placeholder="Select vector stores (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
 
@@ -821,12 +886,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         className="mt-4"
                         help="Select MCP servers or access groups this key can access. "
                       >
-                        <PremiumMCPSelector
-                          onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
+                        <MCPServerSelector
+                          onChange={(val: any) => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
                           value={form.getFieldValue('allowed_mcp_servers_and_groups')}
                           accessToken={accessToken}
                           placeholder="Select MCP servers or access groups (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
 

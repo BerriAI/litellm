@@ -28,6 +28,7 @@ import debounce from "lodash/debounce"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { updateExistingKeys } from "@/utils/dataUtils"
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer"
+import { isAdminRole } from "@/utils/roles"
 
 interface ViewUserDashboardProps {
   accessToken: string | null
@@ -230,6 +231,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
       message.error("Please select users to edit")
       return
     }
+
     setIsBulkEditModalVisible(true)
   }
 
@@ -605,6 +607,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
         teams={teams}
         userRole={userRole}
         userModels={userModels}
+        allowAllUsers={userRole ? isAdminRole(userRole) : false}
       />
     </div>
   )

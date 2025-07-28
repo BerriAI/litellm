@@ -65,6 +65,9 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+# Install semantic_router without dependencies
+RUN pip install semantic_router --no-deps
+
 # Generate prisma client
 RUN prisma generate
 RUN chmod +x docker/entrypoint.sh

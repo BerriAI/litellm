@@ -46,8 +46,8 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
-    handle_update_object_permission_common,
     attach_object_permission_to_dict,
+    handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -59,6 +59,7 @@ from litellm.proxy.utils import (
     _hash_token_if_needed,
     handle_exception_on_proxy,
     jsonify_object,
+    is_valid_api_key,
 )
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret
@@ -331,6 +332,21 @@ def common_key_access_checks(
 router = APIRouter()
 
 
+def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
+    """
+    Handle the key type.
+    """
+    key_type = data.key_type
+    data_json.pop("key_type", None)
+    if key_type == LiteLLMKeyType.LLM_API:
+        data_json["allowed_routes"] = ["llm_api_routes"]
+    elif key_type == LiteLLMKeyType.MANAGEMENT:
+        data_json["allowed_routes"] = ["management_routes"]
+    elif key_type == LiteLLMKeyType.READ_ONLY:
+        data_json["allowed_routes"] = ["info_routes"]
+    return data_json
+
+
 async def _common_key_generation_helper(  # noqa: PLR0915
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -455,6 +471,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
 
+    data_json = handle_key_type(data, data_json)
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
         data_json["key_max_budget"] = data_json.pop("max_budget", None)
@@ -571,6 +588,7 @@ async def generate_key_fn(
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -2600,7 +2618,7 @@ async def _list_key_helper(
             key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
             _token = key_dict.get("token")
-            key_list.append(_token)  # Return only the token
+            key_list.append(cast(str, _token))  # Return only the token
 
     return KeyListResponseObject(
         keys=key_list,
@@ -2667,10 +2685,14 @@ async def block_key(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
-    if data.key.startswith("sk-"):
-        hashed_token = hash_token(token=data.key)
-    else:
-        hashed_token = data.key
+    if not is_valid_api_key(data.key):
+        raise ProxyException(
+            message="Invalid key format.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    hashed_token = hash_token(token=data.key)
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update
@@ -2774,10 +2796,14 @@ async def unblock_key(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
-    if data.key.startswith("sk-"):
-        hashed_token = hash_token(token=data.key)
-    else:
-        hashed_token = data.key
+    if not is_valid_api_key(data.key):
+        raise ProxyException(
+            message="Invalid key format.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    hashed_token = hash_token(token=data.key)
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update
@@ -3099,6 +3125,3 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         raise ValueError(
             f"Invalid model_max_budget: {str(e)}. Example of valid model_max_budget: https://docs.litellm.ai/docs/proxy/users"
         )
-
-
-

@@ -278,6 +278,7 @@ def get_azure_ad_token(
     3. From username and password
     4. From OIDC token
     5. From a service principal with secret workflow
+    6. From DefaultAzureCredential
 
     Args:
         litellm_params: Dictionary containing authentication parameters
@@ -352,18 +353,27 @@ def get_azure_ad_token(
             azure_tenant_id=tenant_id,
             scope=scope,
         )
-    # Try to get token provider from service principal
+    # Try to get token provider from service principal or DefaultAzureCredential
     elif (
         azure_ad_token_provider is None
         and litellm.enable_azure_ad_token_refresh is True
     ):
         verbose_logger.debug(
-            "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
+            "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
         )
         try:
             azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
+        
+        #########################################################
+        # If litellm.enable_azure_ad_token_refresh is True and no other token provider is available,
+        # try to get DefaultAzureCredential provider
+        #########################################################
+        if azure_ad_token_provider is None and azure_ad_token is None:
+            azure_ad_token_provider = BaseAzureLLM._try_get_default_azure_credential_provider(
+                scope=scope,
+            )
 
     # Execute the token provider to get the token if available
     if azure_ad_token_provider and callable(azure_ad_token_provider):
@@ -387,6 +397,38 @@ def get_azure_ad_token(
 
 
 class BaseAzureLLM(BaseOpenAILLM):
+    @staticmethod
+    def _try_get_default_azure_credential_provider(
+        scope: str,
+    ) -> Optional[Callable[[], str]]:
+        """
+        Try to get DefaultAzureCredential provider
+        
+        Args:
+            scope: Azure scope for the token
+            
+        Returns:
+            Token provider callable if DefaultAzureCredential is enabled and available, None otherwise
+        """
+        from litellm.types.secret_managers.get_azure_ad_token_provider import (
+            AzureCredentialType,
+        )
+        
+        verbose_logger.debug(
+            "Attempting to use DefaultAzureCredential for Azure Auth"
+        )
+        
+        try:
+            azure_ad_token_provider = get_azure_ad_token_provider(
+                azure_scope=scope,
+                azure_credential=AzureCredentialType.DefaultAzureCredential,
+            )
+            verbose_logger.debug("Successfully obtained Azure AD token provider using DefaultAzureCredential")
+            return azure_ad_token_provider
+        except Exception as e:
+            verbose_logger.debug(f"DefaultAzureCredential failed: {str(e)}")
+            return None
+
     def get_azure_openai_client(
         self,
         api_key: Optional[str],

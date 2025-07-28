@@ -412,6 +412,7 @@ openai_compatible_endpoints: List = [
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
+    "https://api.hyperbolic.xyz/v1",
 ]
 
 
@@ -452,6 +453,7 @@ openai_compatible_providers: List = [
     "v0",
     "morph",
     "lambda_ai",
+    "hyperbolic",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -466,6 +468,7 @@ openai_text_completion_compatible_providers: List = (
         "moonshot",
         "v0",
         "lambda_ai",
+        "hyperbolic",
     ]
 )
 _openai_like_providers: List = [
@@ -796,6 +799,7 @@ BATCH_STATUS_POLL_MAX_ATTEMPTS = int(
 HEALTH_CHECK_TIMEOUT_SECONDS = int(
     os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60)
 )  # 60 seconds
+LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
@@ -816,6 +820,7 @@ DEFAULT_CRON_JOB_LOCK_TTL_SECONDS = int(
 PROXY_BUDGET_RESCHEDULER_MIN_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 )
+PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
 PROXY_BUDGET_RESCHEDULER_MAX_TIME = int(
     os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 )

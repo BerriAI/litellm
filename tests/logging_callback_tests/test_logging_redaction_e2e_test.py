@@ -200,3 +200,82 @@ async def test_redaction_responses_api_stream():
         "logged standard logging payload for ResponsesAPIResponse stream",
         json.dumps(standard_logging_payload, indent=2),
     )
+
+
+@pytest.mark.asyncio
+async def test_redaction_with_coroutine_objects():
+    """Test that redaction handles coroutine objects correctly without pickle errors"""
+    from litellm.litellm_core_utils.redact_messages import perform_redaction
+    
+    # Test with a coroutine object (simulating streaming response)
+    async def mock_async_generator():
+        yield {"text": "test response"}
+    
+    coroutine = mock_async_generator()
+    
+    # This should not raise a pickle error
+    result = perform_redaction({}, coroutine)
+    assert result == {"text": "redacted-by-litellm"}
+    
+    # Test with an async function
+    async def mock_async_function():
+        return "test"
+    
+    async_func = mock_async_function()
+    result = perform_redaction({}, async_func)
+    assert result == {"text": "redacted-by-litellm"}
+    
+    # Test with an object that has __aiter__ method (async generator)
+    class MockAsyncGenerator:
+        def __aiter__(self):
+            return self
+        
+        async def __anext__(self):
+            raise StopAsyncIteration
+    
+    mock_gen = MockAsyncGenerator()
+    result = perform_redaction({}, mock_gen)
+    assert result == {"text": "redacted-by-litellm"}
+    
+    # Test with an object that has __anext__ method (async iterator)
+    class MockAsyncIterator:
+        def __anext__(self):
+            raise StopAsyncIteration
+    
+    mock_iter = MockAsyncIterator()
+    result = perform_redaction({}, mock_iter)
+    assert result == {"text": "redacted-by-litellm"}
+
+
+@pytest.mark.asyncio
+async def test_redaction_with_streaming_response():
+    """Test that redaction works correctly with streaming responses that return coroutines"""
+    litellm.turn_off_message_logging = True
+    test_custom_logger = TestCustomLogger()
+    litellm.callbacks = [test_custom_logger]
+    
+    # This simulates the scenario where a streaming response returns a coroutine
+    # that would normally cause the pickle error
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        mock_response="hello",
+    )
+    
+    # Consume the stream to trigger logging
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+    
+    await asyncio.sleep(1)
+    standard_logging_payload = test_custom_logger.logged_standard_logging_payload
+    assert standard_logging_payload is not None
+    
+    # Verify that redaction worked without pickle errors
+    assert standard_logging_payload["response"] == {"text": "redacted-by-litellm"}
+    assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+    print(
+        "logged standard logging payload for streaming with coroutine handling",
+        json.dumps(standard_logging_payload, indent=2),
+    )

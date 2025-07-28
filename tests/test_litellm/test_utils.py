@@ -23,6 +23,7 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
 )
+from litellm.proxy.utils import is_valid_api_key
 
 # Adds the parent directory to the system path
 
@@ -904,13 +905,6 @@ class TestProxyFunctionCalling:
                 "litellm_proxy/claude-3-5-sonnet-20240620",
                 True,
             ),
-            ("claude-3-opus-20240229", "litellm_proxy/claude-3-opus-20240229", True),
-            (
-                "claude-3-sonnet-20240229",
-                "litellm_proxy/claude-3-sonnet-20240229",
-                True,
-            ),
-            ("claude-3-haiku-20240307", "litellm_proxy/claude-3-haiku-20240307", True),
             # Google models
             ("gemini-pro", "litellm_proxy/gemini-pro", True),
             ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
@@ -924,11 +918,6 @@ class TestProxyFunctionCalling:
             ),  # This model doesn't support function calling
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
-            (
-                "anthropic.claude-instant-v1",
-                "litellm_proxy/anthropic.claude-instant-v1",
-                False,
-            ),
         ],
     )
     def test_proxy_function_calling_support_consistency(
@@ -1058,7 +1047,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-sonnet-20240229"
+        resolvable_model = "litellm_proxy/claude-3-5-sonnet-latest"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
@@ -1069,7 +1058,7 @@ class TestProxyFunctionCalling:
         
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
-           - litellm_proxy/claude-3-sonnet-20240229
+           - litellm_proxy/claude-3-5-sonnet-latest
            - litellm_proxy/anthropic/claude-3-haiku-20240307
            
         ❌ DOESN'T WORK (requires proxy server config):
@@ -2165,6 +2154,35 @@ def test_image_response_utils():
         "hidden_params": {"additional_headers": {}},
     }
     image_response = ImageResponse(**result)
+
+
+def test_is_valid_api_key():
+    import hashlib
+    # Valid sk- keys
+    assert is_valid_api_key("sk-abc123")
+    assert is_valid_api_key("sk-ABC_123-xyz")
+    # Valid hashed key (64 hex chars)
+    assert is_valid_api_key("a" * 64)
+    assert is_valid_api_key("0123456789abcdef" * 4)  # 16*4 = 64
+    # Real SHA-256 hash
+    real_hash = hashlib.sha256(b"my_secret_key").hexdigest()
+    assert len(real_hash) == 64
+    assert is_valid_api_key(real_hash)
+    # Invalid: too short
+    assert not is_valid_api_key("sk-")
+    assert not is_valid_api_key("")
+    # Invalid: too long
+    assert not is_valid_api_key("sk-" + "a" * 200)
+    # Invalid: wrong prefix
+    assert not is_valid_api_key("pk-abc123")
+    # Invalid: wrong chars in sk- key
+    assert not is_valid_api_key("sk-abc$%#@!")
+    # Invalid: not a string
+    assert not is_valid_api_key(None)
+    assert not is_valid_api_key(12345)
+    # Invalid: wrong length for hash
+    assert not is_valid_api_key("a" * 63)
+    assert not is_valid_api_key("a" * 65)
 
 
 if __name__ == "__main__":

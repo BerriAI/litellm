@@ -127,7 +127,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "parallel_tool_calls",
             "response_format",
             "user",
-            "reasoning_effort",
             "web_search_options",
         ]
 
@@ -136,6 +135,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             custom_llm_provider=self.custom_llm_provider,
         ):
             params.append("thinking")
+            params.append("reasoning_effort")
 
         return params
 
@@ -198,10 +198,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "properties": {},
                 },
             )
-            input_schema: AnthropicInputSchema = AnthropicInputSchema(**_input_schema)
+
+            _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
+            input_schema_filtered = {k: v for k, v in _input_schema.items() if k in _allowed_properties}
+            input_anthropic_schema: AnthropicInputSchema = AnthropicInputSchema(**input_schema_filtered)
+
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
-                input_schema=input_schema,
+                input_schema=input_anthropic_schema,
             )
 
             _description = tool["function"].get("description")

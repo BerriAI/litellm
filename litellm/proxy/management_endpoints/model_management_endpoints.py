@@ -1146,6 +1146,7 @@ async def clear_cache():
 
     try:
         llm_router.model_list.clear()
+        llm_router.auto_routers.clear()
 
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj

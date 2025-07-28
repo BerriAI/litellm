@@ -6,6 +6,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
+from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import get_valid_models
 
@@ -52,7 +53,7 @@ def _get_models_from_access_groups(
         if model in model_access_groups:
             if (
                 not include_model_access_groups
-            ):  # remove access group, unless requested - e.g. when creating a key and trying to see list of models
+            ):  # remove access group, unless requested - e.g. when creating a key
                 idx_to_remove.append(idx)
             new_models.extend(model_access_groups[model])
 
@@ -104,7 +105,8 @@ def get_key_models(
     - List of model name strings
     - Empty list if no models set
     - If model_access_groups is provided, only return models that are in the access groups
-    - If include_model_access_groups is True, it includes the 'keys' of the model_access_groups in the response - {"beta-models": ["gpt-4", "claude-v1"]} -> returns 'beta-models'
+    - If include_model_access_groups is True, it includes the 'keys' of the model_access_groups
+      in the response - {"beta-models": ["gpt-4", "claude-v1"]} -> returns 'beta-models'
     """
     all_models: List[str] = []
     if len(user_api_key_dict.models) > 0:
@@ -287,3 +289,53 @@ def _get_wildcard_models(
         unique_models.remove(model)
 
     return all_wildcard_models
+
+
+def get_all_fallbacks(
+    model: str,
+    llm_router: Optional[Router] = None,
+    fallback_type: str = "general",
+) -> List[str]:
+    """
+    Get all fallbacks for a given model from the router's fallback configuration.
+    
+    Args:
+        model: The model name to get fallbacks for
+        llm_router: The LiteLLM router instance
+        fallback_type: Type of fallback ("general", "context_window", "content_policy")
+    
+    Returns:
+        List of fallback model names. Empty list if no fallbacks found.
+    """
+    if llm_router is None:
+        return []
+    
+    # Get the appropriate fallback list based on type
+    fallbacks_config: list = []
+    if fallback_type == "general":
+        fallbacks_config = getattr(llm_router, "fallbacks", [])
+    elif fallback_type == "context_window":
+        fallbacks_config = getattr(llm_router, "context_window_fallbacks", [])
+    elif fallback_type == "content_policy":
+        fallbacks_config = getattr(llm_router, "content_policy_fallbacks", [])
+    else:
+        verbose_proxy_logger.warning(f"Unknown fallback_type: {fallback_type}")
+        return []
+    
+    if not fallbacks_config:
+        return []
+    
+    try:
+        # Use existing function to get fallback model group
+        fallback_model_group, _ = get_fallback_model_group(
+            fallbacks=fallbacks_config, 
+            model_group=model
+        )
+        
+        if fallback_model_group is None:
+            return []
+        
+        return fallback_model_group
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error getting fallbacks for model {model}: {e}")
+        return []

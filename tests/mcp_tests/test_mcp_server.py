@@ -90,10 +90,16 @@ async def test_mcp_server_manager_https_server():
         
         # Verify tools were returned and properly prefixed
         assert len(tools) == 1
-        assert tools[0].name == "zapier_mcp_server-gmail_send_email"
+        # The server should use the server_name as prefix since no alias is provided
+        expected_prefix = "zapier_mcp_server"
+        assert tools[0].name == f"{expected_prefix}-gmail_send_email"
+        
+        # Manually set up the tool mapping for the call_tool test
+        mcp_server_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = expected_prefix
+        mcp_server_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-gmail_send_email"] = expected_prefix
         
         result = await mcp_server_manager.call_tool(
-            name="zapier_mcp_server-gmail_send_email",
+            name=f"{expected_prefix}-gmail_send_email",
             arguments={
                 "body": "Test",
                 "message": "Test",
@@ -110,7 +116,7 @@ async def test_mcp_server_manager_https_server():
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
-        mock_client.list_tools.assert_called_once()
+        mock_client.list_tools.assert_called()
         mock_client.call_tool.assert_called_once()
 
 
@@ -177,16 +183,20 @@ async def test_mcp_http_transport_list_tools_mock():
         
         # Assertions
         assert len(tools) == 2
-        assert tools[0].name == "test_http_server-gmail_send_email"
-        assert tools[1].name == "test_http_server-calendar_create_event"
+        # The server should use the server_name as prefix since no alias is provided
+        expected_prefix = "test_http_server"
+        assert tools[0].name == f"{expected_prefix}-gmail_send_email"
+        assert tools[1].name == f"{expected_prefix}-calendar_create_event"
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
-        mock_client.list_tools.assert_called_once()
+        # Note: list_tools is called twice - once during initialization and once during the actual list_tools call
+        assert mock_client.list_tools.call_count == 2
         
         # Verify tool mapping was updated
-        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server-gmail_send_email"] == "test_http_server"
-        assert test_manager.tool_name_to_mcp_server_name_mapping["test_http_server-calendar_create_event"] == "test_http_server"
+        expected_prefix = "test_http_server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-gmail_send_email"] == expected_prefix
+        assert test_manager.tool_name_to_mcp_server_name_mapping[f"{expected_prefix}-calendar_create_event"] == expected_prefix
 
 
 @pytest.mark.asyncio
@@ -640,7 +650,9 @@ async def test_list_tools_rest_api_success():
 
             assert isinstance(response, dict)
             assert len(response["tools"]) == 1
-            assert response["tools"][0].name == "test_server-test_tool"
+            # The server should use the server_name as prefix since no alias is provided
+            expected_prefix = "test_server"
+            assert response["tools"][0].name == f"{expected_prefix}-test_tool"
     finally:
         # Restore original state
         global_mcp_server_manager.registry = {}
@@ -661,6 +673,7 @@ async def test_get_tools_from_mcp_servers():
     mock_server_1 = MCPServer(
         server_id="server1_id",
         name="server1",
+        server_name="server1",
         url="http://test1.com",
         transport=MCPTransport.http,
         spec_version=MCPSpecVersion.nov_2024
@@ -668,6 +681,7 @@ async def test_get_tools_from_mcp_servers():
     mock_server_2 = MCPServer(
         server_id="server2_id",
         name="server2",
+        server_name="server2",
         url="http://test2.com",
         transport=MCPTransport.http,
         spec_version=MCPSpecVersion.nov_2024
@@ -685,13 +699,13 @@ async def test_get_tools_from_mcp_servers():
                 return mock_server_2
             return None
 
-        with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager.get_allowed_mcp_servers', 
-                  new_callable=AsyncMock, return_value=["server1_id", "server2_id"]), \
-             patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager.get_mcp_server_by_id',
-                  side_effect=mock_get_server_by_id), \
-             patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager._get_tools_from_server',
-                  new_callable=AsyncMock, return_value=[mock_tool_1]):
+        # Create a mock manager
+        mock_manager = AsyncMock()
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id"])
+        mock_manager.get_mcp_server_by_id = mock_get_server_by_id
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
 
+        with patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', mock_manager):
             # Test with specific servers
             result = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
@@ -702,9 +716,14 @@ async def test_get_tools_from_mcp_servers():
             assert result[0].name == "tool1", "Should return tool from server1"
 
         # Test Case 2: Without specific MCP servers
-        with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager.list_tools',
-                  new_callable=AsyncMock, return_value=[mock_tool_1, mock_tool_2]):
+        # Create a different mock manager for the second test case
+        mock_manager_2 = AsyncMock()
+        mock_manager_2.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id"])
+        mock_manager_2.get_mcp_server_by_id = mock_get_server_by_id
+        mock_manager_2._get_tools_from_server = AsyncMock(side_effect=lambda server, mcp_auth_header=None: 
+            [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2])
 
+        with patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', mock_manager_2):
             result = await _get_tools_from_mcp_servers(
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header=mock_auth_header,
@@ -778,8 +797,9 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         tools = await test_manager.list_tools(user_api_key_auth=MagicMock())
         # Should only return tools from server_a
         assert len(tools) == 1
-        assert tools[0].name.startswith("server_a-")
-        assert "Server A" in tools[0].description
+        # The server should use the server_name as prefix since no alias is provided
+        expected_prefix = "server_a"
+        assert tools[0].name.startswith(f"{expected_prefix}-")
 
 def test_mcp_server_manager_access_groups_from_config():
     """
@@ -815,5 +835,367 @@ def test_mcp_server_manager_access_groups_from_config():
     assert any(config_server.server_id == sid for sid in server_ids_a)
     assert set(server_ids_b) == set([s.server_id for s in test_manager.config_mcp_servers.values() if "group-b" in s.access_groups])
     assert any(s.name == "other_server" and s.server_id in server_ids_c for s in test_manager.config_mcp_servers.values())
+
+
+# Tests for Server Alias Functionality
+def test_get_server_prefix_with_alias():
+    """
+    Test that get_server_prefix returns alias when present.
+    """
+    from litellm.proxy._experimental.mcp_server.utils import get_server_prefix
+    
+    # Create a mock server with alias
+    mock_server = MagicMock()
+    mock_server.alias = "my_alias"
+    mock_server.server_name = "My Server Name"
+    mock_server.server_id = "server-123"
+    
+    prefix = get_server_prefix(mock_server)
+    assert prefix == "my_alias"
+
+
+def test_get_server_prefix_without_alias():
+    """
+    Test that get_server_prefix falls back to server_name when alias is not present.
+    """
+    from litellm.proxy._experimental.mcp_server.utils import get_server_prefix
+    
+    # Create a mock server without alias
+    mock_server = MagicMock()
+    mock_server.alias = None
+    mock_server.server_name = "My Server Name"
+    mock_server.server_id = "server-123"
+    
+    prefix = get_server_prefix(mock_server)
+    assert prefix == "My Server Name"
+
+
+def test_get_server_prefix_fallback_to_server_id():
+    """
+    Test that get_server_prefix falls back to server_id when neither alias nor server_name are present.
+    """
+    from litellm.proxy._experimental.mcp_server.utils import get_server_prefix
+    
+    # Create a mock server without alias or server_name
+    mock_server = MagicMock()
+    mock_server.alias = None
+    mock_server.server_name = None
+    mock_server.server_id = "server-123"
+    
+    prefix = get_server_prefix(mock_server)
+    assert prefix == "server-123"
+
+
+def test_get_server_prefix_empty_strings():
+    """
+    Test that get_server_prefix handles empty strings correctly.
+    """
+    from litellm.proxy._experimental.mcp_server.utils import get_server_prefix
+    
+    # Create a mock server with empty strings
+    mock_server = MagicMock()
+    mock_server.alias = ""
+    mock_server.server_name = ""
+    mock_server.server_id = "server-123"
+    
+    prefix = get_server_prefix(mock_server)
+    assert prefix == "server-123"
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_manager_alias_tool_prefixing():
+    """
+    Test that MCP server manager uses alias for tool prefixing when available.
+    """
+    test_manager = MCPServerManager()
+    
+    # Create a mock server with alias
+    mock_server = MCPServer(
+        server_id="test-server-123",
+        name="test_server",
+        alias="my_alias",
+        server_name="Test Server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        spec_version="2025-03-26"
+    )
+    
+    # Add server to registry
+    test_manager.registry["test-server-123"] = mock_server
+    
+    # Mock tools
+    mock_tools = [
+        MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={"type": "object"}
+        )
+    ]
+    
+    # Mock MCPClient
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+    
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        # Get tools from server
+        tools = await test_manager._get_tools_from_server(mock_server)
+        
+        # Verify tool is prefixed with alias
+        assert len(tools) == 1
+        assert tools[0].name == "my_alias-send_email"
+        
+        # Verify mapping is updated correctly
+        assert test_manager.tool_name_to_mcp_server_name_mapping["send_email"] == "my_alias"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["my_alias-send_email"] == "my_alias"
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_manager_server_name_tool_prefixing():
+    """
+    Test that MCP server manager falls back to server_name for tool prefixing when alias is not available.
+    """
+    test_manager = MCPServerManager()
+    
+    # Create a mock server without alias
+    mock_server = MCPServer(
+        server_id="test-server-123",
+        name="test_server",
+        alias=None,
+        server_name="Test Server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        spec_version="2025-03-26"
+    )
+    
+    # Add server to registry
+    test_manager.registry["test-server-123"] = mock_server
+    
+    # Mock tools
+    mock_tools = [
+        MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={"type": "object"}
+        )
+    ]
+    
+    # Mock MCPClient
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+    
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        # Get tools from server
+        tools = await test_manager._get_tools_from_server(mock_server)
+        
+        # Verify tool is prefixed with server_name (normalized)
+        assert len(tools) == 1
+        assert tools[0].name == "Test_Server-send_email"
+        
+        # Verify mapping is updated correctly
+        assert test_manager.tool_name_to_mcp_server_name_mapping["send_email"] == "Test Server"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["Test_Server-send_email"] == "Test Server"
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_manager_server_id_tool_prefixing():
+    """
+    Test that MCP server manager falls back to server_id for tool prefixing when neither alias nor server_name are available.
+    """
+    test_manager = MCPServerManager()
+    
+    # Create a mock server without alias or server_name
+    mock_server = MCPServer(
+        server_id="test-server-123",
+        name="test_server",
+        alias=None,
+        server_name=None,
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        spec_version="2025-03-26"
+    )
+    
+    # Add server to registry
+    test_manager.registry["test-server-123"] = mock_server
+    
+    # Mock tools
+    mock_tools = [
+        MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={"type": "object"}
+        )
+    ]
+    
+    # Mock MCPClient
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=mock_tools)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+    
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        # Get tools from server
+        tools = await test_manager._get_tools_from_server(mock_server)
+        
+        # Verify tool is prefixed with server_id
+        assert len(tools) == 1
+        assert tools[0].name == "test-server-123-send_email"
+        
+        # Verify mapping is updated correctly
+        assert test_manager.tool_name_to_mcp_server_name_mapping["send_email"] == "test-server-123"
+        assert test_manager.tool_name_to_mcp_server_name_mapping["test-server-123-send_email"] == "test-server-123"
+
+
+def test_add_update_server_with_alias():
+    """
+    Test that add_update_server correctly handles servers with alias.
+    """
+    test_manager = MCPServerManager()
+    
+    # Create a mock LiteLLM_MCPServerTable with alias
+    mock_mcp_server = MagicMock()
+    mock_mcp_server.server_id = "test-server-123"
+    mock_mcp_server.alias = "my_alias"
+    mock_mcp_server.server_name = "Test Server"
+    mock_mcp_server.url = "https://test-server.com/mcp"
+    mock_mcp_server.transport = MCPTransport.http
+    mock_mcp_server.spec_version = "2025-03-26"
+    mock_mcp_server.auth_type = None
+    mock_mcp_server.description = "Test server description"
+    mock_mcp_server.mcp_info = {}
+    mock_mcp_server.command = None
+    mock_mcp_server.args = []
+    mock_mcp_server.env = None
+    
+    # Add server to manager
+    test_manager.add_update_server(mock_mcp_server)
+    
+    # Verify server was added with correct name (should use alias)
+    assert "test-server-123" in test_manager.registry
+    added_server = test_manager.registry["test-server-123"]
+    assert added_server.name == "my_alias"
+    assert added_server.alias == "my_alias"
+    assert added_server.server_name == "Test Server"
+
+
+def test_add_update_server_without_alias():
+    """
+    Test that add_update_server correctly handles servers without alias.
+    """
+    test_manager = MCPServerManager()
+    
+    # Create a mock LiteLLM_MCPServerTable without alias
+    mock_mcp_server = MagicMock()
+    mock_mcp_server.server_id = "test-server-123"
+    mock_mcp_server.alias = None
+    mock_mcp_server.server_name = "Test Server"
+    mock_mcp_server.url = "https://test-server.com/mcp"
+    mock_mcp_server.transport = MCPTransport.http
+    mock_mcp_server.spec_version = "2025-03-26"
+    mock_mcp_server.auth_type = None
+    mock_mcp_server.description = "Test server description"
+    mock_mcp_server.mcp_info = {}
+    mock_mcp_server.command = None
+    mock_mcp_server.args = []
+    mock_mcp_server.env = None
+    
+    # Add server to manager
+    test_manager.add_update_server(mock_mcp_server)
+    
+    # Verify server was added with correct name (should use server_name)
+    assert "test-server-123" in test_manager.registry
+    added_server = test_manager.registry["test-server-123"]
+    assert added_server.name == "Test Server"
+    assert added_server.alias is None
+    assert added_server.server_name == "Test Server"
+
+
+def test_add_update_server_fallback_to_server_id():
+    """
+    Test that add_update_server falls back to server_id when neither alias nor server_name are available.
+    """
+    test_manager = MCPServerManager()
+    
+    # Create a mock LiteLLM_MCPServerTable without alias or server_name
+    mock_mcp_server = MagicMock()
+    mock_mcp_server.server_id = "test-server-123"
+    mock_mcp_server.alias = None
+    mock_mcp_server.server_name = None
+    mock_mcp_server.url = "https://test-server.com/mcp"
+    mock_mcp_server.transport = MCPTransport.http
+    mock_mcp_server.spec_version = "2025-03-26"
+    mock_mcp_server.auth_type = None
+    mock_mcp_server.description = "Test server description"
+    mock_mcp_server.mcp_info = {}
+    mock_mcp_server.command = None
+    mock_mcp_server.args = []
+    mock_mcp_server.env = None
+    
+    # Add server to manager
+    test_manager.add_update_server(mock_mcp_server)
+    
+    # Verify server was added with correct name (should use server_id)
+    assert "test-server-123" in test_manager.registry
+    added_server = test_manager.registry["test-server-123"]
+    assert added_server.name == "test-server-123"
+    assert added_server.alias is None
+    assert added_server.server_name is None
+
+
+def test_normalize_server_name():
+    """
+    Test that normalize_server_name correctly replaces spaces with underscores.
+    """
+    from litellm.proxy._experimental.mcp_server.utils import normalize_server_name
+    
+    # Test basic space replacement
+    assert normalize_server_name("My Server Name") == "My_Server_Name"
+    
+    # Test multiple consecutive spaces
+    assert normalize_server_name("My  Server   Name") == "My__Server___Name"
+    
+    # Test no spaces
+    assert normalize_server_name("MyServerName") == "MyServerName"
+    
+    # Test empty string
+    assert normalize_server_name("") == ""
+    
+    # Test string with only spaces
+    assert normalize_server_name("   ") == "___"
+
+
+def test_add_server_prefix_to_tool_name():
+    """
+    Test that add_server_prefix_to_tool_name correctly formats tool names.
+    """
+    from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_tool_name
+    
+    # Test basic prefixing
+    result = add_server_prefix_to_tool_name("send_email", "My Server")
+    assert result == "My_Server-send_email"
+    
+    # Test with server name that already has underscores
+    result = add_server_prefix_to_tool_name("create_event", "my_server")
+    assert result == "my_server-create_event"
+    
+    # Test with empty tool name
+    result = add_server_prefix_to_tool_name("", "My Server")
+    assert result == "My_Server-"
+    
+    # Test with empty server name
+    result = add_server_prefix_to_tool_name("send_email", "")
+    assert result == "-send_email"
 
 

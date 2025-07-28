@@ -24,8 +24,10 @@ import {
   modelInfoCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
+  getGuardrailsList,
 } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
+import { Button, Form, Input, InputNumber, message, Select, Modal, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
@@ -35,6 +37,7 @@ import ReuseCredentialsModal from "./model_add/reuse_credentials";
 import CacheControlSettings from "./add_model/cache_control_settings";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
+import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -74,18 +77,20 @@ export default function ModelInfoView({
     useState<CredentialItem | null>(null);
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-
+  const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const canEditModel =
-    userRole === "Admin" || modelData.model_info.created_by === userID;
+    userRole === "Admin" || modelData?.model_info?.created_by === userID;
   const isAdmin = userRole === "Admin";
+  const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
   const usingExistingCredential =
-    modelData.litellm_params?.litellm_credential_name != null &&
-    modelData.litellm_params?.litellm_credential_name != undefined;
+    modelData?.litellm_params?.litellm_credential_name != null &&
+    modelData?.litellm_params?.litellm_credential_name != undefined;
   console.log("usingExistingCredential, ", usingExistingCredential);
   console.log(
     "modelData.litellm_params.litellm_credential_name, ",
-    modelData.litellm_params.litellm_credential_name
+    modelData?.litellm_params?.litellm_credential_name
   );
 
   useEffect(() => {
@@ -118,8 +123,23 @@ export default function ModelInfoView({
         setShowCacheControl(true);
       }
     };
+
+    const fetchGuardrails = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
     getExistingCredential();
     getModelInfo();
+    fetchGuardrails();
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
@@ -162,6 +182,9 @@ export default function ModelInfoView({
         input_cost_per_token: values.input_cost / 1_000_000,
         output_cost_per_token: values.output_cost / 1_000_000,
       };
+      if (values.guardrails) {
+        updatedLitellmParams.guardrails = values.guardrails;
+      }
 
       // Handle cache control settings
       if (
@@ -268,6 +291,13 @@ export default function ModelInfoView({
       setTimeout(() => {
         setCopiedStates((prev) => ({ ...prev, [key]: false }));
       }, 2000);
+    }
+  };
+
+  const handleAutoRouterUpdate = (updatedModel: any) => {
+    setLocalModelData(updatedModel);
+    if (onModelUpdate) {
+      onModelUpdate(updatedModel);
     }
   };
 
@@ -430,15 +460,26 @@ export default function ModelInfoView({
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Model Settings</Title>
-                {canEditModel && !isEditing && (
-                  <TremorButton
-                    variant="secondary"
-                    onClick={() => setIsEditing(true)}
-                    className="flex items-center"
-                  >
-                    Edit Model
-                  </TremorButton>
-                )}
+                <div className="flex gap-2">
+                  {isAutoRouter && canEditModel && !isEditing && (
+                    <TremorButton
+                      variant="primary"
+                      onClick={() => setIsAutoRouterModalOpen(true)}
+                      className="flex items-center"
+                    >
+                      Edit Auto Router
+                    </TremorButton>
+                  )}
+                  {canEditModel && !isEditing && (
+                    <TremorButton
+                      variant="secondary"
+                      onClick={() => setIsEditing(true)}
+                      className="flex items-center"
+                    >
+                      Edit Model
+                    </TremorButton>
+                  )}
+                </div>
               </div>
               {localModelData ? (
                 <Form
@@ -480,6 +521,11 @@ export default function ModelInfoView({
                       localModelData.model_info?.access_groups
                     )
                       ? localModelData.model_info.access_groups
+                      : [],
+                    guardrails: Array.isArray(
+                      localModelData.litellm_params?.guardrails
+                    )
+                      ? localModelData.litellm_params.guardrails
                       : [],
                   }}
                   layout="vertical"
@@ -737,6 +783,67 @@ export default function ModelInfoView({
                         )}
                       </div>
 
+                      <div>
+                        <Text className="font-medium">
+                          Guardrails{' '}
+                          <Tooltip title="Apply safety guardrails to this model to filter content or enforce policies">
+                            <a 
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </a>  
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="guardrails" className="mb-0">
+                            <Select
+                              mode="tags"
+                              showSearch
+                              placeholder="Select existing guardrails or type to create new ones"
+                              optionFilterProp="children"
+                              tokenSeparators={[","]}
+                              maxTagCount="responsive"
+                              allowClear
+                              style={{ width: "100%" }}
+                              options={guardrailsList.map((name) => ({
+                                value: name,
+                                label: name,
+                              }))}
+                            />
+                          </Form.Item>
+                                                 ) : (
+                           <div className="mt-1 p-2 bg-gray-50 rounded">
+                             {localModelData.litellm_params?.guardrails ? (
+                               Array.isArray(localModelData.litellm_params.guardrails) ? (
+                                 localModelData.litellm_params.guardrails.length > 0 ? (
+                                   <div className="flex flex-wrap gap-1">
+                                     {localModelData.litellm_params.guardrails.map(
+                                       (guardrail: string, index: number) => (
+                                         <span
+                                           key={index}
+                                           className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
+                                         >
+                                           {guardrail}
+                                         </span>
+                                       )
+                                     )}
+                                   </div>
+                                 ) : (
+                                   "No guardrails assigned"
+                                 )
+                               ) : (
+                                 localModelData.litellm_params.guardrails
+                               )
+                             ) : (
+                               "Not Set"
+                             )}
+                           </div>
+                         )}
+                      </div>
+
                       {/* Cache Control Section */}
                       {isEditing ? (
                         <CacheControlSettings
@@ -916,6 +1023,16 @@ export default function ModelInfoView({
           <Text>{modelData.litellm_params.litellm_credential_name}</Text>
         </Modal>
       )}
+
+      {/* Edit Auto Router Modal */}
+      <EditAutoRouterModal
+        isVisible={isAutoRouterModalOpen}
+        onCancel={() => setIsAutoRouterModalOpen(false)}
+        onSuccess={handleAutoRouterUpdate}
+        modelData={localModelData || modelData}
+        accessToken={accessToken || ""}
+        userRole={userRole || ""}
+      />
     </div>
   );
 }

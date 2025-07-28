@@ -38,9 +38,3 @@ class MorphChatConfig(OpenAILikeChatConfig):
             "model",
             "stream",
         ]
-
-    def pre_call(self, messages: list, model: str, api_key: str, api_base: str):
-        """
-        Hook for any pre-processing before the API call.
-        """
-        return

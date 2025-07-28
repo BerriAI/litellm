@@ -1025,7 +1025,9 @@ class ExperimentalUIJWTToken:
             decrypt_value_helper,
         )
 
-        decrypted_token = decrypt_value_helper(hashed_token, exception_type="debug")
+        decrypted_token = decrypt_value_helper(
+            hashed_token, key="ui_hash_key", exception_type="debug"
+        )
         if decrypted_token is None:
             return None
         try:
