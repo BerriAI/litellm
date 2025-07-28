@@ -10902,8 +10902,8 @@
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00021,
-        "output_cost_per_token": 0.00063,
+        "input_cost_per_token": 2.1e-07,
+        "output_cost_per_token": 6.3e-07,
         "litellm_provider": "qwen",
         "mode": "chat",
         "supports_tool_choice": false
