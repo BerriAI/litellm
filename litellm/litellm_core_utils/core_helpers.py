@@ -256,6 +256,102 @@ def normalize_httpx_client_for_openai(
         raise ValueError("openai package required for custom httpx client support")
 
 
+def normalize_httpx_client_for_anthropic(
+    client: Optional[Union[httpx.Client, httpx.AsyncClient, Any]],
+    is_async: bool,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    **sdk_kwargs: Any,
+) -> Any:
+    """
+    Normalize raw httpx.Client to Anthropic SDK client if needed.
+    
+    Returns:
+        - None if client is None
+        - Original client if already Anthropic SDK instance  
+        - New Anthropic SDK client wrapping httpx client if raw httpx
+    """
+    if client is None:
+        return None
+        
+    # Pass through non-httpx clients (assume they're already provider SDKs)
+    if not isinstance(client, (httpx.Client, httpx.AsyncClient)):
+        return client
+    
+    # Import here to avoid circular dependencies
+    try:
+        from anthropic import Anthropic, AsyncAnthropic
+        
+        if is_async:
+            if not isinstance(client, httpx.AsyncClient):
+                raise ValueError("Expected httpx.AsyncClient for async Anthropic operation")
+            return AsyncAnthropic(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=client,
+                **sdk_kwargs
+            )
+        else:
+            if not isinstance(client, httpx.Client):
+                raise ValueError("Expected httpx.Client for sync Anthropic operation")
+            return Anthropic(
+                api_key=api_key,
+                base_url=api_base,
+                http_client=client,
+                **sdk_kwargs
+            )
+    except ImportError:
+        raise ValueError("anthropic package required for custom httpx client support")
+
+
+def normalize_httpx_client_for_azure(
+    client: Optional[Union[httpx.Client, httpx.AsyncClient, Any]],
+    is_async: bool,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    **sdk_kwargs: Any,
+) -> Any:
+    """
+    Normalize raw httpx.Client to Azure OpenAI SDK client if needed.
+    
+    Returns:
+        - None if client is None
+        - Original client if already Azure SDK instance  
+        - New Azure OpenAI SDK client wrapping httpx client if raw httpx
+    """
+    if client is None:
+        return None
+        
+    # Pass through non-httpx clients (assume they're already provider SDKs)
+    if not isinstance(client, (httpx.Client, httpx.AsyncClient)):
+        return client
+    
+    # Import here to avoid circular dependencies
+    try:
+        from openai import AzureOpenAI, AsyncAzureOpenAI
+        
+        if is_async:
+            if not isinstance(client, httpx.AsyncClient):
+                raise ValueError("Expected httpx.AsyncClient for async Azure operation")
+            return AsyncAzureOpenAI(
+                api_key=api_key,
+                azure_endpoint=api_base or "",
+                http_client=client,
+                **sdk_kwargs
+            )
+        else:
+            if not isinstance(client, httpx.Client):
+                raise ValueError("Expected httpx.Client for sync Azure operation")
+            return AzureOpenAI(
+                api_key=api_key,
+                azure_endpoint=api_base or "",
+                http_client=client,
+                **sdk_kwargs
+            )
+    except ImportError:
+        raise ValueError("openai package required for Azure custom httpx client support")
+
+
 def get_client_or_fallback_to_global(
     client: Optional[Any], 
     is_async: bool

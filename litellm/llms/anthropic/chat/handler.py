@@ -73,17 +73,39 @@ async def make_call(
     timeout: Optional[Union[float, httpx.Timeout]],
     json_mode: bool,
 ) -> Tuple[Any, httpx.Headers]:
-        # Handle raw httpx.AsyncClient by creating a wrapper
+        # Handle raw httpx.AsyncClient by normalizing to Anthropic SDK
     if client is not None and isinstance(client, httpx.AsyncClient):
-        # Create a simple wrapper that implements the AsyncHTTPHandler interface
-        class CustomAsyncHTTPHandler:
-            def __init__(self, client):
-                self.client = client
-            
-            async def post(self, url, headers=None, data=None, stream=False, timeout=None, **kwargs):
-                return await self.client.post(url, headers=headers, content=data, timeout=timeout, **kwargs)
-                            
-        client = CustomAsyncHTTPHandler(client)
+        from litellm.litellm_core_utils.core_helpers import (
+            get_client_or_fallback_to_global,
+            normalize_httpx_client_for_anthropic
+        )
+        
+        # Get API key and base from environment if not provided
+        import os
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        api_base = os.getenv("ANTHROPIC_BASE_URL")
+        
+        normalized_client = normalize_httpx_client_for_anthropic(
+            client=client,
+            is_async=True,
+            api_key=api_key,
+            api_base=api_base,
+        )
+        
+        if normalized_client is not None:
+            # Use the normalized Anthropic SDK client directly
+            try:
+                response = await normalized_client.messages.create(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    **optional_params,
+                )
+                return response, response._request.headers if hasattr(response, '_request') else httpx.Headers()
+            except Exception as e:
+                raise e
     elif client is None:
         client = litellm.module_level_aclient
 
@@ -254,24 +276,37 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
-        # Handle raw httpx.AsyncClient by creating a wrapper
+        # Handle raw httpx.AsyncClient by normalizing to Anthropic SDK
         if client is not None and isinstance(client, httpx.AsyncClient):
-            # Create a simple wrapper that implements the AsyncHTTPHandler interface
-            class CustomAsyncHTTPHandler:
-                def __init__(self, client):
-                    self.client = client
-                
-                async def post(self, url, headers=None, json=None, timeout=None, **kwargs):
-                    return await self.client.post(url, headers=headers, json=json, timeout=timeout, **kwargs)
-                    
-                async def aclose(self):
-                    await self.client.aclose()
+            from litellm.litellm_core_utils.core_helpers import normalize_httpx_client_for_anthropic
             
-            async_handler = CustomAsyncHTTPHandler(client)
-        else:
-            async_handler = client or get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.ANTHROPIC
+            # Get API key and base from environment if not provided
+            import os
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            api_base = os.getenv("ANTHROPIC_BASE_URL")
+            
+            normalized_client = normalize_httpx_client_for_anthropic(
+                client=client,
+                is_async=True,
+                api_key=api_key,
+                api_base=api_base,
             )
+            
+            if normalized_client is not None:
+                # Use the normalized Anthropic SDK client directly
+                response = await normalized_client.messages.create(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    **optional_params,
+                )
+                return response
+        
+        async_handler = client or get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.ANTHROPIC
+        )
 
         try:
             response = await async_handler.post(
@@ -459,19 +494,39 @@ class AnthropicChatCompletion(BaseLLM):
                 )
 
             else:
-                # Handle raw httpx clients by wrapping them in HTTPHandler
+                # Handle raw httpx clients by normalizing to Anthropic SDK
                 if client is not None and isinstance(client, httpx.Client):
-                    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-                    client = HTTPHandler(
-                        timeout=timeout,
-                        concurrent_limit=1000,
-                        client=client,  # Pass the custom httpx client
+                    from litellm.litellm_core_utils.core_helpers import normalize_httpx_client_for_anthropic
+                    
+                    # Get API key and base from environment if not provided
+                    import os
+                    api_key = os.getenv("ANTHROPIC_API_KEY")
+                    api_base = os.getenv("ANTHROPIC_BASE_URL")
+                    
+                    normalized_client = normalize_httpx_client_for_anthropic(
+                        client=client,
+                        is_async=False,
+                        api_key=api_key,
+                        api_base=api_base,
                     )
-                elif client is None or not isinstance(client, HTTPHandler):
+                    
+                    if normalized_client is not None:
+                        # Use the normalized Anthropic SDK client directly
+                        response = normalized_client.messages.create(
+                            model=model,
+                            messages=messages,
+                            headers=headers,
+                            max_tokens=max_tokens,
+                            timeout=timeout,
+                            **optional_params,
+                        )
+                        return response, response._request.headers if hasattr(response, '_request') else httpx.Headers()
+                
+                elif client is None:
                     client = _get_httpx_client(
                         params={"timeout": timeout}
                     )
-                # If client is already HTTPHandler, use as-is
+                # If client is already a proper handler, use as-is
 
                 try:
                     response = client.post(

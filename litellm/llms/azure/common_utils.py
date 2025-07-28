@@ -443,6 +443,44 @@ class BaseAzureLLM(BaseOpenAILLM):
         client_initialization_params: dict = locals()
         client_initialization_params["is_async"] = _is_async
         
+        # Handle global client sessions and normalize raw httpx clients
+        from litellm.litellm_core_utils.core_helpers import (
+            get_client_or_fallback_to_global,
+            normalize_httpx_client_for_azure
+        )
+        
+        client = get_client_or_fallback_to_global(client, _is_async)
+        
+        # For Azure, we need to get the azure params first if normalizing httpx clients
+        if client is not None and isinstance(client, (httpx.Client, httpx.AsyncClient)):
+            azure_client_params = self.initialize_azure_sdk_client(
+                litellm_params=litellm_params or {},
+                api_key=api_key,
+                api_base=api_base,
+                model_name=model,
+                api_version=api_version,
+                is_async=_is_async,
+            )
+            
+            normalized_client = normalize_httpx_client_for_azure(
+                client=client,
+                is_async=_is_async,
+                api_key=azure_client_params.get("api_key"),
+                api_base=azure_client_params.get("azure_endpoint"),
+                api_version=azure_client_params.get("api_version"),
+                azure_ad_token=azure_client_params.get("azure_ad_token"),
+                azure_ad_token_provider=azure_client_params.get("azure_ad_token_provider"),
+            )
+            
+            if normalized_client is not None:
+                # Save client in cache and return
+                self.set_cached_openai_client(
+                    openai_client=normalized_client,
+                    client_initialization_params=client_initialization_params,
+                    client_type="azure",
+                )
+                return normalized_client
+        
         if client is None:
             cached_client = self.get_cached_openai_client(
                 client_initialization_params=client_initialization_params,

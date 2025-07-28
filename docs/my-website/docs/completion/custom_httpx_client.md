@@ -1,6 +1,6 @@
 # Custom HTTP Client
 
-LiteLLM supports custom `httpx.Client` objects for HTTP control across providers.
+LiteLLM supports custom `httpx.Client` objects for HTTP control across all major providers.
 
 ## Quick Start
 
@@ -17,8 +17,9 @@ client = httpx.Client(
     proxy="http://proxy.example.com:8080"
 )
 
+# Works with all major providers
 response = litellm.completion(
-    model="gpt-3.5-turbo",
+    model="gpt-3.5-turbo",  # or claude-3-haiku-20240307, azure/gpt-35-turbo
     messages=[{"role": "user", "content": "Hello!"}],
     client=client
 )
@@ -106,19 +107,28 @@ class LoggingClient(httpx.Client):
 ## Provider Support
 
 - **OpenAI** ✅ Full support via SDK wrapping
-- **Anthropic** ⚠️ Limited support (async only) 
-- **Azure OpenAI** ❌ Not yet supported
+- **Anthropic** ✅ Full support via SDK wrapping
+- **Azure OpenAI** ✅ Full support via SDK wrapping
 - **Gemini** ✅ Direct support
-- **Others** ❌ Coming soon
+- **Others** ⚠️ Check provider docs for compatibility
 
-## Limitations
+## How It Works
 
-- Some providers require specific SDK clients and don't support raw httpx
-- Streaming may not work with all custom clients
-- Connection pooling settings may not transfer to provider SDKs
+LiteLLM automatically wraps your `httpx.Client` in the appropriate provider SDK:
+
+```python
+# Your custom client
+custom_client = httpx.Client(proxy="http://proxy.com:8080")
+
+# LiteLLM automatically wraps it:
+# OpenAI: openai.OpenAI(http_client=custom_client)
+# Anthropic: anthropic.Anthropic(http_client=custom_client)  
+# Azure: openai.AzureOpenAI(http_client=custom_client)
+```
 
 ## Notes
 
 - Global sessions (`client_session`, `aclient_session`) are fallbacks
 - Always close async clients: `await client.aclose()`
-- Provider SDKs take precedence when passed directly 
+- Provider SDKs take precedence when passed directly
+- Custom clients work with both sync and async operations 
