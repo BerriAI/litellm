@@ -17,8 +17,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  CHART_NAME: litellm-helm
-
+  
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
   # print commit hash, tag, and release type
