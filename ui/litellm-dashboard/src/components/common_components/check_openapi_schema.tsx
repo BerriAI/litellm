@@ -33,9 +33,12 @@ interface SchemaFormFieldsProps {
   defaultValues?: { [key: string]: any };
 }
 
+// Define which fields should be parsed as JSON
+export const jsonFields = ['metadata', 'config', 'enforced_params', 'aliases'];
+
+
 // Helper function to determine if a field should be treated as JSON
 const isJSONField = (key: string, property: SchemaProperty): boolean => {
-  const jsonFields = ['metadata', 'config', 'enforced_params', 'aliases'];
   return jsonFields.includes(key) || property.format === 'json';
 };
 
