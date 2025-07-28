@@ -246,7 +246,125 @@ Setting require_approval: "never" triggers automatic tool execution, returning t
 
 
 
-### Specific MCP Servers
+## MCP Server Access Control
+
+LiteLLM Proxy provides two methods for controlling access to specific MCP servers:
+
+1. **URL-based Namespacing** - Use URL paths to directly access specific servers or access groups
+2. **Header-based Namespacing** - Use the `x-mcp-servers` header to specify which servers to access
+
+---
+
+### Method 1: URL-based Namespacing
+
+LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/mcp/<servers or access groups>`. This allows you to:
+
+- **Direct URL Access**: Point MCP clients directly to specific servers or access groups via URL
+- **Simplified Configuration**: Use URLs instead of headers for server selection
+- **Access Group Support**: Use access group names in URLs for grouped server access
+
+#### URL Format
+
+```
+<your-litellm-proxy-base-url>/mcp/<server_alias_or_access_group>
+```
+
+**Examples:**
+- `/mcp/github` - Access tools from the "github" MCP server
+- `/mcp/zapier` - Access tools from the "zapier" MCP server  
+- `/mcp/dev_group` - Access tools from all servers in the "dev_group" access group
+- `/mcp/github,zapier` - Access tools from multiple specific servers
+
+#### Usage Examples
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+```bash title="cURL Example with URL Namespacing" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/github",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This example uses URL namespacing to access only the "github" MCP server.
+
+</TabItem>
+
+<TabItem value="litellm" label="LiteLLM Proxy">
+
+```bash title="cURL Example with URL Namespacing" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "<your-litellm-proxy-base-url>/mcp/dev_group",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This example uses URL namespacing to access all servers in the "dev_group" access group.
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with URL Namespacing" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "<your-litellm-proxy-base-url>/mcp/github,zapier",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+      }
+    }
+  }
+}
+```
+
+This configuration uses URL namespacing to access tools from both "github" and "zapier" MCP servers.
+
+</TabItem>
+</Tabs>
+
+#### Benefits of URL Namespacing
+
+- **Direct Access**: No need for additional headers to specify servers
+- **Clean URLs**: Self-documenting URLs that clearly indicate which servers are accessible
+- **Access Group Support**: Use access group names for grouped server access
+- **Multiple Servers**: Specify multiple servers in a single URL with comma separation
+- **Simplified Configuration**: Easier setup for MCP clients that prefer URL-based configuration
+
+---
+
+### Method 2: Header-based Namespacing
 
 You can choose to access specific MCP servers and only list their tools using the `x-mcp-servers` header. This header allows you to:
 - Limit tool access to one or more specific MCP servers
@@ -254,8 +372,103 @@ You can choose to access specific MCP servers and only list their tools using th
 
 The header accepts a comma-separated list of server aliases: `"alias_1,Server2,Server3"`
 
-Notes:
+**Notes:**
 - If the header is not provided, tools from all available MCP servers will be accessible
+- This method works with the standard LiteLLM MCP endpoint
+
+<Tabs>
+<TabItem value="openai" label="OpenAI API">
+
+```bash title="cURL Example with Header Namespacing" showLineNumbers
+curl --location 'https://api.openai.com/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $OPENAI_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "alias_1"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+In this example, the request will only have access to tools from the "alias_1" MCP server.
+
+</TabItem>
+
+<TabItem value="litellm" label="LiteLLM Proxy">
+
+```bash title="cURL Example with Header Namespacing" showLineNumbers
+curl --location '<your-litellm-proxy-base-url>/v1/responses' \
+--header 'Content-Type: application/json' \
+--header "Authorization: Bearer $LITELLM_API_KEY" \
+--data '{
+    "model": "gpt-4o",
+    "tools": [
+        {
+            "type": "mcp",
+            "server_label": "litellm",
+            "server_url": "litellm_proxy",
+            "require_approval": "never",
+            "headers": {
+                "x-litellm-api-key": "Bearer YOUR_LITELLM_API_KEY",
+                "x-mcp-servers": "alias_1,Server2"
+            }
+        }
+    ],
+    "input": "Run available tools",
+    "tool_choice": "required"
+}'
+```
+
+This configuration restricts the request to only use tools from the specified MCP servers.
+
+</TabItem>
+
+<TabItem value="cursor" label="Cursor IDE">
+
+```json title="Cursor MCP Configuration with Header Namespacing" showLineNumbers
+{
+  "mcpServers": {
+    "LiteLLM": {
+      "url": "litellm_proxy",
+      "headers": {
+        "x-litellm-api-key": "Bearer $LITELLM_API_KEY",
+        "x-mcp-servers": "alias_1,Server2"
+      }
+    }
+  }
+}
+```
+
+This configuration in Cursor IDE settings will limit tool access to only the specified MCP servers.
+
+</TabItem>
+</Tabs>
+
+---
+
+### Comparison: Header vs URL Namespacing
+
+| Feature | Header Namespacing | URL Namespacing |
+|---------|-------------------|-----------------|
+| **Method** | Uses `x-mcp-servers` header | Uses URL path `/mcp/<servers>` |
+| **Endpoint** | Standard `litellm_proxy` endpoint | Custom `/mcp/<servers>` endpoint |
+| **Configuration** | Requires additional header | Self-contained in URL |
+| **Multiple Servers** | Comma-separated in header | Comma-separated in URL path |
+| **Access Groups** | Supported via header | Supported via URL path |
+| **Client Support** | Works with all MCP clients | Works with URL-aware MCP clients |
+| **Use Case** | Dynamic server selection | Fixed server configuration |
 
 <Tabs>
 <TabItem value="openai" label="OpenAI API">
