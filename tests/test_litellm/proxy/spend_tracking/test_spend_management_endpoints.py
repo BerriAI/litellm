@@ -763,7 +763,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
-                    "mcp_namespaced_tool_name": None,
+                    "mcp_namespaced_tool_name": "",
                 }
             )
 
@@ -856,7 +856,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
-                    "mcp_namespaced_tool_name": None,
+                    "mcp_namespaced_tool_name": "",
                 }
             )
 
@@ -947,7 +947,7 @@ class TestSpendLogsPayload:
                     "response": "{}",
                     "proxy_server_request": "{}",
                     "status": "success",
-                    "mcp_namespaced_tool_name": None,
+                    "mcp_namespaced_tool_name": "",
                 }
             )
 

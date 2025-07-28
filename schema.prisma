@@ -371,7 +371,7 @@ model LiteLLM_DailyUserSpend {
   model               String?
   model_group         String?  
   custom_llm_provider String?
-  mcp_namespaced_tool_name String?
+  mcp_namespaced_tool_name String @default("")
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -400,7 +400,7 @@ model LiteLLM_DailyTeamSpend {
   model               String?
   model_group         String?  
   custom_llm_provider String?
-  mcp_namespaced_tool_name String?
+  mcp_namespaced_tool_name String @default("")
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)
@@ -429,7 +429,7 @@ model LiteLLM_DailyTagSpend {
   model               String?
   model_group         String?  
   custom_llm_provider String?
-  mcp_namespaced_tool_name String?
+  mcp_namespaced_tool_name String @default("")
   prompt_tokens       BigInt      @default(0)
   completion_tokens   BigInt      @default(0)
   cache_read_input_tokens     BigInt      @default(0)

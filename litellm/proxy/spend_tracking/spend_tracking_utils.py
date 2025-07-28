@@ -25,6 +25,22 @@ from litellm.types.utils import (
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 
+def get_mcp_namespaced_tool_name_from_metadata(metadata: dict) -> str:
+    """
+    Extract mcp_namespaced_tool_name from metadata, defaulting to empty string.
+    This ensures we never pass None/null to the database.
+    """
+    if not metadata:
+        return ""
+    
+    mcp_tool_call_metadata = metadata.get("mcp_tool_call_metadata")
+    if mcp_tool_call_metadata and isinstance(mcp_tool_call_metadata, dict):
+        mcp_server_name = mcp_tool_call_metadata.get("mcp_server_name")
+        if mcp_server_name:
+            return str(mcp_server_name)
+    return ""
+
+
 def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
     if _master_key is None:
         return False
@@ -287,12 +303,7 @@ def get_logging_payload(  # noqa: PLR0915
 
         id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
-    mcp_namespaced_tool_name = None
-    mcp_tool_call_metadata = clean_metadata.get("mcp_tool_call_metadata", {})
-    if mcp_tool_call_metadata is not None:
-        mcp_namespaced_tool_name = mcp_tool_call_metadata.get(
-            "namespaced_tool_name", None
-        )
+    mcp_namespaced_tool_name = get_mcp_namespaced_tool_name_from_metadata(clean_metadata)
 
     try:
         payload: SpendLogsPayload = SpendLogsPayload(

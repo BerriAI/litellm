@@ -875,7 +875,7 @@ class DBSpendUpdateWriter:
                                     )
                                     or "",
                                     "mcp_namespaced_tool_name": transaction.get(
-                                        "mcp_namespaced_tool_name"
+                                        "mcp_namespaced_tool_name", ""
                                     )
                                     or "",
                                 }
@@ -892,8 +892,9 @@ class DBSpendUpdateWriter:
                                 "model": transaction.get("model"),
                                 "model_group": transaction.get("model_group"),
                                 "mcp_namespaced_tool_name": transaction.get(
-                                    "mcp_namespaced_tool_name"
-                                ),
+                                    "mcp_namespaced_tool_name", ""
+                                )
+                                or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
@@ -1106,7 +1107,7 @@ class DBSpendUpdateWriter:
                 api_key=payload["api_key"],
                 model=payload.get("model", None),
                 model_group=payload.get("model_group", None),
-                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name", None),
+                mcp_namespaced_tool_name=payload.get("mcp_namespaced_tool_name", "") or "",
                 custom_llm_provider=payload.get("custom_llm_provider", None),
                 prompt_tokens=payload["prompt_tokens"],
                 completion_tokens=payload["completion_tokens"],
