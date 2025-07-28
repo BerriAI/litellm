@@ -1,42 +1,61 @@
 name: Deploy CartoDB Docker Image
 on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - "litellm/**"
+      - "docker/**"
+      - ".github/workflows/ghcr_carto_deploy.yaml"
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - "litellm/**"
+      - "docker/**"
+      - ".github/workflows/ghcr_carto_deploy.yaml"
+     
   workflow_dispatch:
     inputs:
-      tag:
-        description: "The tag version you want to build"
-      release_type:
-        description: "The release type you want to build. Can be 'latest', 'stable', 'dev', 'rc'"
-        type: string
-        default: "latest"
-      commit_hash:
-        description: "Commit hash or branch name. Default is main"
+      ref:
+        description: "Branch or full commit SHA to build"
         default: "main"
+      tag:
+        description: "Extra tag (e.g., v1.2.3). Leave blank for none."
+        required: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  
+  DOCKER_GIT_REVISION_SHA: ${{ github.event.inputs.ref || github.sha }}
+  CHANNEL: ${{ github.ref_name || 'manual' }}
+
 jobs:
   # print commit hash, tag, and release type
   print:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "Commit hash: ${{ github.event.inputs.commit_hash }}"
-          echo "Tag: ${{ github.event.inputs.tag }}"
-          echo "Release type: ${{ github.event.inputs.release_type }}"
+          echo "Ref      : ${{ github.event.inputs.ref || github.ref }}"
+          echo "Tag      : ${{ github.event.inputs.tag }}"
+          echo "Channel  : ${{ env.CHANNEL }}"
+          echo "DOCKER_GIT_REVISION_SHA: ${{ env.DOCKER_GIT_REVISION_SHA }}"
 
   build-and-push-image-non_root:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    concurrency:
+        group: ${{ github.workflow }}-${{ github.ref_name || 'manual' }}
+        cancel-in-progress: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.commit_hash }}
-          fetch-depth: 1
+          ref: ${{ github.event.inputs.ref || github.sha }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -44,12 +63,16 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata (tags, labels) for non_root Dockerfile
-        id: meta-non_root
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+      - name: Extract metadata for tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-non_root
+          tags: |
+            type=raw,value=${{ env.CHANNEL }}-latest
+            type=raw,value=${{ env.CHANNEL }}-${{ env.DOCKER_GIT_REVISION_SHA }}
+            ${{ github.event.inputs.tag && format('type=raw,value={0}', github.event.inputs.tag) }}
+  
       # Configure multi platform Docker builds
       - name: Set up QEMU
         uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
@@ -64,10 +87,6 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          tags: |
-            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
-            ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }}
-            ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-non_root:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
-            ${{ github.event.inputs.release_type == 'stable' && format('{0}/CartoDB/litellm-non_root:main-stable', env.REGISTRY) || '' }}
-          labels: ${{ steps.meta-non_root.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
