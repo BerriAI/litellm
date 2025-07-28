@@ -552,6 +552,170 @@ class TestVertexAIPassThroughHandler:
                 call_args = mock_auth.call_args[1]
                 assert call_args["api_key"] == "Bearer test-key-123"
 
+    def test_vertex_passthrough_handler_multimodal_embedding_response(self):
+        """
+        Test that vertex_passthrough_handler correctly identifies and processes multimodal embedding responses
+        """
+        import datetime
+        from unittest.mock import Mock
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        # Create mock multimodal embedding response data
+        multimodal_response_data = {
+            "predictions": [
+                {
+                    "textEmbedding": [0.1, 0.2, 0.3, 0.4, 0.5],
+                    "imageEmbedding": [0.6, 0.7, 0.8, 0.9, 1.0],
+                },
+                {
+                    "videoEmbeddings": [
+                        {
+                            "embedding": [0.11, 0.22, 0.33, 0.44, 0.55],
+                            "startOffsetSec": 0,
+                            "endOffsetSec": 5
+                        }
+                    ]
+                }
+            ]
+        }
+
+        # Create mock httpx.Response
+        mock_httpx_response = Mock()
+        mock_httpx_response.json.return_value = multimodal_response_data
+        mock_httpx_response.status_code = 200
+
+        # Create mock logging object
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.litellm_call_id = "test-call-id-123"
+        mock_logging_obj.model_call_details = {}
+
+        # Test URL with multimodal embedding model
+        url_route = "/v1/projects/test-project/locations/us-central1/publishers/google/models/multimodalembedding@001:predict"
+        
+        start_time = datetime.datetime.now()
+        end_time = datetime.datetime.now()
+        
+        with patch("litellm.llms.vertex_ai.multimodal_embeddings.transformation.VertexAIMultimodalEmbeddingConfig") as mock_multimodal_config:
+            # Mock the multimodal config instance and its methods
+            mock_config_instance = Mock()
+            mock_multimodal_config.return_value = mock_config_instance
+            
+            # Create a mock embedding response that would be returned by the transformation
+            from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+            mock_embedding_response = EmbeddingResponse(
+                object="list",
+                data=[
+                    Embedding(embedding=[0.1, 0.2, 0.3, 0.4, 0.5], index=0, object="embedding"),
+                    Embedding(embedding=[0.6, 0.7, 0.8, 0.9, 1.0], index=1, object="embedding"),
+                ],
+                model="multimodalembedding@001",
+                usage=Usage(prompt_tokens=0, total_tokens=0, completion_tokens=0)
+            )
+            mock_config_instance.transform_embedding_response.return_value = mock_embedding_response
+            
+            # Call the handler
+            result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+                httpx_response=mock_httpx_response,
+                logging_obj=mock_logging_obj,
+                url_route=url_route,
+                result="test-result",
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=False
+            )
+
+            # Verify multimodal embedding detection and processing
+            assert result is not None
+            assert "result" in result
+            assert "kwargs" in result
+            
+            # Verify that the multimodal config was instantiated and used
+            mock_multimodal_config.assert_called_once()
+            mock_config_instance.transform_embedding_response.assert_called_once()
+            
+            # Verify the response is an EmbeddingResponse
+            assert isinstance(result["result"], EmbeddingResponse)
+            assert result["result"].model == "multimodalembedding@001"
+            assert len(result["result"].data) == 2
+
+    def test_vertex_passthrough_handler_multimodal_detection_method(self):
+        """
+        Test the _is_multimodal_embedding_response detection method specifically
+        """
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
+            VertexPassthroughLoggingHandler,
+        )
+
+        # Test case 1: Response with textEmbedding should be detected as multimodal
+        response_with_text_embedding = {
+            "predictions": [
+                {
+                    "textEmbedding": [0.1, 0.2, 0.3]
+                }
+            ]
+        }
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(response_with_text_embedding) is True
+
+        # Test case 2: Response with imageEmbedding should be detected as multimodal
+        response_with_image_embedding = {
+            "predictions": [
+                {
+                    "imageEmbedding": [0.4, 0.5, 0.6]
+                }
+            ]
+        }
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(response_with_image_embedding) is True
+
+        # Test case 3: Response with videoEmbeddings should be detected as multimodal
+        response_with_video_embeddings = {
+            "predictions": [
+                {
+                    "videoEmbeddings": [
+                        {
+                            "embedding": [0.7, 0.8, 0.9],
+                            "startOffsetSec": 0,
+                            "endOffsetSec": 5
+                        }
+                    ]
+                }
+            ]
+        }
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(response_with_video_embeddings) is True
+
+        # Test case 4: Regular text embedding response should NOT be detected as multimodal
+        regular_embedding_response = {
+            "predictions": [
+                {
+                    "embeddings": {
+                        "values": [0.1, 0.2, 0.3]
+                    }
+                }
+            ]
+        }
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(regular_embedding_response) is False
+
+        # Test case 5: Non-embedding response should NOT be detected as multimodal
+        non_embedding_response = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"text": "Hello world"}]
+                    }
+                }
+            ]
+        }
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(non_embedding_response) is False
+
+        # Test case 6: Empty response should NOT be detected as multimodal
+        empty_response = {}
+        assert VertexPassthroughLoggingHandler._is_multimodal_embedding_response(empty_response) is False
+
 
 class TestVertexAIDiscoveryPassThroughHandler:
     """
