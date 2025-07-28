@@ -1,10 +1,7 @@
 name: Helm unit test
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   unit-test:

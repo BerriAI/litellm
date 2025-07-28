@@ -7,10 +7,7 @@ on:
         description: 'Release candidate tag/version'
         required: true
         type: string
-  push:
-    tags:
-      - 'v*-rc*'  # Triggers on release candidate tags like v1.0.0-rc1
-  
+
 jobs:
   run-llm-translation-tests:
     runs-on: ubuntu-latest

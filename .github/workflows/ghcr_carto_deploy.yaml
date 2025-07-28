@@ -9,8 +9,8 @@ on:
         type: string
         default: "latest"
       commit_hash:
-        description: "Commit hash or branch name"
-        required: true
+        description: "Commit hash or branch name. Default is main"
+        default: "main"
 
 env:
   REGISTRY: ghcr.io
@@ -36,7 +36,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.commit_hash }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -51,8 +51,6 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-non_root
       # Configure multi platform Docker builds
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@e0e4588fad221d38ee467c0bffd91115366dc0c5
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@edfb0fe6204400c56fbfd3feba3fe9ad1adfa345
 
@@ -62,10 +60,11 @@ jobs:
           context: .
           file: ./docker/Dockerfile.non_root
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }},
             ${{ steps.meta-non_root.outputs.tags }}-${{ github.event.inputs.release_type }}
             ${{ (github.event.inputs.release_type == 'stable'  || github.event.inputs.release_type == 'rc') && format('{0}/berriai/litellm-non_root:main-{1}', env.REGISTRY, github.event.inputs.tag) || '' }},
             ${{ github.event.inputs.release_type == 'stable' && format('{0}/CartoDB/litellm-non_root:main-stable', env.REGISTRY) || '' }}
-          labels: ${{ steps.meta-non_root.outputs.labels }} 
-          platforms: local,linux/amd64,linux/arm64,linux/arm64/v8
+          labels: ${{ steps.meta-non_root.outputs.labels }}

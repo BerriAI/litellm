@@ -1,10 +1,6 @@
 name: Test Locust Load Test
 
 on:
-  workflow_run:
-    workflows: ["Build, Publish LiteLLM Docker Image. New Release"]
-    types:
-      - completed
   workflow_dispatch:
 
 jobs:
