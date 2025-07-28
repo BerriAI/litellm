@@ -182,7 +182,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             </Form.Item>
             <Form.Item label="MCP Version" name="spec_version" rules={[{ required: true }]}> 
               <Select>
-                <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
+                <Select.Option value="2025-06-18">2025-06-18 (Latest)</Select.Option>
+                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
                 <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>
