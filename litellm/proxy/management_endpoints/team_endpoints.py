@@ -961,28 +961,39 @@ def team_member_add_duplication_check(
     obvious duplicates where both user_id and user_email match exactly.
     """
 
+    invalid_team_members = []
+
     def _check_member_duplication(member: Member):
         # Check by user_id if provided
         if member.user_id is not None:
             for existing_member in existing_team_row.members_with_roles:
                 if existing_member.user_id == member.user_id:
-                    raise ProxyException(
-                        message=f"User with user_id={member.user_id} already in team. Existing members={existing_team_row.members_with_roles}",
-                        type=ProxyErrorTypes.team_member_already_in_team,
-                        param="user_id",
-                        code="400",
-                    )
+                    invalid_team_members.append(member)
 
         # Check by user_email if provided
         if member.user_email is not None:
             for existing_member in existing_team_row.members_with_roles:
                 if existing_member.user_email == member.user_email:
-                    raise ProxyException(
-                        message=f"User with user_email={member.user_email} already in team. Existing members={existing_team_row.members_with_roles}",
-                        type=ProxyErrorTypes.team_member_already_in_team,
-                        param="user_email",
-                        code="400",
-                    )
+                    invalid_team_members.append(member)
+
+    if isinstance(data.member, list) and len(invalid_team_members) == len(data.member):
+        raise ProxyException(
+            message=f"All users are already in team. Existing members={existing_team_row.members_with_roles}",
+            type=ProxyErrorTypes.team_member_already_in_team,
+            param="user_email",
+            code="400",
+        )
+    elif isinstance(data.member, Member) and len(invalid_team_members) == 1:
+        raise ProxyException(
+            message=f"User with user_email={data.member.user_email} already in team. Existing members={existing_team_row.members_with_roles}",
+            type=ProxyErrorTypes.team_member_already_in_team,
+            param="user_email",
+            code="400",
+        )
+    elif len(invalid_team_members) > 0:
+        verbose_proxy_logger.info(
+            f"Some users are already in team. Existing members={existing_team_row.members_with_roles}. Duplicate members={invalid_team_members}",
+        )
 
     if isinstance(data.member, Member):
         _check_member_duplication(data.member)
@@ -1274,6 +1285,32 @@ async def team_member_add(
     )
 
 
+def _cleanup_members_with_roles(
+    existing_team_row: LiteLLM_TeamTable,
+    data: TeamMemberDeleteRequest,
+) -> Tuple[bool, List[Member]]:
+    """Cleanup members_with_roles list for a team."""
+    is_member_in_team = False
+    new_team_members: List[Member] = []
+    for m in existing_team_row.members_with_roles:
+        if (
+            data.user_id is not None
+            and m.user_id is not None
+            and data.user_id == m.user_id
+        ):
+            is_member_in_team = True
+            continue
+        elif (
+            data.user_email is not None
+            and m.user_email is not None
+            and data.user_email == m.user_email
+        ):
+            is_member_in_team = True
+            continue
+        new_team_members.append(m)
+    return is_member_in_team, new_team_members
+
+
 @router.post(
     "/team/member_delete",
     tags=["team management"],
@@ -1346,24 +1383,10 @@ async def team_member_delete(
         )
 
     ## DELETE MEMBER FROM TEAM
-    is_member_in_team = False
-    new_team_members: List[Member] = []
-    for m in existing_team_row.members_with_roles:
-        if (
-            data.user_id is not None
-            and m.user_id is not None
-            and data.user_id == m.user_id
-        ):
-            is_member_in_team = True
-            continue
-        elif (
-            data.user_email is not None
-            and m.user_email is not None
-            and data.user_email == m.user_email
-        ):
-            is_member_in_team = True
-            continue
-        new_team_members.append(m)
+    is_member_in_team, new_team_members = _cleanup_members_with_roles(
+        existing_team_row=existing_team_row,
+        data=data,
+    )
 
     if not is_member_in_team:
         raise HTTPException(status_code=400, detail={"error": "User not found in team"})
@@ -1605,6 +1628,7 @@ async def bulk_team_member_add(
     Parameters:
     - team_id: str - The ID of the team to add members to
     - members: List[Member] - List of members to add to the team
+    - all_users: Optional[bool] - Flag to add all users on Proxy to the team
     - max_budget_in_team: Optional[float] - Maximum budget allocated to each user within the team
     
     Returns:
@@ -1635,6 +1659,29 @@ async def bulk_team_member_add(
     }'
     ```
     """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if data.all_users:
+        # get all users from the database
+        all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
+            order={"created_at": "desc"}
+        )
+        data.members = [
+            Member(
+                user_id=user.user_id,
+                user_email=user.user_email,
+                role="user",
+            )
+            for user in all_users_in_db
+        ]
+
     if not data.members:
         raise HTTPException(
             status_code=400,
@@ -1642,7 +1689,7 @@ async def bulk_team_member_add(
         )
 
     # Limit batch size to prevent overwhelming the system
-    MAX_BATCH_SIZE = 100
+    MAX_BATCH_SIZE = 500
     if len(data.members) > MAX_BATCH_SIZE:
         raise HTTPException(
             status_code=400,
@@ -1674,6 +1721,7 @@ async def bulk_team_member_add(
 
     except Exception as e:
         # If the entire operation fails, mark all members as failed
+        verbose_proxy_logger.exception(e)
         error_message = str(e)
         results = [
             TeamMemberAddResult(

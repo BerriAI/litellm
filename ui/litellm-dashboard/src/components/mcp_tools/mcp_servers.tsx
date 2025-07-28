@@ -180,6 +180,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         mcpServer={
           filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
             server_id: "",
+            server_name: "",
             alias: "",
             url: "",
             transport: "",

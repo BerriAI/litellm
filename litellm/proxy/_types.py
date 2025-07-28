@@ -696,9 +696,24 @@ class KeyRequestBase(GenerateRequestBase):
     allowed_routes: Optional[list] = []
 
 
+class LiteLLMKeyType(str, enum.Enum):
+    """
+    Enum for key types that determine what routes a key can access
+    """
+
+    LLM_API = "llm_api"  # Can call LLM API routes (chat/completions, embeddings, etc.)
+    MANAGEMENT = "management"  # Can call management routes (user/team/key management)
+    READ_ONLY = "read_only"  # Can only call info/read routes
+    DEFAULT = "default"  # Uses default allowed routes
+
+
 class GenerateKeyRequest(KeyRequestBase):
     soft_budget: Optional[float] = None
     send_invite_email: Optional[bool] = None
+    key_type: Optional[LiteLLMKeyType] = Field(
+        default=LiteLLMKeyType.DEFAULT,
+        description="Type of key that determines default allowed routes.",
+    )
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -824,6 +839,7 @@ class SpecialMCPServerName(str, enum.Enum):
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
+    server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
@@ -855,6 +871,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
+    server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
@@ -888,6 +905,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_MCPServerTable record"""
 
     server_id: str
+    server_name: Optional[str] = None
     alias: Optional[str] = None
     description: Optional[str] = None
     url: Optional[str] = None
@@ -952,12 +970,10 @@ class NewUserResponse(GenerateKeyResponse):
     updated_at: Optional[datetime] = None
 
 
-class UpdateUserRequest(GenerateRequestBase):
-    # Note: the defaults of all Params here MUST BE NONE
-    # else they will get overwritten
-    user_id: Optional[str] = None
+class UpdateUserRequestNoUserIDorEmail(
+    GenerateRequestBase
+):  # shared with BulkUpdateUserRequest
     password: Optional[str] = None
-    user_email: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     user_role: Optional[
@@ -969,6 +985,13 @@ class UpdateUserRequest(GenerateRequestBase):
         ]
     ] = None
     max_budget: Optional[float] = None
+
+
+class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
+    # Note: the defaults of all Params here MUST BE NONE
+    # else they will get overwritten
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1766,16 +1789,16 @@ class UserAPIKeyAuth(
         if JWTHandler.is_jwt(token=api_key):
             return f"hashed-jwt-{hash_token(token=api_key)}"
         return api_key
-    
 
     @classmethod
     def get_litellm_internal_health_check_user_api_key_auth(cls) -> "UserAPIKeyAuth":
         """
         Returns a `UserAPIKeyAuth` object for the litellm internal health check service account.
-        
+
         This is used to track number of requests/spend for health check calls.
         """
         from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
         return cls(
             api_key=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_id=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,

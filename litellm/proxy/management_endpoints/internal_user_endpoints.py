@@ -12,6 +12,7 @@ These are members of a Team on LiteLLM
 """
 
 import asyncio
+import json
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -744,7 +745,9 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
-def _update_internal_user_params(data_json: dict, data: UpdateUserRequest) -> dict:
+def _update_internal_user_params(
+    data_json: dict, data: Union[UpdateUserRequest, UpdateUserRequestNoUserIDorEmail]
+) -> dict:
     non_default_values = {}
     for k, v in data_json.items():
         if (
@@ -1015,6 +1018,69 @@ async def user_update(
         )
 
 
+async def bulk_update_processed_users(
+    users_to_update: List[UpdateUserRequest],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> BulkUpdateUserResponse:
+    results: List[UserUpdateResult] = []
+    successful_updates = 0
+    failed_updates = 0
+
+    # Process each user update independently
+    try:
+        for user_request in users_to_update:
+            try:
+                response = await _update_single_user_helper(
+                    user_request=user_request,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                )
+                # Record success
+                results.append(
+                    UserUpdateResult(
+                        user_id=(
+                            response.get("user_id")
+                            if response
+                            else user_request.user_id
+                        ),
+                        user_email=user_request.user_email,
+                        success=True,
+                        updated_user=response,
+                    )
+                )
+                successful_updates += 1
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
+                )
+                # Record failure
+                error_message = str(e)
+                verbose_proxy_logger.error(
+                    f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
+                )
+
+                results.append(
+                    UserUpdateResult(
+                        user_id=user_request.user_id,
+                        user_email=user_request.user_email,
+                        success=False,
+                        error=error_message,
+                    )
+                )
+                failed_updates += 1
+
+        return BulkUpdateUserResponse(
+            results=results,
+            total_requested=len(users_to_update),
+            successful_updates=successful_updates,
+            failed_updates=failed_updates,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to update users: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 @router.post(
     "/user/bulk_update",
     tags=["Internal User management"],
@@ -1037,7 +1103,9 @@ async def bulk_user_update(
     is processed independently - if some updates fail, others will still succeed.
     
     Parameters:
-    - users: List[UpdateUserRequest] - List of user update requests
+    - users: Optional[List[UpdateUserRequest]] - List of specific user update requests
+    - all_users: Optional[bool] - Set to true to update all users in the system
+    - user_updates: Optional[UpdateUserRequest] - Updates to apply when all_users=True
     
     Returns:
     - results: List of individual update results
@@ -1045,7 +1113,7 @@ async def bulk_user_update(
     - successful_updates: Number of successful updates
     - failed_updates: Number of failed updates
     
-    Example request:
+    Example request for specific users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
     --header 'Authorization: Bearer sk-1234' \
@@ -1065,8 +1133,22 @@ async def bulk_user_update(
         ]
     }'
     ```
+    
+    Example request for all users:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/bulk_update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "all_users": true,
+        "user_updates": {
+            "user_role": "internal_user",
+            "max_budget": 50.0
+        }
+    }'
+    ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
         raise HTTPException(
@@ -1074,69 +1156,130 @@ async def bulk_user_update(
             detail={"error": "Database not connected"},
         )
 
-    if not data.users:
+    # Determine the list of users to update
+    users_to_update: Union[
+        List[UpdateUserRequest], List[UpdateUserRequestNoUserIDorEmail]
+    ] = []
+
+    if data.all_users and data.user_updates:
+        # Optimized path for updating all users directly in database
+        all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
+            order={"created_at": "desc"}
+        )
+
+        if not all_users_in_db:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "No users found to update"},
+            )
+
+        # Limit batch size to prevent overwhelming the system
+        MAX_BATCH_SIZE = 500  # Increased limit for all-users operations
+        if len(all_users_in_db) > MAX_BATCH_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Maximum {MAX_BATCH_SIZE} users can be updated at once. Found {len(all_users_in_db)} users."
+                },
+            )
+
+        # Apply update transformations (reuse existing logic)
+        data_json: dict = data.user_updates.model_dump(exclude_unset=True)
+        non_default_values = _update_internal_user_params(
+            data_json=data_json, data=data.user_updates
+        )
+
+        # Remove user identification fields since we're updating by user_id
+        non_default_values.pop("user_id", None)
+        non_default_values.pop("user_email", None)
+
+        successful_updates = 0
+        failed_updates = 0
+        results: List[UserUpdateResult] = []
+
+        try:
+            # Perform bulk database update
+            await prisma_client.db.litellm_usertable.update_many(
+                where={}, data=non_default_values  # Update all users
+            )
+
+            # Create individual success results
+            for user in all_users_in_db:
+                results.append(
+                    UserUpdateResult(
+                        user_id=user.user_id,
+                        user_email=user.user_email,
+                        success=True,
+                        updated_user={"user_id": user.user_id, **non_default_values},
+                    )
+                )
+                successful_updates += 1
+
+            # Create single audit log entry for bulk operation
+            try:
+                asyncio.create_task(
+                    UserManagementEventHooks.create_internal_user_audit_log(
+                        user_id=user_api_key_dict.user_id or "",
+                        action="updated",
+                        litellm_changed_by=litellm_changed_by
+                        or user_api_key_dict.user_id,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        before_value=f"Updated {len(all_users_in_db)} users",
+                        after_value=json.dumps(non_default_values),
+                    )
+                )
+            except Exception as audit_error:
+                verbose_proxy_logger.warning(
+                    f"Failed to create bulk audit log: {audit_error}"
+                )
+
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Failed to perform bulk update: {e}")
+            # Fall back to individual updates if bulk update fails
+            for user in all_users_in_db:
+                user_update_request = data.user_updates.model_copy()
+                user_update_request.user_id = user.user_id
+                users_to_update.append(user_update_request)  # type: ignore
+
+        if successful_updates > 0:
+            return BulkUpdateUserResponse(
+                results=results,
+                total_requested=len(all_users_in_db),
+                successful_updates=successful_updates,
+                failed_updates=failed_updates,
+            )
+
+    elif data.users:
+        users_to_update = data.users
+    else:
         raise HTTPException(
             status_code=400,
-            detail={"error": "At least one user update request is required"},
+            detail={
+                "error": "Must specify either 'users' for individual updates or 'all_users=True' with 'user_updates' for bulk updates"
+            },
+        )
+
+    if not users_to_update:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "No users found to update"},
         )
 
     # Limit batch size to prevent overwhelming the system
-    MAX_BATCH_SIZE = 100
-    if len(data.users) > MAX_BATCH_SIZE:
+    MAX_BATCH_SIZE = 500  # Increased limit for all-users operations
+    if len(users_to_update) > MAX_BATCH_SIZE:
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Maximum {MAX_BATCH_SIZE} users can be updated at once"},
+            detail={
+                "error": f"Maximum {MAX_BATCH_SIZE} users can be updated at once. Found {len(users_to_update)} users."
+            },
         )
 
-    results: List[UserUpdateResult] = []
-    successful_updates = 0
-    failed_updates = 0
-
-    # Process each user update independently
-    for user_request in data.users:
-        try:
-            response = await _update_single_user_helper(
-                user_request=user_request,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-            )
-            # Record success
-            results.append(
-                UserUpdateResult(
-                    user_id=(
-                        response.get("user_id") if response else user_request.user_id
-                    ),
-                    user_email=user_request.user_email,
-                    success=True,
-                    updated_user=response,
-                )
-            )
-            successful_updates += 1
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Failed to update user {user_request.user_id or user_request.user_email}: {e}"
-            )
-            # Record failure
-            error_message = str(e)
-            verbose_proxy_logger.error(
-                f"Failed to update user {user_request.user_id or user_request.user_email}: {error_message}"
-            )
-
-            results.append(
-                UserUpdateResult(
-                    user_id=user_request.user_id,
-                    user_email=user_request.user_email,
-                    success=False,
-                    error=error_message,
-                )
-            )
-            failed_updates += 1
-
-    return BulkUpdateUserResponse(
-        results=results,
-        total_requested=len(data.users),
-        successful_updates=successful_updates,
-        failed_updates=failed_updates,
+    return await bulk_update_processed_users(
+        users_to_update=cast(List[UpdateUserRequest], users_to_update),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
     )
 
 
@@ -1403,6 +1546,9 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _cleanup_members_with_roles,
+    )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
@@ -1451,6 +1597,34 @@ async def delete_user(
                     )
                 )
 
+        ## CLEANUP MEMBERS_WITH_ROLES
+        fetch_all_teams = await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": user_row.teams}}
+        )
+        teams_to_update = []
+        for team in fetch_all_teams:
+            is_member_in_team, new_team_members = _cleanup_members_with_roles(
+                existing_team_row=LiteLLM_TeamTable(**team.model_dump()),
+                data=TeamMemberDeleteRequest(
+                    team_id=team.team_id,
+                    user_id=user_row.user_id,
+                    user_email=user_row.user_email,
+                ),
+            )
+            if is_member_in_team:
+                _db_new_team_members: List[dict] = [
+                    m.model_dump() for m in new_team_members
+                ]
+                team.members_with_roles = json.dumps(_db_new_team_members)
+                teams_to_update.append(team)
+
+        ## update teams
+
+        for team in teams_to_update:
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": team.team_id},
+                data={"members_with_roles": team.members_with_roles},
+            )
     # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
@@ -1465,6 +1639,11 @@ async def delete_user(
 
     ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
     await prisma_client.db.litellm_organizationmembership.delete_many(
+        where={"user_id": {"in": data.user_ids}}
+    )
+
+    ## DELETE ASSOCIATED TEAM MEMBERSHIPS
+    await prisma_client.db.litellm_teammembership.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
 

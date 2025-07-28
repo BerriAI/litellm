@@ -1278,6 +1278,24 @@
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
+    "gpt-4o-realtime-preview-2025-06-03": {
+        "max_tokens": 4096,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_audio_token": 4e-05,
+        "cache_read_input_token_cost": 2.5e-06,
+        "output_cost_per_token": 2e-05,
+        "output_cost_per_audio_token": 8e-05,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "gpt-4o-mini-realtime-preview": {
         "max_tokens": 4096,
         "max_input_tokens": 128000,
@@ -10426,6 +10444,17 @@
         "supports_tool_choice": true,
         "supports_prompt_caching": true
     },
+    "openrouter/bytedance/ui-tars-1.5-7b":{
+        "max_tokens": 2048,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.1e-06,
+        "output_cost_per_token": 0.2e-06,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "source": "https://openrouter.ai/api/v1/models/bytedance/ui-tars-1.5-7b",
+        "supports_tool_choice": true
+    },
     "openrouter/deepseek/deepseek-r1": {
         "max_tokens": 8192,
         "max_input_tokens": 65336,
@@ -11099,12 +11128,23 @@
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00021,
-        "output_cost_per_token": 0.00063,
+        "input_cost_per_token": 0.21e-06,
+        "output_cost_per_token": 0.63e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
-    },      
+    },
+    "openrouter/qwen/qwen3-coder": {
+        "max_tokens": 1000000,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "source": "https://openrouter.ai/qwen/qwen3-coder",
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "openrouter/switchpoint/router": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
