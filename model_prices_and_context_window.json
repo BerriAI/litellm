@@ -15525,7 +15525,6 @@
         "supports_parallel_function_calling": false,
         "supports_system_messages": true,
         "supports_tool_choice": false,
-        "context_length": 16384
     },
     "inference/meta-llama/llama-3.2-3b-instruct/fp-16": {
         "max_tokens": 16384,
@@ -15539,7 +15538,6 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "context_length": 16384
     },
     "inference/mistralai/mistral-nemo-12b-instruct/fp-8": {
         "max_tokens": 16384,
@@ -15553,7 +15551,6 @@
         "supports_parallel_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "context_length": 16384
     },
     "voyage/voyage-lite-01": {
         "max_tokens": 4096,
