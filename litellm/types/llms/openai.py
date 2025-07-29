@@ -407,7 +407,7 @@ class CancelBatchRequest(TypedDict, total=False):
 class ListBatchRequest(TypedDict, total=False):
     """
     ListBatchRequest - List your organization's batches
-    Calls https://api.openai.com/v1/batches
+    Calls https://us.api.openai.com/v1/batches
     """
 
     after: Union[str, NotGiven]

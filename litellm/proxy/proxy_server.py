@@ -6189,8 +6189,8 @@ async def model_streaming_metrics(
         each entry needs to be like this:
         {
             date: 'Jun 23',
-            'gpt-4-https://api.openai.com/v1/': 0.002,
-            'gpt-43-https://api.openai.com-12/v1/': 0.002,
+            'gpt-4-https://us.api.openai.com/v1/': 0.002,
+            'gpt-43-https://us.api.openai.com-12/v1/': 0.002,
         }
         """
         # convert daily entries to list of dicts
@@ -6304,8 +6304,8 @@ async def model_metrics(
         each entry needs to be like this:
         {
             date: 'Jun 23',
-            'gpt-4-https://api.openai.com/v1/': 0.002,
-            'gpt-43-https://api.openai.com-12/v1/': 0.002,
+            'gpt-4-https://us.api.openai.com/v1/': 0.002,
+            'gpt-43-https://us.api.openai.com-12/v1/': 0.002,
         }
         """
         # convert daily entries to list of dicts
@@ -6479,7 +6479,7 @@ async def model_metrics_exceptions(
     """
     Return Data
     {
-        "combined_model_api_base": "gpt-3.5-turbo-https://api.openai.com/v1/,
+        "combined_model_api_base": "gpt-3.5-turbo-https://us.api.openai.com/v1/,
         "total_exceptions": 5,
         "BadRequestException": 5,
         "TimeoutException": 2
