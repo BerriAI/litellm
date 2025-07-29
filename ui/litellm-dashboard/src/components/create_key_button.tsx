@@ -36,7 +36,6 @@ import {
   fetchMCPAccessGroups,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -690,14 +689,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     </div>
                   </div>
                 </Option>
-                <Option value="read_only" label="Read Only">
-                  <div style={{ padding: '4px 0' }}>
-                    <div style={{ fontWeight: 500 }}>Read Only</div>
-                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                      Can only call only info routes (e.g. /key/info, /user/info, /team/info)
-                    </div>
-                  </div>
-                </Option>
               </Select>
             </Form.Item>
             
@@ -874,12 +865,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         className="mt-4"
                         help="Select vector stores this key can access. Leave empty for access to all vector stores"
                       >
-                        <PremiumVectorStoreSelector
-                          onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        <VectorStoreSelector
+                          onChange={(values: string[]) => form.setFieldValue('allowed_vector_store_ids', values)}
                           value={form.getFieldValue('allowed_vector_store_ids')}
                           accessToken={accessToken}
                           placeholder="Select vector stores (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
 

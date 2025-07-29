@@ -17,6 +17,8 @@ class MCPInfo(TypedDict, total=False):
 class MCPServer(BaseModel):
     server_id: str
     name: str
+    alias: Optional[str] = None
+    server_name: Optional[str] = None
     url: Optional[str] = None
     transport: MCPTransportType
     spec_version: MCPSpecVersionType
