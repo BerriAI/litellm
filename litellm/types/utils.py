@@ -570,7 +570,7 @@ class Message(OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
-    function_call: Union[FunctionCall, Dict[str, Any]]
+    function_call: Optional[FunctionCall] = None
     audio: Optional[ChatCompletionAudioResponse] = None
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
@@ -671,13 +671,15 @@ class Message(OpenAIObject):
         
         Relevant issue: https://github.com/BerriAI/litellm/issues/13055
         """
+        from typing import cast
         if tool_calls is None:
             if hasattr(self, "tool_calls"):
                 self.tool_calls = []
         
         if function_call is None:
             if hasattr(self, "function_call"):
-                self.function_call = {}
+                default_function_call: Dict[str, Any] = {}
+                self.function_call = cast(FunctionCall, default_function_call)
 
 
     def get(self, key, default=None):
