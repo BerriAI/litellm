@@ -204,9 +204,9 @@ def get_content_from_model_response(response: Union[ModelResponse, dict]) -> str
     for choice in new_response.choices:
         if isinstance(choice, Choices):
             content += choice.message.content if choice.message.content else ""
-            if choice.message.function_call:
+            if hasattr(choice.message, "function_call") and choice.message.function_call:
                 content += choice.message.function_call.model_dump_json()
-            if choice.message.tool_calls:
+            if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                 for tc in choice.message.tool_calls:
                     content += tc.model_dump_json()
         elif isinstance(choice, StreamingChoices):
