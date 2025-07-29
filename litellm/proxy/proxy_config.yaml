@@ -6,6 +6,12 @@ model_list:
     litellm_params:
       model: openai/*
 
+  - model_name: vertex_ai/gemini-2.5-pro # Vertex AI Gemini
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      thinking: {"type": "enabled", "budget_tokens": 1024}
+      merge_reasoning_content_in_choices: true
+
 
 litellm_settings:
   callbacks: ["datadog_llm_observability"]
