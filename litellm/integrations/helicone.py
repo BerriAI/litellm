@@ -22,7 +22,7 @@ class HeliconeLogger:
 
     def __init__(self):
         # Instance variables
-        self.provider_url = "https://api.openai.com/v1"
+        self.provider_url = "https://us.api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
         self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
         if self.api_base.endswith("/"):

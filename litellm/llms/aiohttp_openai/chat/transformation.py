@@ -38,7 +38,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
 
         """
         if api_base is None:
-            api_base = "https://api.openai.com"
+            api_base = "https://us.api.openai.com"
 
         if not api_base.endswith("/chat/completions"):
             api_base += "/chat/completions"
