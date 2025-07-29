@@ -439,6 +439,7 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
+                litellm_logging_obj=litellm_logging_obj,
             )
 
         # Fall back to local tool registry (use original name)
@@ -490,6 +491,7 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        litellm_logging_obj: Optional[Any] = None,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """Handle tool execution for managed server tools"""
         call_tool_result = await global_mcp_server_manager.call_tool(
@@ -498,6 +500,7 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            litellm_logging_obj=litellm_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result.content  # type: ignore[return-value]
