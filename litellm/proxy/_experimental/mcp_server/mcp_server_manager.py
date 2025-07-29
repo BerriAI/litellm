@@ -550,6 +550,27 @@ class MCPServerManager:
             mcp_auth_header=server_auth_header,
         )
         
+        #########################################################
+        # During MCP Tool Call Hook
+        # Allow concurrent monitoring and validation during execution
+        #########################################################
+        if litellm_logging_obj:
+            during_hook_kwargs = {
+                "name": name,
+                "arguments": arguments,
+                "server_name": server_name_from_prefix,
+            }
+            
+            # Start the during hook in a separate task for concurrent execution
+            during_hook_task = asyncio.create_task(
+                litellm_logging_obj.async_during_mcp_tool_call_hook(
+                    kwargs=during_hook_kwargs,
+                    request_obj=None,  # Will be created in the hook
+                    start_time=start_time,
+                    end_time=start_time,
+                )
+            )
+
         async with client:
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
@@ -557,6 +578,18 @@ class MCPServerManager:
                 arguments=arguments,
             )
             result = await client.call_tool(call_tool_params)
+            
+            #########################################################
+            # Check during hook result if it completed
+            #########################################################
+            if litellm_logging_obj and 'during_hook_task' in locals():
+                try:
+                    during_hook_result = await during_hook_task
+                    if during_hook_result and not during_hook_result.get("should_continue", True):
+                        error_message = during_hook_result.get("error_message", "Tool call cancelled by during-hook")
+                        raise ValueError(error_message)
+                except Exception as e:
+                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
             
             return result
 

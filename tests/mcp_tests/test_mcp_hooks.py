@@ -14,6 +14,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.mcp import (
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
+    MCPDuringCallRequestObject,
+    MCPDuringCallResponseObject,
     MCPPostCallResponseObject,
 )
 from litellm.types.llms.base import HiddenParams
@@ -87,7 +89,34 @@ class TestMCPCostTrackingHook(CustomLogger):
         return response_obj
 
 
-
+class TestMCPMonitoringHook(CustomLogger):
+    """Test hook for real-time monitoring functionality"""
+    
+    def __init__(self):
+        self.max_execution_time = 30.0  # seconds
+        self.call_count = 0
+    
+    async def async_during_mcp_tool_call_hook(
+        self, 
+        kwargs, 
+        request_obj: MCPDuringCallRequestObject, 
+        start_time, 
+        end_time
+    ) -> Optional[MCPDuringCallResponseObject]:
+        """Test execution time monitoring"""
+        self.call_count += 1
+        
+        tool_name = request_obj.tool_name
+        execution_time = (datetime.now() - start_time).total_seconds()
+        
+        # Check if execution is taking too long
+        if execution_time > self.max_execution_time:
+            return MCPDuringCallResponseObject(
+                should_continue=False,
+                error_message=f"Tool {tool_name} execution timeout after {execution_time}s"
+            )
+        
+        return None  # Allow execution to continue
 
 
 class TestMCPArgumentValidationHook(CustomLogger):
@@ -148,7 +177,9 @@ def cost_tracking_hook():
     return TestMCPCostTrackingHook()
 
 
-
+@pytest.fixture
+def monitoring_hook():
+    return TestMCPMonitoringHook()
 
 
 @pytest.fixture
@@ -270,7 +301,25 @@ class TestMCPHooks:
         assert result is not None
         assert result.hidden_params.response_cost == 0.01  # Default cost
     
-
+    @pytest.mark.asyncio
+    async def test_monitoring_hook_normal_execution(self, monitoring_hook):
+        """Test monitoring hook with normal execution time"""
+        kwargs = {"name": "test_tool"}
+        request_obj = MCPDuringCallRequestObject(
+            tool_name="test_tool",
+            arguments={},
+            start_time=datetime.now().timestamp()
+        )
+        
+        result = await monitoring_hook.async_during_mcp_tool_call_hook(
+            kwargs=kwargs,
+            request_obj=request_obj,
+            start_time=datetime.now(),
+            end_time=datetime.now()
+        )
+        
+        assert result is None  # Should allow execution to continue
+        assert monitoring_hook.call_count == 1
     
     @pytest.mark.asyncio
     async def test_argument_validation_hook_valid_github_issue(self, argument_validation_hook):

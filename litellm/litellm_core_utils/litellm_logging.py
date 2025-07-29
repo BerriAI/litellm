@@ -83,6 +83,8 @@ from litellm.types.mcp import (
     MCPPostCallResponseObject,
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
+    MCPDuringCallRequestObject,
+    MCPDuringCallResponseObject,
 )
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
@@ -1188,7 +1190,77 @@ class Logging(LiteLLMLoggingBaseClass):
         }
         return result
 
+    async def async_during_mcp_tool_call_hook(
+        self,
+        kwargs: dict,
+        request_obj: Any,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> Optional[Any]:
+        """
+        During MCP Tool Call Hook
 
+        Use this for concurrent monitoring and validation during tool execution.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPDuringCallRequestObject, MCPDuringCallResponseObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_success_callbacks,
+            global_callbacks=litellm.success_callback,
+        )
+        
+        # Create the request object if it's not already one
+        if not isinstance(request_obj, MCPDuringCallRequestObject):
+            request_obj = MCPDuringCallRequestObject(
+                tool_name=kwargs.get("name", ""),
+                arguments=kwargs.get("arguments", {}),
+                server_name=kwargs.get("server_name"),
+                start_time=start_time.timestamp() if start_time else None,
+                hidden_params=HiddenParams()
+            )
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    response: Optional[MCPDuringCallResponseObject] = (
+                        await callback.async_during_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            request_obj=request_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                    )
+                    ######################################################################
+                    # if any of the callbacks return a response, use the first one
+                    # this allows for execution control decisions
+                    ######################################################################
+                    if response is not None:
+                        return self._parse_during_mcp_call_hook_response(response=response)
+            except Exception as e:
+                verbose_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return None
+
+    def _parse_during_mcp_call_hook_response(
+        self, response: MCPDuringCallResponseObject
+    ) -> Dict[str, Any]:
+        """
+        Parse the response from the during_mcp_tool_call_hook
+
+        1. Check if execution should continue
+        2. Handle any error messages
+        3. Apply any hidden parameter updates
+        """
+        result = {
+            "should_continue": response.should_continue,
+            "error_message": response.error_message,
+            "hidden_params": response.hidden_params,
+        }
+        return result
 
     def _parse_post_mcp_call_hook_response(
         self, response: Optional[MCPPostCallResponseObject]
