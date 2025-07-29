@@ -5,6 +5,7 @@ import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -144,18 +145,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         <TabPanel>
           <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
             <Form.Item label="MCP Server Name" name="server_name" rules={[{
-              validator: (_, value) =>
-                value && value.includes('-')
-                  ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                  : Promise.resolve(),
+              validator: (_, value) => validateMCPServerName(value),
             }]}>
               <TextInput />
             </Form.Item>
             <Form.Item label="Alias" name="alias" rules={[{
-                validator: (_, value) =>
-                  value && value.includes('-')
-                    ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                    : Promise.resolve(),
+                validator: (_, value) => validateMCPServerName(value),
               }]}
             >
               <TextInput onChange={() => setAliasManuallyEdited(true)} />
@@ -165,16 +160,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             </Form.Item>
             <Form.Item label="MCP Server URL" name="url" rules={[
               { required: true, message: "Please enter a server URL" },
-              {
-                validator: (_, value) => {
-                  if (!value) return Promise.resolve();
-                  // More flexible URL validation that allows Kubernetes service names and various URL formats
-                  const urlPattern = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
-                  return urlPattern.test(value)
-                    ? Promise.resolve()
-                    : Promise.reject("Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)");
-                },
-              },
+              { validator: (_, value) => validateMCPServerUrl(value) },
             ]}> 
               <TextInput />
             </Form.Item>
