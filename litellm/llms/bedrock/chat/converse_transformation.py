@@ -49,13 +49,8 @@ from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoni
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
-BEDROCK_HOSTED_TOOLS = [
-    "web_search",
-    "bash",
-    "text_editor",
-    "code_execution",
-    # Add more as Bedrock supports them
-]
+# Bedrock Computer Use Tools (Anthropic Claude on Bedrock)
+BEDROCK_COMPUTER_USE_TOOLS = ["computer_", "bash_", "text_editor_"]
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -225,6 +220,20 @@ class AmazonConverseConfig(BaseConfig):
             + self.get_supported_document_types()
             + self.get_supported_video_types()
         )
+
+    def is_computer_use_tool_used(
+        self, tools: Optional[List[OpenAIChatCompletionToolParam]]
+    ) -> bool:
+        """Check if computer use tools are being used in the request."""
+        if tools is None:
+            return False
+        for tool in tools:
+            if "type" in tool:
+                tool_type = tool["type"]
+                for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
+                    if tool_type.startswith(computer_use_prefix):
+                        return True
+        return False
 
     def _create_json_tool_call_for_response_format(
         self,
@@ -549,39 +558,40 @@ class AmazonConverseConfig(BaseConfig):
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
 
-        # PATCH: Allow anthropic_beta to be passed directly for computer-use
-        # If present in optional_params, ensure it is included in additionalModelRequestFields
-        if "anthropic_beta" in optional_params:
-            additional_request_params["anthropic_beta"] = optional_params["anthropic_beta"]
-
-        def split_bedrock_tools(tools):
-            builtin_tools = []
-            function_tools = []
-            for tool in tools:
-                tool_type = tool.get("type", "")
-                if tool_type == "function" or tool_type == "custom":
-                    function_tools.append(tool)
-                elif tool_type.startswith("computer_"):
-                    builtin_tools.append(tool)
-                elif any(tool_type.startswith(t) for t in BEDROCK_HOSTED_TOOLS):
-                    builtin_tools.append(tool)
-                else:
-                    function_tools.append(tool)
-            return builtin_tools, function_tools
-
-        builtin_tools, function_tools = split_bedrock_tools(optional_params.get("tools", []))
-        if builtin_tools:
-            additional_request_params["tools"] = builtin_tools
-
         # Only set the topK value in for models that support it
         additional_request_params.update(
             self._handle_top_k_value(model, inference_params)
         )
 
-        # Use only function tools for toolConfig
-        bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
-            inference_params.pop("tools", []) if not function_tools else function_tools
-        )
+        original_tools = inference_params.get("tools", [])
+        
+        # Separate computer use tools from regular function tools
+        computer_use_tools = []
+        regular_tools = []
+        
+        for tool in original_tools:
+            if "type" in tool:
+                tool_type = tool["type"]
+                is_computer_use_tool = False
+                for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
+                    if tool_type.startswith(computer_use_prefix):
+                        is_computer_use_tool = True
+                        break
+                if is_computer_use_tool:
+                    computer_use_tools.append(tool)
+                else:
+                    regular_tools.append(tool)
+            else:
+                regular_tools.append(tool)
+        
+        # Process regular function tools using existing logic
+        bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(regular_tools)
+        
+        # Add computer use tools and anthropic_beta if needed
+        if computer_use_tools:
+            additional_request_params["anthropic_beta"] = ["computer-use-2024-10-22"]
+            additional_request_params["tools"] = computer_use_tools
+        
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
             tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
