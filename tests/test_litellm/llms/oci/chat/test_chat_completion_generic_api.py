@@ -9,7 +9,10 @@ oci_key = os.environ.get("OCI_KEY")
 oci_compartment_id = os.environ.get("OCI_COMPARTMENT_ID")
 
 response = completion(
-    model="oci/meta.llama-3.3-70b-instruct",
+    # model="oci/meta.llama-3.3-70b-instruct",
+    # model="oci/xai.grok-4",
+    model="oci/cohere.command-latest",
+    # model="oci/cohere.command-r-plus-08-2024",
     messages=[{"role": "system", "content": "You are a helpful assistant."},
               {"role": "user", "content": "What is the capital of Brazil?"}],
     oci_region=oci_region,
@@ -18,23 +21,23 @@ response = completion(
     oci_tenancy=oci_tenancy,
     oci_key=oci_key,
     oci_compartment_id=oci_compartment_id,
-    tools=[{
-        "type": "function",
-        "function": {
-            "name": "get_capital",
-            "description": "Get the capital of a country.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "country": {
-                        "type": "string",
-                        "description": "The name of the country."
-                    }
-                },
-                "required": ["country"]
-            }
-        }
-    }]
+    # tools=[{
+    #     "type": "function",
+    #     "function": {
+    #         "name": "get_capital",
+    #         "description": "Get the capital of a country.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "country": {
+    #                     "type": "string",
+    #                     "description": "The name of the country."
+    #                 }
+    #             },
+    #             "required": ["country"]
+    #         }
+    #     }
+    # }]
 )
 
 print(response)

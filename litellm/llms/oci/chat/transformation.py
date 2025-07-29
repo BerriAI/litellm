@@ -1,10 +1,10 @@
 import base64
 import datetime
 import hashlib
+import time
 from urllib.parse import urlparse
 import litellm
 import json
-import time
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import base64
@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from typing import Optional, Tuple
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from enum import Enum
 
 import httpx
 
@@ -66,6 +67,14 @@ def load_private_key_from_str(key_str: str):
         raise TypeError("The provided private key is not an RSA key, which is required for OCI signing.")
     return key
 
+class OCIVendors(Enum):
+    """
+    A class to hold the vendor names for OCI models.
+    This is used to map model names to their respective vendors.
+    """
+    COHERE = "COHERE"
+    GENERIC = "GENERIC"
+
 # 5 minute timeout (models may need to load)
 STREAMING_TIMEOUT = 60 * 5
 
@@ -84,29 +93,26 @@ class OCIChatConfig(BaseConfig):
         # mark the class as using a custom stream wrapper because the default only iterates on lines
         setattr(self.__class__, "has_custom_stream_wrapper", True)
 
-        self.openai_to_oci_param_map = {
-            "stream": "stream",
-            "max_tokens": "max_tokens",
-            "max_completion_tokens": "max_tokens",
+        self.openai_to_oci_generic_param_map = {
+            "stream": "isStream",
+            "max_tokens": "maxTokens",
+            "max_completion_tokens": "maxTokens",
             "temperature": "temperature",
             "tools": "tools",
-            # "top_p": "top_p",
-            # "n": "num_return_sequences",
-            # "max_retries": "max_retries",
-            "top_p": False,
-            "n": False,
+            "frequency_penalty": "frequencyPenalty",
+            "logprobs": "logProbs",
+            "logit_bias": "logitBias",
+            "n": "numGenerations",
+            "presence_penalty": "presencePenalty",
+            "seed": "seed",
+            "stop": "stop",
+            "tool_choice": "toolChoice",
+            "top_p": "topP",
             "max_retries": False,
-            "seed": False,  # TODO requires backend changes
-            "stop": False,  # TODO requires backend changes
-            "logit_bias": False,  # TODO requires backend changes
-            "logprobs": False,  # TODO requires backend changes
-            "frequency_penalty": False,
-            "presence_penalty": False,
             "top_logprobs": False,
             "modalities": False,
             "prediction": False,
             "stream_options": False,
-            "tool_choice": False,
             "function_call": False,
             "functions": False,
             "extra_headers": False,
@@ -115,9 +121,53 @@ class OCIChatConfig(BaseConfig):
             "web_search_options": False,
         }
 
+        self.openai_to_oci_cohere_param_map = {
+            "stream": "isStream",
+            "max_tokens": "maxTokens",
+            "max_completion_tokens": "maxTokens",
+            "temperature": "temperature",
+            "tools": "tools",
+            "frequency_penalty": "frequencyPenalty",
+            "presence_penalty": "presencePenalty",
+            "seed": "seed",
+            "stop": "stopSequences",
+            "top_p": "topP",
+            "stream_options": "streamOptions",
+            "max_retries": False,
+            "top_logprobs": False,
+            "modalities": False,
+            "prediction": False,
+            "function_call": False,
+            "functions": False,
+            "extra_headers": False,
+            "parallel_tool_calls": False,
+            "audio": False,
+            "web_search_options": False,
+        }
+
+
+    def _get_vendor_from_model(self, model: str) -> OCIVendors:
+        """
+        Extracts the vendor from the model name.
+        Args:
+            model (str): The model name.
+        Returns:
+            str: The vendor name.
+        """
+        vendor = model.split(".")[0].lower()
+        if vendor == "cohere":
+            return OCIVendors.COHERE
+        else:
+            return OCIVendors.GENERIC
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = []
-        for key, value in self.openai_to_oci_param_map.items():
+        vendor = self._get_vendor_from_model(model)
+        if vendor == OCIVendors.COHERE:
+            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
+        else:
+            open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
+        for key, value in open_ai_to_oci_param_map.items():
             if value:
                 supported_params.append(key)
 
@@ -132,12 +182,17 @@ class OCIChatConfig(BaseConfig):
     ) -> dict:
 
         adapted_params = {}
+        vendor = self._get_vendor_from_model(model)
+        if vendor == OCIVendors.COHERE:
+            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
+        else:
+            open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
 
         all_params = {**non_default_params, **optional_params}
 
         for key, value in all_params.items():
 
-            alias = self.openai_to_oci_param_map.get(key)
+            alias = open_ai_to_oci_param_map.get(key)
 
             if alias is False:
                 if drop_params:
@@ -288,6 +343,53 @@ class OCIChatConfig(BaseConfig):
     ) -> str:
         return f"{API_BASE}/{model}"
 
+    def _get_optional_params(
+        self, vendor: OCIVendors, optional_params: dict
+    ) -> Dict:
+        selected_params = {}
+        if vendor == OCIVendors.COHERE:
+            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
+        else:
+            open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
+
+        for value in open_ai_to_oci_param_map.values():
+            if value in optional_params:
+                selected_params[value] = optional_params[value]
+        if "tools" in selected_params:
+            selected_params["tools"] = adapt_tools_to_oci_standard(selected_params["tools"], vendor)
+        return selected_params
+
+    def _convert_message_history_to_cohere_standard(self, messages: List[AllMessageValues]) -> List[Dict]:
+        """
+        Converts the message history to the standard expected by Cohere models.
+        This is a specific transformation for Cohere models.
+        Args:
+            messages (List[AllMessageValues]): The list of messages to convert.
+        Returns:
+            List[Dict]: The converted message history.
+        """
+        converted_messages = []
+        for message in messages:
+            if message["role"] == "system":
+                converted_messages.append({"role": "SYSTEM", "message": message["content"]})
+            elif message["role"] == "user":
+                converted_messages.append({"role": "USER", "message": message["content"]})
+            elif message["role"] == "assistant":
+                assistant_message = {
+                    "role": "CHATBOT"
+                }
+                if content := message.get("content"):
+                    assistant_message["message"] = content
+                
+                converted_messages.append({"role": "CHATBOT", "message": message.get()})
+            # if message["role"] == "user":
+            #     converted_messages.append({"text": message["content"][0]["text"]})
+            # elif message["role"] == "ASSISTANT":
+            #     converted_messages.append({"text": message["content"][0]["text"]})
+            else:
+                raise Exception(f"Role {message['role']} is not supported in Cohere models")
+        return converted_messages
+
     def transform_request(
         self,
         model: str,
@@ -296,21 +398,13 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        stream = optional_params.get("stream", False)
         oci_compartment_id = optional_params.get("oci_compartment_id", None)
         if not oci_compartment_id:
             raise Exception(
                 "kwarg `oci_compartment_id` is required for OCI requests"
             )
-        temperature = optional_params.get("temperature", None)
-        max_tokens = optional_params.get("max_tokens", None)
-        tools = optional_params.get("tools", None)
 
-        # we add stream not as an additional param, but as a primary prop on the request body, this is always defined if stream == True
-        if optional_params.get("stream"):
-            del optional_params["stream"]
-
-        messages = adapt_messages_to_oci_standard(messages=messages)  # type: ignore
+        vendor = self._get_vendor_from_model(model)
 
         data = {
             "compartmentId": oci_compartment_id,
@@ -319,18 +413,23 @@ class OCIChatConfig(BaseConfig):
                 "modelId": model,
             },
             "chatRequest": {
-                "apiFormat": "GENERIC",
-                "messages": messages,
+                "apiFormat": vendor.value,
             },
         }
-        if temperature:
-            data["chatRequest"]["temperature"] = temperature
-        if stream:
-            data["chatRequest"]["isStream"] = True
-        if max_tokens:
-            data["chatRequest"]["maxTokens"] = max_tokens
-        if tools:
-            data["chatRequest"]["tools"] = adapt_tools_to_oci_standard(tools)
+
+        if vendor == OCIVendors.COHERE:
+            last_message = messages[-1]
+            if last_message["role"] != "USER":
+                raise Exception(
+                    "Last message must be from the USER when using Cohere models"
+                )
+            data["chatRequest"]["message"] = last_message["content"][0]["text"]
+            data["chatRequest"]["chatHistory"] = self._convert_message_history_to_cohere_standard(messages)
+        else:
+            messages = adapt_messages_to_oci_standard(messages=messages)  # type: ignore
+            data["chatRequest"]["messages"] = messages
+        
+        data["chatRequest"] = {**data["chatRequest"], **self._get_optional_params(vendor, optional_params)}
 
         return data
 
@@ -365,10 +464,14 @@ class OCIChatConfig(BaseConfig):
                 status_code=raw_response.status_code,
             )
 
-        # set meta data here
-        iso_str = output["timeCreated"]
-        dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        model_response.created = int(dt.timestamp())
+        vendor = self._get_vendor_from_model(model)
+        if vendor == OCIVendors.COHERE:
+            model_response.created = int(time.time())
+        else:
+            iso_str = output["timeCreated"]
+            dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+            model_response.created = int(dt.timestamp())
+
         model_response.model = json.get("modelId", model)
 
         # Add the output
@@ -379,12 +482,14 @@ class OCIChatConfig(BaseConfig):
             )
 
         message = model_response.choices[0].message  # type: ignore
-
-        response_message = output["choices"][0]["message"]
-        if "content" in response_message and isinstance(response_message["content"], list):
-            message.content = response_message["content"][0]["text"]
-        if "toolCalls" in response_message:
-            message.tool_calls = adapt_tools_to_openai_standard(response_message["toolCalls"])
+        if vendor == OCIVendors.COHERE:
+            message.content = output["text"] 
+        else:
+            response_message = output["choices"][0]["message"]
+            if "content" in response_message and isinstance(response_message["content"], list):
+                message.content = response_message["content"][0]["text"]
+            if "toolCalls" in response_message:
+                message.tool_calls = adapt_tools_to_openai_standard(response_message["toolCalls"])
 
         usage = Usage(
             prompt_tokens=output["usage"]["promptTokens"],
@@ -616,20 +721,43 @@ def _adapt_string_only_content_to_lists(messages: List[Dict]):
     return new_messages
 
 
-def adapt_tools_to_oci_standard(tools: List[Dict]):
+def adapt_tools_to_oci_standard(tools: List[Dict], vendor: OCIVendors):
     new_tools = []
-    for tool in tools:
-        if tool["type"] != "function":
-            raise Exception("OCI only supports function tools")
-        
-        new_tool = {
-            "type": "FUNCTION",
-            "name": tool["function"]["name"],
-            "description": tool["function"].get("description", ""),
-            "parameters": tool["function"]["parameters"],
-        }
+    if vendor == OCIVendors.COHERE:
+        for tool in tools:
+            if tool["type"] != "function":
+                raise Exception("OCI only supports function tools")
 
-        new_tools.append(new_tool)
+            parameters = {}
+            for key, value in tool["function"]["parameters"]["properties"].items():
+                parameters[key] = {
+                    "description": value.get("description", ""),
+                    "type": value.get("type", "string"),
+                }
+            if "required" in tool["function"]["parameters"]:
+                for required_key in tool["function"]["parameters"]["required"]:
+                    if required_key not in parameters:
+                        raise Exception(f"Required key `{required_key}` not found in parameters")
+                    parameters[required_key]["isRequired"] = True
+
+            new_tool = {
+                "name": tool["function"]["name"],
+                "description": tool["function"].get("description", ""),
+                "parameterDefinitions": parameters
+            }
+            new_tools.append(new_tool)
+    else:
+        for tool in tools:
+            if tool["type"] != "function":
+                raise Exception("OCI only supports function tools")
+            
+            new_tool = {
+                "type": "FUNCTION",
+                "name": tool["function"]["name"],
+                "description": tool["function"].get("description", ""),
+                "parameters": tool["function"]["parameters"],
+            }
+            new_tools.append(new_tool)
     
     return new_tools
 
