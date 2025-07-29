@@ -235,6 +235,47 @@ class AmazonConverseConfig(BaseConfig):
                         return True
         return False
 
+    def _transform_computer_use_tools(
+        self, computer_use_tools: List[OpenAIChatCompletionToolParam]
+    ) -> List[dict]:
+        """Transform computer use tools to Bedrock format."""
+        transformed_tools = []
+        
+        for tool in computer_use_tools:
+            tool_type = tool.get("type", "")
+            
+            # Check if this is a computer use tool with the startswith method
+            is_computer_use_tool = False
+            for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
+                if tool_type.startswith(computer_use_prefix):
+                    is_computer_use_tool = True
+                    break
+            
+            if is_computer_use_tool:
+                if tool_type.startswith("computer_") and "function" in tool:
+                    # Computer use tool with function format
+                    func = tool["function"]
+                    transformed_tool = {
+                        "type": tool_type,
+                        "name": func.get("name", "computer"),
+                        **func.get("parameters", {})
+                    }
+                else:
+                    # Direct tools - just need to ensure name is present
+                    transformed_tool = tool.copy()
+                    if "name" not in transformed_tool:
+                        if tool_type.startswith("bash_"):
+                            transformed_tool["name"] = "bash"
+                        elif tool_type.startswith("text_editor_"):
+                            transformed_tool["name"] = "str_replace_editor"
+            else:
+                # Pass through other tools as-is
+                transformed_tool = tool.copy()
+                
+            transformed_tools.append(transformed_tool)
+            
+        return transformed_tools
+
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
@@ -590,7 +631,9 @@ class AmazonConverseConfig(BaseConfig):
         # Add computer use tools and anthropic_beta if needed
         if computer_use_tools:
             additional_request_params["anthropic_beta"] = ["computer-use-2024-10-22"]
-            additional_request_params["tools"] = computer_use_tools
+            # Transform computer use tools to proper Bedrock format
+            transformed_computer_tools = self._transform_computer_use_tools(computer_use_tools)
+            additional_request_params["tools"] = transformed_computer_tools
         
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
