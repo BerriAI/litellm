@@ -170,12 +170,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    team_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -439,7 +439,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_request_route=user_api_key_dict.request_route,
         )
         return user_api_key_logged_metadata
-
+    
     @staticmethod
     def add_user_api_key_auth_to_request_metadata(
         data: dict,
@@ -457,7 +457,9 @@ class LiteLLMProxyRequestSetup:
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name][
             "user_api_key"
-        ] = user_api_key_dict.api_key  # this is just the hashed token
+        ] = (
+            user_api_key_dict.api_key
+        )  # this is just the hashed token
 
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
@@ -477,11 +479,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name][
-                "tags"
-            ] = LiteLLMProxyRequestSetup._merge_tags(
-                request_tags=data[_metadata_variable_name].get("tags"),
-                tags_to_add=key_metadata["tags"],
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
             )
         if "spend_logs_metadata" in key_metadata and isinstance(
             key_metadata["spend_logs_metadata"], dict
@@ -630,10 +632,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "user" not in data:
             data["user"] = user
 
-    # Set user from token if not already set and token has user_id
-    if data.get("user", None) is None and user_api_key_dict.user_id is not None:
-        data["user"] = user_api_key_dict.user_id
-
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
@@ -696,9 +694,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name][
-            "global_max_parallel_requests"
-        ] = general_settings.get("global_max_parallel_requests", None)
+        data[_metadata_variable_name]["global_max_parallel_requests"] = (
+            general_settings.get("global_max_parallel_requests", None)
+        )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
