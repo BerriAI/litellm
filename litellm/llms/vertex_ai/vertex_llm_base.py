@@ -469,14 +469,28 @@ class VertexBase:
             raise ValueError("Credentials are None after loading")
 
         if _credentials.expired:
-            verbose_logger.debug(
-                f"Credentials expired, refreshing for project_id: {project_id}"
-            )
-            self.refresh_auth(_credentials)
-            self._credentials_project_mapping[credential_cache_key] = (
-                _credentials,
-                credential_project_id,
-            )
+            try:
+                verbose_logger.debug(
+                    f"Credentials expired, refreshing for project_id: {project_id}"
+                )
+                self.refresh_auth(_credentials)
+                self._credentials_project_mapping[credential_cache_key] = (
+                    _credentials,
+                    credential_project_id,
+                )
+            except Exception as e:
+                # if refresh fails, it's possible the user has re-authenticated via `gcloud auth application-default login`
+                # in this case, we should try to reload the credentials by clearing the cache and retrying
+                if "Reauthentication is needed" in str(e):
+                    verbose_logger.debug(
+                        f"Credential refresh failed for project_id: {project_id}. Deleting from cache and retrying."
+                    )
+                    del self._credentials_project_mapping[credential_cache_key]
+                    return self.get_access_token(
+                        credentials=credentials,
+                        project_id=project_id,
+                    )
+                raise e
 
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):
