@@ -123,3 +123,22 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
     return _secret_detection_object
 
 
+def initialize_mcp(litellm_params: LitellmParams, guardrail: Guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.mcp import MCPGuardrail
+
+    _mcp_callback = MCPGuardrail(
+        guardrail_name=guardrail.get("guardrail_name", ""),
+        event_hook=litellm_params.mode,
+        default_on=litellm_params.default_on,
+        mcp_server_name=litellm_params.mcp_server_name,
+        mcp_server_id=litellm_params.mcp_server_id,
+        tool_name=litellm_params.tool_name,
+        block_on_error=litellm_params.block_on_error,
+        timeout=litellm_params.timeout,
+        custom_validation_function=litellm_params.custom_validation_function,
+        validation_rules=litellm_params.validation_rules,
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_mcp_callback)
+    return _mcp_callback
+
+

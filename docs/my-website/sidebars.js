@@ -263,7 +263,14 @@ const sidebars = {
         "text_completion",
         "embedding/supported_embedding",
         "anthropic_unified",
-        "mcp",
+        {
+          type: "category",
+          label: "MCP",
+          items: [
+            "mcp",
+            "proxy/guardrails/mcp_guardrail",
+          ]
+        },
         "generateContent",
         {
           type: "category",

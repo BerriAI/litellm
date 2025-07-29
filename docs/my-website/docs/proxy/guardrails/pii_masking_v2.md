@@ -78,7 +78,7 @@ model_list:
 guardrails:
   - guardrail_name: "presidio-pii"
     litellm_params:
-      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "mcp", "presidio"
       mode: "pre_call"
       presidio_language: "en"  # optional: set default language for PII analysis
 ```
@@ -492,7 +492,7 @@ model_list:
 guardrails:
   - guardrail_name: "presidio-pre-guard"
     litellm_params:
-      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "mcp", "presidio"
       mode: "pre_call"
       output_parse_pii: True
 ```
@@ -527,7 +527,7 @@ model_list:
 guardrails:
   - guardrail_name: "presidio-pre-guard"
     litellm_params:
-      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "mcp", "presidio"
       mode: "pre_call"
       presidio_ad_hoc_recognizers: "./hooks/example_presidio_ad_hoc_recognizer.json"
 ```
@@ -587,7 +587,7 @@ model_list:
 guardrails:
   - guardrail_name: "presidio-pre-guard"
     litellm_params:
-      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "presidio"
+      guardrail: presidio  # supported values: "aporia", "bedrock", "lakera", "mcp", "presidio"
       mode: "logging_only"
 ```
 
