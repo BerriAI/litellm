@@ -5,6 +5,7 @@ import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -144,18 +145,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         <TabPanel>
           <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
             <Form.Item label="MCP Server Name" name="server_name" rules={[{
-              validator: (_, value) =>
-                value && value.includes('-')
-                  ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                  : Promise.resolve(),
+              validator: (_, value) => validateMCPServerName(value),
             }]}>
               <TextInput />
             </Form.Item>
             <Form.Item label="Alias" name="alias" rules={[{
-                validator: (_, value) =>
-                  value && value.includes('-')
-                    ? Promise.reject("Alias cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                    : Promise.resolve(),
+                validator: (_, value) => validateMCPServerName(value),
               }]}
             >
               <TextInput onChange={() => setAliasManuallyEdited(true)} />
@@ -163,7 +158,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             <Form.Item label="Description" name="description">
               <TextInput />
             </Form.Item>
-            <Form.Item label="MCP Server URL" name="url" rules={[{ required: true, message: "Please enter a server URL" }]}> 
+            <Form.Item label="MCP Server URL" name="url" rules={[
+              { required: true, message: "Please enter a server URL" },
+              { validator: (_, value) => validateMCPServerUrl(value) },
+            ]}> 
               <TextInput />
             </Form.Item>
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}> 
