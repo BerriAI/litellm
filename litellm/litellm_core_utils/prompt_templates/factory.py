@@ -3027,7 +3027,7 @@ class BedrockConverseMessagesProcessor:
             )
         )
         if _cache_point_block is not None:
-            content_list.append(_cache_point_block)
+            content_list.append(cast(BedrockContentBlock, _cache_point_block))
 
     @staticmethod
     def _initial_message_setup(
