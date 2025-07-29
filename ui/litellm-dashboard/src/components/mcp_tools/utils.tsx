@@ -34,4 +34,20 @@ export const getMaskedAndFullUrl = (url: string): { maskedUrl: string, hasToken:
     maskedUrl: maskUrl(url),
     hasToken: !!token
   };
+};
+
+// Validation utilities for MCP server forms
+export const validateMCPServerUrl = (value: string) => {
+  if (!value) return Promise.resolve();
+  // More flexible URL validation that allows Kubernetes service names and various URL formats
+  const urlPattern = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
+  return urlPattern.test(value)
+    ? Promise.resolve()
+    : Promise.reject("Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)");
+};
+
+export const validateMCPServerName = (value: string) => {
+  return value && value.includes("-")
+    ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
+    : Promise.resolve();
 }; 
