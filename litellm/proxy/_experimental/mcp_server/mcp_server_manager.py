@@ -7,6 +7,7 @@ This is a Proxy
 """
 
 import asyncio
+import datetime
 import hashlib
 import json
 from typing import Any, Dict, List, Optional, cast
@@ -482,6 +483,7 @@ class MCPServerManager:
             mcp_auth_header: Optional[str] = None,
             mcp_server_auth_headers: Optional[Dict[str, str]] = None,
             mcp_protocol_version: Optional[str] = None,
+            litellm_logging_obj: Optional[Any] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -493,10 +495,13 @@ class MCPServerManager:
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
             mcp_protocol_version: Optional MCP protocol version from request header
+            litellm_logging_obj: Optional logging object for hook integration
 
         Returns:
             CallToolResult from the MCP server
         """
+        start_time = datetime.datetime.now()
+        
         # Remove prefix if present to get the original tool name
         original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(name)
 
@@ -511,6 +516,34 @@ class MCPServerManager:
             if normalize_server_name(server_name_from_prefix) != normalize_server_name(expected_prefix):
                 raise ValueError(
                     f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}")
+
+        #########################################################
+        # Pre MCP Tool Call Hook
+        # Allow validation and modification of tool calls before execution
+        #########################################################
+        if litellm_logging_obj:
+            pre_hook_kwargs = {
+                "name": name,
+                "arguments": arguments,
+                "server_name": server_name_from_prefix,
+                "user_api_key_auth": user_api_key_auth,
+            }
+            pre_hook_result = await litellm_logging_obj.async_pre_mcp_tool_call_hook(
+                kwargs=pre_hook_kwargs,
+                request_obj=None,  # Will be created in the hook
+                start_time=start_time,
+                end_time=start_time,
+            )
+            
+            if pre_hook_result:
+                # Check if the call should proceed
+                if not pre_hook_result.get("should_proceed", True):
+                    error_message = pre_hook_result.get("error_message", "Tool call rejected by pre-hook")
+                    raise ValueError(error_message)
+                
+                # Apply any argument modifications
+                if pre_hook_result.get("modified_arguments"):
+                    arguments = pre_hook_result["modified_arguments"]
 
         # Get server-specific auth header if available
         server_auth_header = None
@@ -528,13 +561,49 @@ class MCPServerManager:
             mcp_auth_header=server_auth_header,
             protocol_version=mcp_protocol_version,
         )
+        
+        #########################################################
+        # During MCP Tool Call Hook
+        # Allow concurrent monitoring and validation during execution
+        #########################################################
+        if litellm_logging_obj:
+            during_hook_kwargs = {
+                "name": name,
+                "arguments": arguments,
+                "server_name": server_name_from_prefix,
+            }
+            
+            # Start the during hook in a separate task for concurrent execution
+            during_hook_task = asyncio.create_task(
+                litellm_logging_obj.async_during_mcp_tool_call_hook(
+                    kwargs=during_hook_kwargs,
+                    request_obj=None,  # Will be created in the hook
+                    start_time=start_time,
+                    end_time=start_time,
+                )
+            )
+
         async with client:
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
                 arguments=arguments,
             )
-            return await client.call_tool(call_tool_params)
+            result = await client.call_tool(call_tool_params)
+            
+            #########################################################
+            # Check during hook result if it completed
+            #########################################################
+            if litellm_logging_obj and 'during_hook_task' in locals():
+                try:
+                    during_hook_result = await during_hook_task
+                    if during_hook_result and not during_hook_result.get("should_continue", True):
+                        error_message = during_hook_result.get("error_message", "Tool call cancelled by during-hook")
+                        raise ValueError(error_message)
+                except Exception as e:
+                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
+            
+            return result
 
     #########################################################
     # End of Methods that call the upstream MCP servers

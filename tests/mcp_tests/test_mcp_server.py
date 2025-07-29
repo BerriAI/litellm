@@ -190,7 +190,7 @@ async def test_mcp_http_transport_list_tools_mock():
         
         # Verify client methods were called
         mock_client.__aenter__.assert_called()
-        # Note: list_tools is called once during the actual list_tools call
+        # Note: list_tools is called twice - once during initialization and once during the actual list_tools call
         assert mock_client.list_tools.call_count in [1,2]
         
         # Verify tool mapping was updated

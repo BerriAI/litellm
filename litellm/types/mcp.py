@@ -71,6 +71,47 @@ class MCPStdioConfig(TypedDict, total=False):
     """
 
 
+class MCPPreCallRequestObject(BaseModel):
+    """
+    Pydantic object used for MCP pre_call_hook request validation and modification
+    """
+    tool_name: str
+    arguments: Dict[str, Any]
+    server_name: Optional[str] = None
+    user_api_key_auth: Optional[Dict[str, Any]] = None
+    hidden_params: HiddenParams = HiddenParams()
+
+
+class MCPPreCallResponseObject(BaseModel):
+    """
+    Pydantic object used for MCP pre_call_hook response
+    """
+    should_proceed: bool = True
+    modified_arguments: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    hidden_params: HiddenParams = HiddenParams()
+
+
+class MCPDuringCallRequestObject(BaseModel):
+    """
+    Pydantic object used for MCP during_call_hook request
+    """
+    tool_name: str
+    arguments: Dict[str, Any]
+    server_name: Optional[str] = None
+    start_time: Optional[float] = None
+    hidden_params: HiddenParams = HiddenParams()
+
+
+class MCPDuringCallResponseObject(BaseModel):
+    """
+    Pydantic object used for MCP during_call_hook response
+    """
+    should_continue: bool = True
+    error_message: Optional[str] = None
+    hidden_params: HiddenParams = HiddenParams()
+
+
 class MCPPostCallResponseObject(BaseModel):
     """
     Pydantic object used for MCP post_call_hook response
