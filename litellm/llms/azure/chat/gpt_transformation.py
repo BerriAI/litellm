@@ -160,7 +160,7 @@ class AzureOpenAIConfig(BaseConfig):
 
         api_version_times = api_version.split("-")
 
-        if len(api_version_times) == 3:
+        if len(api_version_times) >= 3:
             api_version_year = api_version_times[0]
             api_version_month = api_version_times[1]
             api_version_day = api_version_times[2]
