@@ -126,7 +126,7 @@ class TestListMCPServers:
     async def test_list_mcp_servers_config_yaml_only(self):
         """
         Test 1: Returns MCPs defined on the config.yaml only
-
+        
         Scenario: No DB MCPs, only config.yaml MCPs
         Expected: Should return only config.yaml MCPs
         """
@@ -145,7 +145,7 @@ class TestListMCPServers:
             mcp_servers=[]  # No DB servers in this test
         )
         mock_user_auth = generate_mock_user_api_key_auth()
-
+        
         # Mock config MCPs
         config_server_1 = generate_mock_mcp_server_config_record(
             server_id="config_server_1",
@@ -159,7 +159,7 @@ class TestListMCPServers:
             url="https://mcp.deepwiki.com/mcp",
             transport="http",
         )
-
+        
         # Mock global MCP server manager
         mock_manager = MagicMock()
         mock_manager.config_mcp_servers = {
@@ -169,10 +169,27 @@ class TestListMCPServers:
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["config_server_1", "config_server_2"]
         )
-
+        
+        # Mock the new method that returns servers with health and team data
+        mock_servers_with_health = [
+            generate_mock_mcp_server_db_record(
+                server_id="config_server_1",
+                alias="Zapier MCP",
+                url="https://actions.zapier.com/mcp/sse",
+                transport="sse",
+            ),
+            generate_mock_mcp_server_db_record(
+                server_id="config_server_2",
+                alias="DeepWiki MCP",
+                url="https://mcp.deepwiki.com/mcp",
+                transport="http",
+            )
+        ]
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
+            return_value=mock_servers_with_health
+        )
+        
         with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers"
-        ) as mock_get_db_servers, patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
             mock_manager,
         ), patch(
@@ -182,41 +199,38 @@ class TestListMCPServers:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
         ):
-
-            # Mock empty DB response
-            mock_get_db_servers.return_value = []
-
+            
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_all_mcp_servers,
             )
-
+            
             result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
-
-            # Assertions
+            
+            # Verify results
             assert len(result) == 2
-
-            # Check that config servers are included
+            
+            # Check that both config servers are returned
             server_ids = [server.server_id for server in result]
             assert "config_server_1" in server_ids
             assert "config_server_2" in server_ids
-
-            # Verify properties of returned servers
-            zapier_server = next(s for s in result if s.server_id == "config_server_1")
-            assert zapier_server.alias == "Zapier MCP"
-            assert zapier_server.url == "https://actions.zapier.com/mcp/sse"
-            assert zapier_server.transport == "sse"
-
-            deepwiki_server = next(s for s in result if s.server_id == "config_server_2")
-            assert deepwiki_server.alias == "DeepWiki MCP"
-            assert deepwiki_server.url == "https://mcp.deepwiki.com/mcp"
-            assert deepwiki_server.transport == "http"
+            
+            # Check server details
+            for server in result:
+                if server.server_id == "config_server_1":
+                    assert server.alias == "Zapier MCP"
+                    assert server.url == "https://actions.zapier.com/mcp/sse"
+                    assert server.transport == "sse"
+                elif server.server_id == "config_server_2":
+                    assert server.alias == "DeepWiki MCP"
+                    assert server.url == "https://mcp.deepwiki.com/mcp"
+                    assert server.transport == "http"
 
     @pytest.mark.asyncio
     async def test_list_mcp_servers_combined_config_and_db(self):
         """
         Test 2: If both config.yaml and DB then combines both and returns the result
-
+        
         Scenario: Both DB and config.yaml have MCPs
         Expected: Should return combined list from both sources without duplicates
         """
@@ -233,7 +247,7 @@ class TestListMCPServers:
             url="https://slack-mcp.example.com/mcp",
             transport="http",
         )
-
+        
         # Mock dependencies
         mock_prisma_client = MagicMock()
         mock_prisma_client = setup_mock_prisma_client(
@@ -249,7 +263,7 @@ class TestListMCPServers:
             mcp_servers=[db_server_1, db_server_2]  # DB servers for this test
         )
         mock_user_auth = generate_mock_user_api_key_auth()
-
+        
         # Mock config MCPs
         config_server_1 = generate_mock_mcp_server_config_record(
             server_id="config_server_1",
@@ -263,7 +277,7 @@ class TestListMCPServers:
             url="https://mcp.deepwiki.com/mcp",
             transport="http",
         )
-
+        
         # Mock global MCP server manager
         mock_manager = MagicMock()
         mock_manager.config_mcp_servers = {
@@ -278,10 +292,29 @@ class TestListMCPServers:
                 "config_server_2",
             ]
         )
-
+        
+        # Mock the new method that returns servers with health and team data
+        mock_servers_with_health = [
+            db_server_1,
+            db_server_2,
+            generate_mock_mcp_server_db_record(
+                server_id="config_server_1",
+                alias="Zapier MCP",
+                url="https://actions.zapier.com/mcp/sse",
+                transport="sse",
+            ),
+            generate_mock_mcp_server_db_record(
+                server_id="config_server_2",
+                alias="DeepWiki MCP",
+                url="https://mcp.deepwiki.com/mcp",
+                transport="http",
+            )
+        ]
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
+            return_value=mock_servers_with_health
+        )
+        
         with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers"
-        ) as mock_get_db_servers, patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
             mock_manager,
         ), patch(
@@ -291,53 +324,48 @@ class TestListMCPServers:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
         ):
-
-            # Mock DB response with servers
-            mock_get_db_servers.return_value = [db_server_1, db_server_2]
-
+            
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_all_mcp_servers,
             )
-
+            
             result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
-
-            # Assertions
+            
+            # Verify results
             assert len(result) == 4
-
-            # Check that both DB and config servers are included
+            
+            # Check that both DB and config servers are returned
             server_ids = [server.server_id for server in result]
             assert "db_server_1" in server_ids
             assert "db_server_2" in server_ids
             assert "config_server_1" in server_ids
             assert "config_server_2" in server_ids
-
-            # Verify properties of returned servers
-            gmail_server = next(s for s in result if s.server_id == "db_server_1")
-            assert gmail_server.alias == "DB Gmail MCP"
-            assert gmail_server.url == "https://gmail-mcp.example.com/mcp"
-            assert gmail_server.transport == "sse"
-
-            slack_server = next(s for s in result if s.server_id == "db_server_2")
-            assert slack_server.alias == "DB Slack MCP"
-            assert slack_server.url == "https://slack-mcp.example.com/mcp"
-            assert slack_server.transport == "http"
-
-            zapier_server = next(s for s in result if s.server_id == "config_server_1")
-            assert zapier_server.alias == "Zapier MCP"
-            assert zapier_server.url == "https://actions.zapier.com/mcp/sse"
-            assert zapier_server.transport == "sse"
-
-            deepwiki_server = next(s for s in result if s.server_id == "config_server_2")
-            assert deepwiki_server.alias == "DeepWiki MCP"
-            assert deepwiki_server.url == "https://mcp.deepwiki.com/mcp"
-            assert deepwiki_server.transport == "http"
+            
+            # Check server details
+            for server in result:
+                if server.server_id == "db_server_1":
+                    assert server.alias == "DB Gmail MCP"
+                    assert server.url == "https://gmail-mcp.example.com/mcp"
+                    assert server.transport == "sse"
+                elif server.server_id == "db_server_2":
+                    assert server.alias == "DB Slack MCP"
+                    assert server.url == "https://slack-mcp.example.com/mcp"
+                    assert server.transport == "http"
+                elif server.server_id == "config_server_1":
+                    assert server.alias == "Zapier MCP"
+                    assert server.url == "https://actions.zapier.com/mcp/sse"
+                    assert server.transport == "sse"
+                elif server.server_id == "config_server_2":
+                    assert server.alias == "DeepWiki MCP"
+                    assert server.url == "https://mcp.deepwiki.com/mcp"
+                    assert server.transport == "http"
 
     @pytest.mark.asyncio
     async def test_list_mcp_servers_non_admin_user_filtered(self):
         """
         Test 3: Non-admin users only see MCPs they have access to
-
+        
         Scenario: Non-admin user with limited access
         Expected: Should return only MCPs the user has access to
         """
@@ -347,7 +375,7 @@ class TestListMCPServers:
             alias="Allowed Gmail MCP",
             url="https://gmail-mcp.example.com/mcp",
         )
-
+        
         # Mock dependencies
         mock_prisma_client = MagicMock()
         mock_prisma_client = setup_mock_prisma_client(
@@ -366,14 +394,14 @@ class TestListMCPServers:
             user_role=LitellmUserRoles.INTERNAL_USER,  # Non-admin user
             team_id="team_123",
         )
-
+        
         # Mock config MCPs - user has access to one
         config_server_allowed = generate_mock_mcp_server_config_record(
             server_id="config_server_allowed",
             name="Allowed Zapier MCP",
             url="https://actions.zapier.com/mcp/sse",
         )
-
+        
         # Mock global MCP server manager
         mock_manager = MagicMock()
         mock_manager.config_mcp_servers = {
@@ -386,10 +414,21 @@ class TestListMCPServers:
         mock_manager.get_allowed_mcp_servers = AsyncMock(
             return_value=["db_server_allowed", "config_server_allowed"]
         )
-
+        
+        # Mock the new method that returns servers with health and team data
+        mock_servers_with_health = [
+            db_server_allowed,
+            generate_mock_mcp_server_db_record(
+                server_id="config_server_allowed",
+                alias="Allowed Zapier MCP",
+                url="https://actions.zapier.com/mcp/sse",
+            )
+        ]
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(
+            return_value=mock_servers_with_health
+        )
+        
         with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user"
-        ) as mock_get_user_servers, patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
             mock_manager,
         ), patch(
@@ -399,34 +438,31 @@ class TestListMCPServers:
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
             return_value=mock_prisma_client,
         ):
-
-            # Mock user-specific DB response
-            mock_get_user_servers.return_value = [db_server_allowed]
-
+            
             # Import and call the function
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_all_mcp_servers,
             )
-
+            
             result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
-
-            # Assertions
+            
+            # Verify results - should only return servers user has access to
             assert len(result) == 2
-
-            # Check that only allowed servers are included
+            
+            # Check that only allowed servers are returned
             server_ids = [server.server_id for server in result]
             assert "db_server_allowed" in server_ids
             assert "config_server_allowed" in server_ids
             assert "config_server_not_allowed" not in server_ids
-
-            # Verify properties of returned servers
-            gmail_server = next(s for s in result if s.server_id == "db_server_allowed")
-            assert gmail_server.alias == "Allowed Gmail MCP"
-            assert gmail_server.url == "https://gmail-mcp.example.com/mcp"
-
-            zapier_server = next(s for s in result if s.server_id == "config_server_allowed")
-            assert zapier_server.alias == "Allowed Zapier MCP"
-            assert zapier_server.url == "https://actions.zapier.com/mcp/sse"
+            
+            # Check server details
+            for server in result:
+                if server.server_id == "db_server_allowed":
+                    assert server.alias == "Allowed Gmail MCP"
+                    assert server.url == "https://gmail-mcp.example.com/mcp"
+                elif server.server_id == "config_server_allowed":
+                    assert server.alias == "Allowed Zapier MCP"
+                    assert server.url == "https://actions.zapier.com/mcp/sse"
 
 
 class TestMCPHealthCheckEndpoints:
@@ -598,7 +634,7 @@ class TestMCPHealthCheckEndpoints:
         
         # Mock global MCP server manager
         mock_manager = MagicMock()
-        mock_manager.health_check_all_servers = AsyncMock(return_value={
+        mock_manager.health_check_allowed_servers = AsyncMock(return_value={
             "server1": {
                 "server_id": "server1",
                 "status": "healthy",
@@ -656,11 +692,15 @@ class TestMCPHealthCheckEndpoints:
     @pytest.mark.asyncio
     async def test_fetch_all_mcp_servers_with_health_status(self):
         """Test that fetch_all_mcp_servers includes health check status"""
-        # Mock server
+        # Mock server with health status
         mock_server = generate_mock_mcp_server_db_record(
             server_id="test-server",
             alias="Test Server"
         )
+        # Add health status to the mock server
+        mock_server.status = "healthy"
+        mock_server.last_health_check = datetime.now()
+        mock_server.health_check_error = None
         
         # Mock dependencies
         mock_prisma_client = MagicMock()
@@ -674,16 +714,7 @@ class TestMCPHealthCheckEndpoints:
         mock_manager = MagicMock()
         mock_manager.config_mcp_servers = {}
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=[])
-        mock_manager.health_check_all_servers = AsyncMock(return_value={
-            "test-server": {
-                "server_id": "test-server",
-                "status": "healthy",
-                "tools_count": 1,
-                "last_health_check": "2024-01-01T12:00:00",
-                "response_time_ms": 100.0,
-                "error": None
-            }
-        })
+        mock_manager.get_all_mcp_servers_with_health_and_teams = AsyncMock(return_value=[mock_server])
         
         mock_user_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN
@@ -698,12 +729,6 @@ class TestMCPHealthCheckEndpoints:
         ), patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
             mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers",
-            AsyncMock(return_value=[mock_server]),
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_servers",
-            AsyncMock(return_value=[]),
         ):
             
             # Import and call the function

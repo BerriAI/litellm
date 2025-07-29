@@ -1,6 +1,5 @@
 
 
-
 """
 1. Allow proxy admin to perform create, update, and delete operations on MCP servers in the db.
 2. Allows users to view the mcp servers they have access to.
@@ -19,11 +18,10 @@ Endpoints here:
 
 import importlib
 from typing import Dict, Iterable, List, Optional, cast
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
-
-import datetime
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -198,7 +196,7 @@ if MCP_AVAILABLE:
                     },
                 )
 
-        # Perform health check
+        # Perform health check using server manager
         try:
             health_result = await global_mcp_server_manager.health_check_server(server_id)
             return health_result
@@ -224,69 +222,18 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        # Get all accessible servers for the user
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-
-        # First, get all relevant teams
-        user_teams = []
-        teams = await prisma_client.db.litellm_teamtable.find_many(
-                include={
-                    "object_permission": True
-                }
-            )
-        if _user_has_admin_view(user_api_key_dict):
-            # Admin can see all teams
-            user_teams = teams
-        else:
-            for team in teams:
-                if team.members_with_roles:
-                    for member in team.members_with_roles:
-                        if (
-                            "user_id" in member
-                            and member["user_id"] is not None
-                            and member["user_id"] == user_api_key_dict.user_id
-                        ):
-                            user_teams.append(team)
-
-        # Get all accessible server IDs
-        accessible_server_ids = set()
-        for team in user_teams:
-            if team.object_permission and team.object_permission.mcp_servers:
-                accessible_server_ids.update(team.object_permission.mcp_servers)
-
-        # If admin, get all servers
-        if _user_has_admin_view(user_api_key_dict):
-            all_mcp_servers = await get_all_mcp_servers(prisma_client)
-            for server in all_mcp_servers:
-                accessible_server_ids.add(server.server_id)
-
-        # Add config.yaml servers
-        ALLOWED_MCP_SERVER_IDS = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
+        # Use server manager to get health checks for allowed servers
+        try:
+            all_health_results = await global_mcp_server_manager.health_check_allowed_servers(
                 user_api_key_auth=user_api_key_dict
             )
-        )
-        accessible_server_ids.update(ALLOWED_MCP_SERVER_IDS)
-
-        # Perform health checks on accessible servers
-        try:
-            all_health_results = await global_mcp_server_manager.health_check_all_servers()
-            
-            # Filter to only accessible servers
-            filtered_results = {
-                server_id: result 
-                for server_id, result in all_health_results.items() 
-                if server_id in accessible_server_ids
-            }
             
             return {
-                "total_servers": len(filtered_results),
-                "healthy_count": len([r for r in filtered_results.values() if r["status"] == "healthy"]),
-                "unhealthy_count": len([r for r in filtered_results.values() if r["status"] == "unhealthy"]),
-                "unknown_count": len([r for r in filtered_results.values() if r["status"] == "unknown"]),
-                "servers": filtered_results
+                "total_servers": len(all_health_results),
+                "healthy_count": len([r for r in all_health_results.values() if r["status"] == "healthy"]),
+                "unhealthy_count": len([r for r in all_health_results.values() if r["status"] == "unhealthy"]),
+                "unknown_count": len([r for r in all_health_results.values() if r["status"] == "unknown"]),
+                "servers": all_health_results
             }
         except Exception as e:
             verbose_proxy_logger.exception(f"Error performing health checks on MCP servers: {str(e)}")
@@ -312,129 +259,10 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        from datetime import datetime
-
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
+        # Use server manager to get all servers with health and team data
+        return await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
+            user_api_key_auth=user_api_key_dict
         )
-
-        # First, get all relevant teams
-        user_teams = []
-        teams = await prisma_client.db.litellm_teamtable.find_many(
-                include={
-                    "object_permission": True
-                }
-            )
-        if _user_has_admin_view(user_api_key_dict):
-            # Admin can see all teams
-            user_teams = teams
-        else:
-            for team in teams:
-                if team.members_with_roles:
-                    for member in team.members_with_roles:
-                        if (
-                            "user_id" in member
-                            and member["user_id"] is not None
-                            and member["user_id"] == user_api_key_dict.user_id
-                        ):
-                            user_teams.append(team)
-
-        # Create a mapping of server_id to teams that have access to it
-        server_to_teams_map: Dict[str, List[Dict[str, str]]] = {}
-        for team in user_teams:
-            if team.object_permission and team.object_permission.mcp_servers:
-                for server_id in team.object_permission.mcp_servers:
-                    if server_id not in server_to_teams_map:
-                        server_to_teams_map[server_id] = []
-                    server_to_teams_map[server_id].append({
-                        "team_id": team.team_id,
-                        "team_alias": team.team_alias,
-                        "organization_id": team.organization_id
-                    })
-
-        # Get MCP servers
-
-        # get all mcp server_ids from user_teams
-        mcp_server_ids = []
-        for team in user_teams:
-            if team.object_permission and team.object_permission.mcp_servers:
-                mcp_server_ids.extend(team.object_permission.mcp_servers)
-
-        LIST_MCP_SERVERS = await get_mcp_servers(prisma_client, mcp_server_ids)
-
-        if _user_has_admin_view(user_api_key_dict):
-            all_mcp_servers = await get_all_mcp_servers(prisma_client)
-            # add all_mcp_servers to LIST_MCP_SERVERS such that there are no duplicates
-            for server in all_mcp_servers:
-                if server.server_id not in mcp_server_ids:
-                    LIST_MCP_SERVERS.append(server)
-
-        # Add config.yaml servers
-        ALLOWED_MCP_SERVER_IDS = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth=user_api_key_dict
-            )
-        )
-        ALL_CONFIG_MCP_SERVERS = global_mcp_server_manager.config_mcp_servers
-        for _server_id, _server_config in ALL_CONFIG_MCP_SERVERS.items():
-            if _server_id in ALLOWED_MCP_SERVER_IDS:
-                LIST_MCP_SERVERS.append(
-                    LiteLLM_MCPServerTable(
-                        server_id=_server_id,
-                        server_name=_server_config.name,
-                        alias=_server_config.alias,
-                        url=_server_config.url,
-                        transport=_server_config.transport,
-                        spec_version=_server_config.spec_version,
-                        auth_type=_server_config.auth_type,
-                        created_at=datetime.now(),
-                        updated_at=datetime.now(),
-                        mcp_info=_server_config.mcp_info,
-                        # Stdio-specific fields
-                        command=getattr(_server_config, 'command', None),
-                        args=getattr(_server_config, 'args', None) or [],
-                        env=getattr(_server_config, 'env', None) or {},
-                    )
-                )
-
-        # Perform health checks on all servers
-        try:
-            all_health_results = await global_mcp_server_manager.health_check_all_servers()
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Error performing health checks: {e}")
-            all_health_results = {}
-
-        # Map servers to their teams and return
-        LIST_MCP_SERVERS = [
-            LiteLLM_MCPServerTable(
-                server_id=server.server_id,
-                server_name=server.server_name,
-                alias=server.alias,
-                description=server.description,
-                url=server.url,
-                transport=server.transport,
-                spec_version=server.spec_version,
-                auth_type=server.auth_type,
-                created_at=server.created_at,
-                created_by=server.created_by,
-                updated_at=server.updated_at,
-                updated_by=server.updated_by,
-                mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
-                mcp_info=server.mcp_info,
-                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
-                # Health check status
-                status=all_health_results.get(server.server_id, {}).get("status", "unknown"),
-                last_health_check=datetime.fromisoformat(all_health_results.get(server.server_id, {}).get("last_health_check", datetime.now().isoformat())) if all_health_results.get(server.server_id, {}).get("last_health_check") else None,
-                health_check_error=all_health_results.get(server.server_id, {}).get("error"),
-                # Stdio-specific fields
-                command=getattr(server, 'command', None),
-                args=getattr(server, 'args', None) or [],
-                env=getattr(server, 'env', None) or {},
-            )
-            for server in LIST_MCP_SERVERS
-        ]
-
-        return LIST_MCP_SERVERS
 
     @router.get(
         "/server/{server_id}",
@@ -467,7 +295,7 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server with id {server_id} not found"},
             )
 
-        # Perform health check on the server
+        # Perform health check on the server using server manager
         try:
             health_result = await global_mcp_server_manager.health_check_server(server_id)
             # Update the server object with health check results
