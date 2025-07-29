@@ -922,6 +922,9 @@ class CustomStreamWrapper:
             )
             if reasoning_content:
                 if self.sent_first_thinking_block is False:
+                    # Ensure content is not None before concatenation
+                    if model_response.choices[0].delta.content is None:
+                        model_response.choices[0].delta.content = ""
                     model_response.choices[0].delta.content += (
                         "<think>" + reasoning_content
                     )
@@ -938,7 +941,7 @@ class CustomStreamWrapper:
                 and model_response.choices[0].delta.content
             ):
                 model_response.choices[0].delta.content = (
-                    "</think>" + model_response.choices[0].delta.content
+                    "</think>" + (model_response.choices[0].delta.content or "")
                 )
                 self.sent_last_thinking_block = True
 
