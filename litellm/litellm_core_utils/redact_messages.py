@@ -14,6 +14,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import StandardCallbackDynamicParams
+import asyncio
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -71,18 +72,15 @@ def perform_redaction(model_call_details: dict, result):
 
     # Redact result
     if result is not None:
-        # Check if result is a coroutine or other non-pickleable object
-        import asyncio
-        import inspect
-        if asyncio.iscoroutine(result) or inspect.iscoroutine(result):
-            # For coroutines, return a placeholder since we can't deepcopy them
-            return {"text": "redacted-by-litellm", "type": "coroutine"}
+        # Check if result is a coroutine, async generator, or other async object - these cannot be deepcopied
+        if (asyncio.iscoroutine(result) or 
+            asyncio.iscoroutinefunction(result) or
+            hasattr(result, '__aiter__') or  # async generator
+            hasattr(result, '__anext__')):   # async iterator
+            # For async objects, return a simple redacted response without deepcopy
+            return {"text": "redacted-by-litellm"}
         
-        try:
-            _result = copy.deepcopy(result)
-        except (TypeError, AttributeError) as e:
-            # If deepcopy fails, return a safe placeholder
-            return {"text": "redacted-by-litellm", "error": f"deepcopy failed: {type(result).__name__}"}
+        _result = copy.deepcopy(result)
         if isinstance(_result, litellm.ModelResponse):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:

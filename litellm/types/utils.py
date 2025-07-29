@@ -2093,6 +2093,7 @@ all_litellm_params = [
     "metadata",
     "litellm_metadata",
     "litellm_trace_id",
+    "guardrails",
     "tags",
     "acompletion",
     "aimg_generation",
@@ -2317,6 +2318,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    AUTO_ROUTER = "auto_router"
 
 
 # Create a set of all provider values for quick lookup

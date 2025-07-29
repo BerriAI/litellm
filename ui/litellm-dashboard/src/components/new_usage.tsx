@@ -83,7 +83,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
 
   // Add date range state
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 28 * 24 * 60 * 60 * 1000),
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
     to: new Date(),
   });
 
@@ -393,7 +393,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
   return (
     <div style={{ width: "100%" }} className="p-8 relative">
       {/* Export Data Button - Positioned in top right corner */}
-      {all_admin_roles.includes(userRole || "") && (
+      {/* {all_admin_roles.includes(userRole || "") && (
         <div className="absolute top-4 right-4 z-10">
           <button
             onClick={() => setIsCloudZeroModalOpen(true)}
@@ -428,7 +428,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
             </svg>
           </button>
         </div>
-      )}
+      )} */}
 
       <TabGroup>
         <TabList variant="solid" className="mt-1">
