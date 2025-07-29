@@ -83,7 +83,6 @@ from litellm.types.mcp import (
     MCPPostCallResponseObject,
     MCPPreCallRequestObject,
     MCPPreCallResponseObject,
-    MCPDuringCallRequestObject,
     MCPDuringCallResponseObject,
 )
 from litellm.types.rerank import RerankResponse
@@ -1203,7 +1202,7 @@ class Logging(LiteLLMLoggingBaseClass):
         Use this for concurrent monitoring and validation during tool execution.
         """
         from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPDuringCallRequestObject, MCPDuringCallResponseObject
+        from litellm.types.mcp import MCPDuringCallResponseObject, MCPDuringCallRequestObject
 
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_success_callbacks,
