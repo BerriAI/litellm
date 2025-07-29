@@ -163,7 +163,19 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             <Form.Item label="Description" name="description">
               <TextInput />
             </Form.Item>
-            <Form.Item label="MCP Server URL" name="url" rules={[{ required: true, message: "Please enter a server URL" }]}> 
+            <Form.Item label="MCP Server URL" name="url" rules={[
+              { required: true, message: "Please enter a server URL" },
+              {
+                validator: (_, value) => {
+                  if (!value) return Promise.resolve();
+                  // More flexible URL validation that allows Kubernetes service names and various URL formats
+                  const urlPattern = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
+                  return urlPattern.test(value)
+                    ? Promise.resolve()
+                    : Promise.reject("Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)");
+                },
+              },
+            ]}> 
               <TextInput />
             </Form.Item>
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}> 

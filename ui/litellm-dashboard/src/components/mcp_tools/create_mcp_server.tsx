@@ -310,7 +310,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 name="url"
                 rules={[
                   { required: true, message: "Please enter a server URL" },
-                  { type: "url", message: "Please enter a valid URL" },
+                  {
+                    validator: (_, value) => {
+                      if (!value) return Promise.resolve();
+                      // More flexible URL validation that allows Kubernetes service names and various URL formats
+                      const urlPattern = /^https?:\/\/[^\s/$.?#].[^\s]*$/i;
+                      return urlPattern.test(value)
+                        ? Promise.resolve()
+                        : Promise.reject("Please enter a valid URL (e.g., http://service-name.domain:1234/path or https://example.com)");
+                    },
+                  },
                 ]}
               >
                 <TextInput
