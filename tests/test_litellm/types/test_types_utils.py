@@ -73,3 +73,52 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+
+
+def test_message_handle_initialize_tool_call_fields_function_call_none():
+    """
+    Test that Message._handle_initialize_tool_call_fields properly handles function_call=None
+    by setting function_call to empty dict.
+    
+    Related to issue: https://github.com/BerriAI/litellm/issues/13055
+    """
+    from litellm.types.utils import Message
+
+    # Create a Message with valid initial values
+    message = Message(
+        content="Hello, world!",
+        role="assistant",
+        function_call={"name": "test_function", "arguments": "{}"},
+        tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "test", "arguments": "{}"}}]
+    )
+    
+    # Manually set the function_call attribute to None to test the method behavior
+    setattr(message, "function_call", None)
+    
+    # Test the _handle_initialize_tool_call_fields method with function_call=None
+    message._handle_initialize_tool_call_fields(function_call=None, tool_calls=[])
+    
+    # Verify that function_call is set to empty dict when None
+    assert message.function_call == {}
+
+
+def test_message_handle_initialize_tool_call_fields_tool_calls_empty():
+    """
+    Test that Message._handle_initialize_tool_call_fields properly handles tool_calls=None
+    by setting tool_calls to empty list.
+    
+    Related to issue: https://github.com/BerriAI/litellm/issues/13055
+    """
+    from litellm.types.utils import Message
+
+    # Create a Message with valid initial values
+    message = Message(
+        content="Hello, world!",
+        role="assistant",
+        function_call=None,
+        tool_calls=None
+    )
+
+    # Verify that tool_calls is set to empty list when None
+    assert message.tool_calls == []
+    assert message.function_call == {}
