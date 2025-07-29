@@ -17,7 +17,7 @@ Endpoints here:
 """
 
 import importlib
-from typing import Dict, Iterable, List, Optional, cast
+from typing import Iterable, List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
@@ -40,10 +40,8 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
-        get_all_mcp_servers,
         get_all_mcp_servers_for_user,
         get_mcp_server,
-        get_mcp_servers,
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
