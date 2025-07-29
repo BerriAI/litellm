@@ -1989,7 +1989,6 @@ def test_openai_chat_completion_complete_response_call():
         "gpt-3.5-turbo",
         "azure/chatgpt-v-3",
         "claude-3-haiku-20240307",
-        "o1-preview",
         "o1",
         "azure/fake-o1-mini",
     ],
@@ -2156,54 +2155,6 @@ def test_together_ai_completion_call_mistral():
 
 
 # # test on together ai completion call - starcoder
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_openai_o1_completion_call_streaming(sync_mode):
-    try:
-        litellm.set_verbose = False
-        if sync_mode:
-            response = completion(
-                model="o1-preview",
-                messages=messages,
-                stream=True,
-            )
-            complete_response = ""
-            print(f"returned response object: {response}")
-            has_finish_reason = False
-            for idx, chunk in enumerate(response):
-                chunk, finished = streaming_format_tests(idx, chunk)
-                has_finish_reason = finished
-                if finished:
-                    break
-                complete_response += chunk
-            if has_finish_reason is False:
-                raise Exception("Finish reason not set for last chunk")
-            if complete_response == "":
-                raise Exception("Empty response received")
-        else:
-            response = await acompletion(
-                model="o1-preview",
-                messages=messages,
-                stream=True,
-            )
-            complete_response = ""
-            print(f"returned response object: {response}")
-            has_finish_reason = False
-            idx = 0
-            async for chunk in response:
-                chunk, finished = streaming_format_tests(idx, chunk)
-                has_finish_reason = finished
-                if finished:
-                    break
-                complete_response += chunk
-                idx += 1
-            if has_finish_reason is False:
-                raise Exception("Finish reason not set for last chunk")
-            if complete_response == "":
-                raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except Exception:
-        pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
 def test_together_ai_completion_call_starcoder_bad_key():
