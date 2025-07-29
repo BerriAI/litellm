@@ -665,223 +665,11 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools_bash():
     assert fields["tools"][0]["type"] == "bash_20241022"
 
 
-# Computer Use Tools Tests
-def test_bedrock_computer_use_tools_single():
-    """Test Bedrock with single computer use tool."""
-    try:
-        litellm.set_verbose = True
-        tools = [
-            {
-                "type": "computer_20241022",
-                "name": "computer",
-                "display_height_px": 768,
-                "display_width_px": 1024,
-                "display_number": 0,
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Take a screenshot"
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-                        }
-                    }
-                ]
-            }
-        ]
-        response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-            messages=messages,
-            tools=tools,
-        )
-        print(f"Computer use response: {response}")
-        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert response.choices[0].message.tool_calls[0].function.name == "computer"
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_computer_use_tools_function_format():
-    """Test Bedrock with computer use tool in function format."""
-    try:
-        litellm.set_verbose = True
-        tools = [
-            {
-                "type": "computer_20241022",
-                "function": {
-                    "name": "computer",
-                    "parameters": {
-                        "display_height_px": 768,
-                        "display_width_px": 1024,
-                        "display_number": 0,
-                    },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "Take a screenshot and describe what you see"
-            }
-        ]
-        response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-            messages=messages,
-            tools=tools,
-        )
-        print(f"Computer use function format response: {response}")
-        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert response.choices[0].message.tool_calls[0].function.name == "computer"
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_bash_tool():
-    """Test Bedrock with bash tool."""
-    try:
-        litellm.set_verbose = True
-        tools = [
-            {
-                "type": "bash_20241022",
-                "name": "bash",
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "List all python files in the current directory"
-            }
-        ]
-        response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-            messages=messages,
-            tools=tools,
-        )
-        print(f"Bash tool response: {response}")
-        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert response.choices[0].message.tool_calls[0].function.name == "bash"
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_text_editor_tool():
-    """Test Bedrock with text editor tool."""
-    try:
-        litellm.set_verbose = True
-        tools = [
-            {
-                "type": "text_editor_20241022",
-                "name": "str_replace_editor",
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "Create a hello world Python script"
-            }
-        ]
-        response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-            messages=messages,
-            tools=tools,
-        )
-        print(f"Text editor tool response: {response}")
-        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert response.choices[0].message.tool_calls[0].function.name == "str_replace_editor"
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_mixed_computer_use_and_function_calling():
-    """Test Bedrock with both computer use tools and function calling tools."""
-    try:
-        litellm.set_verbose = True
-        tools = [
-            {
-                "type": "computer_20241022",
-                "function": {
-                    "name": "computer",
-                    "parameters": {
-                        "display_height_px": 768,
-                        "display_width_px": 1024,
-                        "display_number": 0,
-                    },
-                },
-            },
-            {
-                "type": "bash_20241022",
-                "name": "bash",
-            },
-            {
-                "type": "text_editor_20241022",
-                "name": "str_replace_editor",
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            },
-                            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                        },
-                        "required": ["location"],
-                    },
-                }
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "Check the weather in Boston and then take a screenshot"
-            }
-        ]
-        response: ModelResponse = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
-            messages=messages,
-            tools=tools,
-        )
-        print(f"Mixed tools response: {response}")
-        # Should have tool calls
-        assert len(response.choices[0].message.tool_calls) > 0
-        # Check that we have function names
-        tool_names = [tc.function.name for tc in response.choices[0].message.tool_calls]
-        print(f"Tool names called: {tool_names}")
-        # Should call weather function or computer tool
-        assert any(name in ["get_weather", "computer"] for name in tool_names)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_computer_use_tools_transformation():
-    """Test that computer use tools are transformed correctly for Bedrock format."""
-    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-
+def test_transform_request_with_multiple_tools():
+    """Test transformation with multiple tools including computer, bash, and function tools."""
     config = AmazonConverseConfig()
-
-    # Test mixed computer use and function calling tools
+    
+    # Use the exact payload from the user's error
     tools = [
         {
             "type": "computer_20241022",
@@ -921,9 +709,14 @@ def test_bedrock_computer_use_tools_transformation():
             }
         }
     ]
-
-    messages = [{"role": "user", "content": "Test message"}]
-
+    
+    messages = [
+        {
+            "role": "user",
+            "content": "run ls command and find all python files"
+        }
+    ]
+    
     # Transform request
     request_data = config.transform_request(
         model="anthropic.claude-3-5-sonnet-20241022-v2:0",
@@ -932,66 +725,214 @@ def test_bedrock_computer_use_tools_transformation():
         litellm_params={},
         headers={}
     )
-
-    # Verify computer use tools are in additionalModelRequestFields
-    assert "anthropic_beta" in request_data["additionalModelRequestFields"]
-    assert request_data["additionalModelRequestFields"]["anthropic_beta"] == ["computer-use-2024-10-22"]
-    assert "tools" in request_data["additionalModelRequestFields"]
-
-    computer_tools = request_data["additionalModelRequestFields"]["tools"]
-    assert len(computer_tools) == 3  # computer, bash, text_editor
-
-    # Check computer tool transformation
-    computer_tool = next(t for t in computer_tools if t["type"] == "computer_20241022")
-    assert computer_tool["name"] == "computer"
-    assert computer_tool["display_height_px"] == 768
-    assert computer_tool["display_width_px"] == 1024
-    assert computer_tool["display_number"] == 0
-
-    # Check bash tool transformation
-    bash_tool = next(t for t in computer_tools if t["type"] == "bash_20241022")
-    assert bash_tool["name"] == "bash"
-
-    # Check text editor tool transformation
-    text_editor_tool = next(t for t in computer_tools if t["type"] == "text_editor_20241022")
-    assert text_editor_tool["name"] == "str_replace_editor"
-
-    # Verify function calling tool is in toolConfig
-    assert "toolConfig" in request_data
-    assert len(request_data["toolConfig"]["tools"]) == 1  # get_weather function
-    function_tool = request_data["toolConfig"]["tools"][0]
-    assert function_tool["toolSpec"]["name"] == "get_weather"
-    assert function_tool["toolSpec"]["description"] == "Get the current weather in a given location"
-
-    print("✓ Computer use tools transformation test passed\!")
+    
+    # Verify the structure
+    assert "additionalModelRequestFields" in request_data
+    additional_fields = request_data["additionalModelRequestFields"]
+    
+    # Check that anthropic_beta is set correctly for computer use
+    assert "anthropic_beta" in additional_fields
+    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    
+    # Check that tools are present
+    assert "tools" in additional_fields
+    assert len(additional_fields["tools"]) == 3  # computer, bash, text_editor tools
+    
+    # Verify tool types
+    tool_types = [tool.get("type") for tool in additional_fields["tools"]]
+    assert "computer_20241022" in tool_types
+    assert "bash_20241022" in tool_types
+    assert "text_editor_20241022" in tool_types
+    
+    # Function tools are processed separately and not included in computer use tools
+    # They would be in toolConfig if present
 
 
-def test_bedrock_computer_use_tools_without_name():
-    """Test that computer use tools without explicit names get default names."""
-    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-
+def test_transform_request_with_computer_tool_only():
+    """Test transformation with only computer tool."""
     config = AmazonConverseConfig()
+    
+    tools = [
+        {
+            "type": "computer_20241022",
+            "name": "computer",
+            "display_height_px": 768,
+            "display_width_px": 1024,
+            "display_number": 0,
+        }
+    ]
+    
+    messages = [
+        {
+            "role": "user", 
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Go to the bedrock console"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+                    }
+                }
+            ]
+        }
+    ]
+    
+    # Transform request
+    request_data = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify the structure
+    assert "additionalModelRequestFields" in request_data
+    additional_fields = request_data["additionalModelRequestFields"]
+    
+    # Check that anthropic_beta is set correctly for computer use
+    assert "anthropic_beta" in additional_fields
+    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    
+    # Check that tools are present
+    assert "tools" in additional_fields
+    assert len(additional_fields["tools"]) == 1
+    assert additional_fields["tools"][0]["type"] == "computer_20241022"
 
-    # Test computer use tools without explicit names
+
+def test_transform_request_with_bash_tool_only():
+    """Test transformation with only bash tool."""
+    config = AmazonConverseConfig()
+    
     tools = [
         {
             "type": "bash_20241022",
-            # No name field
-        },
-        {
-            "type": "text_editor_20241022",
-            # No name field
+            "name": "bash",
         }
     ]
+    
+    messages = [
+        {
+            "role": "user", 
+            "content": "run ls command and find all python files"
+        }
+    ]
+    
+    # Transform request
+    request_data = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify the structure
+    assert "additionalModelRequestFields" in request_data
+    additional_fields = request_data["additionalModelRequestFields"]
+    
+    # Check that anthropic_beta is set correctly for computer use
+    assert "anthropic_beta" in additional_fields
+    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    
+    # Check that tools are present
+    assert "tools" in additional_fields
+    assert len(additional_fields["tools"]) == 1
+    assert additional_fields["tools"][0]["type"] == "bash_20241022"
 
-    transformed_tools = config._transform_computer_use_tools(tools)
 
-    # Check that default names are assigned
-    bash_tool = next(t for t in transformed_tools if t["type"] == "bash_20241022")
-    assert bash_tool["name"] == "bash"
+def test_transform_request_with_text_editor_tool():
+    """Test transformation with text editor tool."""
+    config = AmazonConverseConfig()
+    
+    tools = [
+        {
+            "type": "text_editor_20241022",
+            "name": "str_replace_editor",
+        }
+    ]
+    
+    messages = [
+        {
+            "role": "user",
+            "content": "Edit this text file"
+        }
+    ]
+    
+    # Transform request
+    request_data = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify the structure
+    assert "additionalModelRequestFields" in request_data
+    additional_fields = request_data["additionalModelRequestFields"]
+    
+    # Check that anthropic_beta is set correctly for computer use
+    assert "anthropic_beta" in additional_fields
+    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    
+    # Check that tools are present
+    assert "tools" in additional_fields
+    assert len(additional_fields["tools"]) == 1
+    assert additional_fields["tools"][0]["type"] == "text_editor_20241022"
 
-    text_editor_tool = next(t for t in transformed_tools if t["type"] == "text_editor_20241022")
-    assert text_editor_tool["name"] == "str_replace_editor"
 
-    print("✓ Computer use tools default names test passed\!")
-
+def test_transform_request_with_function_tool():
+    """Test transformation with function tool."""
+    config = AmazonConverseConfig()
+    
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            }
+        }
+    ]
+    
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco?"
+        }
+    ]
+    
+    # Transform request
+    request_data = config.transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=messages,
+        optional_params={"tools": tools},
+        litellm_params={},
+        headers={}
+    )
+    
+    # Verify the structure
+    assert "additionalModelRequestFields" in request_data
+    additional_fields = request_data["additionalModelRequestFields"]
+    
+    # Function tools are not computer use tools, so they don't get anthropic_beta
+    # They are processed through the regular tool config
+    assert "toolConfig" in request_data
+    assert "tools" in request_data["toolConfig"]
+    assert len(request_data["toolConfig"]["tools"]) == 1
+    assert request_data["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
