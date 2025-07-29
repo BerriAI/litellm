@@ -2226,6 +2226,7 @@ async def list_available_teams(
     response_model=TeamListResponse,
     dependencies=[Depends(user_api_key_auth)],
 )
+@management_endpoint_wrapper
 async def list_team_v2(
     http_request: Request,
     user_id: Optional[str] = fastapi.Query(
@@ -2284,6 +2285,18 @@ async def list_team_v2(
         raise HTTPException(
             status_code=500,
             detail={"error": f"No db connected. prisma client={prisma_client}"},
+        )
+
+    if not allowed_route_check_inside_route(
+        user_api_key_dict=user_api_key_dict, requested_user_id=user_id
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "Only admin users can query all teams/other teams. Your user role={}".format(
+                    user_api_key_dict.user_role
+                )
+            },
         )
 
     if user_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
