@@ -6914,6 +6914,8 @@ class ProviderConfigManager:
             return litellm.NscaleConfig()
         elif litellm.LlmProviders.HYPERBOLIC == provider:
             return litellm.HyperbolicChatConfig()
+        elif litellm.LlmProviders.INFERENCE == provider:
+            return litellm.InferenceChatConfig()
         return None
 
     @staticmethod

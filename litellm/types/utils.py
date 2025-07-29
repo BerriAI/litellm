@@ -2317,6 +2317,7 @@ class LlmProviders(str, Enum):
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
+    INFERENCE = "inference"
     RECRAFT = "recraft"
     AUTO_ROUTER = "auto_router"
 
