@@ -1126,3 +1126,78 @@ async def test_google_generate_content_with_openai():
         # remove any GenericLiteLLMParams fields
         passed_fields = passed_fields - set(GenericLiteLLMParams.model_fields.keys())
         assert passed_fields == set(["model", "messages"]), f"Expected only model, contents, systemInstruction, and safetySettings to be passed through, got {passed_fields}"
+
+@pytest.mark.asyncio
+async def test_agenerate_content_x_goog_api_key_header():
+    """
+    Test that agenerate_content passes x-goog-api-key header correctly.
+    
+    This test verifies that when calling agenerate_content with a Google GenAI model,
+    the HTTP request includes the x-goog-api-key header with the correct API key value.
+    """
+    import os
+    import unittest.mock
+
+    import httpx
+    
+    test_api_key = "test-gemini-api-key-123"
+    
+    # Mock environment to ensure we use our test API key
+    with unittest.mock.patch.dict(os.environ, {"GEMINI_API_KEY": test_api_key}, clear=False):
+        # Mock the AsyncHTTPHandler's post method to capture headers
+        with unittest.mock.patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new_callable=unittest.mock.AsyncMock) as mock_post:
+            # Mock a successful response
+            mock_response = unittest.mock.MagicMock()
+            mock_response.json.return_value = {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": "Hello! How can I help you today?"}],
+                            "role": "model"
+                        },
+                        "finishReason": "STOP",
+                        "index": 0
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 10,
+                    "totalTokenCount": 15
+                }
+            }
+            mock_response.status_code = 200
+            mock_response.headers = {}
+            mock_post.return_value = mock_response
+            
+            # Call agenerate_content with Google AI Studio model
+            try:
+                response = await agenerate_content(
+                    model="gemini/gemini-1.5-flash",
+                    contents=[
+                        {"role": "user", "parts": [{"text": "Hello, world!"}]}
+                    ],
+                    api_key=test_api_key
+                )
+            except Exception:
+                # Ignore any response processing errors, we just want to check the headers
+                pass
+            
+            # Verify that AsyncHTTPHandler.post was called
+            mock_post.assert_called_once()
+            
+            # Get the arguments passed to the post call
+            call_args, call_kwargs = mock_post.call_args
+            
+            # Verify that headers contain x-goog-api-key
+            headers = call_kwargs.get("headers", {})
+            assert "x-goog-api-key" in headers, f"x-goog-api-key header not found in headers: {list(headers.keys())}"
+            
+            # Verify the API key is set (could be our test key or from api_key parameter)
+            api_key_value = headers["x-goog-api-key"]
+            assert api_key_value == test_api_key, f"Expected x-goog-api-key to be {test_api_key}, got {api_key_value}"
+            
+            # Verify other expected headers
+            assert headers.get("Content-Type") == "application/json", f"Expected Content-Type application/json, got {headers.get('Content-Type')}"
+            
+            print(f"✓ Test passed: x-goog-api-key header correctly set to {api_key_value}")
+            print(f"✓ All headers: {list(headers.keys())}")

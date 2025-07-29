@@ -30,6 +30,12 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     """
     Configuration for calling Google models in their native format.
     """
+    ##############################
+    # Constants
+    ##############################
+    XGOOGLE_API_KEY = "x-goog-api-key"
+    ##############################
+    
     @property
     def custom_llm_provider(self) -> Literal["gemini", "vertex_ai"]:
         return "gemini"
@@ -113,8 +119,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         default_headers = {
             "Content-Type": "application/json",
         }
-        if api_key is not None:
-            default_headers["Authorization"] = f"Bearer {api_key}"
+        gemini_api_key = self._get_google_ai_studio_api_key(dict(litellm_params or {}))
+        if gemini_api_key is not None:
+            default_headers[self.XGOOGLE_API_KEY] = gemini_api_key
         if headers is not None:
             default_headers.update(headers)
 
