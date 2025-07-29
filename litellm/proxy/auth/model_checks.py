@@ -75,16 +75,13 @@ async def get_mcp_server_ids(
     if prisma_client is None:
         return []
 
-
     if user_api_key_dict.object_permission_id is None:
         return []
 
-
     # Make a direct SQL query to get just the mcp_servers
     try:
-
         result = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": user_api_key_dict.object_permission_id},
+            where={"object_permission_id": user_api_key_dict.object_permission_id},
         )
         if result and result.mcp_servers:
             return result.mcp_servers
@@ -298,18 +295,18 @@ def get_all_fallbacks(
 ) -> List[str]:
     """
     Get all fallbacks for a given model from the router's fallback configuration.
-    
+
     Args:
         model: The model name to get fallbacks for
         llm_router: The LiteLLM router instance
         fallback_type: Type of fallback ("general", "context_window", "content_policy")
-    
+
     Returns:
         List of fallback model names. Empty list if no fallbacks found.
     """
     if llm_router is None:
         return []
-    
+
     # Get the appropriate fallback list based on type
     fallbacks_config: list = []
     if fallback_type == "general":
@@ -321,20 +318,19 @@ def get_all_fallbacks(
     else:
         verbose_proxy_logger.warning(f"Unknown fallback_type: {fallback_type}")
         return []
-    
+
     if not fallbacks_config:
         return []
-    
+
     try:
         # Use existing function to get fallback model group
         fallback_model_group, _ = get_fallback_model_group(
-            fallbacks=fallbacks_config, 
-            model_group=model
+            fallbacks=fallbacks_config, model_group=model
         )
-        
+
         if fallback_model_group is None:
             return []
-        
+
         return fallback_model_group
     except Exception as e:
         verbose_proxy_logger.error(f"Error getting fallbacks for model {model}: {e}")

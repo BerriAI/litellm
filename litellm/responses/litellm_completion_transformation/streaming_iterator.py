@@ -164,7 +164,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             Union[ModelResponse, TextCompletionResponse]
         ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks)
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
-
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(

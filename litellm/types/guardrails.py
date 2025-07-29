@@ -41,6 +41,7 @@ class SupportedGuardrailIntegrations(Enum):
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
 
+
 class Role(Enum):
     SYSTEM = "system"
     ASSISTANT = "assistant"
@@ -311,7 +312,6 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
-
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
@@ -407,7 +407,8 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     )
 
     model: Optional[str] = Field(
-        default=None, description="Optional field if guardrail requires a 'model' parameter"
+        default=None,
+        description="Optional field if guardrail requires a 'model' parameter",
     )
 
     # Model Armor params
@@ -428,7 +429,7 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=True,
         description="Whether to fail the request if Model Armor encounters an error",
     )
-    
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 

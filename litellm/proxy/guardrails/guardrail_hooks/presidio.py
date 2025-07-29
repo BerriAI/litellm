@@ -404,7 +404,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 LitellmCallTypes.completion.value,
                 LitellmCallTypes.acompletion.value,
             ]:
-
                 messages = data["messages"]
                 tasks = []
 

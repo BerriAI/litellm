@@ -325,7 +325,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
-                outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
+                outputText = litellm.AmazonMistralConfig.get_outputText(
+                    completion_response, model_response
+                )
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:

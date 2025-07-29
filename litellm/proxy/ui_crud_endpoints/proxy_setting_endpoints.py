@@ -473,12 +473,10 @@ async def update_sso_settings(sso_config: SSOConfig):
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump(exclude_none=True)
     for field_name, value in sso_data.items():
-
         if field_name == "user_email" and value is not None:
             # Store user_email in general_settings instead of environment variables
             config["general_settings"]["proxy_admin_email"] = value
         elif field_name == "ui_access_mode" and value is not None:
-
             config["general_settings"]["ui_access_mode"] = value
         elif field_name in env_var_mapping and value is not None:
             env_var_name = env_var_mapping[field_name]
@@ -489,7 +487,6 @@ async def update_sso_settings(sso_config: SSOConfig):
 
     stored_config = config
     if len(config["environment_variables"]) > 0:
-
         stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
             environment_variables=config["environment_variables"]
         )

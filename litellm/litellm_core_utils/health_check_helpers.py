@@ -1,4 +1,3 @@
-
 """
 Helper functions for health check calls.
 """
@@ -7,8 +6,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-class HealthCheckHelpers:
 
+class HealthCheckHelpers:
     @staticmethod
     async def ahealth_check_wildcard_models(
         model: str,
@@ -41,7 +40,6 @@ class HealthCheckHelpers:
         model_params["max_tokens"] = 1
         await acompletion(**model_params)
         return {}
-    
 
     @staticmethod
     def _update_model_params_with_health_check_tracking_information(
@@ -57,6 +55,7 @@ class HealthCheckHelpers:
         """
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
         _metadata_variable_name = "litellm_metadata"
         litellm_metadata = HealthCheckHelpers._get_metadata_for_health_check_call()
         model_params[_metadata_variable_name] = litellm_metadata
@@ -66,13 +65,14 @@ class HealthCheckHelpers:
             _metadata_variable_name=_metadata_variable_name,
         )
         return model_params
-    
+
     @staticmethod
     def _get_metadata_for_health_check_call():
         """
         Returns the metadata for the health check call.
         """
         from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+
         return {
             "tags": [LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME],
         }

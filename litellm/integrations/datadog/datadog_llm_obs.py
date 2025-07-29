@@ -161,7 +161,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             output_tokens=float(standard_logging_payload.get("completion_tokens", 0)),
             total_tokens=float(standard_logging_payload.get("total_tokens", 0)),
             total_cost=float(standard_logging_payload.get("response_cost", 0)),
-            time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
+            time_to_first_token=self._get_time_to_first_token_seconds(
+                standard_logging_payload
+            ),
         )
 
         return LLMObsPayload(
@@ -177,8 +179,10 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 self._get_datadog_tags(standard_logging_object=standard_logging_payload)
             ],
         )
-    
-    def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
+
+    def _get_time_to_first_token_seconds(
+        self, standard_logging_payload: StandardLoggingPayload
+    ) -> float:
         """
         Get the time to first token in seconds
 
@@ -187,7 +191,9 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         For non streaming calls, CompletionStartTime is time we get the response back
         """
         start_time: Optional[float] = standard_logging_payload.get("startTime")
-        completion_start_time: Optional[float] = standard_logging_payload.get("completionStartTime")
+        completion_start_time: Optional[float] = standard_logging_payload.get(
+            "completionStartTime"
+        )
         end_time: Optional[float] = standard_logging_payload.get("endTime")
 
         if completion_start_time is not None and start_time is not None:
@@ -196,7 +202,6 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             return end_time - start_time
         else:
             return 0.0
-
 
     def _get_response_messages(self, response_obj: Any) -> List[Any]:
         """
@@ -208,102 +213,104 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             return [response_obj["choices"][0]["message"].json()]
         return []
 
-    def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
+    def _get_datadog_span_kind(
+        self, call_type: Optional[str]
+    ) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
         """
         Map liteLLM call_type to appropriate DataDog LLM Observability span kind.
-        
+
         Available DataDog span kinds: "llm", "tool", "task", "embedding", "retrieval"
         """
         if call_type is None:
             return "llm"
-        
+
         # Embedding operations
         if call_type in [CallTypes.embedding.value, CallTypes.aembedding.value]:
             return "embedding"
-        
-        # LLM completion operations  
+
+        # LLM completion operations
         if call_type in [
-            CallTypes.completion.value, 
+            CallTypes.completion.value,
             CallTypes.acompletion.value,
-            CallTypes.text_completion.value, 
+            CallTypes.text_completion.value,
             CallTypes.atext_completion.value,
-            CallTypes.generate_content.value, 
+            CallTypes.generate_content.value,
             CallTypes.agenerate_content.value,
-            CallTypes.generate_content_stream.value, 
+            CallTypes.generate_content_stream.value,
             CallTypes.agenerate_content_stream.value,
-            CallTypes.anthropic_messages.value
+            CallTypes.anthropic_messages.value,
         ]:
             return "llm"
-        
+
         # Tool operations
         if call_type in [CallTypes.call_mcp_tool.value]:
             return "tool"
-            
+
         # Retrieval operations
         if call_type in [
-            CallTypes.get_assistants.value, 
+            CallTypes.get_assistants.value,
             CallTypes.aget_assistants.value,
-            CallTypes.get_thread.value, 
+            CallTypes.get_thread.value,
             CallTypes.aget_thread.value,
-            CallTypes.get_messages.value, 
+            CallTypes.get_messages.value,
             CallTypes.aget_messages.value,
-            CallTypes.afile_retrieve.value, 
+            CallTypes.afile_retrieve.value,
             CallTypes.file_retrieve.value,
-            CallTypes.afile_list.value, 
+            CallTypes.afile_list.value,
             CallTypes.file_list.value,
-            CallTypes.afile_content.value, 
+            CallTypes.afile_content.value,
             CallTypes.file_content.value,
-            CallTypes.retrieve_batch.value, 
+            CallTypes.retrieve_batch.value,
             CallTypes.aretrieve_batch.value,
-            CallTypes.retrieve_fine_tuning_job.value, 
+            CallTypes.retrieve_fine_tuning_job.value,
             CallTypes.aretrieve_fine_tuning_job.value,
-            CallTypes.responses.value, 
+            CallTypes.responses.value,
             CallTypes.aresponses.value,
-            CallTypes.alist_input_items.value
+            CallTypes.alist_input_items.value,
         ]:
             return "retrieval"
-            
+
         # Task operations (batch, fine-tuning, file operations, etc.)
         if call_type in [
-            CallTypes.create_batch.value, 
+            CallTypes.create_batch.value,
             CallTypes.acreate_batch.value,
-            CallTypes.create_fine_tuning_job.value, 
+            CallTypes.create_fine_tuning_job.value,
             CallTypes.acreate_fine_tuning_job.value,
-            CallTypes.cancel_fine_tuning_job.value, 
+            CallTypes.cancel_fine_tuning_job.value,
             CallTypes.acancel_fine_tuning_job.value,
-            CallTypes.list_fine_tuning_jobs.value, 
+            CallTypes.list_fine_tuning_jobs.value,
             CallTypes.alist_fine_tuning_jobs.value,
-            CallTypes.create_assistants.value, 
+            CallTypes.create_assistants.value,
             CallTypes.acreate_assistants.value,
-            CallTypes.delete_assistant.value, 
+            CallTypes.delete_assistant.value,
             CallTypes.adelete_assistant.value,
-            CallTypes.create_thread.value, 
+            CallTypes.create_thread.value,
             CallTypes.acreate_thread.value,
-            CallTypes.add_message.value, 
+            CallTypes.add_message.value,
             CallTypes.a_add_message.value,
-            CallTypes.run_thread.value, 
+            CallTypes.run_thread.value,
             CallTypes.arun_thread.value,
-            CallTypes.run_thread_stream.value, 
+            CallTypes.run_thread_stream.value,
             CallTypes.arun_thread_stream.value,
-            CallTypes.file_delete.value, 
+            CallTypes.file_delete.value,
             CallTypes.afile_delete.value,
-            CallTypes.create_file.value, 
+            CallTypes.create_file.value,
             CallTypes.acreate_file.value,
-            CallTypes.image_generation.value, 
+            CallTypes.image_generation.value,
             CallTypes.aimage_generation.value,
-            CallTypes.image_edit.value, 
+            CallTypes.image_edit.value,
             CallTypes.aimage_edit.value,
-            CallTypes.moderation.value, 
+            CallTypes.moderation.value,
             CallTypes.amoderation.value,
-            CallTypes.transcription.value, 
+            CallTypes.transcription.value,
             CallTypes.atranscription.value,
-            CallTypes.speech.value, 
+            CallTypes.speech.value,
             CallTypes.aspeech.value,
-            CallTypes.rerank.value, 
-            CallTypes.arerank.value
+            CallTypes.rerank.value,
+            CallTypes.arerank.value,
         ]:
             return "task"
-            
+
         # Default fallback for unknown or passthrough operations
         return "llm"
 

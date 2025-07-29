@@ -248,7 +248,7 @@ def get_llm_provider(  # noqa: PLR0915
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
                     elif endpoint == "https://api.inference.net/v1":
                         custom_llm_provider = "inference"
-                        dynamic_api_key = get_secret_str("INFERENCE_API_KEY")   
+                        dynamic_api_key = get_secret_str("INFERENCE_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(

@@ -402,19 +402,21 @@ def sync_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     if gemini_api_key is not None:
-        messages, optional_params, cached_content = (
-            context_caching_endpoints.check_and_create_cache(
-                messages=messages,
-                optional_params=optional_params,
-                api_key=gemini_api_key,
-                api_base=api_base,
-                model=model,
-                client=client,
-                timeout=timeout,
-                extra_headers=extra_headers,
-                cached_content=optional_params.pop("cached_content", None),
-                logging_obj=logging_obj,
-            )
+        (
+            messages,
+            optional_params,
+            cached_content,
+        ) = context_caching_endpoints.check_and_create_cache(
+            messages=messages,
+            optional_params=optional_params,
+            api_key=gemini_api_key,
+            api_base=api_base,
+            model=model,
+            client=client,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            cached_content=optional_params.pop("cached_content", None),
+            logging_obj=logging_obj,
         )
     else:  # [TODO] implement context caching for gemini as well
         cached_content = optional_params.pop("cached_content", None)

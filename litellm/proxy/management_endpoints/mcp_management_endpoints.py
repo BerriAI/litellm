@@ -1,6 +1,3 @@
-
-
-
 """
 1. Allow proxy admin to perform create, update, and delete operations on MCP servers in the db.
 2. Allows users to view the mcp servers they have access to.
@@ -26,7 +23,9 @@ from fastapi.responses import JSONResponse
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
-from litellm.proxy._experimental.mcp_server.utils import validate_and_normalize_mcp_server_payload
+from litellm.proxy._experimental.mcp_server.utils import (
+    validate_and_normalize_mcp_server_payload,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
@@ -82,7 +81,6 @@ if MCP_AVAILABLE:
                 return True
         return False
 
-
     # Router to fetch all MCP tools available for the current key
 
     @router.get(
@@ -91,7 +89,7 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def get_mcp_tools(
-            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Get all MCP tools available for the current key, including those from access groups
@@ -104,11 +102,15 @@ if MCP_AVAILABLE:
         )
 
         # This now includes both direct and access group servers
-        server_ids = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_dict)
+        server_ids = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+            user_api_key_dict
+        )
 
         tools = []
         for server_id in server_ids:
-            tools.extend(await global_mcp_server_manager.get_tools_for_server(server_id))
+            tools.extend(
+                await global_mcp_server_manager.get_tools_for_server(server_id)
+            )
 
         verbose_proxy_logger.debug(f"Available tools: {tools}")
 
@@ -120,13 +122,15 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
     )
     async def get_mcp_access_groups(
-            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         """
         Get all available MCP access groups from the database AND config
         """
         from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
 
         access_groups = set()
 
@@ -140,7 +144,10 @@ if MCP_AVAILABLE:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
                 for server in mcp_servers:
-                    if hasattr(server, 'mcp_access_groups') and server.mcp_access_groups:
+                    if (
+                        hasattr(server, "mcp_access_groups")
+                        and server.mcp_access_groups
+                    ):
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
@@ -175,10 +182,8 @@ if MCP_AVAILABLE:
         # First, get all relevant teams
         user_teams = []
         teams = await prisma_client.db.litellm_teamtable.find_many(
-                include={
-                    "object_permission": True
-                }
-            )
+            include={"object_permission": True}
+        )
         if _user_has_admin_view(user_api_key_dict):
             # Admin can see all teams
             user_teams = teams
@@ -200,11 +205,13 @@ if MCP_AVAILABLE:
                 for server_id in team.object_permission.mcp_servers:
                     if server_id not in server_to_teams_map:
                         server_to_teams_map[server_id] = []
-                    server_to_teams_map[server_id].append({
-                        "team_id": team.team_id,
-                        "team_alias": team.team_alias,
-                        "organization_id": team.organization_id
-                    })
+                    server_to_teams_map[server_id].append(
+                        {
+                            "team_id": team.team_id,
+                            "team_alias": team.team_alias,
+                            "organization_id": team.organization_id,
+                        }
+                    )
 
         # Get MCP servers
 
@@ -245,9 +252,9 @@ if MCP_AVAILABLE:
                         updated_at=datetime.now(),
                         mcp_info=_server_config.mcp_info,
                         # Stdio-specific fields
-                        command=getattr(_server_config, 'command', None),
-                        args=getattr(_server_config, 'args', None) or [],
-                        env=getattr(_server_config, 'env', None) or {},
+                        command=getattr(_server_config, "command", None),
+                        args=getattr(_server_config, "args", None) or [],
+                        env=getattr(_server_config, "env", None) or {},
                     )
                 )
 
@@ -266,13 +273,18 @@ if MCP_AVAILABLE:
                 created_by=server.created_by,
                 updated_at=server.updated_at,
                 updated_by=server.updated_by,
-                mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
+                mcp_access_groups=server.mcp_access_groups
+                if server.mcp_access_groups is not None
+                else [],
                 mcp_info=server.mcp_info,
-                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
+                teams=cast(
+                    List[Dict[str, str | None]],
+                    server_to_teams_map.get(server.server_id, []),
+                ),
                 # Stdio-specific fields
-                command=getattr(server, 'command', None),
-                args=getattr(server, 'args', None) or [],
-                env=getattr(server, 'env', None) or {},
+                command=getattr(server, "command", None),
+                args=getattr(server, "args", None) or [],
+                env=getattr(server, "env", None) or {},
             )
             for server in LIST_MCP_SERVERS
         ]
@@ -532,4 +544,3 @@ if MCP_AVAILABLE:
             pass
 
         return mcp_server_record_updated
-

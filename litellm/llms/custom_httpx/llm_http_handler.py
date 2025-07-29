@@ -2485,10 +2485,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.
@@ -2677,10 +2674,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -2712,7 +2706,8 @@ class BaseLLMHTTPHandler:
 
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2763,15 +2758,17 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
 
         return model_response
@@ -2804,10 +2801,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2858,17 +2855,19 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
-        
+
         return model_response
 
     ###### VECTOR STORE HANDLER ######
@@ -2907,15 +2906,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
+            litellm_params=dict(litellm_params),
         )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -2936,7 +2936,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = await async_httpx_client.post(
@@ -3004,15 +3006,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
+            litellm_params=dict(litellm_params),
         )
 
         all_optional_params: Dict[str, Any] = dict(litellm_params)
@@ -3035,7 +3038,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = sync_httpx_client.post(
@@ -3084,11 +3089,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -3159,11 +3165,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -3240,13 +3247,14 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            generate_content_provider_config.sync_get_auth_token_and_url(
-                api_base=litellm_params.api_base,
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-            )
+        (
+            headers,
+            api_base,
+        ) = generate_content_provider_config.sync_get_auth_token_and_url(
+            api_base=litellm_params.api_base,
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         if extra_headers:
@@ -3344,13 +3352,14 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            await generate_content_provider_config.get_auth_token_and_url(
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-                api_base=litellm_params.api_base,
-            )
+        (
+            headers,
+            api_base,
+        ) = await generate_content_provider_config.get_auth_token_and_url(
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:

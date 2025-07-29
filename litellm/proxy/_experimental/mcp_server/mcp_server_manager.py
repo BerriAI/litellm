@@ -45,16 +45,16 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
     """
     Helper function to deserialize environment dictionary from database storage.
     Handles both JSON string and dictionary formats.
-    
+
     Args:
         env_data: The environment data from database (could be JSON string or dict)
-        
+
     Returns:
         Dict[str, str] or None: Deserialized environment dictionary
     """
     if not env_data:
         return None
-        
+
     if isinstance(env_data, str):
         try:
             return json.loads(env_data)
@@ -100,70 +100,86 @@ class MCPServerManager:
         """
         return self.config_mcp_servers | self.registry
 
-    def load_servers_from_config(self, mcp_servers_config: Dict[str, Any], mcp_aliases: Optional[Dict[str, str]] = None):
+    def load_servers_from_config(
+        self,
+        mcp_servers_config: Dict[str, Any],
+        mcp_aliases: Optional[Dict[str, str]] = None,
+    ):
         """
         Load the MCP Servers from the config
-        
+
         Args:
             mcp_servers_config: Dictionary of MCP server configurations
             mcp_aliases: Optional dictionary mapping aliases to server names from litellm_settings
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
-        
+
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases = set()
-        
+
         for server_name, server_config in mcp_servers_config.items():
             validate_mcp_server_name(server_name)
             _mcp_info: Dict[str, Any] = server_config.get("mcp_info", None) or {}
             # Convert Dict[str, Any] to MCPInfo properly
             mcp_info: MCPInfo = {
                 "server_name": _mcp_info.get("server_name", server_name),
-                "description": _mcp_info.get("description", server_config.get("description", None)),
+                "description": _mcp_info.get(
+                    "description", server_config.get("description", None)
+                ),
                 "logo_url": _mcp_info.get("logo_url", None),
                 "mcp_server_cost_info": _mcp_info.get("mcp_server_cost_info", None),
             }
 
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)
-            
+
             # Apply mcp_aliases mapping if provided
             if mcp_aliases and alias is None:
                 # Check if this server_name has an alias in mcp_aliases
                 for alias_name, target_server_name in mcp_aliases.items():
-                    if target_server_name == server_name and alias_name not in used_aliases:
+                    if (
+                        target_server_name == server_name
+                        and alias_name not in used_aliases
+                    ):
                         alias = alias_name
                         used_aliases.add(alias_name)
-                        verbose_logger.debug(f"Mapped alias '{alias_name}' to server '{server_name}'")
+                        verbose_logger.debug(
+                            f"Mapped alias '{alias_name}' to server '{server_name}'"
+                        )
                         break
-            
+
             # Create a temporary server object to use with get_server_prefix utility
-            temp_server = type('TempServer', (), {
-                'alias': alias,
-                'server_name': server_name,
-                'server_id': None
-            })()
+            temp_server = type(
+                "TempServer",
+                (),
+                {"alias": alias, "server_name": server_name, "server_id": None},
+            )()
             name_for_prefix = get_server_prefix(temp_server)
 
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)
-            
+
             # Apply mcp_aliases mapping if provided
             if mcp_aliases and alias is None:
                 # Check if this server_name has an alias in mcp_aliases
                 for alias_name, target_server_name in mcp_aliases.items():
-                    if target_server_name == server_name and alias_name not in used_aliases:
+                    if (
+                        target_server_name == server_name
+                        and alias_name not in used_aliases
+                    ):
                         alias = alias_name
                         used_aliases.add(alias_name)
-                        verbose_logger.debug(f"Mapped alias '{alias_name}' to server '{server_name}'")
+                        verbose_logger.debug(
+                            f"Mapped alias '{alias_name}' to server '{server_name}'"
+                        )
                         break
-            
+
             # Create a temporary server object to use with get_server_prefix utility
-            temp_server = type('TempServer', (), {
-                'alias': alias,
-                'server_name': server_name,
-                'server_id': None
-            })()
+            temp_server = type(
+                "TempServer",
+                (),
+                {"alias": alias, "server_name": server_name, "server_id": None},
+            )()
             name_for_prefix = get_server_prefix(temp_server)
 
             # Generate stable server ID based on parameters
@@ -219,15 +235,17 @@ class MCPServerManager:
             _mcp_info: MCPInfo = mcp_server.mcp_info or {}
             # Use helper to deserialize environment dictionary
             # Safely access env field which may not exist on Prisma model objects
-            env_data = getattr(mcp_server, 'env', None)
+            env_data = getattr(mcp_server, "env", None)
             env_dict = _deserialize_env_dict(env_data)
             # Use alias for name if present, else server_name
-            name_for_prefix = mcp_server.alias or mcp_server.server_name or mcp_server.server_id
+            name_for_prefix = (
+                mcp_server.alias or mcp_server.server_name or mcp_server.server_id
+            )
             new_server = MCPServer(
                 server_id=mcp_server.server_id,
                 name=name_for_prefix,
-                alias=getattr(mcp_server, 'alias', None),
-                server_name=getattr(mcp_server, 'server_name', None),
+                alias=getattr(mcp_server, "alias", None),
+                server_name=getattr(mcp_server, "server_name", None),
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
                 spec_version=cast(MCPSpecVersionType, mcp_server.spec_version),
@@ -238,14 +256,12 @@ class MCPServerManager:
                     mcp_server_cost_info=_mcp_info.get("mcp_server_cost_info", None),
                 ),
                 # Stdio-specific fields
-                command=getattr(mcp_server, 'command', None),
-                args=getattr(mcp_server, 'args', None) or [],
+                command=getattr(mcp_server, "command", None),
+                args=getattr(mcp_server, "args", None) or [],
                 env=env_dict,
             )
             self.registry[mcp_server.server_id] = new_server
-            verbose_logger.debug(
-                f"Added MCP Server: {name_for_prefix}"
-            )
+            verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
 
     async def get_allowed_mcp_servers(
         self, user_api_key_auth: Optional[UserAPIKeyAuth] = None
@@ -267,7 +283,6 @@ class MCPServerManager:
             )
             return list(self.get_registry().keys())
 
-
     async def get_tools_for_server(self, server_id: str) -> List[MCPTool]:
         """
         Get the tools for a given server
@@ -276,10 +291,9 @@ class MCPServerManager:
         if server is None:
             return []
         return await self._get_tools_from_server(server)
-        
 
     async def list_tools(
-        self, 
+        self,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
@@ -305,38 +319,44 @@ class MCPServerManager:
             if server is None:
                 verbose_logger.warning(f"MCP Server {server_id} not found")
                 continue
-            
+
             # Get server-specific auth header if available
             server_auth_header = None
             if mcp_server_auth_headers and server.alias:
                 server_auth_header = mcp_server_auth_headers.get(server.alias)
             elif mcp_server_auth_headers and server.server_name:
                 server_auth_header = mcp_server_auth_headers.get(server.server_name)
-            
+
             # Fall back to deprecated mcp_auth_header if no server-specific header found
             if server_auth_header is None:
                 server_auth_header = mcp_auth_header
-            
+
             try:
                 tools = await self._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
                 )
                 list_tools_result.extend(tools)
-                verbose_logger.info(f"Successfully fetched {len(tools)} tools from server {server.name}")
+                verbose_logger.info(
+                    f"Successfully fetched {len(tools)} tools from server {server.name}"
+                )
             except Exception as e:
                 verbose_logger.warning(
                     f"Failed to list tools from server {server.name}: {str(e)}. Continuing with other servers."
                 )
                 # Continue with other servers instead of failing completely
 
-        verbose_logger.info(f"Successfully fetched {len(list_tools_result)} tools total from all servers")
+        verbose_logger.info(
+            f"Successfully fetched {len(list_tools_result)} tools total from all servers"
+        )
         return list_tools_result
 
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
-    def _create_mcp_client(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> MCPClient:
+    def _create_mcp_client(
+        self, server: MCPServer, mcp_auth_header: Optional[str] = None
+    ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
 
@@ -348,18 +368,16 @@ class MCPServerManager:
             MCPClient: Configured MCP client instance
         """
         transport = server.transport or MCPTransport.sse
-        
+
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             # For stdio, we need to get the stdio config from the server
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
-                    command=server.command,
-                    args=server.args,
-                    env=server.env or {}
+                    command=server.command, args=server.args, env=server.env or {}
                 )
-            
+
             return MCPClient(
                 server_url="",  # Not used for stdio
                 transport_type=transport,
@@ -379,7 +397,9 @@ class MCPServerManager:
                 timeout=60.0,
             )
 
-    async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
+    async def _get_tools_from_server(
+        self, server: MCPServer, mcp_auth_header: Optional[str] = None
+    ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
 
@@ -408,10 +428,14 @@ class MCPServerManager:
                         verbose_logger.debug(f"Tools from {server.name}: {tools}")
                         return tools
                 except asyncio.CancelledError:
-                    verbose_logger.warning(f"Client operation cancelled for {server.name}")
+                    verbose_logger.warning(
+                        f"Client operation cancelled for {server.name}"
+                    )
                     return []
                 except Exception as e:
-                    verbose_logger.warning(f"Client operation failed for {server.name}: {str(e)}")
+                    verbose_logger.warning(
+                        f"Client operation failed for {server.name}: {str(e)}"
+                    )
                     return []
 
             try:
@@ -429,7 +453,7 @@ class MCPServerManager:
                     prefixed_tool = MCPTool(
                         name=prefixed_name,
                         description=tool.description,
-                        inputSchema=tool.inputSchema
+                        inputSchema=tool.inputSchema,
                     )
                     prefixed_tools.append(prefixed_tool)
 
@@ -437,26 +461,38 @@ class MCPServerManager:
                     self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
                     self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
 
-                verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
+                verbose_logger.info(
+                    f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}"
+                )
                 return prefixed_tools
             except asyncio.TimeoutError:
-                verbose_logger.warning(f"Timeout while listing tools from {server.name}")
+                verbose_logger.warning(
+                    f"Timeout while listing tools from {server.name}"
+                )
                 # Don't re-raise the exception, just return empty list
                 return []
             except asyncio.CancelledError:
-                verbose_logger.warning(f"Task cancelled while listing tools from {server.name}")
+                verbose_logger.warning(
+                    f"Task cancelled while listing tools from {server.name}"
+                )
                 # Don't re-raise cancellation, just return empty list
                 return []
             except ConnectionError as e:
-                verbose_logger.warning(f"Connection error while listing tools from {server.name}: {str(e)}")
+                verbose_logger.warning(
+                    f"Connection error while listing tools from {server.name}: {str(e)}"
+                )
                 # Don't re-raise the exception, just return empty list
                 return []
             except Exception as e:
-                verbose_logger.warning(f"Error listing tools from {server.name}: {str(e)}")
+                verbose_logger.warning(
+                    f"Error listing tools from {server.name}: {str(e)}"
+                )
                 # Don't re-raise the exception, just return empty list
                 return []
         except Exception as e:
-            verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
+            verbose_logger.warning(
+                f"Failed to get tools from server {server.name}: {str(e)}"
+            )
             return []  # Return empty list on failure
         finally:
             if client:
@@ -466,12 +502,12 @@ class MCPServerManager:
                     pass
 
     async def call_tool(
-            self,
-            name: str,
-            arguments: Dict[str, Any],
-            user_api_key_auth: Optional[UserAPIKeyAuth] = None,
-            mcp_auth_header: Optional[str] = None,
-            mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[Dict[str, str]] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -487,7 +523,9 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         # Remove prefix if present to get the original tool name
-        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(name)
+        original_tool_name, server_name_from_prefix = get_server_name_prefix_tool_mcp(
+            name
+        )
 
         # Get the MCP server
         mcp_server = self._get_mcp_server_from_tool_name(name)
@@ -497,9 +535,12 @@ class MCPServerManager:
         # Validate that the server from prefix matches the actual server (if prefix was used)
         if server_name_from_prefix:
             expected_prefix = get_server_prefix(mcp_server)
-            if normalize_server_name(server_name_from_prefix) != normalize_server_name(expected_prefix):
+            if normalize_server_name(server_name_from_prefix) != normalize_server_name(
+                expected_prefix
+            ):
                 raise ValueError(
-                    f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}")
+                    f"Tool {name} server prefix mismatch: expected {expected_prefix}, got {server_name_from_prefix}"
+                )
 
         # Get server-specific auth header if available
         server_auth_header = None
@@ -507,7 +548,7 @@ class MCPServerManager:
             server_auth_header = mcp_server_auth_headers.get(mcp_server.alias)
         elif mcp_server_auth_headers and mcp_server.server_name:
             server_auth_header = mcp_server_auth_headers.get(mcp_server.server_name)
-        
+
         # Fall back to deprecated mcp_auth_header if no server-specific header found
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
@@ -527,7 +568,6 @@ class MCPServerManager:
     #########################################################
     # End of Methods that call the upstream MCP servers
     #########################################################
-
 
     def initialize_tool_name_to_mcp_server_name_mapping(self):
         """
@@ -571,14 +611,18 @@ class MCPServerManager:
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
             server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
             for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(server_name):
+                if normalize_server_name(server.name) == normalize_server_name(
+                    server_name
+                ):
                     return server
 
         # If not found and tool name is prefixed, try extracting server name from prefix
         if is_tool_name_prefixed(tool_name):
             _, server_name_from_prefix = get_server_name_prefix_tool_mcp(tool_name)
             for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(server_name_from_prefix):
+                if normalize_server_name(server.name) == normalize_server_name(
+                    server_name_from_prefix
+                ):
                     return server
 
         return None
@@ -636,9 +680,7 @@ class MCPServerManager:
             A deterministic server ID string
         """
         # Create a string from all the identifying parameters
-        params_string = (
-            f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}|{alias or ''}"
-        )
+        params_string = f"{server_name}|{url}|{transport}|{spec_version}|{auth_type or ''}|{alias or ''}"
 
         # Generate SHA-256 hash
         hash_object = hashlib.sha256(params_string.encode("utf-8"))

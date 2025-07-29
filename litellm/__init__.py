@@ -495,6 +495,7 @@ hyperbolic_models: List = []
 inference_models: List = []
 recraft_models: List = []
 
+
 def is_bedrock_pricing_only_model(key: str) -> bool:
     """
     Excludes keys with the pattern 'bedrock/<region>/<model>'. These are in the model_prices_and_context_window.json file for pricing purposes only.
@@ -684,6 +685,7 @@ def add_known_models():
             recraft_models.append(key)
         elif value.get("litellm_provider") == "inference":
             inference_models.append(key)
+
 
 add_known_models()
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary

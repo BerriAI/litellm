@@ -16,10 +16,11 @@ GenerateContentContentListUnionDict = _genai_types.ContentListUnionDict
 GenerateContentConfigDict = _genai_types.GenerateContentConfigDict
 GenerateContentRequestParametersDict = _genai_types._GenerateContentParametersDict
 
+
 class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
     generationConfig: Optional[Any]
 
 
-class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
+class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):  # type: ignore[misc]
     _hidden_params: dict = {}
     pass

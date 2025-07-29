@@ -68,7 +68,7 @@ class OpenMeterLogger(CustomLogger):
         user_param = kwargs.get("user", None)  # end-user passed in via 'user' param
         if user_param is None:
             raise Exception("OpenMeter: user is required")
-        
+
         # Ensure subject is always a string for OpenMeter API
         subject = str(user_param)
 

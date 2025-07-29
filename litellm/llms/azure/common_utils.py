@@ -365,14 +365,16 @@ def get_azure_ad_token(
             azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
-        
+
         #########################################################
         # If litellm.enable_azure_ad_token_refresh is True and no other token provider is available,
         # try to get DefaultAzureCredential provider
         #########################################################
         if azure_ad_token_provider is None and azure_ad_token is None:
-            azure_ad_token_provider = BaseAzureLLM._try_get_default_azure_credential_provider(
-                scope=scope,
+            azure_ad_token_provider = (
+                BaseAzureLLM._try_get_default_azure_credential_provider(
+                    scope=scope,
+                )
             )
 
     # Execute the token provider to get the token if available
@@ -403,27 +405,27 @@ class BaseAzureLLM(BaseOpenAILLM):
     ) -> Optional[Callable[[], str]]:
         """
         Try to get DefaultAzureCredential provider
-        
+
         Args:
             scope: Azure scope for the token
-            
+
         Returns:
             Token provider callable if DefaultAzureCredential is enabled and available, None otherwise
         """
         from litellm.types.secret_managers.get_azure_ad_token_provider import (
             AzureCredentialType,
         )
-        
-        verbose_logger.debug(
-            "Attempting to use DefaultAzureCredential for Azure Auth"
-        )
-        
+
+        verbose_logger.debug("Attempting to use DefaultAzureCredential for Azure Auth")
+
         try:
             azure_ad_token_provider = get_azure_ad_token_provider(
                 azure_scope=scope,
                 azure_credential=AzureCredentialType.DefaultAzureCredential,
             )
-            verbose_logger.debug("Successfully obtained Azure AD token provider using DefaultAzureCredential")
+            verbose_logger.debug(
+                "Successfully obtained Azure AD token provider using DefaultAzureCredential"
+            )
             return azure_ad_token_provider
         except Exception as e:
             verbose_logger.debug(f"DefaultAzureCredential failed: {str(e)}")
@@ -656,10 +658,10 @@ class BaseAzureLLM(BaseOpenAILLM):
             else:
                 client = AzureOpenAI(**azure_client_params)  # type: ignore
         return client
-    
+
     @staticmethod
     def _base_validate_azure_environment(
-        headers: dict,  litellm_params: Optional[GenericLiteLLMParams]
+        headers: dict, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key = (
@@ -681,12 +683,12 @@ class BaseAzureLLM(BaseOpenAILLM):
             headers["Authorization"] = f"Bearer {azure_ad_token}"
 
         return headers
-    
+
     @staticmethod
     def _get_base_azure_url(
         api_base: Optional[str],
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
-        route: Literal["/openai/responses", "/openai/vector_stores"]
+        route: Literal["/openai/responses", "/openai/vector_stores"],
     ) -> str:
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         if api_base is None:
@@ -705,27 +707,28 @@ class BaseAzureLLM(BaseOpenAILLM):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
-        
+
         # Add the path to the base URL
         if route not in api_base:
-            new_url = _add_path_to_api_base(
-                api_base=api_base, ending_path=route
-            )
+            new_url = _add_path_to_api_base(api_base=api_base, ending_path=route)
         else:
             new_url = api_base
-        
+
         if BaseAzureLLM._is_azure_v1_api_version(api_version):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url = httpx.URL(new_url)
-                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
-
+                new_url = str(
+                    parsed_url.copy_with(
+                        path=parsed_url.path.replace("/openai", "/openai/v1")
+                    )
+                )
 
         # Use the new query_params dictionary
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
-    
+
     @staticmethod
     def _is_azure_v1_api_version(api_version: Optional[str]) -> bool:
         if api_version is None:

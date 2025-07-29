@@ -17,6 +17,7 @@ else:
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
+
 class BaseGoogleGenAIGenerateContentStreamingIterator:
     """
     Base class for Google GenAI Generate Content streaming iterators that provides common logic
@@ -42,6 +43,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
+
         end_time = datetime.now()
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
@@ -58,7 +60,9 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         )
 
 
-class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
+class GoogleGenAIGenerateContentStreamingIterator(
+    BaseGoogleGenAIGenerateContentStreamingIterator
+):
     """
     Streaming iterator specifically for Google GenAI generate content API.
     """
@@ -105,10 +109,14 @@ class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContent
     async def __anext__(self):
         # This should not be used for sync responses
         # If you need async iteration, use AsyncGoogleGenAIGenerateContentStreamingIterator
-        raise NotImplementedError("Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration")
+        raise NotImplementedError(
+            "Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration"
+        )
 
 
-class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
+class AsyncGoogleGenAIGenerateContentStreamingIterator(
+    BaseGoogleGenAIGenerateContentStreamingIterator
+):
     """
     Async streaming iterator specifically for Google GenAI generate content API.
     """
@@ -148,4 +156,4 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
             return chunk
         except StopAsyncIteration:
             await self._handle_async_streaming_logging()
-            raise StopAsyncIteration 
+            raise StopAsyncIteration

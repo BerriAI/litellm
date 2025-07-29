@@ -32,7 +32,6 @@ LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
 
-
 class LangfuseOtelLogger:
     @staticmethod
     def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
@@ -45,10 +44,7 @@ class LangfuseOtelLogger:
         #########################################################
         # Set Langfuse specific attributes eg Langfuse Environment
         #########################################################
-        LangfuseOtelLogger._set_langfuse_specific_attributes(
-            span=span,
-            kwargs=kwargs
-        )
+        LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs)
         return
 
     @staticmethod

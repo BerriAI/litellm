@@ -75,7 +75,9 @@ class ResponsesToCompletionBridgeHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-    def completion(self, *args, **kwargs) -> Union[
+    def completion(
+        self, *args, **kwargs
+    ) -> Union[
         Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
