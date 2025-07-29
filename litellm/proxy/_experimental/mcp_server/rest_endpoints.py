@@ -171,7 +171,7 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
                     spec_version=request.spec_version,
@@ -200,7 +200,7 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
                     spec_version=request.spec_version,

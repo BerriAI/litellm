@@ -1438,3 +1438,59 @@ def test_anthropic_tool_cache_control():
     assert "cache_control" in json.dumps(
         result["raw_request_body"]["messages"][2]["content"]
     )
+
+
+def test_anthropic_streaming():
+    from litellm import completion
+
+    request_data = {
+        "messages": [
+            {
+                "role": "system",
+                "content": "Call the tool, please, but tell me what you are doing before you do it.",  # (so we get some pre-tool streaming output)
+            },
+            {
+                "role": "user",
+                "content": "Do what you are told to do in the system prompt",
+            },
+        ],
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "max_tokens": 7000,
+        "parallel_tool_calls": False,
+        "stream": True,
+        "temperature": 0,
+        "tool_choice": "auto",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_me_please",
+                    "strict": True,
+                    "parameters": {
+                        "properties": {
+                            "a_number": {
+                                "description": "String that is text version of a number, e.g. sixty-five. At least a 5 digit number.",
+                                "type": "string",
+                                "title": "A Number Function",
+                            }
+                        },
+                        "title": "call_me_please",
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["a_number"],
+                    },
+                    "description": "Call this tool with a number to get a random number back",
+                },
+            }
+        ],
+    }
+
+    response = completion(**request_data)
+
+    role_set_count = 0
+    for chunk in response:
+        if chunk.choices[0].delta.role is not None:
+            print(f"role: {chunk.choices[0].delta.role}")
+            role_set_count += 1
+
+    assert role_set_count == 1

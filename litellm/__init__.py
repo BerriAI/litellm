@@ -83,10 +83,10 @@ if litellm_mode == "DEV":
 # Register async client cleanup to prevent resource leaks
 register_async_client_cleanup()
 
-##################################################
+####################################################
 if set_verbose == True:
     _turn_on_debug()
-##################################################
+####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
 CALLBACK_TYPES = Union[str, Callable, CustomLogger]
 input_callback: List[CALLBACK_TYPES] = []
@@ -797,6 +797,7 @@ models_by_provider: dict = {
     "bedrock": bedrock_models + bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
+    "ollama_chat": ollama_models,
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,

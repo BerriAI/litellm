@@ -337,7 +337,7 @@ def test_openai_max_retries_0(mock_get_openai_client):
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
 
 
-@pytest.mark.parametrize("model", ["o1", "o1-preview", "o1-mini", "o3-mini"])
+@pytest.mark.parametrize("model", ["o1", "o1-mini", "o3-mini"])
 def test_o1_parallel_tool_calls(model):
     litellm.completion(
         model=model,
@@ -544,6 +544,7 @@ async def test_openai_codex(sync_mode):
 
     assert response.choices[0].message.content is not None
 
+
 @pytest.mark.asyncio
 async def test_openai_via_gemini_streaming_bridge():
     """
@@ -585,6 +586,7 @@ async def test_openai_via_gemini_streaming_bridge():
         assert not isinstance(chunk, ModelResponseStream)
 
     assert len(printed_chunks) > 0
+
 
 def test_openai_deepresearch_model_bridge():
     """
