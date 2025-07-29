@@ -617,7 +617,7 @@ class Message(OpenAIObject):
             "content": content,
             "role": role or "assistant",  # handle null input
             "function_call": (
-                FunctionCall(**function_call) if function_call is not None else None
+                FunctionCall(**function_call) if function_call is not None and function_call != {} else None
             ),
             "tool_calls": (
                 [
