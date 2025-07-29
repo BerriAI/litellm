@@ -1507,7 +1507,7 @@ async def test_list_team_v2_security_check_non_admin_user():
         assert "Only admin users can query all teams/other teams" in str(
             exc_info.value.detail["error"]
         )
-        assert "INTERNAL_USER" in str(exc_info.value.detail["error"])
+        assert LitellmUserRoles.INTERNAL_USER.value in str(exc_info.value.detail["error"])
 
 
 @pytest.mark.asyncio
@@ -1596,6 +1596,9 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
             http_request=mock_request,
             user_id="non_admin_user_123",  # Non-admin querying their own teams
             user_api_key_dict=mock_user_api_key_dict_non_admin,
+            team_id=None,
+            page=1,
+            page_size=10,
         )
 
         # Should return results without error
