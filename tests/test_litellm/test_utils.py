@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     Delta,
     LlmProviders,
@@ -557,6 +558,7 @@ def test_get_model_info_gemini():
             model.startswith("gemini/")
             and not "gemma" in model
             and not "learnlm" in model
+            and not "imagen" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -2153,6 +2155,36 @@ def test_image_response_utils():
         "hidden_params": {"additional_headers": {}},
     }
     image_response = ImageResponse(**result)
+
+
+def test_is_valid_api_key():
+    import hashlib
+
+    # Valid sk- keys
+    assert is_valid_api_key("sk-abc123")
+    assert is_valid_api_key("sk-ABC_123-xyz")
+    # Valid hashed key (64 hex chars)
+    assert is_valid_api_key("a" * 64)
+    assert is_valid_api_key("0123456789abcdef" * 4)  # 16*4 = 64
+    # Real SHA-256 hash
+    real_hash = hashlib.sha256(b"my_secret_key").hexdigest()
+    assert len(real_hash) == 64
+    assert is_valid_api_key(real_hash)
+    # Invalid: too short
+    assert not is_valid_api_key("sk-")
+    assert not is_valid_api_key("")
+    # Invalid: too long
+    assert not is_valid_api_key("sk-" + "a" * 200)
+    # Invalid: wrong prefix
+    assert not is_valid_api_key("pk-abc123")
+    # Invalid: wrong chars in sk- key
+    assert not is_valid_api_key("sk-abc$%#@!")
+    # Invalid: not a string
+    assert not is_valid_api_key(None)
+    assert not is_valid_api_key(12345)
+    # Invalid: wrong length for hash
+    assert not is_valid_api_key("a" * 63)
+    assert not is_valid_api_key("a" * 65)
 
 
 if __name__ == "__main__":
