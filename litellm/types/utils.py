@@ -678,6 +678,30 @@ class Message(OpenAIObject):
             # if using pydantic v1
             return self.dict()
 
+    @staticmethod
+    def _ensure_export_defaults(data: dict) -> dict:
+        """
+        Convert None values to empty arrays/objects for OpenAI compatibility.
+        Only modifies fields that are present but have None values.
+        """
+        if "tool_calls" in data and data["tool_calls"] is None:
+            data["tool_calls"] = []
+        if "function_call" in data and data["function_call"] is None:
+            data["function_call"] = {}
+        if "annotations" in data and data["annotations"] is None:
+            data["annotations"] = []
+        return data
+
+    def model_dump(self, **kwargs):
+        # Override model_dump to ensure fields are not None
+        data = super().model_dump(**kwargs)
+        return self._ensure_export_defaults(data)
+
+    def dict(self, **kwargs):
+        # For pydantic v1 compatibility
+        data = super().dict(**kwargs)
+        return self._ensure_export_defaults(data)
+
 
 class Delta(OpenAIObject):
     reasoning_content: Optional[str] = None
