@@ -96,10 +96,12 @@ class AnthropicPassthroughLoggingHandler:
         handles streaming and non-streaming responses
         """
         try:
+
             response_cost = litellm.completion_cost(
                 completion_response=litellm_model_response,
                 model=model,
             )
+
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
@@ -125,9 +127,10 @@ class AnthropicPassthroughLoggingHandler:
             litellm_model_response.id = logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
-            logging_obj.model_call_details["custom_llm_provider"] = (
-                litellm.LlmProviders.ANTHROPIC.value
-            )
+            if not logging_obj.model_call_details.get("custom_llm_provider"):
+                logging_obj.model_call_details["custom_llm_provider"] = (
+                    litellm.LlmProviders.ANTHROPIC.value
+                )
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -165,6 +168,7 @@ class AnthropicPassthroughLoggingHandler:
             custom_llm_provider = litellm_logging_obj.model_call_details.get(
                 "custom_llm_provider"
             )
+
             if custom_llm_provider and not model.startswith(custom_llm_provider):
                 model = f"{custom_llm_provider}/{model}"
         complete_streaming_response = (
