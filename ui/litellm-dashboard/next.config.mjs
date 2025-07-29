@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     output: 'export',
-    basePath: process.env.UI_BASE_PATH || '/ui',
+    basePath: '',
+    assetPrefix: '/litellm-asset-prefix',  // If a server_root_path is set, this will be overridden by runtime injection
 };
 
 nextConfig.experimental = {

@@ -1,5 +1,6 @@
 import openai from "openai";
 import { message } from "antd";
+import { getProxyBaseUrl } from "@/components/networking";
 
 export async function makeOpenAIImageGenerationRequest(
   prompt: string,
@@ -15,9 +16,7 @@ export async function makeOpenAIImageGenerationRequest(
     console.log = function () {};
   }
   console.log("isLocal:", isLocal);
-  const proxyBaseUrl = isLocal
-    ? "http://localhost:4000"
-    : window.location.origin;
+  const proxyBaseUrl = getProxyBaseUrl()
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,

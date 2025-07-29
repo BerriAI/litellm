@@ -22,18 +22,52 @@ export function RequestResponsePanel({
   getRawRequest,
   formattedResponse,
 }: RequestResponsePanelProps) {
-  const handleCopyRequest = () => {
+  const copyToClipboard = async (text: string) => {
     try {
-      navigator.clipboard.writeText(JSON.stringify(getRawRequest(), null, 2));
-      message.success('Request copied to clipboard');
+      // Try modern clipboard API first
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } else {
+        // Fallback for non-secure contexts (like 0.0.0.0)
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (!successful) {
+          throw new Error('execCommand failed');
+        }
+        return true;
+      }
     } catch (error) {
+      console.error('Copy failed:', error);
+      return false;
+    }
+  };
+
+  const handleCopyRequest = async () => {
+    const success = await copyToClipboard(JSON.stringify(getRawRequest(), null, 2));
+    if (success) {
+      message.success('Request copied to clipboard');
+    } else {
       message.error('Failed to copy request');
     }
   };
 
-  const handleCopyResponse = () => {
-    navigator.clipboard.writeText(JSON.stringify(formattedResponse(), null, 2));
-    message.success('Response copied to clipboard');
+  const handleCopyResponse = async () => {
+    const success = await copyToClipboard(JSON.stringify(formattedResponse(), null, 2));
+    if (success) {
+      message.success('Response copied to clipboard');
+    } else {
+      message.error('Failed to copy response');
+    }
   };
 
   return (

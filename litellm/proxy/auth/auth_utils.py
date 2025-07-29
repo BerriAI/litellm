@@ -456,31 +456,6 @@ def is_pass_through_provider_route(route: str) -> bool:
     return False
 
 
-def should_run_auth_on_pass_through_provider_route(route: str) -> bool:
-    """
-    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on /vertex-ai/{endpoint} routes
-    Use this to decide if the rest of the LiteLLM Virtual Key auth checks should run on provider pass through routes
-    ex /vertex-ai/{endpoint} routes
-    Run virtual key auth if the following is try:
-    - User is premium_user
-    - User has enabled litellm_setting.use_client_credentials_pass_through_routes
-    """
-    from litellm.proxy.proxy_server import general_settings, premium_user
-
-    if premium_user is not True:
-        return False
-
-    # premium use has opted into using client credentials
-    if (
-        general_settings.get("use_client_credentials_pass_through_routes", False)
-        is True
-    ):
-        return False
-
-    # only enabled for LiteLLM Enterprise
-    return True
-
-
 def _has_user_setup_sso():
     """
     Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID and UI username environment variables.
@@ -499,17 +474,47 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_end_user_id_from_request_body(request_body: dict) -> Optional[str]:
-    # openai - check 'user'
+def get_end_user_id_from_request_body(
+    request_body: dict, request_headers: Optional[dict] = None
+) -> Optional[str]:
+    # Import general_settings here to avoid potential circular import issues at module level
+    # and to ensure it's fetched at runtime.
+    from litellm.proxy.proxy_server import general_settings
+
+    # Check 1: Custom Header from general_settings.user_header_name (only if request_headers is provided)
+    # User query: "system not respecting user_header_name property"
+    # This implies the key in general_settings is 'user_header_name'.
+    if request_headers is not None:
+        user_id_header_config_key = "user_header_name"
+
+        custom_header_name_to_check = general_settings.get(user_id_header_config_key)
+
+        if custom_header_name_to_check and isinstance(custom_header_name_to_check, str):
+            for header_name, header_value in request_headers.items():
+                if header_name.lower() == custom_header_name_to_check.lower():
+                    user_id_from_header = header_value
+                    if user_id_from_header.strip():
+                        return str(user_id_from_header)
+
+    # Check 2: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:
-        return str(request_body["user"])
-    # anthropic - check 'litellm_metadata'
-    end_user_id = request_body.get("litellm_metadata", {}).get("user", None)
-    if end_user_id:
-        return str(end_user_id)
-    metadata = request_body.get("metadata")
-    if metadata and "user_id" in metadata and metadata["user_id"] is not None:
-        return str(metadata["user_id"])
+        user_from_body_user_field = request_body["user"]
+        return str(user_from_body_user_field)
+
+    # Check 3: 'litellm_metadata.user' in request_body (commonly Anthropic)
+    litellm_metadata = request_body.get("litellm_metadata")
+    if isinstance(litellm_metadata, dict):
+        user_from_litellm_metadata = litellm_metadata.get("user")
+        if user_from_litellm_metadata is not None:
+            return str(user_from_litellm_metadata)
+
+    # Check 4: 'metadata.user_id' in request_body (another common pattern)
+    metadata_dict = request_body.get("metadata")
+    if isinstance(metadata_dict, dict):
+        user_id_from_metadata_field = metadata_dict.get("user_id")
+        if user_id_from_metadata_field is not None:
+            return str(user_id_from_metadata_field)
+
     return None
 
 
@@ -534,3 +539,7 @@ def get_model_from_request(
             model = match.group(1)
 
     return model
+
+
+def abbreviate_api_key(api_key: str) -> str:
+    return f"sk-...{api_key[-4:]}"

@@ -51,7 +51,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl tzdata
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -65,6 +65,9 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+# Install semantic_router without dependencies
+RUN pip install semantic_router --no-deps
+
 # Generate prisma client
 RUN prisma generate
 RUN chmod +x docker/entrypoint.sh
@@ -72,7 +75,10 @@ RUN chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 
+RUN apk add --no-cache supervisor
+COPY docker/supervisord.conf /etc/supervisord.conf
+
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
 
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
+# Append "--detailed_debug" to the end of CMD to view detailed debug logs
 CMD ["--port", "4000"]

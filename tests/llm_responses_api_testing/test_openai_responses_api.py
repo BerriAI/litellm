@@ -2,8 +2,13 @@ import os
 import sys
 import pytest
 import asyncio
-from typing import Optional
+from typing import Optional, cast
 from unittest.mock import patch, AsyncMock
+import httpx
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+import time
+import json
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
@@ -579,15 +584,14 @@ async def test_openai_responses_litellm_router_no_metadata():
         )
 
         # Check the request body
-        request_body = mock_post.call_args.kwargs["data"]
+        request_body = mock_post.call_args.kwargs["json"]
         print("Request body:", json.dumps(request_body, indent=4))
 
-        loaded_request_body = json.loads(request_body)
-        print("Loaded request body:", json.dumps(loaded_request_body, indent=4))
+
 
         # Assert metadata is not in the request
         assert (
-            "metadata" not in loaded_request_body
+            "metadata" not in request_body
         ), "metadata should not be in the request body"
         mock_post.assert_called_once()
 
@@ -680,14 +684,87 @@ async def test_openai_responses_litellm_router_with_metadata():
         )
 
         # Check the request body
-        request_body = mock_post.call_args.kwargs["data"]
-        loaded_request_body = json.loads(request_body)
-        print("Request body:", json.dumps(loaded_request_body, indent=4))
+        request_body = mock_post.call_args.kwargs["json"]
+        print("Request body:", json.dumps(request_body, indent=4))
 
         # Assert metadata matches exactly what was passed
         assert (
-            loaded_request_body["metadata"] == test_metadata
+            request_body["metadata"] == test_metadata
         ), "metadata in request body should match what was passed"
+        mock_post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_litellm_router_with_prompt():
+    """Test that prompt object is passed through the Router for responses API"""
+
+    prompt_obj = {
+        "id": "pmpt_abc123",
+        "version": "2",
+        "variables": {"random_variable": "ishaan_from_litellm"},
+    }
+
+    mock_response = {
+        "id": "resp_123",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": None},
+        "truncation": "disabled",
+        "user": None,
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = str(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt4o-special-alias",
+                    "litellm_params": {
+                        "model": "gpt-4o",
+                        "api_key": "fake-key",
+                    },
+                }
+            ]
+        )
+
+        await router.aresponses(
+            model="gpt4o-special-alias",
+            input="Hello",
+            prompt=prompt_obj,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+        assert request_body["prompt"] == prompt_obj
         mock_post.assert_called_once()
 
 
@@ -796,7 +873,7 @@ async def test_openai_o1_pro_response_api(sync_mode):
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
-        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body = mock_post.call_args.kwargs["json"]
         assert request_body["model"] == "o1-pro"
         assert request_body["max_output_tokens"] == 20
 
@@ -908,7 +985,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
 
                 # Verify the sync request was made correctly
                 mock_sync_post.assert_called_once()
-                request_body = json.loads(mock_sync_post.call_args.kwargs["data"])
+                request_body = mock_sync_post.call_args.kwargs["json"]
                 assert request_body["model"] == "o1-pro"
                 assert request_body["max_output_tokens"] == 20
                 assert "stream" not in request_body
@@ -932,7 +1009,7 @@ async def test_openai_o1_pro_response_api_streaming(sync_mode):
 
             # Verify the async request was made correctly
             mock_post.assert_called_once()
-            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            request_body = mock_post.call_args.kwargs["json"]
             assert request_body["model"] == "o1-pro"
             assert request_body["max_output_tokens"] == 20
             assert "stream" not in request_body
@@ -1015,7 +1092,7 @@ def test_basic_computer_use_preview_tool_call():
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
-        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        request_body = mock_post.call_args.kwargs["json"]
         
         # Validate the request structure
         assert request_body["model"] == "computer-use-preview"
@@ -1033,3 +1110,190 @@ def test_basic_computer_use_preview_tool_call():
         assert isinstance(request_body["input"], str)
         assert request_body["input"] == "Check the latest OpenAI news on bing.com."
         
+
+
+def test_mcp_tools_with_responses_api():
+    litellm._turn_on_debug()
+    MCP_TOOLS = [
+        {
+            "type": "mcp",
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+            "headers": {
+                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+            }
+        }
+    ]
+    MODEL = "openai/gpt-4.1"
+    USER_QUERY = "how does tiktoken work?"
+    #########################################################
+    # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval 
+    response = litellm.responses(
+        model=MODEL,
+        tools=MCP_TOOLS,
+        input=USER_QUERY
+    )
+    print(response)
+
+    response = cast(ResponsesAPIResponse, response)
+
+    mcp_approval_id: Optional[str] = None
+    for output in response.output:
+        if output.type == "mcp_approval_request":
+            mcp_approval_id = output.id
+            break
+
+    # Step 2: Send followup with approval for the MCP call
+    if mcp_approval_id:
+        response_with_mcp_call = litellm.responses(
+            model=MODEL,
+            tools=MCP_TOOLS,
+            input=[
+                {
+                    "type": "mcp_approval_response",
+                    "approve": True,
+                    "approval_request_id": mcp_approval_id
+                }
+            ],
+            previous_response_id=response.id,
+        )
+        print(response_with_mcp_call)
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_api_field_types():
+    """Test that specific fields in the response have the correct types"""
+    litellm._turn_on_debug()
+    litellm.set_verbose = True
+    
+    # Test with store=True
+    response = await litellm.aresponses(
+        model="gpt-4o",
+        input="hi",
+    )
+    
+    # Verify created_at is an integer
+    assert isinstance(response.created_at, int), "created_at should be an integer"
+    
+    # Verify store field is present and matches input
+    assert hasattr(response, "store"), "store field should be present"
+    assert response.store is True, "store field should match input value"
+    
+    # Test without store parameter
+    response_without_store = await litellm.aresponses(
+        model="gpt-4o",
+        input="hi"
+    )
+    
+    # Verify created_at is still an integer
+    assert isinstance(response_without_store.created_at, int), "created_at should be an integer"
+    
+    # Verify store field is present but None when not specified
+    assert hasattr(response_without_store, "store"), "store field should be present"
+
+
+@pytest.mark.asyncio
+async def test_store_field_transformation():
+    """Test store field transformation with mocked API responses"""
+    config = OpenAIResponsesAPIConfig()
+    
+    # Initialize logging object with required parameters
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type="aresponses",
+        start_time=time.time(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id"
+    )
+
+    # Base response data with all required fields
+    base_response = {
+        "id": "test_id",
+        "created_at": 1751443898,
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [{"type": "message", "id": "msg_1", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "Hello", "annotations": []}]}],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "error": None,
+        "incomplete_details": None,
+        "instructions": "test instructions",
+        "metadata": {},
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "max_output_tokens": 100,
+        "previous_response_id": None,
+        "reasoning": None,
+        "status": "completed",
+        "text": None,
+        "truncation": "auto",
+        "usage": {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+        "user": "test_user"
+    }
+
+    # Test case 1: API returns store=True
+    mock_response_store_true = httpx.Response(
+        status_code=200,
+        content=json.dumps({**base_response, "store": True}).encode()
+    )
+
+    # Test case 2: API returns store=False
+    mock_response_store_false = httpx.Response(
+        status_code=200,
+        content=json.dumps({**base_response, "store": False}).encode()
+    )
+
+    # Test case 3: API returns store=null
+    mock_response_store_null = httpx.Response(
+        status_code=200,
+        content=json.dumps({**base_response, "store": None}).encode()
+    )
+
+    # Test case 4: API omits store field
+    mock_response_no_store = httpx.Response(
+        status_code=200,
+        content=json.dumps(base_response).encode()
+    )
+
+    # Test when store=True in request
+    logging_obj.optional_params = {"store": True}
+    response = config.transform_response_api_response(
+        model="gpt-4o",
+        raw_response=mock_response_store_true,
+        logging_obj=logging_obj
+    )
+    assert response.store is True, "store should be True when specified in request and API returns True"
+
+    # Test when store=False in request
+    logging_obj.optional_params = {"store": False}
+    response = config.transform_response_api_response(
+        model="gpt-4o",
+        raw_response=mock_response_store_false,
+        logging_obj=logging_obj
+    )
+    assert response.store is False, "store should be False when specified in request and API returns False"
+
+    # Test when store not in request but API returns null
+    response = config.transform_response_api_response(
+        model="gpt-4o",
+        raw_response=mock_response_store_null,
+        logging_obj=logging_obj
+    )
+    assert response.store is None, "store should be None when not specified in request and API returns null"
+
+    # Test when store not in request and API omits store field
+    response = config.transform_response_api_response(
+        model="gpt-4o",
+        raw_response=mock_response_no_store,
+        logging_obj=logging_obj
+    )
+    assert response.store is None, "store should be None when not specified in request and API omits store"
+
+    # Verify created_at is always converted to integer
+    assert isinstance(response.created_at, int), "created_at should always be converted to integer"
+    assert response.created_at == 1751443898, "created_at should maintain the same value after conversion"
+
+

@@ -40,11 +40,14 @@ const ConditionalPublicModelName: React.FC = () => {
       const currentMappings = form.getFieldValue('model_mappings') || [];
       
       // Only update if the mappings don't exist or don't match the selected models
-      const shouldUpdateMappings = currentMappings.length !== selectedModels.length || 
-        !selectedModels.every(model => 
-          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => 
-            mapping.public_name === model || 
-            (model === 'custom' && mapping.public_name === customModelName)));
+      const shouldUpdateMappings = currentMappings.length !== selectedModels.length ||
+        !selectedModels.every(model =>
+          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => {
+            if (model === 'custom') {
+              return mapping.litellm_model === 'custom' || mapping.litellm_model === customModelName;
+            }
+            return mapping.litellm_model === model;
+          }));
       
       if (shouldUpdateMappings) {
         const mappings = selectedModels.map((model: string) => {
@@ -102,7 +105,23 @@ const ConditionalPublicModelName: React.FC = () => {
         labelCol={{ span: 10 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
-        required={true}
+        rules={[
+          {
+            required: true,
+            validator: async (_, value) => {
+              if (!value || value.length === 0) {
+                throw new Error('At least one model mapping is required');
+              }
+              // Check if all mappings have valid public names
+              const invalidMappings = value.filter((mapping: any) => 
+                !mapping.public_name || mapping.public_name.trim() === ''
+              );
+              if (invalidMappings.length > 0) {
+                throw new Error('All model mappings must have valid public names');
+              }
+            }
+          }
+        ]}
       >
         <Table 
           key={tableKey} // Add key to force re-render

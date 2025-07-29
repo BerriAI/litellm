@@ -173,12 +173,14 @@ class OllamaConfig(BaseConfig):
             if param == "top_p":
                 optional_params["top_p"] = value
             if param == "frequency_penalty":
-                optional_params["repeat_penalty"] = value
+                optional_params["frequency_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
             if param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
+                elif value["type"] == "json_schema":
+                    optional_params["format"] = value["json_schema"]["schema"]
 
         return optional_params
 

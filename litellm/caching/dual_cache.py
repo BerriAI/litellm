@@ -14,6 +14,9 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
+if TYPE_CHECKING:
+    from litellm.types.caching import RedisPipelineIncrementOperation
+
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 
@@ -196,7 +199,6 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
-        redis_only: bool = False,
         **kwargs,
     ):
         # Try to fetch from in-memory cache first
@@ -205,7 +207,7 @@ class DualCache(BaseCache):
                 f"async get cache: cache key: {key}; local_only: {local_only}"
             )
             result = None
-            if self.in_memory_cache is not None and not redis_only:
+            if self.in_memory_cache is not None:
                 in_memory_result = await self.in_memory_cache.async_get_cache(
                     key, **kwargs
                 )
@@ -214,7 +216,7 @@ class DualCache(BaseCache):
                 if in_memory_result is not None:
                     result = in_memory_result
 
-            if result is None and self.redis_cache is not None and not local_only:
+            if result is None and self.redis_cache is not None and local_only is False:
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result = await self.redis_cache.async_get_cache(
                     key, parent_otel_span=parent_otel_span
@@ -368,6 +370,31 @@ class DualCache(BaseCache):
                     value,
                     parent_otel_span=parent_otel_span,
                     ttl=kwargs.get("ttl", None),
+                )
+
+            return result
+        except Exception as e:
+            raise e  # don't log if exception is raised
+
+    async def async_increment_cache_pipeline(
+        self,
+        increment_list: List["RedisPipelineIncrementOperation"],
+        local_only: bool = False,
+        parent_otel_span: Optional[Span] = None,
+        **kwargs,
+    ) -> Optional[List[float]]:
+        try:
+            result: Optional[List[float]] = None
+            if self.in_memory_cache is not None:
+                result = await self.in_memory_cache.async_increment_pipeline(
+                    increment_list=increment_list,
+                    parent_otel_span=parent_otel_span,
+                )
+
+            if self.redis_cache is not None and local_only is False:
+                result = await self.redis_cache.async_increment_pipeline(
+                    increment_list=increment_list,
+                    parent_otel_span=parent_otel_span,
                 )
 
             return result

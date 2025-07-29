@@ -165,6 +165,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -211,6 +212,7 @@ def test_add_headers_to_request(litellm_key_header_name):
         "Authorization": "Bearer 1234",
         "X-Custom-Header": "Custom-Value",
         "X-Stainless-Header": "Stainless-Value",
+        "anthropic-beta": "beta-value",
     }
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
@@ -219,7 +221,10 @@ def test_add_headers_to_request(litellm_key_header_name):
     forwarded_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(
         request_headers
     )
-    assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
+    assert forwarded_headers == {
+        "X-Custom-Header": "Custom-Value",
+        "anthropic-beta": "beta-value",
+    }
 
 
 @pytest.mark.parametrize(
@@ -431,6 +436,7 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -468,6 +474,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -512,6 +519,7 @@ def test_openai_deployments_model_chat_completions_azure(
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -545,6 +553,7 @@ def test_embedding(mock_aembedding, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -572,6 +581,7 @@ def test_bedrock_embedding(mock_aembedding, client_no_auth):
             input=["good morning from litellm"],
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -629,6 +639,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             size="1024x1024",
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -731,6 +742,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -1037,12 +1049,10 @@ async def test_create_team_member_add(prisma_client, new_member_method):
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
 
+        print(f"team_member_add_request={team_member_add_request}")
         await team_member_add(
             data=team_member_add_request,
             user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
-            http_request=Request(
-                scope={"type": "http", "path": "/user/new"},
-            ),
         )
 
         mock_client.assert_called()
@@ -1225,9 +1235,6 @@ async def test_create_team_member_add_team_admin(
             await team_member_add(
                 data=team_member_add_request,
                 user_api_key_dict=valid_token,
-                http_request=Request(
-                    scope={"type": "http", "path": "/user/new"},
-                ),
             )
         except HTTPException as e:
             if user_role == "user":
@@ -1280,6 +1287,7 @@ async def test_user_info_team_list(prisma_client):
 
         try:
             await user_info(
+                request=MagicMock(),
                 user_id=None,
                 user_api_key_dict=UserAPIKeyAuth(
                     api_key="sk-1234", user_id="default_user_id"
@@ -2192,6 +2200,54 @@ async def test_get_ui_settings_spend_logs_threshold():
 
     # Clean up
     proxy_state.set_proxy_state_variable("spend_logs_row_count", 0)
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
+    """
+    Test that _run_background_health_check reflects changes to llm_model_list in each health check iteration.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    import copy
+
+    test_model_list_1 = [{"model_name": "model-a"}]
+    test_model_list_2 = [{"model_name": "model-b"}]
+    called_model_lists = []
+
+    async def fake_perform_health_check(model_list, details):
+        called_model_lists.append(copy.deepcopy(model_list))
+        return (["healthy"], ["unhealthy"])
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", None)
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_1)
+    )
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+
+    async def fake_sleep(interval):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    try:
+        await proxy_server._run_background_health_check()
+    except asyncio.CancelledError:
+        pass
+
+    monkeypatch.setattr(
+        proxy_server, "llm_model_list", copy.deepcopy(test_model_list_2)
+    )
+
+    try:
+        await proxy_server._run_background_health_check()
+    except asyncio.CancelledError:
+        pass
+
+    assert len(called_model_lists) >= 2
+    assert called_model_lists[0] == test_model_list_1
+    assert called_model_lists[1] == test_model_list_2
 
 
 def test_get_timeout_from_request():

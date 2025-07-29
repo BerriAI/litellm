@@ -23,12 +23,22 @@ Supports **ALL** VLLM Endpoints (including streaming).
 
 ## Quick Start
 
-Let's call the VLLM [`/metrics` endpoint](https://vllm.readthedocs.io/en/latest/api_reference/api_reference.html)
+Let's call the VLLM [`/score` endpoint](https://vllm.readthedocs.io/en/latest/api_reference/api_reference.html)
 
-1. Add HOSTED VLLM API BASE to your environment 
+1. Add a VLLM hosted model to your LiteLLM Proxy 
 
-```bash
-export HOSTED_VLLM_API_BASE="https://my-vllm-server.com"
+:::info
+
+Works with LiteLLM v1.72.0+. 
+
+:::
+
+```yaml
+model_list:
+  - model_name: "my-vllm-model"
+    litellm_params:
+      model: hosted_vllm/vllm-1.72
+      api_base: https://my-vllm-server.com
 ```
 
 2. Start LiteLLM Proxy 
@@ -41,12 +51,19 @@ litellm
 
 3. Test it! 
 
-Let's call the VLLM `/metrics` endpoint
+Let's call the VLLM `/score` endpoint
 
 ```bash
-curl -L -X GET 'http://0.0.0.0:4000/vllm/metrics' \
--H 'Content-Type: application/json' \
--H 'Authorization: Bearer sk-1234' \
+curl -X 'POST' \
+  'http://0.0.0.0:4000/vllm/score' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "model": "my-vllm-model",
+  "encoding_format": "float",
+  "text_1": "What is the capital of France?",
+  "text_2": "The capital of France is Paris."
+}'
 ```
 
 

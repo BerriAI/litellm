@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# VertexAI [Anthropic, Gemini, Model Garden]
+# VertexAI [Gemini]
 
 ## Overview
 
@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 | Description | Vertex AI is a fully-managed AI development platform for building and using generative AI. |
 | Provider Route on LiteLLM | `vertex_ai/` |
 | Link to Provider Doc | [Vertex AI ↗](https://cloud.google.com/vertex-ai) |
-| Base URL | [https://{vertex_location}-aiplatform.googleapis.com/](https://{vertex_location}-aiplatform.googleapis.com/) |
+| Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models) |
 
 
@@ -347,7 +347,9 @@ Return a `list[Recipe]`
 completion(model="vertex_ai/gemini-1.5-flash-preview-0514", messages=messages, response_format={ "type": "json_object" })
 ```
 
-### **Grounding - Web Search**
+### **Google Hosted Tools (Web Search, Code Execution, etc.)**
+
+#### **Web Search**
 
 Add Google Search Result grounding to vertex ai calls. 
 
@@ -422,6 +424,73 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### **Url Context**
+Using the URL context tool, you can provide Gemini with URLs as additional context for your prompt. The model can then retrieve content from the URLs and use that content to inform and shape its response.
+
+[**Relevant Docs**](https://ai.google.dev/gemini-api/docs/url-context)
+
+See the grounding metadata with `response_obj._hidden_params["vertex_ai_url_context_metadata"]`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = ".."
+
+# 👇 ADD URL CONTEXT
+tools = [{"urlContext": {}}]
+
+response = completion(
+    model="gemini/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    tools=tools,
+)
+
+print(response)
+
+# Access URL context metadata
+url_context_metadata = response.model_extra['vertex_ai_url_context_metadata']
+urlMetadata = url_context_metadata[0]['urlMetadata'][0]
+print(f"Retrieved URL: {urlMetadata['retrievedUrl']}")
+print(f"Retrieval Status: {urlMetadata['urlRetrievalStatus']}")
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start Proxy
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+3. Make Request!
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [{"role": "user", "content": "Summarize this document: https://ai.google.dev/gemini-api/docs/models"}],
+    "tools": [{"urlContext": {}}]
+  }'
+```
+</TabItem>
+</Tabs>
+
+#### **Enterprise Web Search**
+
 You can also use the `enterpriseWebSearch` tool for an [enterprise compliant search](https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/web-grounding-enterprise).
 
 <Tabs>
@@ -491,6 +560,53 @@ curl http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+#### **Code Execution**
+
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+import os
+
+## SETUP ENVIRONMENT
+# !gcloud auth application-default login - run this to add vertex credentials to your env
+
+
+tools = [{"codeExecution": {}}] # 👈 ADD CODE EXECUTION
+
+response = completion(
+    model="vertex_ai/gemini-2.0-flash",
+    messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash showLineNumbers
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-2.0-flash",
+  "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+  "tools": [{"codeExecution": {}}]
+}
+'
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
 
 #### **Moving from Vertex AI SDK to LiteLLM (GROUNDING)**
 
@@ -546,10 +662,13 @@ print(resp)
 
 LiteLLM translates OpenAI's `reasoning_effort` to Gemini's `thinking` parameter. [Code](https://github.com/BerriAI/litellm/blob/620664921902d7a9bfb29897a7b27c1a7ef4ddfb/litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py#L362)
 
+Added an additional non-OpenAI standard "disable" value for non-reasoning Gemini requests.
+
 **Mapping**
 
 | reasoning_effort | thinking |
 | ---------------- | -------- |
+| "disable"        | "budget_tokens": 0    |
 | "low"            | "budget_tokens": 1024 |
 | "medium"         | "budget_tokens": 2048 |
 | "high"           | "budget_tokens": 4096 |
@@ -832,7 +951,7 @@ OR
 
 You can set:
 - `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
-- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
+- `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.). Some models support the global location, please see [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#supported_models)
 - `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
 
 as dynamic params for a `litellm.completion` call. 
@@ -1089,534 +1208,6 @@ os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
 # set directly on module 
 litellm.vertex_location = "us-central1 # Your Location
 ```
-## Anthropic 
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| claude-3-opus@20240229   | `completion('vertex_ai/claude-3-opus@20240229', messages)` |
-| claude-3-5-sonnet@20240620  | `completion('vertex_ai/claude-3-5-sonnet@20240620', messages)` |
-| claude-3-sonnet@20240229   | `completion('vertex_ai/claude-3-sonnet@20240229', messages)` |
-| claude-3-haiku@20240307   | `completion('vertex_ai/claude-3-haiku@20240307', messages)` |
-| claude-3-7-sonnet@20250219   | `completion('vertex_ai/claude-3-7-sonnet@20250219', messages)` |
-
-### Usage
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
-
-model = "claude-3-sonnet@20240229"
-
-vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
-vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
-
-response = completion(
-    model="vertex_ai/" + model,
-    messages=[{"role": "user", "content": "hi"}],
-    temperature=0.7,
-    vertex_ai_project=vertex_ai_project,
-    vertex_ai_location=vertex_ai_location,
-)
-print("\nModel Response", response)
-```
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: anthropic-vertex
-      litellm_params:
-        model: vertex_ai/claude-3-sonnet@20240229
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-    - model_name: anthropic-vertex
-      litellm_params:
-        model: vertex_ai/claude-3-sonnet@20240229
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-west-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-            "model": "anthropic-vertex", # 👈 the 'model_name' in config
-            "messages": [
-                {
-                "role": "user",
-                "content": "what llm are you"
-                }
-            ],
-        }'
-```
-
-</TabItem>
-</Tabs>
-
-
-
-### Usage - `thinking` / `reasoning_content`
-
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-
-resp = completion(
-    model="vertex_ai/claude-3-7-sonnet-20250219",
-    messages=[{"role": "user", "content": "What is the capital of France?"}],
-    thinking={"type": "enabled", "budget_tokens": 1024},
-)
-
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="PROXY">
-
-1. Setup config.yaml
-
-```yaml
-- model_name: claude-3-7-sonnet-20250219
-  litellm_params:
-    model: vertex_ai/claude-3-7-sonnet-20250219
-    vertex_ai_project: "my-test-project"
-    vertex_ai_location: "us-west-1"
-```
-
-2. Start proxy
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-3. Test it! 
-
-```bash
-curl http://0.0.0.0:4000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
-  -d '{
-    "model": "claude-3-7-sonnet-20250219",
-    "messages": [{"role": "user", "content": "What is the capital of France?"}],
-    "thinking": {"type": "enabled", "budget_tokens": 1024}
-  }'
-```
-
-</TabItem>
-</Tabs>
-
-
-**Expected Response**
-
-```python
-ModelResponse(
-    id='chatcmpl-c542d76d-f675-4e87-8e5f-05855f5d0f5e',
-    created=1740470510,
-    model='claude-3-7-sonnet-20250219',
-    object='chat.completion',
-    system_fingerprint=None,
-    choices=[
-        Choices(
-            finish_reason='stop',
-            index=0,
-            message=Message(
-                content="The capital of France is Paris.",
-                role='assistant',
-                tool_calls=None,
-                function_call=None,
-                provider_specific_fields={
-                    'citations': None,
-                    'thinking_blocks': [
-                        {
-                            'type': 'thinking',
-                            'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
-                            'signature': 'EuYBCkQYAiJAy6...'
-                        }
-                    ]
-                }
-            ),
-            thinking_blocks=[
-                {
-                    'type': 'thinking',
-                    'thinking': 'The capital of France is Paris. This is a very straightforward factual question.',
-                    'signature': 'EuYBCkQYAiJAy6AGB...'
-                }
-            ],
-            reasoning_content='The capital of France is Paris. This is a very straightforward factual question.'
-        )
-    ],
-    usage=Usage(
-        completion_tokens=68,
-        prompt_tokens=42,
-        total_tokens=110,
-        completion_tokens_details=None,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            audio_tokens=None,
-            cached_tokens=0,
-            text_tokens=None,
-            image_tokens=None
-        ),
-        cache_creation_input_tokens=0,
-        cache_read_input_tokens=0
-    )
-)
-```
-
-
-
-## Meta/Llama API
- 
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| meta/llama-3.2-90b-vision-instruct-maas | `completion('vertex_ai/meta/llama-3.2-90b-vision-instruct-maas', messages)` |
-| meta/llama3-8b-instruct-maas | `completion('vertex_ai/meta/llama3-8b-instruct-maas', messages)` |
-| meta/llama3-70b-instruct-maas | `completion('vertex_ai/meta/llama3-70b-instruct-maas', messages)` |
-| meta/llama3-405b-instruct-maas   | `completion('vertex_ai/meta/llama3-405b-instruct-maas', messages)` |
-| meta/llama-4-scout-17b-16e-instruct-maas | `completion('vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas', messages)` |
-| meta/llama-4-scout-17-128e-instruct-maas | `completion('vertex_ai/meta/llama-4-scout-128b-16e-instruct-maas', messages)` |
-| meta/llama-4-maverick-17b-128e-instruct-maas | `completion('vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas',messages)` |
-| meta/llama-4-maverick-17b-16e-instruct-maas | `completion('vertex_ai/meta/llama-4-maverick-17b-16e-instruct-maas',messages)` |
-
-### Usage
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
-
-model = "meta/llama3-405b-instruct-maas"
-
-vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
-vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
-
-response = completion(
-    model="vertex_ai/" + model,
-    messages=[{"role": "user", "content": "hi"}],
-    vertex_ai_project=vertex_ai_project,
-    vertex_ai_location=vertex_ai_location,
-)
-print("\nModel Response", response)
-```
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: anthropic-llama
-      litellm_params:
-        model: vertex_ai/meta/llama3-405b-instruct-maas
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-    - model_name: anthropic-llama
-      litellm_params:
-        model: vertex_ai/meta/llama3-405b-instruct-maas
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-west-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-            "model": "anthropic-llama", # 👈 the 'model_name' in config
-            "messages": [
-                {
-                "role": "user",
-                "content": "what llm are you"
-                }
-            ],
-        }'
-```
-
-</TabItem>
-</Tabs>
-
-## Mistral API
-
-[**Supported OpenAI Params**](https://github.com/BerriAI/litellm/blob/e0f3cd580cb85066f7d36241a03c30aa50a8a31d/litellm/llms/openai.py#L137)
- 
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| mistral-large@latest   | `completion('vertex_ai/mistral-large@latest', messages)` |
-| mistral-large@2407   | `completion('vertex_ai/mistral-large@2407', messages)` |
-| mistral-nemo@latest   | `completion('vertex_ai/mistral-nemo@latest', messages)` |
-| codestral@latest   | `completion('vertex_ai/codestral@latest', messages)` |
-| codestral@@2405   | `completion('vertex_ai/codestral@2405', messages)` |
-
-### Usage
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
-
-model = "mistral-large@2407"
-
-vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
-vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
-
-response = completion(
-    model="vertex_ai/" + model,
-    messages=[{"role": "user", "content": "hi"}],
-    vertex_ai_project=vertex_ai_project,
-    vertex_ai_location=vertex_ai_location,
-)
-print("\nModel Response", response)
-```
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: vertex-mistral
-      litellm_params:
-        model: vertex_ai/mistral-large@2407
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-    - model_name: vertex-mistral
-      litellm_params:
-        model: vertex_ai/mistral-large@2407
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-west-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-            "model": "vertex-mistral", # 👈 the 'model_name' in config
-            "messages": [
-                {
-                "role": "user",
-                "content": "what llm are you"
-                }
-            ],
-        }'
-```
-
-</TabItem>
-</Tabs>
-
-
-### Usage - Codestral FIM
-
-Call Codestral on VertexAI via the OpenAI [`/v1/completion`](https://platform.openai.com/docs/api-reference/completions/create) endpoint for FIM tasks. 
-
-Note: You can also call Codestral via `/chat/completion`.
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
-# OR run `!gcloud auth print-access-token` in your terminal
-
-model = "codestral@2405"
-
-vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
-vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
-
-response = text_completion(
-    model="vertex_ai/" + model,
-    vertex_ai_project=vertex_ai_project,
-    vertex_ai_location=vertex_ai_location,
-    prompt="def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():", 
-    suffix="return True",                                              # optional
-    temperature=0,                                                     # optional
-    top_p=1,                                                           # optional
-    max_tokens=10,                                                     # optional
-    min_tokens=10,                                                     # optional
-    seed=10,                                                           # optional
-    stop=["return"],                                                   # optional
-)
-
-print("\nModel Response", response)
-```
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: vertex-codestral
-      litellm_params:
-        model: vertex_ai/codestral@2405
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-    - model_name: vertex-codestral
-      litellm_params:
-        model: vertex_ai/codestral@2405
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-west-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl -X POST 'http://0.0.0.0:4000/completions' \
-      -H 'Authorization: Bearer sk-1234' \
-      -H 'Content-Type: application/json' \
-      -d '{
-            "model": "vertex-codestral", # 👈 the 'model_name' in config
-            "prompt": "def is_odd(n): \n return n % 2 == 1 \ndef test_is_odd():", 
-            "suffix":"return True",                                              # optional
-            "temperature":0,                                                     # optional
-            "top_p":1,                                                           # optional
-            "max_tokens":10,                                                     # optional
-            "min_tokens":10,                                                     # optional
-            "seed":10,                                                           # optional
-            "stop":["return"],                                                   # optional
-        }'
-```
-
-</TabItem>
-</Tabs>
-
-
-## AI21 Models
- 
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| jamba-1.5-mini@001   | `completion(model='vertex_ai/jamba-1.5-mini@001', messages)` |
-| jamba-1.5-large@001   | `completion(model='vertex_ai/jamba-1.5-large@001', messages)` |
-
-### Usage
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = ""
-
-model = "meta/jamba-1.5-mini@001"
-
-vertex_ai_project = "your-vertex-project" # can also set this as os.environ["VERTEXAI_PROJECT"]
-vertex_ai_location = "your-vertex-location" # can also set this as os.environ["VERTEXAI_LOCATION"]
-
-response = completion(
-    model="vertex_ai/" + model,
-    messages=[{"role": "user", "content": "hi"}],
-    vertex_ai_project=vertex_ai_project,
-    vertex_ai_location=vertex_ai_location,
-)
-print("\nModel Response", response)
-```
-</TabItem>
-<TabItem value="proxy" label="Proxy">
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: jamba-1.5-mini
-      litellm_params:
-        model: vertex_ai/jamba-1.5-mini@001
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-    - model_name: jamba-1.5-large
-      litellm_params:
-        model: vertex_ai/jamba-1.5-large@001
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-west-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-            "model": "jamba-1.5-large",
-            "messages": [
-                {
-                "role": "user",
-                "content": "what llm are you"
-                }
-            ],
-        }'
-```
-
-</TabItem>
-</Tabs>
-
 
 ## Gemini Pro
 | Model Name       | Function Call                        |
@@ -1712,119 +1303,6 @@ curl --location 'https://0.0.0.0:4000/v1/chat/completions' \
 
 </TabItem>
 </Tabs>
-
-
-
-## Model Garden
-
-:::tip
-
-All OpenAI compatible models from Vertex Model Garden are supported. 
-
-:::
-
-#### Using Model Garden
-
-**Almost all Vertex Model Garden models are OpenAI compatible.**
-
-<Tabs>
-
-<TabItem value="openai" label="OpenAI Compatible Models">
-
-| Property | Details |
-|----------|---------|
-| Provider Route | `vertex_ai/openai/{MODEL_ID}` |
-| Vertex Documentation | [Vertex Model Garden - OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_gradio_streaming_chat_completions.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
-| Supported Operations | `/chat/completions`, `/embeddings` |
-
-<Tabs>
-<TabItem value="sdk" label="SDK">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-response = completion(
-  model="vertex_ai/openai/<your-endpoint-id>", 
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-
-<TabItem value="proxy" label="Proxy">
-
-
-**1. Add to config**
-
-```yaml
-model_list:
-    - model_name: llama3-1-8b-instruct
-      litellm_params:
-        model: vertex_ai/openai/5464397967697903616
-        vertex_ai_project: "my-test-project"
-        vertex_ai_location: "us-east-1"
-```
-
-**2. Start proxy**
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING at http://0.0.0.0:4000
-```
-
-**3. Test it!**
-
-```bash
-curl --location 'http://0.0.0.0:4000/chat/completions' \
-      --header 'Authorization: Bearer sk-1234' \
-      --header 'Content-Type: application/json' \
-      --data '{
-            "model": "llama3-1-8b-instruct", # 👈 the 'model_name' in config
-            "messages": [
-                {
-                "role": "user",
-                "content": "what llm are you"
-                }
-            ],
-        }'
-```
-
-
-
-
-</TabItem>
-
-</Tabs>
-
-</TabItem>
-
-<TabItem value="non-openai" label="Non-OpenAI Compatible Models">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-response = completion(
-  model="vertex_ai/<your-endpoint-id>", 
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-
-</Tabs>
-
-
 
 ## Gemini Pro Vision
 | Model Name       | Function Call                        |
@@ -2683,44 +2161,132 @@ print(response)
 </Tabs>
 
 
-## **Image Generation Models**
+## **Gemini TTS (Text-to-Speech) Audio Output**
 
-Usage 
+:::info
+
+LiteLLM supports Gemini TTS models on Vertex AI that can generate audio responses using the OpenAI-compatible `audio` parameter format.
+
+:::
+
+### Supported Models
+
+LiteLLM supports Gemini TTS models with audio capabilities on Vertex AI (e.g. `vertex_ai/gemini-2.5-flash-preview-tts` and `vertex_ai/gemini-2.5-pro-preview-tts`). For the complete list of available TTS models and voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
+
+### Limitations
+
+:::warning
+
+**Important Limitations**:
+- Gemini TTS models only support the `pcm16` audio format
+- **Streaming support has not been added** to TTS models yet
+- The `modalities` parameter must be set to `['audio']` for TTS requests
+
+:::
+
+### Quick Start
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
 
 ```python
-response = await litellm.aimage_generation(
-    prompt="An olympic size swimming pool",
-    model="vertex_ai/imagegeneration@006",
-    vertex_ai_project="adroit-crow-413218",
-    vertex_ai_location="us-central1",
+from litellm import completion
+import json
+
+## GET CREDENTIALS
+file_path = 'path/to/vertex_ai_service_account.json'
+
+# Load the JSON file
+with open(file_path, 'r') as file:
+    vertex_credentials = json.load(file)
+
+# Convert to JSON string
+vertex_credentials_json = json.dumps(vertex_credentials)
+
+response = completion(
+    model="vertex_ai/gemini-2.5-flash-preview-tts",
+    messages=[{"role": "user", "content": "Say hello in a friendly voice"}],
+    modalities=["audio"],  # Required for TTS models
+    audio={
+        "voice": "Kore",
+        "format": "pcm16"  # Required: must be "pcm16"
+    },
+    vertex_credentials=vertex_credentials_json
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-tts-flash
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-preview-tts
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+  - model_name: gemini-tts-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro-preview-tts
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+      vertex_credentials: "/path/to/service_account.json"
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make TTS request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-tts-flash",
+    "messages": [{"role": "user", "content": "Say hello in a friendly voice"}],
+    "modalities": ["audio"],
+    "audio": {
+      "voice": "Kore",
+      "format": "pcm16"
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Advanced Usage
+
+You can combine TTS with other Gemini features:
+
+```python
+response = completion(
+    model="vertex_ai/gemini-2.5-pro-preview-tts",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant that speaks clearly."},
+        {"role": "user", "content": "Explain quantum computing in simple terms"}
+    ],
+    modalities=["audio"],
+    audio={
+        "voice": "Charon",
+        "format": "pcm16"
+    },
+    temperature=0.7,
+    max_tokens=150,
+    vertex_credentials=vertex_credentials_json
 )
 ```
 
-**Generating multiple images**
-
-Use the `n` parameter to pass how many images you want generated
-```python
-response = await litellm.aimage_generation(
-    prompt="An olympic size swimming pool",
-    model="vertex_ai/imagegeneration@006",
-    vertex_ai_project="adroit-crow-413218",
-    vertex_ai_location="us-central1",
-    n=1,
-)
-```
-
-### Supported Image Generation Models
-
-| Model Name                   | FUsage                                            |
-|------------------------------|--------------------------------------------------------------|
-| `imagen-3.0-generate-001`      | `litellm.image_generation('vertex_ai/imagen-3.0-generate-001', prompt)` |
-| `imagen-3.0-fast-generate-001` | `litellm.image_generation('vertex_ai/imagen-3.0-fast-generate-001', prompt)` |
-| `imagegeneration@006`          | `litellm.image_generation('vertex_ai/imagegeneration@006', prompt)`  |
-| `imagegeneration@005`          | `litellm.image_generation('vertex_ai/imagegeneration@005', prompt)`  |
-| `imagegeneration@002`          | `litellm.image_generation('vertex_ai/imagegeneration@002', prompt)`  |
-
-
-
+For more information about Gemini's TTS capabilities and available voices, see the [official Gemini TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation).
 
 ## **Text to Speech APIs**
 

@@ -5,6 +5,7 @@ import { getProviderLogoAndName } from "../provider_info_helpers";
 import { ModelData } from "./types";
 import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "../delete_model_button";
+import { useState } from "react";
 
 export const columns = (
   userRole: string,
@@ -16,6 +17,8 @@ export const columns = (
   handleEditClick: (model: any) => void,
   handleRefreshClick: () => void,
   setEditModel: (edit: boolean) => void,
+  expandedRows: Set<string>,
+  setExpandedRows: (expandedRows: Set<string>) => void,
 ): ColumnDef<ModelData>[] => [
   {
     header: "Model ID",
@@ -181,6 +184,70 @@ export const columns = (
         </div>
       ) : (
         "-"
+      );
+    },
+  },
+  {
+    header: "Model Access Group",
+    accessorKey: "model_info.model_access_group",
+    enableSorting: false,
+    cell: ({ row }) => {
+      const model = row.original;
+      const accessGroups = model.model_info.access_groups;
+      
+      if (!accessGroups || accessGroups.length === 0) {
+        return "-";
+      }
+      
+      const modelId = model.model_info.id;
+      const isExpanded = expandedRows.has(modelId);
+      const shouldShowExpandButton = accessGroups.length > 1;
+      
+      const toggleExpanded = () => {
+        const newExpanded = new Set(expandedRows);
+        if (isExpanded) {
+          newExpanded.delete(modelId);
+        } else {
+          newExpanded.add(modelId);
+        }
+        setExpandedRows(newExpanded);
+      };
+      
+      return (
+        <div className="flex items-center gap-1 overflow-hidden">
+          <Badge
+            size="xs"
+            color="blue"
+            className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
+          >
+            {accessGroups[0]}
+          </Badge>
+          
+          {(isExpanded || (!shouldShowExpandButton && accessGroups.length === 2)) && 
+            accessGroups.slice(1).map((group: string, index: number) => (
+              <Badge
+                key={index + 1}
+                size="xs"
+                color="blue"
+                className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
+              >
+                {group}
+              </Badge>
+            ))
+          }
+          
+          {shouldShowExpandButton && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleExpanded();
+              }}
+              className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded hover:bg-blue-50 h-5 leading-tight flex-shrink-0 whitespace-nowrap"
+            >
+              {isExpanded ? '−' : `+${accessGroups.length - 1}`}
+            </button>
+          )}
+        </div>
       );
     },
   },

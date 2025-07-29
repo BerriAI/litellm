@@ -96,6 +96,8 @@ class LowestTPMLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
+                if "litellm_params" not in kwargs:
+                    return
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )

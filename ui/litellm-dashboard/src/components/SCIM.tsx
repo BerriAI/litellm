@@ -175,13 +175,13 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
                 </Text>
                 <div className="flex items-center">
                   <TextInput
-                    value={tokenData.token}
+                    value={tokenData.key}
                     className="flex-grow mr-2 bg-white"
                     type="password"
                     disabled={true}
                   />
                   <CopyToClipboard
-                    text={tokenData.token}
+                    text={tokenData.key}
                     onCopy={() => message.success("Token copied to clipboard")}
                   >
                     <TremorButton variant="primary" className="flex items-center">

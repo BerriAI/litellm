@@ -1,11 +1,12 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
-
+import httpx
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -13,6 +14,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
+from litellm.types.utils import ModelResponse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
@@ -192,3 +194,48 @@ class GroqChatConfig(OpenAILikeChatConfig):
         )
 
         return optional_params
+    
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        model_response = super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+        mapped_service_tier: Literal["auto", "default", "flex"] = self._map_groq_service_tier(original_service_tier=getattr(model_response, "service_tier"))
+        setattr(model_response, "service_tier", mapped_service_tier)
+        return model_response
+    
+
+    def _map_groq_service_tier(self, original_service_tier: Optional[str]) -> Literal["auto", "default", "flex"]:
+        """
+        Ensure groq service tier is OpenAI compatible.
+        """
+        if original_service_tier is None:
+            return "auto"
+        if original_service_tier not in ["auto", "default", "flex"]:
+            return "auto"
+        
+        return cast(Literal["auto", "default", "flex"], original_service_tier)

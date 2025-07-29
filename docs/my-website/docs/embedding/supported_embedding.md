@@ -310,9 +310,25 @@ import os
 os.environ['NVIDIA_NIM_API_KEY'] = ""
 response = embedding(
     model='nvidia_nim/<model_name>', 
-    input=["good morning from litellm"]
+    input=["good morning from litellm"],
+    input_type="query"
 )
 ```
+## `input_type` Parameter for Embedding Models
+
+Certain embedding models, such as `nvidia/embed-qa-4` and the E5 family, operate in **dual modes**—one for **indexing documents (passages)** and another for **querying**. To maintain high retrieval accuracy, it's essential to specify how the input text is being used by setting the `input_type` parameter correctly.
+
+### Usage
+
+Set the `input_type` parameter to one of the following values:
+
+- `"passage"` – for embedding content during **indexing** (e.g., documents).
+- `"query"` – for embedding content during **retrieval** (e.g., user queries).
+
+> **Warning:** Incorrect usage of `input_type` can lead to a significant drop in retrieval performance.
+
+
+
 All models listed [here](https://build.nvidia.com/explore/retrieval) are supported:
 
 | Model Name         | Function Call                                         |
@@ -326,6 +342,7 @@ All models listed [here](https://build.nvidia.com/explore/retrieval) are support
 | nvidia/llama-3.2-nv-embedqa-1b-v2 | `embedding(model="nvidia_nim/nvidia/llama-3.2-nv-embedqa-1b-v2", input)` |
 | snowflake/arctic-embed-l | `embedding(model="nvidia_nim/snowflake/arctic-embed-l", input)` |
 | baai/bge-m3 | `embedding(model="nvidia_nim/baai/bge-m3", input)` |
+
 
 ## HuggingFace Embedding Models
 LiteLLM supports all Feature-Extraction + Sentence Similarity Embedding models: https://huggingface.co/models?pipeline_tag=feature-extraction
@@ -469,7 +486,7 @@ response = embedding(
 print(response)
 ```
 
-## Supported Models
+### Supported Models
 All models listed here https://docs.voyageai.com/embeddings/#models-and-specifics are supported
 
 | Model Name               | Function Call                                                                                                                                                      |
@@ -478,7 +495,7 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-lite-01 | `embedding(model="voyage/voyage-lite-01", input)` | 
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` | 
 
-## Provider-specific Params
+### Provider-specific Params
 
 
 :::info
@@ -540,3 +557,28 @@ curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
 ```
 </TabItem>
 </Tabs>
+
+## Nebius AI Studio Embedding Models
+
+### Usage - Embedding
+```python
+from litellm import embedding
+import os
+
+os.environ['NEBIUS_API_KEY'] = ""
+response = embedding(
+    model="nebius/BAAI/bge-en-icl",
+    input=["Good morning from litellm!"],
+)
+print(response)
+```
+
+### Supported Models
+All supported models can be found here: https://studio.nebius.ai/models/embedding
+
+| Model Name               | Function Call                                                   |
+|--------------------------|-----------------------------------------------------------------|
+| BAAI/bge-en-icl | `embedding(model="nebius/BAAI/bge-en-icl", input)`              | 
+| BAAI/bge-multilingual-gemma2 | `embedding(model="nebius/BAAI/bge-multilingual-gemma2", input)` | 
+| intfloat/e5-mistral-7b-instruct | `embedding(model="nebius/intfloat/e5-mistral-7b-instruct", input)`      | 
+
