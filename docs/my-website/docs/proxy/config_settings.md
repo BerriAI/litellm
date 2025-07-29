@@ -336,6 +336,7 @@ router_settings:
 | AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
 | AZURE_API_VERSION | Version of the Azure API being used
 | AZURE_AUTHORITY_HOST | Azure authority host URL
+| AZURE_CERTIFICATE_PASSWORD | Password for Azure OpenAI certificate
 | AZURE_CLIENT_ID | Client ID for Azure services
 | AZURE_CLIENT_SECRET | Client secret for Azure services
 | AZURE_CODE_INTERPRETER_COST_PER_SESSION | Cost per session for Azure Code Interpreter service
