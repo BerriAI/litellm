@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useMemo } from "react"
 import {
   BarChart,
   Card,
@@ -54,6 +54,7 @@ import { EntityList } from "./entity_usage"
 import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { valueFormatterSpend } from "./usage/utils/value_formatters"
 import CloudZeroExportModal from "./cloudzero_export_modal"
+import { UiLoadingSpinner } from "./ui/ui-loading-spinner"
 
 interface NewUsagePageProps {
   accessToken: string | null
@@ -72,16 +73,14 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
   // Add loading state
   const [loading, setLoading] = useState(false)
 
-  // Separate selected date from applied date
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-    to: new Date(),
-  })
+  // Create initial dates outside of state to prevent recreation
+  const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), [])
+  const initialToDate = useMemo(() => new Date(), [])
 
-  // Applied date that triggers data fetching
-  const [appliedDateValue, setAppliedDateValue] = useState<DateRangePickerValue>({
-    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-    to: new Date(),
+  // Single date state that directly triggers data fetching
+  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: initialFromDate,
+    to: initialToDate,
   })
 
   const [allTags, setAllTags] = useState<EntityList[]>([])
@@ -293,22 +292,17 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
   }
 
   const fetchUserSpendData = async () => {
-    if (!accessToken || !appliedDateValue.from || !appliedDateValue.to) return
+    if (!accessToken || !dateValue.from || !dateValue.to) return
 
     setLoading(true)
 
     // Create new Date objects to avoid mutating the original dates
-    const startTime = new Date(appliedDateValue.from)
-    const endTime = new Date(appliedDateValue.to)
+    const startTime = new Date(dateValue.from)
+    const endTime = new Date(dateValue.to)
 
     try {
       // Get first page
       const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime)
-
-      // Check if we need to fetch more pages
-      if (firstPageData.metadata.total_pages > 10) {
-        throw new Error("Too many pages of data (>10). Please select a smaller date range.")
-      }
 
       // If only one page, just set the data
       if (firstPageData.metadata.total_pages <= 1) {
@@ -345,28 +339,22 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     }
   }
 
-  // Handle apply button click
-  const handleApplyDateRange = () => {
-    setAppliedDateValue(dateValue)
-  }
-
-  // Check if dates are different from applied dates
-  const hasUnappliedChanges =
-    dateValue.from?.getTime() !== appliedDateValue.from?.getTime() ||
-    dateValue.to?.getTime() !== appliedDateValue.to?.getTime()
-
+  // Fetch data directly when date changes (no apply button)
   useEffect(() => {
     fetchUserSpendData()
-  }, [accessToken, appliedDateValue])
+  }, [accessToken, dateValue])
 
   const modelMetrics = processActivityData(userSpendData, "models")
   const keyMetrics = processActivityData(userSpendData, "api_keys")
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers")
 
-  // Loading component for charts
+  // Loading component for charts - Reusing app's existing loader
   const ChartLoader = () => (
     <div className="flex items-center justify-center h-40">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div>
+      <div className="flex items-center justify-center gap-2">
+        <UiLoadingSpinner className="size-6" />
+        <span className="text-gray-600 text-sm">Loading...</span>
+      </div>
     </div>
   )
 
@@ -419,25 +407,14 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabPanels>
           {/* Your Usage Panel */}
           <TabPanel>
-            <Grid numItems={3} className="gap-2 w-full mb-4">
-              <Col numColSpan={2}>
+            <Grid numItems={2} className="gap-2 w-full mb-4">
+              <Col>
                 <UsageDatePicker
                   value={dateValue}
                   onValueChange={(value) => {
                     setDateValue(value)
                   }}
                 />
-              </Col>
-              <Col numColSpan={1} className="flex items-end">
-                <Button
-                  onClick={handleApplyDateRange}
-                  disabled={!hasUnappliedChanges || loading}
-                  className={`w-full ${
-                    hasUnappliedChanges ? "bg-cyan-600 hover:bg-cyan-700" : "bg-gray-400 cursor-not-allowed"
-                  }`}
-                >
-                  {loading ? "Loading..." : "Apply"}
-                </Button>
               </Col>
             </Grid>
             <TabGroup>
