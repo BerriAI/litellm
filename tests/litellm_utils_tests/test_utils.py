@@ -1,4 +1,5 @@
 import copy
+import logging
 import sys
 import time
 from datetime import datetime
@@ -238,11 +239,19 @@ def test_trimming_with_tool_calls():
             "content": '{"location": "Paris", "temperature": "22", "unit": "celsius"}',
         },
     ]
-    result = trim_messages(messages=messages, max_tokens=1, return_response_tokens=True)
+    num_tool_calls = 3
+
+    result = trim_messages(messages=messages, max_tokens=1)
 
     print(result)
 
-    assert len(result[0]) == 3  # final 3 messages are tool calls
+    # only trailing tool calls are returned
+    assert len(result) == num_tool_calls
+    assert result == messages[-num_tool_calls:]
+
+    result = trim_messages(messages=messages, max_tokens=999)
+    # message length is below max_tokens, so output should match input
+    assert messages == result
 
 
 def test_trimming_should_not_change_original_messages():
@@ -272,6 +281,53 @@ def test_trimming_with_model_cost_max_input_tokens(model):
         get_token_count(trimmed_messages, model=model)
         < litellm.model_cost[model]["max_input_tokens"]
     )
+
+
+def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        },
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco?",
+            # non-string values will cause the tokenizer to raise an exception
+            "user_id": 123,
+        },
+        Message(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    function=Function(
+                        arguments='{"location": "San Francisco, CA", "unit": "celsius"}',
+                        name="get_current_weather",
+                    ),
+                    id="call_G11shFcS024xEKjiAOSt6Tc9",
+                    type="function",
+                ),
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "call_G11shFcS024xEKjiAOSt6Tc9",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+        },
+    ]
+
+    # trim_messages() catches the exception raised by the tokenizer and logs an error
+    with caplog.at_level(level=logging.ERROR, logger="LiteLLM"):
+        trimmed_messages = trim_messages(messages, max_tokens=999)
+
+    assert trimmed_messages == messages
+
+    assert len(caplog.records) >= 1
+    assert "Got exception while token trimming" in caplog.text
 
 
 def test_aget_valid_models():
@@ -599,6 +655,73 @@ def test_redact_msgs_from_logs():
         response_obj.choices[0].message.content
         == "I'm LLaMA, an AI assistant developed by Meta AI that can understand and respond to human input in a conversational manner."
     )
+
+    litellm.turn_off_message_logging = False
+    print("Test passed")
+
+
+def test_redact_embedding_response():
+    """
+    Tests that EmbeddingResponse redaction preserves critical metadata while clearing sensitive data
+
+    This test ensures that:
+    1. usage field is preserved for token/cost tracking
+    2. model field is preserved for response structure integrity
+    3. data field (containing embeddings) is cleared for privacy
+    4. original response object is not modified
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_logging,
+    )
+
+    litellm.turn_off_message_logging = True
+
+    # Create a test EmbeddingResponse with usage data
+    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+    original_data = [
+        {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
+        {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]}
+    ]
+
+    response_obj = litellm.EmbeddingResponse(
+        model="text-embedding-ada-002",
+        data=original_data,
+        usage=original_usage,
+        object="list"
+    )
+
+    litellm_logging_obj = Logging(
+        model="text-embedding-ada-002",
+        messages=[{"role": "user", "content": "test input"}],
+        stream=False,
+        call_type="embedding",
+        litellm_call_id="1234",
+        start_time=datetime.now(),
+        function_id="1234",
+    )
+
+    _redacted_response_obj = redact_message_input_output_from_logging(
+        result=response_obj,
+        model_call_details=litellm_logging_obj.model_call_details,
+    )
+
+    # Assert the original response_obj is NOT modified
+    assert response_obj.data == original_data
+    assert response_obj.usage == original_usage
+    assert response_obj.model == "text-embedding-ada-002"
+    assert response_obj.object == "list"
+
+    # Assert the redacted response preserves critical metadata
+    assert _redacted_response_obj.usage == original_usage  # usage should be preserved
+    assert _redacted_response_obj.model == "text-embedding-ada-002"  # model should be preserved
+    assert _redacted_response_obj.object == "list"  # object should be preserved
+
+    # Assert sensitive data is cleared
+    assert _redacted_response_obj.data == []  # data should be cleared
+
+    # Assert it's still an EmbeddingResponse instance
+    assert isinstance(_redacted_response_obj, litellm.EmbeddingResponse)
 
     litellm.turn_off_message_logging = False
     print("Test passed")
@@ -1019,25 +1142,32 @@ def test_is_base64_encoded():
 )
 def test_async_http_handler(mock_async_client):
     import httpx
+    import ssl
 
     timeout = 120
     event_hooks = {"request": [lambda r: r]}
     concurrent_limit = 2
 
-    AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+    # Mock the transport creation to return a specific transport
+    with mock.patch.object(AsyncHTTPHandler, '_create_async_transport') as mock_create_transport:
+        mock_transport = mock.MagicMock()
+        mock_create_transport.return_value = mock_transport
 
-    mock_async_client.assert_called_with(
-        cert="/client.pem",
-        transport=None,
-        event_hooks=event_hooks,
-        headers=headers,
-        limits=httpx.Limits(
-            max_connections=concurrent_limit,
-            max_keepalive_connections=concurrent_limit,
-        ),
-        timeout=timeout,
-        verify="/certificate.pem",
-    )
+        AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
+
+        # Get the call arguments
+        call_args = mock_async_client.call_args[1]
+        
+        # Assert SSL context is being used instead of direct cert/verify params
+        assert call_args["cert"] == "/client.pem"
+        assert isinstance(call_args["verify"], ssl.SSLContext)
+        assert call_args["transport"] == mock_transport
+        assert call_args["event_hooks"] == event_hooks
+        assert call_args["headers"] == headers
+        assert isinstance(call_args["limits"], httpx.Limits)
+        assert call_args["limits"].max_connections == concurrent_limit
+        assert call_args["limits"].max_keepalive_connections == concurrent_limit
+        assert call_args["timeout"] == timeout
 
 
 @mock.patch("httpx.AsyncClient")
@@ -1049,10 +1179,12 @@ def test_async_http_handler_force_ipv4(mock_async_client):
     This is prod test - we need to ensure that httpx always uses ipv4 when litellm.force_ipv4 is True
     """
     import httpx
+    import ssl
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     # Set force_ipv4 to True
     litellm.force_ipv4 = True
+    litellm.disable_aiohttp_transport = True
 
     try:
         timeout = 120
@@ -1078,7 +1210,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
         assert call_args["limits"].max_connections == concurrent_limit
         assert call_args["limits"].max_keepalive_connections == concurrent_limit
         assert call_args["timeout"] == timeout
-        assert call_args["verify"] is True
+        assert isinstance(call_args["verify"], ssl.SSLContext)
         assert call_args["cert"] is None
 
     finally:
@@ -1253,20 +1385,20 @@ def test_get_end_user_id_for_cost_tracking(
 
 
 @pytest.mark.parametrize(
-    "litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
+    "litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id",
     [
-        ({}, False, None),
-        ({"user_api_key_end_user_id": "123"}, False, "123"),
-        ({"user_api_key_end_user_id": "123"}, True, None),
+        ({}, True, None),
+        ({"user_api_key_end_user_id": "123"}, True, "123"),
+        ({"user_api_key_end_user_id": "123"}, False, None),
     ],
 )
 def test_get_end_user_id_for_cost_tracking_prometheus_only(
-    litellm_params, disable_end_user_cost_tracking_prometheus_only, expected_end_user_id
+    litellm_params, enable_end_user_cost_tracking_prometheus_only, expected_end_user_id
 ):
     from litellm.utils import get_end_user_id_for_cost_tracking
 
-    litellm.disable_end_user_cost_tracking_prometheus_only = (
-        disable_end_user_cost_tracking_prometheus_only
+    litellm.enable_end_user_cost_tracking_prometheus_only = (
+        enable_end_user_cost_tracking_prometheus_only
     )
     assert (
         get_end_user_id_for_cost_tracking(
@@ -2102,10 +2234,10 @@ def test_get_provider_audio_transcription_config():
 
 def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
-    
+
     assert supports_pdf_input(model) == expected_bool
 
-    
+
 def test_get_valid_models_from_provider():
     """
     Test that get_valid_models returns the correct models for a given provider
@@ -2158,4 +2290,24 @@ def test_get_valid_models_from_dynamic_api_key():
     assert len(valid_models) > 0
     assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
 
-    
+
+
+def test_get_whitelisted_models():
+    """
+    Snapshot of all bedrock models as of 12/24/2024.
+
+    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
+
+    Create whitelist to prevent naming regressions for older litellm versions.
+    """
+    whitelisted_models = []
+    for model, info in litellm.model_cost.items():
+        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
+            whitelisted_models.append(model)
+
+        # Write to a local file
+    with open("whitelisted_bedrock_models.txt", "w") as file:
+        for model in whitelisted_models:
+            file.write(f"{model}\n")
+
+    print("whitelisted_models written to whitelisted_bedrock_models.txt")

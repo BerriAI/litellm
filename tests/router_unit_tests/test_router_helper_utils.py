@@ -14,6 +14,7 @@ import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
+from litellm.types.router import Deployment, LiteLLM_Params
 
 
 @pytest.fixture
@@ -444,6 +445,40 @@ async def test_deployment_callback_on_failure(model_list):
         start_time=time.time(),
         end_time=time.time(),
     )
+
+
+def test_deployment_callback_respects_cooldown_time(model_list):
+    """Ensure per-model cooldown_time is honored even when exception headers are present."""
+    import httpx
+    import time
+    from unittest.mock import patch
+
+    router = Router(model_list=model_list)
+
+    class FakeException(Exception):
+        def __init__(self):
+            self.status_code = 429
+            self.headers = httpx.Headers({"x-test": "1"})
+
+    kwargs = {
+        "exception": FakeException(),
+        "litellm_params": {
+            "metadata": {"model_group": "gpt-3.5-turbo"},
+            "model_info": {"id": 100},
+            "cooldown_time": 0,
+        },
+    }
+
+    with patch("litellm.router._set_cooldown_deployments") as mock_set:
+        router.deployment_callback_on_failure(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+        mock_set.assert_called_once()
+        assert mock_set.call_args.kwargs["time_to_cooldown"] == 0
 
 
 def test_log_retry(model_list):
@@ -1152,3 +1187,148 @@ def test_init_responses_api_endpoints(model_list):
     assert isinstance(router.aget_responses, Callable)
     assert router.adelete_responses is not None
     assert isinstance(router.adelete_responses, Callable)
+
+
+@pytest.mark.parametrize(
+    "mock_testing_fallbacks, mock_testing_context_fallbacks, mock_testing_content_policy_fallbacks, expected_fallbacks, expected_context, expected_content_policy",
+    [
+        # Test string to bool conversion
+        ("true", "false", "True", True, False, True),
+        ("TRUE", "FALSE", "False", True, False, False),
+        ("false", "true", "false", False, True, False),
+        # Test actual boolean values (should pass through unchanged)
+        (True, False, True, True, False, True),
+        (False, True, False, False, True, False),
+        # Test None values
+        (None, None, None, None, None, None),
+        # Test mixed types
+        ("true", False, None, True, False, None),
+    ],
+)
+def test_mock_router_testing_params_str_to_bool_conversion(
+    mock_testing_fallbacks,
+    mock_testing_context_fallbacks,
+    mock_testing_content_policy_fallbacks,
+    expected_fallbacks,
+    expected_context,
+    expected_content_policy,
+):
+    """Test if MockRouterTestingParams.from_kwargs correctly converts string values to booleans using str_to_bool"""
+    from litellm.types.router import MockRouterTestingParams
+    
+    kwargs = {
+        "mock_testing_fallbacks": mock_testing_fallbacks,
+        "mock_testing_context_fallbacks": mock_testing_context_fallbacks,
+        "mock_testing_content_policy_fallbacks": mock_testing_content_policy_fallbacks,
+        "other_param": "should_remain",  # This should not be affected
+    }
+    
+    # Make a copy to verify kwargs are properly popped
+    original_kwargs = kwargs.copy()
+    
+    mock_params = MockRouterTestingParams.from_kwargs(kwargs)
+    
+    # Verify the converted values
+    assert mock_params.mock_testing_fallbacks == expected_fallbacks
+    assert mock_params.mock_testing_context_fallbacks == expected_context
+    assert mock_params.mock_testing_content_policy_fallbacks == expected_content_policy
+    
+    # Verify that the mock testing params were popped from kwargs
+    assert "mock_testing_fallbacks" not in kwargs
+    assert "mock_testing_context_fallbacks" not in kwargs
+    assert "mock_testing_content_policy_fallbacks" not in kwargs
+    
+    # Verify other params remain unchanged
+    assert kwargs["other_param"] == "should_remain"
+
+
+def test_is_auto_router_deployment(model_list):
+    """Test if the '_is_auto_router_deployment' function correctly identifies auto-router deployments"""
+    router = Router(model_list=model_list)
+    
+    # Test case 1: Model starts with "auto_router/" - should return True
+    litellm_params_auto = LiteLLM_Params(model="auto_router/my-auto-router")
+    assert router._is_auto_router_deployment(litellm_params_auto) is True
+    
+    # Test case 2: Model doesn't start with "auto_router/" - should return False
+    litellm_params_regular = LiteLLM_Params(model="gpt-3.5-turbo")
+    assert router._is_auto_router_deployment(litellm_params_regular) is False
+    
+    # Test case 3: Model is empty string - should return False
+    litellm_params_empty = LiteLLM_Params(model="")
+    assert router._is_auto_router_deployment(litellm_params_empty) is False
+    
+    # Test case 4: Model contains "auto_router/" but doesn't start with it - should return False
+    litellm_params_contains = LiteLLM_Params(model="prefix_auto_router/something")
+    assert router._is_auto_router_deployment(litellm_params_contains) is False
+
+
+
+@patch('litellm.router_strategy.auto_router.auto_router.AutoRouter')
+def test_init_auto_router_deployment_success(mock_auto_router, model_list):
+    """Test if the 'init_auto_router_deployment' function successfully initializes auto-router when all params provided"""
+    router = Router(model_list=model_list)
+    
+    # Create a mock AutoRouter instance
+    mock_auto_router_instance = MagicMock()
+    mock_auto_router.return_value = mock_auto_router_instance
+    
+    # Test case: All required parameters provided
+    litellm_params = LiteLLM_Params(
+        model="auto_router/test",
+        auto_router_config_path="/path/to/config",
+        auto_router_default_model="gpt-3.5-turbo",
+        auto_router_embedding_model="text-embedding-ada-002"
+    )
+    deployment = Deployment(
+        model_name="test-auto-router", 
+        litellm_params=litellm_params,
+        model_info={"id": "test-id"}
+    )
+    
+    # Should not raise any exception
+    router.init_auto_router_deployment(deployment)
+    
+    # Verify AutoRouter was called with correct parameters
+    mock_auto_router.assert_called_once_with(
+        model_name="test-auto-router",
+        auto_router_config_path="/path/to/config",
+        auto_router_config=None,
+        default_model="gpt-3.5-turbo",
+        embedding_model="text-embedding-ada-002",
+        litellm_router_instance=router,
+    )
+    
+    # Verify the auto-router was added to the router's auto_routers dict
+    assert "test-auto-router" in router.auto_routers
+    assert router.auto_routers["test-auto-router"] == mock_auto_router_instance
+
+
+@patch('litellm.router_strategy.auto_router.auto_router.AutoRouter')
+def test_init_auto_router_deployment_duplicate_model_name(mock_auto_router, model_list):
+    """Test if the 'init_auto_router_deployment' function raises ValueError when model_name already exists"""
+    router = Router(model_list=model_list)
+    
+    # Create a mock AutoRouter instance
+    mock_auto_router_instance = MagicMock()
+    mock_auto_router.return_value = mock_auto_router_instance
+    
+    # Add an existing auto-router
+    router.auto_routers["test-auto-router"] = mock_auto_router_instance
+    
+    # Try to add another auto-router with the same name
+    litellm_params = LiteLLM_Params(
+        model="auto_router/test",
+        auto_router_config_path="/path/to/config",
+        auto_router_default_model="gpt-3.5-turbo",
+        auto_router_embedding_model="text-embedding-ada-002"
+    )
+    deployment = Deployment(
+        model_name="test-auto-router", 
+        litellm_params=litellm_params,
+        model_info={"id": "test-id"}
+    )
+    
+    with pytest.raises(ValueError, match="Auto-router deployment test-auto-router already exists"):
+        router.init_auto_router_deployment(deployment)
+

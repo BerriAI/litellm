@@ -1,5 +1,5 @@
 """
-Support for gpt model family 
+Support for gpt model family
 """
 
 from typing import (
@@ -11,6 +11,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Union,
     cast,
     overload,
@@ -56,6 +57,7 @@ from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.llms.openai import ChatCompletionToolParam
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -89,6 +91,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     - `top_p` (number or null): An alternative to sampling with temperature, used for nucleus sampling.
     """
 
+    # Add a class variable to track if this is the base class
+    _is_base_class = True
+
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
     functions: Optional[list] = None
@@ -119,6 +124,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+        self.__class__._is_base_class = False
 
     @classmethod
     def get_config(cls):
@@ -313,10 +320,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             content_item = content_item_typed
         return content_item
 
+    # fmt: off
+
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: 
         ...
 
     @overload
@@ -327,6 +336,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         is_async: Literal[False] = False,
     ) -> List[AllMessageValues]:
         ...
+
+    # fmt: on
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -346,10 +357,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         List[OpenAIMessageContentListBlock], message_content
                     )
                     for i, content_item in enumerate(message_content_types):
-                        message_content_types[
-                            i
-                        ] = await self._async_transform_content_item(
-                            cast(OpenAIMessageContentListBlock, content_item),
+                        message_content_types[i] = (
+                            await self._async_transform_content_item(
+                                cast(OpenAIMessageContentListBlock, content_item),
+                            )
                         )
             return messages
 
@@ -373,6 +384,29 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         )
             return messages
 
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,  # allows overrides to selectively run this
+        messages: List[AllMessageValues],
+        tools: Optional[List["ChatCompletionToolParam"]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
+        )
+        from litellm.types.llms.openai import ChatCompletionToolParam
+
+        for message in messages:
+            message = cast(
+                AllMessageValues, filter_value_from_dict(message, "cache_control")  # type: ignore
+            )
+        if tools is not None:
+            for tool in tools:
+                tool = cast(
+                    ChatCompletionToolParam,
+                    filter_value_from_dict(tool, "cache_control"),  # type: ignore
+                )
+        return messages, tools
+
     def transform_request(
         self,
         model: str,
@@ -388,6 +422,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         messages = self._transform_messages(messages=messages, model=model)
+        messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
+            model=model, messages=messages, tools=optional_params.get("tools", [])
+        )
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
+
         return {
             "model": model,
             "messages": messages,
@@ -405,12 +445,26 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
         )
-
-        return {
-            "model": model,
-            "messages": transformed_messages,
-            **optional_params,
-        }
+        transformed_messages, tools = (
+            self.remove_cache_control_flag_from_messages_and_tools(
+                model=model,
+                messages=transformed_messages,
+                tools=optional_params.get("tools", []),
+            )
+        )
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
+        if self.__class__._is_base_class:
+            return {
+                "model": model,
+                "messages": transformed_messages,
+                **optional_params,
+            }
+        else:
+            ## allow for any object specific behaviour to be handled
+            return self.transform_request(
+                model, messages, optional_params, litellm_params, headers
+            )
 
     def _passed_in_tools(self, optional_params: dict) -> bool:
         return optional_params.get("tools", None) is not None

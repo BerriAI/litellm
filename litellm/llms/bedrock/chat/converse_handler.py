@@ -112,6 +112,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         client: Optional[AsyncHTTPHandler] = None,
         fake_stream: bool = False,
         json_mode: Optional[bool] = False,
+        api_key: Optional[str] = None,
     ) -> CustomStreamWrapper:
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
@@ -128,6 +129,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
+            api_key=api_key
         )
 
         ## LOGGING
@@ -176,6 +178,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         logger_fn=None,
         headers: dict = {},
         client: Optional[AsyncHTTPHandler] = None,
+        api_key: Optional[str] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         request_data = await litellm.AmazonConverseConfig()._async_transform_request(
             model=model,
@@ -184,7 +187,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             litellm_params=litellm_params,
         )
         data = json.dumps(request_data)
-
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
@@ -192,6 +194,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=api_base,
             data=data,
             headers=headers,
+            api_key=api_key
         )
 
         ## LOGGING
@@ -261,6 +264,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         logger_fn=None,
         extra_headers: Optional[dict] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
+        api_key: Optional[str] = None,
     ):
         ## SETUP ##
         stream = optional_params.pop("stream", None)
@@ -353,6 +357,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     json_mode=json_mode,
                     fake_stream=fake_stream,
                     credentials=credentials,
+                    api_key=api_key
                 )  # type: ignore
             ### ASYNC COMPLETION
             return self.async_completion(
@@ -370,6 +375,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 timeout=timeout,
                 client=client,
                 credentials=credentials,
+                api_key=api_key
             )  # type: ignore
 
         ## TRANSFORMATION ##
@@ -381,7 +387,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             litellm_params=litellm_params,
         )
         data = json.dumps(_data)
-
         prepped = self.get_request_headers(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -389,6 +394,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             endpoint_url=proxy_endpoint_url,
             data=data,
             headers=headers,
+            api_key=api_key
         )
 
         ## LOGGING

@@ -18,7 +18,7 @@ from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from unittest.mock import patch
 from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
-from base_llm_unit_tests import BaseReasoningLLMTests
+from base_llm_unit_tests import BaseReasoningLLMTests, BaseLLMChatTest
 
 
 def test_xai_chat_config_get_openai_compatible_provider_info():
@@ -111,6 +111,27 @@ def test_xai_chat_config_map_openai_params():
     # Assert unsupported parameter is not in the result
     assert "unsupported_param" not in result
 
+def test_xai_check_for_stop_in_supported_params():
+    supported_params = XAIChatConfig().get_supported_openai_params(
+        model="xai/grok-3-mini"
+    )
+    assert "stop" not in supported_params
+
+
+@pytest.mark.parametrize("model", ["xai/grok-4", "xai/grok-4-0709"])
+def test_xai_grok_4_stop_not_supported(model):
+    """
+    Test that grok-4 models do not support the stop parameter
+
+    Issue: https://github.com/BerriAI/litellm/issues/12635
+    """
+    supported_params = XAIChatConfig().get_supported_openai_params(
+        model=model
+    )
+    assert "stop" not in supported_params
+
+
+
 
 @pytest.mark.parametrize("stream", [False, True])
 def test_completion_xai(stream):
@@ -124,9 +145,9 @@ def test_completion_xai(stream):
             },
         ]
         response = completion(
-            model="xai/grok-beta",
+            model="xai/grok-4",
             messages=messages,
-            stream=stream,
+            stream=stream
         )
         print(response)
 
@@ -156,7 +177,7 @@ def test_xai_message_name_filtering():
         {"role": "assistant", "content": "Hello", "name": "Jane"},
     ]
     response = completion(
-        model="xai/grok-beta",
+        model="xai/grok-3-mini-beta",
         messages=messages,
     )
     assert response is not None
@@ -169,3 +190,12 @@ class TestXAIReasoningEffort(BaseReasoningLLMTests):
             "model": "xai/grok-3-mini-beta",
             "messages": [{"role": "user", "content": "Hello"}],
         }
+    
+class TestXAIChat(BaseLLMChatTest):
+    def get_base_completion_call_args(self):
+        return {
+            "model": "xai/grok-3-mini-beta",
+        }
+    def test_tool_call_no_arguments(self, tool_call_no_arguments):
+        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
+        pass

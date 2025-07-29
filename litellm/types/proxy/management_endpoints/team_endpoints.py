@@ -1,8 +1,13 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
-from litellm.proxy._types import LiteLLM_TeamTable
+from litellm.proxy._types import (
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    Member,
+)
 
 
 class GetTeamMemberPermissionsRequest(BaseModel):
@@ -45,3 +50,34 @@ class TeamListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class BulkTeamMemberAddRequest(BaseModel):
+    """Request for bulk team member addition"""
+
+    team_id: str
+    members: Optional[List[Member]] = None  # List of members to add
+    all_users: Optional[bool] = False  # Flag to add all users on Proxy to the team
+    max_budget_in_team: Optional[float] = None
+
+
+class TeamMemberAddResult(BaseModel):
+    """Result of a single team member add operation"""
+
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    success: bool
+    error: Optional[str] = None
+    updated_user: Optional[Dict[str, Any]] = None
+    updated_team_membership: Optional[Dict[str, Any]] = None
+
+
+class BulkTeamMemberAddResponse(BaseModel):
+    """Response for bulk team member add operations"""
+
+    team_id: str
+    results: List[TeamMemberAddResult]
+    total_requested: int
+    successful_additions: int
+    failed_additions: int
+    updated_team: Optional[Dict[str, Any]] = None

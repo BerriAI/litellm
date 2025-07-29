@@ -7,7 +7,7 @@ from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
-    type: Required[Literal["auto", "any", "tool"]]
+    type: Required[Literal["auto", "any", "tool", "none"]]
     name: str
     disable_parallel_tool_use: bool  # default is false
 
@@ -16,6 +16,7 @@ class AnthropicInputSchema(TypedDict, total=False):
     type: Optional[str]
     properties: Optional[dict]
     additionalProperties: Optional[bool]
+    required: Optional[List[str]]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -57,12 +58,31 @@ class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_ed
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
+class AnthropicCodeExecutionTool(TypedDict, total=False):
+    type: Required[str]
+    name: Required[Literal["code_execution"]]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 AllAnthropicToolsValues = Union[
     AnthropicComputerTool,
     AnthropicHostedTools,
     AnthropicMessagesTool,
     AnthropicWebSearchTool,
+    AnthropicCodeExecutionTool,
 ]
+
+
+class AnthropicMcpServerToolConfiguration(TypedDict, total=False):
+    allowed_tools: Optional[List[str]]
+
+
+class AnthropicMcpServerTool(TypedDict, total=False):
+    type: Required[Literal["url"]]
+    url: Required[str]
+    name: Required[str]
+    tool_configuration: AnthropicMcpServerToolConfiguration
+    authorization_token: str
 
 
 class AnthropicMessagesTextParam(TypedDict, total=False):
@@ -107,9 +127,27 @@ class AnthropicContentParamSource(TypedDict):
     data: str
 
 
+class AnthropicContentParamSourceUrl(TypedDict):
+    type: Literal["url"]
+    url: str
+
+
+class AnthropicContentParamSourceFileId(TypedDict):
+    type: Literal["file"]
+    file_id: str
+
+
+class AnthropicMessagesContainerUploadParam(TypedDict, total=False):
+    type: Required[Literal["container_upload"]]
+    file_id: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[AnthropicContentParamSource, AnthropicContentParamSourceFileId]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -119,7 +157,13 @@ class CitationsObject(TypedDict):
 
 class AnthropicMessagesDocumentParam(TypedDict, total=False):
     type: Required[Literal["document"]]
-    source: Required[AnthropicContentParamSource]
+    source: Required[
+        Union[
+            AnthropicContentParamSource,
+            AnthropicContentParamSourceFileId,
+            AnthropicContentParamSourceUrl,
+        ]
+    ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
     title: str
     context: str
@@ -129,6 +173,7 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
 class AnthropicMessagesToolResultContent(TypedDict):
     type: Literal["text"]
     text: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolResultParam(TypedDict, total=False):
@@ -149,6 +194,7 @@ AnthropicMessagesUserMessageValues = Union[
     AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
     AnthropicMessagesDocumentParam,
+    AnthropicMessagesContainerUploadParam,
 ]
 
 
@@ -184,6 +230,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
     top_k: Optional[int]
     top_p: Optional[float]
+    mcp_servers: Optional[List[AnthropicMcpServerTool]]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -249,15 +296,23 @@ class TextBlock(TypedDict):
     type: Literal["text"]
 
 
-class ContentBlockStart(TypedDict):
-    """
-    event: content_block_start
-    data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
-    """
+class ContentBlockStartToolUse(TypedDict):
+    type: Literal["content_block_start"]
+    id: str
+    name: str
+    input: dict
+    content_block: ToolUseBlock
 
-    type: str
+
+class ContentBlockStartText(TypedDict):
+    type: Literal["content_block_start"]
     index: int
-    content_block: Union[ToolUseBlock, TextBlock]
+    content_block: TextBlock
+
+
+ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock]
+
+ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
 
 class MessageDelta(TypedDict, total=False):

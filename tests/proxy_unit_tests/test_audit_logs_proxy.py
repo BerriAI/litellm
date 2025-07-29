@@ -34,7 +34,6 @@ from litellm.proxy.proxy_server import (
     chat_completion,
     completion,
     embeddings,
-    image_generation,
     model_list,
     moderations,
     user_api_key_auth,

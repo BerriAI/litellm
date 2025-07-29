@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall } from "../networking";
+import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall, allEndUsersCall } from "../networking";
 import { DataTable } from "./table";
 import { columns, LogEntry } from "./columns";
 import { Row } from "@tanstack/react-table";
@@ -22,6 +22,18 @@ import FilterComponent from "../common_components/filter";
 import { FilterOption } from "../common_components/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
 import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
+import {
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanels,
+  TabPanel,
+  Text,
+  Switch,
+} from "@tremor/react";
+import AuditLogs from "./audit_logs";
+import { getTimeRangeDisplay } from "./logs_utils";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -29,6 +41,7 @@ interface SpendLogsTableProps {
   userRole: string | null;
   userID: string | null;
   allTeams: Team[];
+  premiumUser: boolean;
 }
 
 export interface PaginatedResponse {
@@ -50,6 +63,7 @@ export default function SpendLogsTable({
   userRole,
   userID,
   allTeams,
+  premiumUser,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -68,7 +82,6 @@ export default function SpendLogsTable({
     moment().format("YYYY-MM-DDTHH:mm")
   );
 
-  // Add these new state variables at the top with other useState declarations
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const [tempTeamId, setTempTeamId] = useState("");
@@ -82,11 +95,27 @@ export default function SpendLogsTable({
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(
     userRole && internalUserRoles.includes(userRole)
   );
+  const [activeTab, setActiveTab] = useState("request logs");
 
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
+
+  const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
+    const storedValue = sessionStorage.getItem("isLiveTail");
+    // default to true if nothing is stored
+    return storedValue !== null ? JSON.parse(storedValue) : true;
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
+  }, [isLiveTail]);
+
+  const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({ 
+    value: 24, 
+    unit: "hours" 
+  });
 
   useEffect(() => {
     const fetchKeyInfo = async () => {
@@ -138,6 +167,20 @@ export default function SpendLogsTable({
       setFilterByCurrentUser(true);
     }
   }, [userRole]);
+
+  const LiveTailControls = () => {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium text-gray-900">Live Tail</span>
+        <Switch 
+          color="green"
+          checked={isLiveTail}
+          defaultChecked={true}
+          onChange={setIsLiveTail}
+        />
+      </div>
+    );
+  };
 
   const logs = useQuery<PaginatedResponse>({
     queryKey: [
@@ -208,8 +251,8 @@ export default function SpendLogsTable({
 
       return response;
     },
-    enabled: !!accessToken && !!token && !!userRole && !!userID,
-    refetchInterval: 5000,
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
+    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
     refetchIntervalInBackground: true,
   });
 
@@ -226,7 +269,6 @@ export default function SpendLogsTable({
     filteredLogs,
     allTeams: hookAllTeams,
     allKeyAliases,
-    allModels,
     handleFilterChange,
     handleFilterReset
   } = useLogFilterLogic({
@@ -336,6 +378,7 @@ export default function SpendLogsTable({
       
     }).map(log => ({
       ...log,
+      duration: (Date.parse(log.endTime) - Date.parse(log.startTime)) / 1000,
       onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
       onSessionClick: (sessionId: string) => {
         if (sessionId) setSelectedSessionId(sessionId);
@@ -355,25 +398,7 @@ export default function SpendLogsTable({
     logs.refetch();
   };
 
-  // Add this function to format the time range display
-  const getTimeRangeDisplay = () => {
-    if (isCustomDate) {
-      return `${moment(startTime).format('MMM D, h:mm A')} - ${moment(endTime).format('MMM D, h:mm A')}`;
-    }
-    
-    const now = moment();
-    const start = moment(startTime);
-    const diffMinutes = now.diff(start, 'minutes');
-    
-    if (diffMinutes <= 15) return 'Last 15 Minutes';
-    if (diffMinutes <= 60) return 'Last Hour';
-    
-    const diffHours = now.diff(start, 'hours');
-    if (diffHours <= 4) return 'Last 4 Hours';
-    if (diffHours <= 24) return 'Last 24 Hours';
-    if (diffHours <= 168) return 'Last 7 Days';
-    return `${start.format('MMM D')} - ${now.format('MMM D')}`;
-  };
+
 
   const handleRowExpand = (requestId: string | null) => {
     setExpandedRequestId(requestId);
@@ -408,17 +433,7 @@ export default function SpendLogsTable({
     {
       name: 'Model',
       label: 'Model',
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!allModels || allModels.length === 0) return [];
-        const filtered = allModels.filter((model: string) => {
-          return model.toLowerCase().includes(searchText.toLowerCase());
-        });
-        return filtered.map((model: string) => ({
-          label: model,
-          value: model
-        }));
-      }
+      isSearchable: false,
     },
     {
       name: 'Key Alias',
@@ -427,7 +442,7 @@ export default function SpendLogsTable({
       searchFn: async (searchText: string) => {
         if (!accessToken) return [];
         const keyAliases = await fetchAllKeyAliases(accessToken);
-        const filtered = keyAliases.filter(alias => 
+        const filtered = keyAliases.filter(alias =>
           alias.toLowerCase().includes(searchText.toLowerCase())
         );
         return filtered.map(alias => ({
@@ -437,10 +452,24 @@ export default function SpendLogsTable({
       }
     },
     {
+      name: 'End User',
+      label: 'End User',
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        if (!accessToken) return [];
+        const data = await allEndUsersCall(accessToken);
+        const users = data?.end_users || [];
+        const filtered = users.filter((u: string) =>
+          u.toLowerCase().includes(searchText.toLowerCase())
+        );
+        return filtered.map((u: string) => ({ label: u, value: u }));
+      }
+    },
+    {
       name: 'Key Hash',
       label: 'Key Hash',
       isSearchable: false,
-    }
+    },
   ]
 
   // When a session is selected, render the SessionView component
@@ -456,254 +485,316 @@ export default function SpendLogsTable({
     );
   }
 
+  const formatTimeUnit = (value: number, unit: string) => {
+    if (value === 1) {
+      if (unit === 'minutes') return 'minute';
+      if (unit === 'hours') return 'hour';
+      if (unit === 'days') return 'day';
+    }
+    return unit;
+  };
+
+  const quickSelectOptions = [
+    { label: "Last 15 Minutes", value: 15, unit: "minutes" },
+    { label: "Last Hour", value: 1, unit: "hours" },
+    { label: "Last 4 Hours", value: 4, unit: "hours" },
+    { label: "Last 24 Hours", value: 24, unit: "hours" },
+    { label: "Last 7 Days", value: 7, unit: "days" },
+  ];
+
+  const selectedOption = quickSelectOptions.find(
+    (option) =>
+      option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit
+  );
+
+  const displayLabel = isCustomDate
+    ? getTimeRangeDisplay(isCustomDate, startTime, endTime)
+    : selectedOption?.label;
+
   return (
     <div className="w-full p-6">
-
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">
-          {selectedSessionId ? (
-            <>
-              Session: <span className="font-mono">{selectedSessionId}</span>
-              <button
-                className="ml-4 px-3 py-1 text-sm border rounded hover:bg-gray-50"
-                onClick={() => setSelectedSessionId(null)}
-              >
-                ← Back to All Logs
-              </button>
-            </>
-          ) : (
-            "Request Logs"
-          )}
-        </h1>
-      </div>
-      {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
-        <KeyInfoView keyId={selectedKeyIdInfoView} keyData={selectedKeyInfo} accessToken={accessToken} userID={userID} userRole={userRole} teams={allTeams} onClose={() => setSelectedKeyIdInfoView(null)} />
-      ) : selectedSessionId ? (
-        <div className="bg-white rounded-lg shadow">
-          <DataTable
-            columns={columns}
-            data={sessionData}
-            renderSubComponent={RequestViewer}
-            getRowCanExpand={() => true}
-            // Optionally: add session-specific row expansion state
-          />
-        </div>
-      ) : (
-        <>
-        <FilterComponent options={logFilterOptions} onApplyFilters={handleFilterChange} onResetFilters={handleFilterReset} />
-        <div className="bg-white rounded-lg shadow">
-          <div className="border-b px-6 py-4">
-            <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative w-64">
-                  <input
-                    type="text"
-                    placeholder="Search by Request ID"
-                    className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                  <svg
-                    className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                    />
-                  </svg>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <div className="relative" ref={quickSelectRef}>
+      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
+        <TabList>
+          <Tab>
+            Request Logs
+          </Tab>
+          <Tab>
+            Audit Logs
+          </Tab>
+        </TabList>
+        <TabPanels>
+          <TabPanel>
+            <div className="flex items-center justify-between mb-4">
+              <h1 className="text-xl font-semibold">
+                {selectedSessionId ? (
+                  <>
+                    Session: <span className="font-mono">{selectedSessionId}</span>
                     <button
-                      onClick={() => setQuickSelectOpen(!quickSelectOpen)}
-                      className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                      className="ml-4 px-3 py-1 text-sm border rounded hover:bg-gray-50"
+                      onClick={() => setSelectedSessionId(null)}
                     >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                        />
-                      </svg>
-                      {getTimeRangeDisplay()}
+                      ← Back to All Logs
                     </button>
-
-                    {quickSelectOpen && (
-                      <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
-                        <div className="space-y-1">
-                          {[
-                            { label: "Last 15 Minutes", value: 15, unit: "minutes" },
-                            { label: "Last Hour", value: 1, unit: "hours" },
-                            { label: "Last 4 Hours", value: 4, unit: "hours" },
-                            { label: "Last 24 Hours", value: 24, unit: "hours" },
-                            { label: "Last 7 Days", value: 7, unit: "days" },
-                          ].map((option) => (
-                            <button
-                              key={option.label}
-                              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                getTimeRangeDisplay() === option.label ? 'bg-blue-50 text-blue-600' : ''
-                              }`}
-                              onClick={() => {
-                                setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
-                                setStartTime(
-                                  moment()
-                                    .subtract(option.value, option.unit as any)
-                                    .format("YYYY-MM-DDTHH:mm")
-                                );
-                                setQuickSelectOpen(false);
-                                setIsCustomDate(false);
-                              }}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                          <div className="border-t my-2" />
-                          <button
-                            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                              isCustomDate ? 'bg-blue-50 text-blue-600' : ''
-                            }`}
-                            onClick={() => setIsCustomDate(!isCustomDate)}
-                          >
-                            Custom Range
-                          </button>
-                        </div>
+                  </>
+                ) : (
+                  "Request Logs"
+                )}
+              </h1>
+            </div>
+            {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
+              <KeyInfoView keyId={selectedKeyIdInfoView} keyData={selectedKeyInfo} accessToken={accessToken} userID={userID} userRole={userRole} teams={allTeams} onClose={() => setSelectedKeyIdInfoView(null)} premiumUser={premiumUser} />
+            ) : selectedSessionId ? (
+              <div className="bg-white rounded-lg shadow">
+                <DataTable
+                  columns={columns}
+                  data={sessionData}
+                  renderSubComponent={RequestViewer}
+                  getRowCanExpand={() => true}
+                  // Optionally: add session-specific row expansion state
+                />
+              </div>
+            ) : (
+              <>
+              <FilterComponent options={logFilterOptions} onApplyFilters={handleFilterChange} onResetFilters={handleFilterReset} />
+              <div className="bg-white rounded-lg shadow">
+                <div className="border-b px-6 py-4">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between space-y-4 md:space-y-0">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="relative w-64">
+                        <input
+                          type="text"
+                          placeholder="Search by Request ID"
+                          className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                        <svg
+                          className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                          />
+                        </svg>
                       </div>
-                    )}
-                  </div>
-                  
-                  <button
-                    onClick={handleRefresh}
-                    className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
-                    title="Refresh data"
-                  >
-                    <svg
-                      className={`w-4 h-4 ${logs.isFetching ? 'animate-spin' : ''}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                      />
-                    </svg>
-                    <span>Refresh</span>
-                  </button>
-                </div>
 
-                {isCustomDate && (
-                  <div className="flex items-center gap-2">
-                    <div>
-                      <input
-                        type="datetime-local"
-                        value={startTime}
-                        onChange={(e) => {
-                          setStartTime(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
+                      <div className="flex items-center gap-2">
+                        <div className="relative" ref={quickSelectRef}>
+                          <button
+                            onClick={() => setQuickSelectOpen(!quickSelectOpen)}
+                            className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                              />
+                            </svg>
+                            {displayLabel}
+                          </button>
+
+                          {quickSelectOpen && (
+                            <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
+                              <div className="space-y-1">
+                                {quickSelectOptions.map((option) => (
+                                  <button
+                                    key={option.label}
+                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                                      displayLabel === option.label ? 'bg-blue-50 text-blue-600' : ''
+                                    }`}
+                                    onClick={() => {
+                                      setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+                                      setStartTime(
+                                        moment()
+                                          .subtract(option.value, option.unit as any)
+                                          .format("YYYY-MM-DDTHH:mm")
+                                      );
+                                      setSelectedTimeInterval({ value: option.value, unit: option.unit });
+                                      setIsCustomDate(false);
+                                      setQuickSelectOpen(false);
+                                    }}
+                                  >
+                                    {option.label}
+                                  </button>
+                                ))}
+                                <div className="border-t my-2" />
+                                <button
+                                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
+                                    isCustomDate ? 'bg-blue-50 text-blue-600' : ''
+                                  }`}
+                                  onClick={() => setIsCustomDate(!isCustomDate)}
+                                >
+                                  Custom Range
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        
+                        <LiveTailControls />
+                        
+                        <button
+                          onClick={handleRefresh}
+                          className="px-3 py-2 text-sm border rounded-md hover:bg-gray-50 flex items-center gap-2"
+                          title="Refresh data"
+                        >
+                          <svg
+                            className={`w-4 h-4 ${logs.isFetching ? 'animate-spin' : ''}`}
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                            />
+                          </svg>
+                          <span>Refresh</span>
+                        </button>
+                      </div>
+
+                      {isCustomDate && (
+                        <div className="flex items-center gap-2">
+                          <div>
+                            <input
+                              type="datetime-local"
+                              value={startTime}
+                              onChange={(e) => {
+                                setStartTime(e.target.value);
+                                setCurrentPage(1);
+                              }}
+                              className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            />
+                          </div>
+                          <span className="text-gray-500">to</span>
+                          <div>
+                            <input
+                              type="datetime-local"
+                              value={endTime}
+                              onChange={(e) => {
+                                setEndTime(e.target.value);
+                                setCurrentPage(1);
+                              }}
+                              className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <span className="text-gray-500">to</span>
-                    <div>
-                      <input
-                        type="datetime-local"
-                        value={endTime}
-                        onChange={(e) => {
-                          setEndTime(e.target.value);
-                          setCurrentPage(1);
-                        }}
-                        className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
+
+                    <div className="flex items-center space-x-4">
+                      <span className="text-sm text-gray-700">
+                        Showing{" "}
+                        {logs.isLoading
+                          ? "..."
+                          : filteredLogs
+                          ? (currentPage - 1) * pageSize + 1
+                          : 0}{" "}
+                        -{" "}
+                        {logs.isLoading
+                          ? "..."
+                          : filteredLogs
+                          ? Math.min(currentPage * pageSize, filteredLogs.total)
+                          : 0}{" "}
+                        of{" "}
+                        {logs.isLoading
+                          ? "..."
+                          : filteredLogs
+                          ? filteredLogs.total
+                          : 0}{" "}
+                        results
+                      </span>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-sm text-gray-700">
+                          Page {logs.isLoading ? "..." : currentPage} of{" "}
+                          {logs.isLoading
+                            ? "..."
+                            : filteredLogs
+                            ? filteredLogs.total_pages
+                            : 1}
+                        </span>
+                        <button
+                          onClick={() =>
+                            setCurrentPage((p) => Math.max(1, p - 1))
+                          }
+                          disabled={logs.isLoading || currentPage === 1}
+                          className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          onClick={() =>
+                            setCurrentPage((p) =>
+                              Math.min(
+                                filteredLogs.total_pages || 1,
+                                p + 1,
+                              ),
+                            )
+                          }
+                          disabled={
+                            logs.isLoading ||
+                            currentPage === (filteredLogs.total_pages || 1)
+                          }
+                          className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Next
+                        </button>
+                      </div>
                     </div>
+                  </div>
+                </div>
+                {isLiveTail && currentPage === 1 && (
+                  <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-green-700">
+                        Auto-refreshing every 15 seconds
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setIsLiveTail(false)}
+                      className="text-sm text-green-600 hover:text-green-800"
+                    >
+                      Stop
+                    </button>
                   </div>
                 )}
+                <DataTable
+                  columns={columns}
+                  data={filteredData}
+                  renderSubComponent={RequestViewer}
+                  getRowCanExpand={() => true}
+                />
               </div>
-
-              <div className="flex items-center space-x-4">
-                <span className="text-sm text-gray-700">
-                  Showing{" "}
-                  {logs.isLoading
-                    ? "..."
-                    : filteredLogs
-                    ? (currentPage - 1) * pageSize + 1
-                    : 0}{" "}
-                  -{" "}
-                  {logs.isLoading
-                    ? "..."
-                    : filteredLogs
-                    ? Math.min(currentPage * pageSize, filteredLogs.total)
-                    : 0}{" "}
-                  of{" "}
-                  {logs.isLoading
-                    ? "..."
-                    : filteredLogs
-                    ? filteredLogs.total
-                    : 0}{" "}
-                  results
-                </span>
-                <div className="flex items-center space-x-2">
-                  <span className="text-sm text-gray-700">
-                    Page {logs.isLoading ? "..." : currentPage} of{" "}
-                    {logs.isLoading
-                      ? "..."
-                      : filteredLogs
-                      ? filteredLogs.total_pages
-                      : 1}
-                  </span>
-                  <button
-                    onClick={() =>
-                      setCurrentPage((p) => Math.max(1, p - 1))
-                    }
-                    disabled={logs.isLoading || currentPage === 1}
-                    className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() =>
-                      setCurrentPage((p) =>
-                        Math.min(
-                          filteredLogs.total_pages || 1,
-                          p + 1,
-                        ),
-                      )
-                    }
-                    disabled={
-                      logs.isLoading ||
-                      currentPage === (filteredLogs.total_pages || 1)
-                    }
-                    className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <DataTable
-            columns={columns}
-            data={filteredData}
-            renderSubComponent={RequestViewer}
-            getRowCanExpand={() => true}
-          />
-        </div>
-        </>
-      )} 
+              </>
+            )} 
+          </TabPanel>
+          <TabPanel>
+            <AuditLogs 
+              userID={userID}
+              userRole={userRole}
+              token={token}
+              accessToken={accessToken}
+              isActive={activeTab === "audit logs"}
+              premiumUser={premiumUser}
+              allTeams={allTeams}
+            />
+          </TabPanel>
+        </TabPanels>
+      </TabGroup>
     </div>
   );
 }
@@ -838,7 +929,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cost:</span>
-              <span>${Number(row.original.spend || 0).toFixed(6)}</span>
+              <span>${formatNumberWithCommas(row.original.spend || 0, 6)}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cache Hit:</span>
@@ -863,6 +954,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <div className="flex">
               <span className="font-medium w-1/3">End Time:</span>
               <span>{row.original.endTime}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Duration:</span>
+              <span>{row.original.duration} s.</span>
             </div>
           </div>
         </div>

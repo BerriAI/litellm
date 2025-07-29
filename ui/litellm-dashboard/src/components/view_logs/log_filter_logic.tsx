@@ -14,6 +14,7 @@ export const FILTER_KEYS = {
   REQUEST_ID: "Request ID",
   MODEL: "Model",
   USER_ID: "User ID",
+  END_USER: "End User",
   STATUS: "Status",
   KEY_ALIAS: "Key Alias",
 } as const;
@@ -48,6 +49,7 @@ export function useLogFilterLogic({
     [FILTER_KEYS.REQUEST_ID]: "",
     [FILTER_KEYS.MODEL]: "",
     [FILTER_KEYS.USER_ID]: "",
+    [FILTER_KEYS.END_USER]: "",
     [FILTER_KEYS.STATUS]: "",
     [FILTER_KEYS.KEY_ALIAS]: ""
   }), []);
@@ -77,6 +79,7 @@ export function useLogFilterLogic({
         page,
         pageSize,
         filters[FILTER_KEYS.USER_ID] || undefined,
+        filters[FILTER_KEYS.END_USER] || undefined,
         filters[FILTER_KEYS.STATUS] || undefined,
         filters[FILTER_KEYS.MODEL] || undefined
       );
@@ -151,6 +154,12 @@ export function useLogFilterLogic({
         log => log.api_key === filters[FILTER_KEYS.KEY_HASH]
       );
     }
+
+    if (filters[FILTER_KEYS.END_USER]) {
+      filteredData = filteredData.filter(
+        log => log.end_user === filters[FILTER_KEYS.END_USER]
+      );
+    }
     
     // Add key alias filtering
     if (filters[FILTER_KEYS.KEY_ALIAS]) {
@@ -198,24 +207,6 @@ export function useLogFilterLogic({
     enabled: !!accessToken,
   });
 
-  const { data: allModels = [] } = useQuery<string[], Error>({
-    queryKey: ['allModels', accessToken, userID, userRole],
-    queryFn: async () => {
-      if (!accessToken || !userID || !userRole) return [];
-
-      const response = await modelAvailableCall(
-        accessToken,
-        userID,
-        userRole,
-        false, // return_wildcard_routes
-        null // teamID
-      );
-
-      return response.data.map((model: { id: string }) => model.id);
-    },
-    enabled: !!accessToken && !!userID && !!userRole,
-  });
-
   // Update filters state
   const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
     setFilters(prev => {
@@ -252,7 +243,6 @@ export function useLogFilterLogic({
     filteredLogs,
     allKeyAliases,
     allTeams,
-    allModels,
     handleFilterChange,
     handleFilterReset,
   };

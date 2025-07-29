@@ -20,35 +20,7 @@ and more, as well as making chat and HTTP requests to the proxy server.
    If you have [uv](https://github.com/astral-sh/uv) installed, you can try this:
 
    ```shell
-   uvx --from=litellm[proxy] litellm-proxy
-   ```
-
-   and if things are working, you should see something like this:
-
-   ```shell
-   Usage: litellm-proxy [OPTIONS] COMMAND [ARGS]...
-
-   LiteLLM Proxy CLI - Manage your LiteLLM proxy server
-
-   Options:
-   --base-url TEXT  Base URL of the LiteLLM proxy server  [env var:
-                     LITELLM_PROXY_URL]
-   --api-key TEXT   API key for authentication  [env var:
-                     LITELLM_PROXY_API_KEY]
-   --help           Show this message and exit.
-
-   Commands:
-   chat         Chat with models through the LiteLLM proxy server
-   credentials  Manage credentials for the LiteLLM proxy server
-   http         Make HTTP requests to the LiteLLM proxy server
-   keys         Manage API keys for the LiteLLM proxy server
-   models       Manage models on your LiteLLM proxy server
-   ```
-
-   If this works, you can make use of the tool more convenient by doing:
-
-   ```shell
-   uv tool install litellm[proxy]
+   uv tool install 'litellm[proxy]'
    ```
 
    If that works, you'll see something like this:
@@ -62,25 +34,6 @@ and more, as well as making chat and HTTP requests to the proxy server.
 
    ```shell
    litellm-proxy
-   ```
-
-   In the future if you want to upgrade, you can do so with:
-
-   ```shell
-   uv tool upgrade litellm[proxy]
-   ```
-
-   or if you want to uninstall, you can do so with:
-
-   ```shell
-   uv tool uninstall litellm
-   ```
-
-   If you don't have uv or otherwise want to use pip, you can activate a virtual
-   environment and install the package manually:
-
-   ```bash
-   pip install 'litellm[proxy]'
    ```
 
 2. **Set up environment variables**
@@ -104,12 +57,41 @@ and more, as well as making chat and HTTP requests to the proxy server.
 
    - If you see an error, check your environment variables and proxy server status.
 
-## Configuration
+## Authentication using CLI
 
-You can configure the CLI using environment variables or command-line options:
+You can use the CLI to authenticate to the LiteLLM Gateway. This is great if you're trying to give a large number of developers self-serve access to the LiteLLM Gateway.
 
-- `LITELLM_PROXY_URL`: Base URL of the LiteLLM proxy server (default: http://localhost:4000)
-- `LITELLM_PROXY_API_KEY`: API key for authentication
+:::info
+
+For an indepth guide, see [CLI Authentication](./cli_sso).
+
+:::
+
+
+
+1. **Set up the proxy URL**
+
+   ```bash
+   export LITELLM_PROXY_URL=http://localhost:4000
+   ```
+
+   *(Replace with your actual proxy URL)*
+
+2. **Login**
+
+   ```bash
+   litellm-proxy login
+   ```
+
+   This will open a browser window to authenticate. If you have connected LiteLLM Proxy to your SSO provider, you can login with your SSO credentials. Once logged in, you can use the CLI to make requests to the LiteLLM Gateway.
+
+3. **Test your authentication**
+
+   ```bash
+   litellm-proxy models list
+   ```
+
+   This will list all the models available to you.
 
 ## Main Commands
 

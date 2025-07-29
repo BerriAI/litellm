@@ -223,13 +223,13 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
 
   // Dynamically render settings based on the schema
   const renderSettings = () => {
-    const { values, schema } = settings;
+    const { values, field_schema } = settings;
     
-    if (!schema || !schema.properties) {
+    if (!field_schema || !field_schema.properties) {
       return <Text>No schema information available</Text>;
     }
 
-    return Object.entries(schema.properties).map(([key, property]: [string, any]) => {
+    return Object.entries(field_schema.properties).map(([key, property]: [string, any]) => {
       const value = values[key];
       const displayName = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       
@@ -292,8 +292,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
         These settings will be applied by default when creating new teams.
       </Text>
       
-      {settings?.schema?.description && (
-        <Paragraph className="mb-4 mt-2">{settings.schema.description}</Paragraph>
+      {settings?.field_schema?.description && (
+        <Paragraph className="mb-4 mt-2">{settings.field_schema.description}</Paragraph>
       )}
       <Divider />
       

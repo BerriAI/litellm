@@ -7,6 +7,7 @@ load_dotenv()
 import pytest
 
 from litellm import completion, acompletion
+from litellm.exceptions import APIConnectionError
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -35,6 +36,12 @@ async def test_chat_completion_snowflake(sync_mode):
             )
             print(response)
             assert response is not None
+    except APIConnectionError as e:
+        # Skip test if Snowflake API is unavailable (502 error)
+        if "Application failed to respond" in str(e) or "502" in str(e):
+            pytest.skip(f"Snowflake API unavailable: {e}")
+        else:
+            raise  # Re-raise if it's a different APIConnectionError
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -72,5 +79,11 @@ async def test_chat_completion_snowflake_stream(sync_mode):
 
             for chunk in response:
                 print(chunk)
+    except APIConnectionError as e:
+        # Skip test if Snowflake API is unavailable (502 error)
+        if "Application failed to respond" in str(e) or "502" in str(e):
+            pytest.skip(f"Snowflake API unavailable: {e}")
+        else:
+            raise  # Re-raise if it's a different APIConnectionError
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

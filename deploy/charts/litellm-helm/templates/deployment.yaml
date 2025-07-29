@@ -1,6 +1,8 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  annotations:
+  {{- toYaml .Values.deploymentAnnotations | nindent 4 }}
   name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.labels" . | nindent 4 }}

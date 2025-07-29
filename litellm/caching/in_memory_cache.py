@@ -11,7 +11,10 @@ Has 4 methods:
 import json
 import sys
 import time
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
+
+if TYPE_CHECKING:
+    from litellm.types.caching import RedisPipelineIncrementOperation
 
 from pydantic import BaseModel
 
@@ -84,6 +87,19 @@ class InMemoryCache(BaseCache):
         except Exception:
             return False
 
+    def _is_key_expired(self, key: str) -> bool:
+        """
+        Check if a specific key is expired
+        """
+        return key in self.ttl_dict and time.time() > self.ttl_dict[key]
+
+    def _remove_key(self, key: str) -> None:
+        """
+        Remove a key from both cache_dict and ttl_dict
+        """
+        self.cache_dict.pop(key, None)
+        self.ttl_dict.pop(key, None)
+
     def evict_cache(self):
         """
         Eviction policy:
@@ -97,14 +113,25 @@ class InMemoryCache(BaseCache):
 
         """
         for key in list(self.ttl_dict.keys()):
-            if time.time() > self.ttl_dict[key]:
-                self.cache_dict.pop(key, None)
-                self.ttl_dict.pop(key, None)
+            if self._is_key_expired(key):
+                self._remove_key(key)
 
                 # de-reference the removed item
                 # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
                 # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
                 # This can occur when an object is referenced by another object, but the reference is never removed.
+
+    def allow_ttl_override(self, key: str) -> bool:
+        """
+        Check if ttl is set for a key
+        """
+        ttl_time = self.ttl_dict.get(key)
+        if ttl_time is None:  # if ttl is not set, allow override
+            return True
+        elif float(ttl_time) < time.time():  # if ttl is expired, allow override
+            return True
+        else:
+            return False
 
     def set_cache(self, key, value, **kwargs):
         if len(self.cache_dict) >= self.max_size_in_memory:
@@ -114,10 +141,11 @@ class InMemoryCache(BaseCache):
             return
 
         self.cache_dict[key] = value
-        if "ttl" in kwargs and kwargs["ttl"] is not None:
-            self.ttl_dict[key] = time.time() + kwargs["ttl"]
-        else:
-            self.ttl_dict[key] = time.time() + self.default_ttl
+        if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+            if "ttl" in kwargs and kwargs["ttl"] is not None:
+                self.ttl_dict[key] = time.time() + float(kwargs["ttl"])
+            else:
+                self.ttl_dict[key] = time.time() + self.default_ttl
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -140,12 +168,21 @@ class InMemoryCache(BaseCache):
         self.set_cache(key, init_value, ttl=ttl)
         return value
 
+    def evict_element_if_expired(self, key: str) -> bool:
+        """
+        Returns True if the element is expired and removed from the cache
+
+        Returns False if the element is not expired
+        """
+        if self._is_key_expired(key):
+            self._remove_key(key)
+            return True
+        return False
+
     def get_cache(self, key, **kwargs):
         if key in self.cache_dict:
-            if key in self.ttl_dict:
-                if time.time() > self.ttl_dict[key]:
-                    self.cache_dict.pop(key, None)
-                    return None
+            if self.evict_element_if_expired(key):
+                return None
             original_cached_response = self.cache_dict[key]
             try:
                 cached_response = json.loads(original_cached_response)
@@ -185,6 +222,17 @@ class InMemoryCache(BaseCache):
         await self.async_set_cache(key, value, **kwargs)
         return value
 
+    async def async_increment_pipeline(
+        self, increment_list: List["RedisPipelineIncrementOperation"], **kwargs
+    ) -> Optional[List[float]]:
+        results = []
+        for increment in increment_list:
+            result = await self.async_increment(
+                increment["key"], increment["increment_value"], **kwargs
+            )
+            results.append(result)
+        return results
+
     def flush_cache(self):
         self.cache_dict.clear()
         self.ttl_dict.clear()
@@ -193,11 +241,18 @@ class InMemoryCache(BaseCache):
         pass
 
     def delete_cache(self, key):
-        self.cache_dict.pop(key, None)
-        self.ttl_dict.pop(key, None)
+        self._remove_key(key)
 
     async def async_get_ttl(self, key: str) -> Optional[int]:
         """
         Get the remaining TTL of a key in in-memory cache
         """
         return self.ttl_dict.get(key, None)
+
+    async def async_get_oldest_n_keys(self, n: int) -> List[str]:
+        """
+        Get the oldest n keys in the cache
+        """
+        # sorted ttl dict by ttl
+        sorted_ttl_dict = sorted(self.ttl_dict.items(), key=lambda x: x[1])
+        return [key for key, _ in sorted_ttl_dict[:n]]

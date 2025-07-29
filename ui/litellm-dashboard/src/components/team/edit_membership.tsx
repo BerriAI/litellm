@@ -78,9 +78,9 @@ const MemberModal = <T extends BaseMember>({
       
       onSubmit(formData);
       form.resetFields();
-      message.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
+      // message.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
     } catch (error) {
-      message.error('Failed to submit form');
+      // message.error('Failed to submit form');
       console.error('Form submission error:', error);
     }
   };

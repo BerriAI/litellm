@@ -2,8 +2,9 @@
 ## File for 'response_cost' calculation in Logging
 import time
 from functools import lru_cache
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union, cast
 
+from httpx import Response
 from pydantic import BaseModel
 
 import litellm
@@ -17,6 +18,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    CostCalculatorUtils,
     _generic_cost_per_character,
     generic_cost_per_token,
     select_cost_metric_for_model,
@@ -26,6 +28,9 @@ from litellm.llms.anthropic.cost_calculation import (
 )
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
+)
+from litellm.llms.bedrock.cost_calculation import (
+    cost_per_token as bedrock_cost_per_token,
 )
 from litellm.llms.bedrock.image.cost_calculator import (
     cost_calculator as bedrock_image_cost_calculator,
@@ -44,6 +49,9 @@ from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
+from litellm.llms.perplexity.cost_calculator import (
+    cost_per_token as perplexity_cost_per_token,
+)
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
@@ -73,7 +81,6 @@ from litellm.types.utils import (
     LlmProviders,
     LlmProvidersSet,
     ModelInfo,
-    PassthroughCallTypes,
     StandardBuiltInToolsParams,
     Usage,
 )
@@ -89,6 +96,13 @@ from litellm.utils import (
     _cached_get_model_info_helper,
     token_counter,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LitellmLoggingObject,
+    )
+else:
+    LitellmLoggingObject = Any
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -315,6 +329,8 @@ def cost_per_token(  # noqa: PLR0915
             )
     elif custom_llm_provider == "anthropic":
         return anthropic_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "bedrock":
+        return bedrock_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "openai":
         return openai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "databricks":
@@ -329,6 +345,8 @@ def cost_per_token(  # noqa: PLR0915
         return gemini_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "deepseek":
         return deepseek_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "perplexity":
+        return perplexity_cost_per_token(model=model, usage=usage_block)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -585,6 +603,7 @@ def completion_cost(  # noqa: PLR0915
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
 ) -> float:
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -650,9 +669,10 @@ def completion_cost(  # noqa: PLR0915
         potential_model_names = [selected_model]
         if model is not None:
             potential_model_names.append(model)
+
         for idx, model in enumerate(potential_model_names):
             try:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"selected model name for cost calculation: {model}"
                 )
 
@@ -661,9 +681,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -746,12 +766,7 @@ def completion_cost(  # noqa: PLR0915
                                 str(e)
                             )
                         )
-                if (
-                    call_type == CallTypes.image_generation.value
-                    or call_type == CallTypes.aimage_generation.value
-                    or call_type
-                    == PassthroughCallTypes.passthrough_image_generation.value
-                ):
+                if CostCalculatorUtils._call_type_has_image_response(call_type):
                     ### IMAGE GENERATION COST CALCULATION ###
                     if custom_llm_provider == "vertex_ai":
                         if isinstance(completion_response, ImageResponse):
@@ -769,6 +784,22 @@ def completion_cost(  # noqa: PLR0915
                             )
                         raise TypeError(
                             "completion_response must be of type ImageResponse for bedrock image cost calculation"
+                        )
+                    elif custom_llm_provider == litellm.LlmProviders.RECRAFT.value:
+                        from litellm.llms.recraft.cost_calculator import (
+                            cost_calculator as recraft_image_cost_calculator,
+                        )
+                        return recraft_image_cost_calculator(
+                            model=model,
+                            image_response=completion_response,
+                        )
+                    elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
+                        from litellm.llms.gemini.image_generation.cost_calculator import (
+                            cost_calculator as gemini_image_cost_calculator,
+                        )
+                        return gemini_image_cost_calculator(
+                            model=model,
+                            image_response=completion_response,
                         )
                     else:
                         return default_image_cost_calculator(
@@ -832,6 +863,11 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                     )
+                elif call_type == CallTypes.call_mcp_tool.value:
+                    from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                        MCPCostCalculator,
+                    )
+                    return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model
@@ -964,6 +1000,7 @@ def response_cost_calculator(
         ResponsesAPIResponse,
         LiteLLMRealtimeStreamLoggingObject,
         OpenAIModerationResponse,
+        Response,
     ],
     model: str,
     custom_llm_provider: Optional[str],
@@ -993,6 +1030,7 @@ def response_cost_calculator(
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
 ) -> float:
     """
     Returns
@@ -1025,6 +1063,7 @@ def response_cost_calculator(
                 standard_built_in_tools_params=standard_built_in_tools_params,
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
+                litellm_logging_obj=litellm_logging_obj,
             )
         return response_cost
     except Exception as e:
@@ -1114,9 +1153,13 @@ def default_image_cost_calculator(
 
     # Build model names for cost lookup
     base_model_name = f"{size_str}/{model}"
-    if custom_llm_provider and model.startswith(custom_llm_provider):
+    model_name_without_custom_llm_provider: Optional[str] = None
+    if custom_llm_provider and model.startswith(f"{custom_llm_provider}/"):
+        model_name_without_custom_llm_provider = model.replace(
+            f"{custom_llm_provider}/", ""
+        )
         base_model_name = (
-            f"{custom_llm_provider}/{size_str}/{model.replace(custom_llm_provider, '')}"
+            f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
         )
     model_name_with_quality = (
         f"{quality}/{base_model_name}" if quality else base_model_name
@@ -1138,17 +1181,18 @@ def default_image_cost_calculator(
 
     # Try model with quality first, fall back to base model name
     cost_info: Optional[dict] = None
-    models_to_check = [
+    models_to_check: List[Optional[str]] = [
         model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
         model_without_provider,
         model,
+        model_name_without_custom_llm_provider,
     ]
-    for model in models_to_check:
-        if model in litellm.model_cost:
-            cost_info = litellm.model_cost[model]
+    for _model in models_to_check:
+        if _model is not None and _model in litellm.model_cost:
+            cost_info = litellm.model_cost[_model]
             break
     if cost_info is None:
         raise Exception(
@@ -1171,7 +1215,7 @@ def batch_cost_calculator(
         model=model, custom_llm_provider=custom_llm_provider
     )
 
-    verbose_logger.info(
+    verbose_logger.debug(
         "Calculating batch cost per token. model=%s, custom_llm_provider=%s",
         model,
         custom_llm_provider,
@@ -1209,28 +1253,7 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
-class RealtimeAPITokenUsageProcessor:
-    @staticmethod
-    def collect_usage_from_realtime_stream_results(
-        results: OpenAIRealtimeStreamList,
-    ) -> List[Usage]:
-        """
-        Collect usage from realtime stream results
-        """
-        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
-            List[OpenAIRealtimeStreamResponseBaseObject],
-            [result for result in results if result["type"] == "response.done"],
-        )
-        usage_objects: List[Usage] = []
-        for result in response_done_events:
-            usage_object = (
-                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                    result["response"].get("usage", {})
-                )
-            )
-            usage_objects.append(usage_object)
-        return usage_objects
-
+class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: List[Usage]) -> Usage:
         """
@@ -1266,13 +1289,17 @@ class RealtimeAPITokenUsageProcessor:
                     combined.prompt_tokens_details = PromptTokensDetailsWrapper()
 
                 # Check what keys exist in the model's prompt_tokens_details
-                for attr in dir(usage.prompt_tokens_details):
-                    if not attr.startswith("_") and not callable(
-                        getattr(usage.prompt_tokens_details, attr)
+                for attr in usage.prompt_tokens_details.model_fields:
+                    if (
+                        hasattr(usage.prompt_tokens_details, attr)
+                        and not attr.startswith("_")
+                        and not callable(getattr(usage.prompt_tokens_details, attr))
                     ):
-                        current_val = getattr(combined.prompt_tokens_details, attr, 0)
-                        new_val = getattr(usage.prompt_tokens_details, attr, 0)
-                        if new_val is not None:
+                        current_val = (
+                            getattr(combined.prompt_tokens_details, attr, 0) or 0
+                        )
+                        new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
+                        if new_val is not None and isinstance(new_val, (int, float)):
                             setattr(
                                 combined.prompt_tokens_details,
                                 attr,
@@ -1307,6 +1334,29 @@ class RealtimeAPITokenUsageProcessor:
                             )
 
         return combined
+
+
+class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
+    @staticmethod
+    def collect_usage_from_realtime_stream_results(
+        results: OpenAIRealtimeStreamList,
+    ) -> List[Usage]:
+        """
+        Collect usage from realtime stream results
+        """
+        response_done_events: List[OpenAIRealtimeStreamResponseBaseObject] = cast(
+            List[OpenAIRealtimeStreamResponseBaseObject],
+            [result for result in results if result["type"] == "response.done"],
+        )
+        usage_objects: List[Usage] = []
+        for result in response_done_events:
+            usage_object = (
+                ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    result["response"].get("usage", {})
+                )
+            )
+            usage_objects.append(usage_object)
+        return usage_objects
 
     @staticmethod
     def collect_and_combine_usage_from_realtime_stream_results(
@@ -1353,9 +1403,9 @@ def handle_realtime_stream_cost_calculation(
     potential_model_names = []
     for result in results:
         if result["type"] == "session.created":
-            received_model = cast(OpenAIRealtimeStreamSessionEvents, result)["session"][
-                "model"
-            ]
+            received_model = cast(OpenAIRealtimeStreamSessionEvents, result)[
+                "session"
+            ].get("model", None)
             potential_model_names.append(received_model)
 
     potential_model_names.append(litellm_model_name)
@@ -1364,6 +1414,8 @@ def handle_realtime_stream_cost_calculation(
 
     for model_name in potential_model_names:
         try:
+            if model_name is None:
+                continue
             _input_cost_per_token, _output_cost_per_token = generic_cost_per_token(
                 model=model_name,
                 usage=combined_usage_object,

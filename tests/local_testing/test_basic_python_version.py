@@ -24,8 +24,8 @@ def test_using_litellm():
 
 
 def test_litellm_proxy_server():
-    # Install the litellm[proxy] package
-    subprocess.run(["pip", "install", "litellm[proxy]"])
+    # Install the local litellm[proxy] package in development mode
+    subprocess.run(["pip", "install", "-e", ".[proxy]"])
 
     # Import the proxy_server module
     try:
@@ -91,11 +91,11 @@ import requests
 
 
 def test_litellm_proxy_server_config_no_general_settings():
-    # Install the litellm[proxy] package
-    # Start the server
+    # Install the local litellm packages in development mode
+    server_process = None
     try:
-        subprocess.run(["pip", "install", "litellm[proxy]"])
-        subprocess.run(["pip", "install", "litellm[extra_proxy]"])
+        subprocess.run(["pip", "install", "-e", ".[proxy]"])
+        subprocess.run(["pip", "install", "-e", ".[extra_proxy]"])
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         server_process = subprocess.Popen(
@@ -136,8 +136,9 @@ def test_litellm_proxy_server_config_no_general_settings():
         pytest.fail("Failed to connect to the server")
     finally:
         # Shut down the server
-        server_process.terminate()
-        server_process.wait()
+        if server_process:
+            server_process.terminate()
+            server_process.wait()
 
     # Additional assertions can be added here
     assert True

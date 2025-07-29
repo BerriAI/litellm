@@ -2,7 +2,7 @@
 
 You can now override the default api key auth.
 
-Here's how: 
+## Usage
 
 #### 1. Create a custom auth file. 
 
@@ -45,4 +45,24 @@ general_settings:
 #### 3. Start the proxy
 ```shell
 $ litellm --config /path/to/config.yaml 
+```
+
+## ✨ Support LiteLLM Virtual Keys + Custom Auth
+
+Supported from v1.72.2+
+
+:::info 
+
+✨ Supporting Custom Auth + LiteLLM Virtual Keys is on LiteLLM Enterprise
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
+:::
+
+```yaml
+general_settings:
+  custom_auth: custom_auth_auto.user_api_key_auth
+  custom_auth_settings:
+    mode: "auto" # can be 'on', 'off', 'auto' - 'auto' checks both litellm api key auth + custom auth
 ```

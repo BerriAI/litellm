@@ -331,6 +331,70 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
 
 
+## OpenAI Chat Completion to Responses API Bridge
+
+Call any Responses API model from OpenAI's `/chat/completions` endpoint. 
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os 
+
+os.environ["OPENAI_API_KEY"] = "sk-1234"
+
+response = litellm.completion(
+    model="o3-deep-research-2025-06-26",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    tools=[
+        {"type": "web_search_preview"},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ],
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: openai-model
+    litellm_params:
+      model: o3-deep-research-2025-06-26
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+2. Start the proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it!
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{ 
+    "model": "openai-model",
+    "messages": [
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "tools": [
+        {"type": "web_search_preview"},
+        {"type": "code_interpreter", "container": {"type": "auto"}},
+    ],
+}'
+```
+
+</TabItem>
+</Tabs>
+
+
 ## OpenAI Audio Transcription
 
 LiteLLM supports OpenAI Audio Transcription endpoint.

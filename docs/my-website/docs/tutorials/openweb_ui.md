@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Open WebUI with LiteLLM
+# Open WebUI
 
 This guide walks you through connecting Open WebUI to LiteLLM. Using LiteLLM with Open WebUI allows teams to 
 - Access 100+ LLMs on Open WebUI
@@ -119,11 +119,16 @@ Example litellm config.yaml:
 
 ```yaml
 model_list:
-  - model_name: thinking-anthropic-claude-3-7-sonnet
+  - model_name: thinking-anthropic-claude-3-7-sonnet # Bedrock Anthropic
     litellm_params:
       model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
       thinking: {"type": "enabled", "budget_tokens": 1024}
       max_tokens: 1080
+      merge_reasoning_content_in_choices: true
+  - model_name: vertex_ai/gemini-2.5-pro # Vertex AI Gemini
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      thinking: {"type": "enabled", "budget_tokens": 1024}
       merge_reasoning_content_in_choices: true
 ```
 
@@ -134,4 +139,21 @@ On the models dropdown select `thinking-anthropic-claude-3-7-sonnet`
 <Image img={require('../../img/litellm_thinking_openweb.gif')} />
 
 ## Additional Resources
+
 - Running LiteLLM and Open WebUI on Windows Localhost: A Comprehensive Guide [https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/](https://www.tanyongsheng.com/note/running-litellm-and-openwebui-on-windows-localhost-a-comprehensive-guide/)
+- [Run Guardrails Based on User-Agent Header](../proxy/guardrails/quick_start#-tag-based-guardrail-modes)
+
+
+## Add Custom Headers to Spend Tracking
+
+You can add custom headers to the request to track spend and usage.
+
+```yaml
+litellm_settings:
+  extra_spend_tag_headers:
+    - "x-custom-header"
+```
+
+You can add custom headers to the request to track spend and usage.
+
+<Image img={require('../../img/custom_tag_headers.png')} />

@@ -165,6 +165,14 @@ class TestOpenAIGPTImage1(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gpt-image-1"}
 
+class TestRecraftImageGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "recraft/recraftv3"}
+
+class TestGoogleImageGen(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "gemini/imagen-4.0-generate-preview-06-06"}
+
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.set_verbose = True
@@ -241,4 +249,67 @@ async def test_aimage_generation_bedrock_with_optional_params():
             pass
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_gpt_image_1_with_input_fidelity():
+    """Test gpt-image-1 with input_fidelity parameter (mocked)"""
+    from unittest.mock import AsyncMock, patch
+    
+    # Mock OpenAI response
+    mock_openai_response = {
+        "created": 1703658209,
+        "data": [
+            {
+                "url": "https://example.com/generated_image.png"
+            }
+        ]
+    }
+    
+    # Create a proper mock response object
+    class MockResponse:
+        def model_dump(self):
+            return mock_openai_response
+    
+    # Create a mock client with the images.generate method
+    mock_client = AsyncMock()
+    mock_client.images.generate = AsyncMock(return_value=MockResponse())
+    
+    # Capture the actual arguments sent to OpenAI client
+    captured_args = None
+    captured_kwargs = None
+    
+    async def capture_generate_call(*args, **kwargs):
+        nonlocal captured_args, captured_kwargs
+        captured_args = args
+        captured_kwargs = kwargs
+        return MockResponse()
+    
+    mock_client.images.generate.side_effect = capture_generate_call
+    
+    # Mock the _get_openai_client method to return our mock client
+    with patch.object(litellm.main.openai_chat_completions, '_get_openai_client', return_value=mock_client):
+        response = await litellm.aimage_generation(
+            prompt="A cute baby sea otter",
+            model="gpt-image-1",
+            input_fidelity="high",
+            quality="medium",
+            size="1024x1024",
+        )
+        
+        # Validate the response
+        assert response is not None
+        assert response.created == 1703658209
+        assert response.data is not None
+        assert len(response.data) == 1
+        assert response.data[0].url == "https://example.com/generated_image.png"
+        
+        # Validate that the OpenAI client was called with correct parameters
+        mock_client.images.generate.assert_called_once()
+        assert captured_kwargs is not None
+        assert captured_kwargs["model"] == "gpt-image-1"
+        assert captured_kwargs["prompt"] == "A cute baby sea otter"
+        assert captured_kwargs["input_fidelity"] == "high"
+        assert captured_kwargs["quality"] == "medium"
+        assert captured_kwargs["size"] == "1024x1024"
 

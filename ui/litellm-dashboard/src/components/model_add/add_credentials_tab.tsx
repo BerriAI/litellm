@@ -42,10 +42,16 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const handleSubmit = (values: any) => {
+    const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
+      if (value !== '' && value !== undefined && value !== null) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {} as any);
     if (addOrEdit === "add") {
-      onAddCredential(values);
+      onAddCredential(filteredValues);
     } else {
-      onUpdateCredential(values);
+      onUpdateCredential(filteredValues);
     }
     form.resetFields();
   };
@@ -101,6 +107,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           tooltip="Helper to auto-populate provider specific fields"
         >
           <AntdSelect
+            showSearch
             onChange={(value) => {
               setSelectedProvider(value as Providers);
               form.setFieldValue("custom_llm_provider", value);

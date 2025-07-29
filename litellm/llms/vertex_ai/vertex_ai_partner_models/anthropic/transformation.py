@@ -47,6 +47,10 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     Note: Please make sure to modify the default parameters as required for your use case.
     """
 
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "vertex_ai"
+
     def transform_request(
         self,
         model: str,

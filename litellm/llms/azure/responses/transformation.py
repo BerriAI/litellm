@@ -1,15 +1,11 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
-import httpx
-
-import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -21,25 +17,37 @@ else:
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def validate_environment(
-        self,
-        headers: dict,
-        model: str,
-        api_key: Optional[str] = None,
+        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
-        api_key = (
-            api_key
-            or litellm.api_key
-            or litellm.azure_key
-            or get_secret_str("AZURE_OPENAI_API_KEY")
-            or get_secret_str("AZURE_API_KEY")
+        return BaseAzureLLM._base_validate_azure_environment(
+            headers=headers, litellm_params=litellm_params
         )
 
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
+    def get_stripped_model_name(self, model: str) -> str:
+        # if "responses/" is in the model name, remove it
+        if "responses/" in model:
+            model = model.replace("responses/", "")
+        if "o_series" in model:
+            model = model.replace("o_series/", "")
+        return model
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """No transform applied since inputs are in OpenAI spec already"""
+        stripped_model_name = self.get_stripped_model_name(model)
+        return dict(
+            ResponsesAPIRequestParams(
+                model=stripped_model_name,
+                input=input,
+                **response_api_optional_request_params,
+            )
         )
-        return headers
 
     def get_complete_url(
         self,
@@ -62,35 +70,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
-        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
-        if api_base is None:
-            raise ValueError(
-                f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
-            )
-        original_url = httpx.URL(api_base)
-
-        # Extract api_version or use default
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
-
-        # Create a new dictionary with existing params
-        query_params = dict(original_url.params)
-
-        # Add api_version if needed
-        if "api-version" not in query_params and api_version:
-            query_params["api-version"] = api_version
-
-        # Add the path to the base URL
-        if "/openai/responses" not in api_base:
-            new_url = _add_path_to_api_base(
-                api_base=api_base, ending_path="/openai/responses"
-            )
-        else:
-            new_url = api_base
-
-        # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params=query_params)
-
-        return str(final_url)
+        return BaseAzureLLM._get_base_azure_url(
+            api_base=api_base, litellm_params=litellm_params, route="/openai/responses"
+        )
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
@@ -170,3 +152,35 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         data: Dict = {}
         verbose_logger.debug(f"get response url={get_url}")
         return get_url, data
+
+    def transform_list_input_items_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        after: Optional[str] = None,
+        before: Optional[str] = None,
+        include: Optional[List[str]] = None,
+        limit: int = 20,
+        order: Literal["asc", "desc"] = "desc",
+    ) -> Tuple[str, Dict]:
+        url = (
+            self._construct_url_for_response_id_in_path(
+                api_base=api_base, response_id=response_id
+            )
+            + "/input_items"
+        )
+        params: Dict[str, Any] = {}
+        if after is not None:
+            params["after"] = after
+        if before is not None:
+            params["before"] = before
+        if include:
+            params["include"] = ",".join(include)
+        if limit is not None:
+            params["limit"] = limit
+        if order is not None:
+            params["order"] = order
+        verbose_logger.debug(f"list input items url={url}")
+        return url, params

@@ -16,7 +16,6 @@ from typing import (
 from pydantic import BaseModel
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.utils import (
@@ -33,11 +32,17 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp import MCPPostCallResponseObject
+    from litellm.types.router import PreRoutingHookResponse
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     LiteLLMLoggingObj = Any
+    UserAPIKeyAuth = Any
+    MCPPostCallResponseObject = Any
+    PreRoutingHookResponse = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -87,6 +92,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -104,6 +111,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Returns:
@@ -117,6 +126,21 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     """
     Allows usage-based-routing-v2 to run pre-call rpm checks within the picked deployment's semaphore (concurrency-safe tpm/rpm checks).
     """
+
+    async def async_pre_routing_hook(
+        self,
+        model: str,
+        request_kwargs: Dict,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+        specific_deployment: Optional[bool] = False,
+    ) -> Optional[PreRoutingHookResponse]:
+        """
+        This hook is called before the routing decision is made.
+
+        Used for the litellm auto-router to modify the request before the routing decision is made.
+        """
+        return None
 
     async def async_filter_deployments(
         self,
@@ -146,6 +170,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     def pre_call_check(self, deployment: dict) -> Optional[dict]:
+        pass
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: dict,
+        response: LLMResponseTypes,
+        call_type: Optional[CallTypes],
+    ) -> Optional[LLMResponseTypes]:
+        """
+        Allow modifying / reviewing the response just after it's received from the deployment.
+        """
         pass
 
     #### Fallback Events - router/proxy only ####
@@ -349,6 +384,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
 
+    #########################################################
+    # MCP TOOL CALL HOOKS
+    #########################################################
+    async def async_post_mcp_tool_call_hook(
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+    ) -> Optional[MCPPostCallResponseObject]:
+        """
+        This log gets called after the MCP tool call is made.
+
+        Useful if you want to modiy the standard logging payload after the MCP tool call is made.
+        """
+        return None
+
     # Useful helpers for custom logger classes
 
     def truncate_standard_logging_payload_content(
@@ -405,3 +453,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if len(text) > max_length
             else text
         )
+
+    def _select_metadata_field(
+        self, request_kwargs: Optional[Dict] = None
+    ) -> Optional[str]:
+        """
+        Select the metadata field to use for logging
+
+        1. If `litellm_metadata` is in the request kwargs, use it
+        2. Otherwise, use `metadata`
+        """
+        from litellm.constants import LITELLM_METADATA_FIELD, OLD_LITELLM_METADATA_FIELD
+
+        if request_kwargs is None:
+            return None
+        if LITELLM_METADATA_FIELD in request_kwargs:
+            return LITELLM_METADATA_FIELD
+        return OLD_LITELLM_METADATA_FIELD

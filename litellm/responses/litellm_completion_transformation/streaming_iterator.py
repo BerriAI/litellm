@@ -8,6 +8,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
+    ReasoningSummaryTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -115,15 +116,34 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         """
         Transform a chat completion chunk to a response API chunk.
 
-        This currently only handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API.
+        This currently handles emitting the OutputTextDeltaEvent, which is used by other tools using the responses API
+        and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         """
-        return OutputTextDeltaEvent(
-            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-            item_id=chunk.id,
-            output_index=0,
-            content_index=0,
-            delta=self._get_delta_string_from_streaming_choices(chunk.choices),
-        )
+        if (
+            chunk.choices
+            and hasattr(chunk.choices[0].delta, "reasoning_content")
+            and chunk.choices[0].delta.reasoning_content
+        ):
+            reasoning_content = chunk.choices[0].delta.reasoning_content
+
+            return ReasoningSummaryTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+                item_id=f"{chunk.id}_reasoning",
+                output_index=0,
+                delta=reasoning_content,
+            )
+        else:
+            delta_content = self._get_delta_string_from_streaming_choices(chunk.choices)
+            if delta_content:
+                return OutputTextDeltaEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                    item_id=chunk.id,
+                    output_index=0,
+                    content_index=0,
+                    delta=delta_content,
+                )
+
+        return None
 
     def _get_delta_string_from_streaming_choices(
         self, choices: List[StreamingChoices]

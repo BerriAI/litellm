@@ -2,6 +2,8 @@ import openai from "openai";
 import { message } from "antd";
 import { MessageType } from "../types";
 import { TokenUsage } from "../ResponseMetrics";
+import { getProxyBaseUrl } from "@/components/networking";
+import { MCPTool } from "@/components/chat_ui/llm_calls/fetch_mcp_tools";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -12,10 +14,11 @@ export async function makeOpenAIResponsesRequest(
   signal?: AbortSignal,
   onReasoningContent?: (content: string) => void,
   onTimingData?: (timeToFirstToken: number) => void,
-  onUsageData?: (usage: TokenUsage) => void,
+  onUsageData?: (usage: TokenUsage, toolName?: string) => void,
   traceId?: string,
   vector_store_ids?: string[],
-  guardrails?: string[]
+  guardrails?: string[],
+  selectedMCPTool?: string
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -27,10 +30,7 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
   
-  const proxyBaseUrl = isLocal
-    ? "http://localhost:4000"
-    : window.location.origin;
-  
+  const proxyBaseUrl = getProxyBaseUrl()
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
@@ -55,6 +55,17 @@ export async function makeOpenAIResponsesRequest(
       type: "message"
     }));
 
+    // Format MCP tool if selected
+    const tools = selectedMCPTool ? [{
+      type: "mcp",
+      server_label: "litellm",
+      server_url: `${proxyBaseUrl}/mcp`,
+      require_approval: "never",
+      headers: {
+        "x-litellm-api-key": `Bearer ${accessToken}`
+      }
+    }] : undefined;
+
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
     const response = await (client as any).responses.create({
@@ -64,39 +75,49 @@ export async function makeOpenAIResponsesRequest(
       litellm_trace_id: traceId,
       ...(vector_store_ids ? { vector_store_ids } : {}),
       ...(guardrails ? { guardrails } : {}),
+      ...(tools ? { tools, tool_choice: "required" } : {}),
     }, { signal });
+
+    let mcpToolUsed = "";
 
     for await (const event of response) {
       console.log("Response event:", event);
-      
+
       // Use a type-safe approach to handle events
       if (typeof event === 'object' && event !== null) {
+        // Check for MCP tool usage
+        if (event.type === "response.output_item.done" && 
+            event.item?.type === "mcp_call" && 
+            event.item?.name) {
+          mcpToolUsed = event.item.name;
+          console.log("MCP tool used:", mcpToolUsed);
+        }
+
         // Handle output text delta
         // 1) drop any "role" streams
         if (event.type === "response.role.delta") {
-            continue;
+          continue;
         }
 
         // 2) only handle actual text deltas
         if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-            const delta = event.delta;
-            console.log("Text delta", delta);
-            // skip pure whitespace/newlines
-            if (delta.trim().length > 0) {
-                updateTextUI("assistant", delta, selectedModel);
-                            
-                // Calculate time to first token
-                if (!firstTokenReceived) {
-                    firstTokenReceived = true;
-                    const timeToFirstToken = Date.now() - startTime;
-                    console.log("First token received! Time:", timeToFirstToken, "ms");
-                    
-                    if (onTimingData) {
-                    onTimingData(timeToFirstToken);
-                    }
-                }
-            
+          const delta = event.delta;
+          console.log("Text delta", delta);
+          // skip pure whitespace/newlines
+          if (delta.trim().length > 0) {
+            updateTextUI("assistant", delta, selectedModel);
+                        
+            // Calculate time to first token
+            if (!firstTokenReceived) {
+              firstTokenReceived = true;
+              const timeToFirstToken = Date.now() - startTime;
+              console.log("First token received! Time:", timeToFirstToken, "ms");
+              
+              if (onTimingData) {
+                onTimingData(timeToFirstToken);
+              }
             }
+          }
         }
         
         // Handle reasoning content
@@ -106,7 +127,7 @@ export async function makeOpenAIResponsesRequest(
             onReasoningContent(delta);
           }
         }
-        
+
         // Handle usage data at the response.completed event
         if (event.type === "response.completed" && 'response' in event) {
           const response_obj = event.response;
@@ -127,11 +148,13 @@ export async function makeOpenAIResponsesRequest(
               usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
             }
             
-            onUsageData(usageData);
+            onUsageData(usageData, mcpToolUsed);
           }
         }
       }
     }
+
+    return response;
   } catch (error) {
     if (signal?.aborted) {
       console.log("Responses API request was cancelled");
