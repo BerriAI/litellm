@@ -1,7 +1,7 @@
 model_list:
-  - model_name: vertex_ai/*
+  - model_name: openai/*
     litellm_params:
-      model: gemini/*
+      model: openai/*
 
 
 litellm_settings:
