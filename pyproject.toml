@@ -53,9 +53,7 @@ azure-storage-blob = {version="^12.25.1", optional=true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 google-auth = {version = "^2.14.1", optional = true}
 google-api-core = {version = "^2.14.1", optional = true}
-proto-plus = {version = "^1.22.3", optional = true}
 tenacity = {version = ">=8.2.3,<9.0.0", optional = true}
-anyio = {version = ">=4.8.0,<5.0.0", optional = true, python = ">=3.9"}
 resend = {version = "^0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
 websockets = {version = "^13.1.0", optional = true}
