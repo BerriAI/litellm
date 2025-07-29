@@ -239,7 +239,7 @@ class AmazonConverseConfig(BaseConfig):
         self, computer_use_tools: List[OpenAIChatCompletionToolParam]
     ) -> List[dict]:
         """Transform computer use tools to Bedrock format."""
-        transformed_tools = []
+        transformed_tools: List[dict] = []
         
         for tool in computer_use_tools:
             tool_type = tool.get("type", "")
@@ -251,6 +251,7 @@ class AmazonConverseConfig(BaseConfig):
                     is_computer_use_tool = True
                     break
             
+            transformed_tool: dict = {}
             if is_computer_use_tool:
                 if tool_type.startswith("computer_") and "function" in tool:
                     # Computer use tool with function format
@@ -262,7 +263,7 @@ class AmazonConverseConfig(BaseConfig):
                     }
                 else:
                     # Direct tools - just need to ensure name is present
-                    transformed_tool = tool.copy()
+                    transformed_tool = dict(tool)
                     if "name" not in transformed_tool:
                         if tool_type.startswith("bash_"):
                             transformed_tool["name"] = "bash"
@@ -270,7 +271,7 @@ class AmazonConverseConfig(BaseConfig):
                             transformed_tool["name"] = "str_replace_editor"
             else:
                 # Pass through other tools as-is
-                transformed_tool = tool.copy()
+                transformed_tool = dict(tool)
                 
             transformed_tools.append(transformed_tool)
             
