@@ -578,7 +578,8 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     finish_reason = choice.get("finish_details") or "stop"
                 if (
                     finish_reason == "stop"
-                    and message.tool_calls
+                    and hasattr(message, "tool_calls")
+                    and message.tool_calls is not None
                     and len(message.tool_calls) > 0
                 ):
                     finish_reason = "tool_calls"
