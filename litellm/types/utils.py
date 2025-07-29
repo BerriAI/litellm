@@ -656,8 +656,29 @@ class Message(OpenAIObject):
             # ensure default response matches OpenAI spec
             if hasattr(self, "thinking_blocks"):
                 del self.thinking_blocks
-
+        
+        self._handle_initialize_tool_call_fields(function_call, tool_calls)
         add_provider_specific_fields(self, provider_specific_fields)
+    
+    def _handle_initialize_tool_call_fields(
+        self,
+        function_call: Optional[Any] = None,
+        tool_calls: Optional[list] = None,
+    ):
+        """
+        Delete `tool_calls` and `function_call` fields if they are None.
+        This is to ensure default response matches OpenAI spec.
+        
+        Relevant issue: https://github.com/BerriAI/litellm/issues/13055
+        """
+        if tool_calls is None:
+            if hasattr(self, "tool_calls"):
+                del self.tool_calls
+        
+        if function_call is None:
+            if hasattr(self, "function_call"):
+                del self.function_call
+
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
