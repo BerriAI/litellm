@@ -38,6 +38,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `ingress.*`                                                | See [values.yaml](./values.yaml) for example settings                                                                                                                                 | N/A  |
 | `proxy_config.*`                                           | See [values.yaml](./values.yaml) for default settings.  See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples.                            | N/A  |
 | `extraContainers[]`                                        | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.                                                                                             | `[]`  |
+| `extraResources[]`                                         | An array of additional Kubernetes resources to deploy alongside LiteLLM. Useful for external-secrets, custom secrets, etc.                                                           | `[]`  |
 
 #### Example `environmentSecrets` Secret 
 
@@ -109,6 +110,56 @@ data:
 ```
 
 Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472732157221e04c6b15e3b3f094)
+
+## Using External Secrets Operator
+
+The chart supports deploying additional Kubernetes resources via the `extraResources` array in values.yaml. This is particularly useful for integrating with the [External Secrets Operator](https://external-secrets.io/) to manage secrets from external systems like AWS Systems Manager Parameter Store, HashiCorp Vault, Azure Key Vault, etc.
+
+### Example: AWS SSM Parameter Store Integration
+
+See [examples/external-secrets-ssm.yaml](./examples/external-secrets-ssm.yaml) for a complete example of using AWS SSM Parameter Store with external-secrets.
+
+Prerequisites:
+1. Install external-secrets operator in your cluster
+2. Configure IRSA (IAM Role for Service Accounts) for AWS SSM access
+3. Store your secrets in SSM Parameter Store
+
+```bash
+# Install external-secrets operator
+helm repo add external-secrets https://charts.external-secrets.io
+helm install external-secrets external-secrets/external-secrets \
+  -n external-secrets-system --create-namespace
+
+# Deploy LiteLLM with external-secrets
+helm install litellm . -f examples/external-secrets-ssm.yaml
+```
+
+The example configuration will:
+- Create a SecretStore for AWS SSM Parameter Store
+- Fetch secrets from SSM parameters like `/litellm/master-key`, `/litellm/openai/api-key`
+- Make them available as Kubernetes secrets
+- Configure LiteLLM to use these secrets via environment variables
+
+### Custom External Resources
+
+You can also use `extraResources` to deploy any custom Kubernetes resources:
+
+```yaml
+extraResources:
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: my-custom-secret
+    data:
+      key: dmFsdWU=  # base64 encoded "value"
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: my-config
+    data:
+      config.yaml: |
+        key: value
+```
 
 ## Accessing the Admin UI
 When browsing to the URL published per the settings in `ingress.*`, you will
