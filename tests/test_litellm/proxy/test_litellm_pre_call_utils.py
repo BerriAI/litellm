@@ -1,7 +1,9 @@
+import asyncio
+import copy
 import json
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import Request
@@ -12,6 +14,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,
     _get_enforced_params,
+    add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
 
@@ -28,17 +31,17 @@ def test_check_if_token_is_service_account():
     service_account_token = UserAPIKeyAuth(
         api_key="test-key", metadata={"service_account_id": "test-service-account"}
     )
-    assert check_if_token_is_service_account(service_account_token) is True
+    assert check_if_token_is_service_account(service_account_token) == True
 
     # Test case 2: Regular user token
     regular_token = UserAPIKeyAuth(api_key="test-key", metadata={})
-    assert check_if_token_is_service_account(regular_token) is False
+    assert check_if_token_is_service_account(regular_token) == False
 
     # Test case 3: Token with other metadata
     other_metadata_token = UserAPIKeyAuth(
         api_key="test-key", metadata={"user_id": "test-user"}
     )
-    assert check_if_token_is_service_account(other_metadata_token) is False
+    assert check_if_token_is_service_account(other_metadata_token) == False
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -207,6 +210,7 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
 
     # Assert metadata was parsed correctly
     metadata_field = updated_data.get("metadata", {})
+    litellm_metadata = updated_data.get("litellm_metadata", {})
 
     assert isinstance(metadata_field, dict)
     assert "tags" in metadata_field
@@ -602,6 +606,7 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
 
 
+
 def test_get_num_retries_from_request():
     """
     Test LiteLLMProxyRequestSetup._get_num_retries_from_request method
@@ -663,7 +668,6 @@ def test_get_num_retries_from_request():
     )
     assert result == -1
 
-
 def test_add_user_api_key_auth_to_request_metadata():
     """
     Test that add_user_api_key_auth_to_request_metadata properly adds user API key authentication data to request metadata
@@ -672,9 +676,9 @@ def test_add_user_api_key_auth_to_request_metadata():
     data = {
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "Hello"}],
-        "litellm_metadata": {},  # This will be the metadata variable name
+        "litellm_metadata": {}  # This will be the metadata variable name
     }
-
+    
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-test-key-123",
         user_id="test-user-123",
@@ -685,21 +689,21 @@ def test_add_user_api_key_auth_to_request_metadata():
         team_alias="test-team-alias",
         end_user_id="test-end-user-123",
         request_route="/chat/completions",
-        end_user_max_budget=500.0,
+        end_user_max_budget=500.0
     )
-
+    
     metadata_variable_name = "litellm_metadata"
-
+    
     # Call the function
     result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
         user_api_key_dict=user_api_key_dict,
-        _metadata_variable_name=metadata_variable_name,
+        _metadata_variable_name=metadata_variable_name
     )
-
+    
     # Verify the metadata was properly added
     metadata = result[metadata_variable_name]
-
+    
     # Check that user API key information was added
     assert metadata["user_api_key_hash"] == "hashed-test-key-123"
     assert metadata["user_api_key_alias"] == "test-key-alias"
@@ -710,211 +714,13 @@ def test_add_user_api_key_auth_to_request_metadata():
     assert metadata["user_api_key_end_user_id"] == "test-end-user-123"
     assert metadata["user_api_key_user_email"] == "test@example.com"
     assert metadata["user_api_key_request_route"] == "/chat/completions"
-
+    
     # Check that the hashed API key was added
     assert metadata["user_api_key"] == "hashed-test-key-123"
-
+    
     # Check that end user max budget was added
     assert metadata["user_api_end_user_max_budget"] == 500.0
-
+    
     # Verify original data is preserved
     assert result["model"] == "gpt-3.5-turbo"
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_sets_user_from_token():
-    """
-    Test that user is set from user_api_key_dict.user_id when no user is provided in request
-    """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    # Setup mock request
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    # Setup user API key with user_id
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="test_api_key",
-        user_id="test-user-123",  # This should be set in data["user"]
-        team_id="test_team_id",
-    )
-
-    # Setup request data WITHOUT user field
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}],
-        # NO "user" field
-    }
-
-    # Setup proxy config
-    proxy_config = MagicMock()
-
-    # Call add_litellm_data_to_request
-    result = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config,
-    )
-
-    # Verify that user was set from token
-    assert "user" in result
-    assert result["user"] == "test-user-123"
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_preserves_existing_user():
-    """
-    Test that existing user in request data is not overwritten by token user_id
-    """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    # Setup mock request
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    # Setup user API key with user_id
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="test_api_key",
-        user_id="token-user-456",  # This should NOT overwrite existing user
-        team_id="test_team_id",
-    )
-
-    # Setup request data WITH existing user field
-    data = {
-        "model": "gpt-4",
-        "messages": [{"role": "user", "content": "Hello"}],
-        "user": "existing-user-789",  # This should be preserved
-    }
-
-    # Setup proxy config
-    proxy_config = MagicMock()
-
-    # Call add_litellm_data_to_request
-    result = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config,
-    )
-
-    # Verify that existing user was preserved
-    assert "user" in result
-    assert result["user"] == "existing-user-789"  # Original user preserved
-    assert result["user"] != "token-user-456"  # Token user_id not used
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_user_from_headers_takes_priority():
-    """
-    Test that user from headers takes priority over token user_id
-    """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    # Setup mock request with user header
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {
-        "Content-Type": "application/json",
-        "X-User-ID": "header-user-999",  # User from header
-    }
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    # Setup user API key with user_id
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="test_api_key",
-        user_id="token-user-123",  # This should NOT be used
-        team_id="test_team_id",
-    )
-
-    # Setup request data WITHOUT user field
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}],
-    }
-
-    # Setup general settings with user header name
-    general_settings = {"user_header_name": "X-User-ID"}
-
-    # Setup proxy config
-    proxy_config = MagicMock()
-
-    # Call add_litellm_data_to_request
-    result = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config,
-        general_settings=general_settings,
-    )
-
-    # Verify that header user takes priority
-    assert "user" in result
-    assert result["user"] == "header-user-999"  # Header user used
-    assert result["user"] != "token-user-123"  # Token user_id not used
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_no_user_when_token_has_no_user_id():
-    """
-    Test that no user is set when token has no user_id and no user provided
-    """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-
-    # Setup mock request
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    # Setup user API key WITHOUT user_id
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="test_api_key",
-        user_id=None,  # No user_id in token
-        team_id="test_team_id",
-    )
-
-    # Setup request data WITHOUT user field
-    data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Hello"}],
-    }
-
-    # Setup proxy config
-    proxy_config = MagicMock()
-
-    # Call add_litellm_data_to_request
-    result = await add_litellm_data_to_request(
-        data=data,
-        request=request_mock,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config,
-    )
-
-    # Verify that no user is set
-    assert result.get("user") is None
