@@ -8,6 +8,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config"
 import MCPConnectionStatus from "./mcp_connection_status"
 import StdioConfiguration from "./StdioConfiguration"
 import { isAdminRole } from "@/utils/roles"
+import { validateMCPServerUrl, validateMCPServerName } from "./utils"
 
 const asset_logos_folder = "../ui/assets/logos/"
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`
@@ -228,12 +229,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               name="server_name"
               rules={[
                 { required: false, message: "Please enter a server name" },
-                {
-                  validator: (_, value) =>
-                    value && value.includes("-")
-                      ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                      : Promise.resolve(),
-                },
+                { validator: (_, value) => validateMCPServerName(value) },
               ]}
             >
               <TextInput
@@ -310,7 +306,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 name="url"
                 rules={[
                   { required: true, message: "Please enter a server URL" },
-                  { type: "url", message: "Please enter a valid URL" },
+                  { validator: (_, value) => validateMCPServerUrl(value) },
                 ]}
               >
                 <TextInput
