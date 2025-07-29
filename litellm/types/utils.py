@@ -570,7 +570,7 @@ class Message(OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
-    function_call: Optional[FunctionCall]
+    function_call: Union[FunctionCall, Dict[str, Any]]
     audio: Optional[ChatCompletionAudioResponse] = None
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
@@ -673,11 +673,11 @@ class Message(OpenAIObject):
         """
         if tool_calls is None:
             if hasattr(self, "tool_calls"):
-                del self.tool_calls
+                self.tool_calls = []
         
         if function_call is None:
             if hasattr(self, "function_call"):
-                del self.function_call
+                self.function_call = {}
 
 
     def get(self, key, default=None):
