@@ -1643,6 +1643,8 @@ async def test_list_team_v2_security_check_admin_user():
             http_request=mock_request,
             user_id=None,  # Admin querying all teams
             user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
         )
 
         # Should return results without error
