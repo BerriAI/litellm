@@ -2,8 +2,9 @@ import json
 import os
 import sys
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 sys.path.insert(
@@ -11,7 +12,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import AnthropicPassthroughLoggingHandler
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+    AnthropicPassthroughLoggingHandler,
+)
 
 
 class TestAnthropicLoggingHandlerModelFallback:

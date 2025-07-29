@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 import httpx
 
@@ -156,9 +156,17 @@ class AnthropicPassthroughLoggingHandler:
 
         model = request_body.get("model", "")
         # Dheck if it's available in the logging object
-        if not model and hasattr(litellm_logging_obj, 'model_call_details') and litellm_logging_obj.model_call_details.get('model'):
-            model = litellm_logging_obj.model_call_details.get('model')
-
+        if (
+            not model
+            and hasattr(litellm_logging_obj, "model_call_details")
+            and litellm_logging_obj.model_call_details.get("model")
+        ):
+            model = cast(str, litellm_logging_obj.model_call_details.get("model"))
+            custom_llm_provider = litellm_logging_obj.model_call_details.get(
+                "custom_llm_provider"
+            )
+            if custom_llm_provider and not model.startswith(custom_llm_provider):
+                model = f"{custom_llm_provider}/{model}"
         complete_streaming_response = (
             AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
                 all_chunks=all_chunks,
