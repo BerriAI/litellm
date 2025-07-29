@@ -411,6 +411,8 @@ def image_generation(  # noqa: PLR0915
         #########################################################
         elif custom_llm_provider in (
             litellm.LlmProviders.RECRAFT,
+            litellm.LlmProviders.GEMINI,
+            
         ):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")

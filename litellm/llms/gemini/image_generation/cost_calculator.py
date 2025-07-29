@@ -1,3 +1,7 @@
+"""
+Google AI Image Generation Cost Calculator
+"""
+
 from typing import Any
 
 import litellm
@@ -9,12 +13,13 @@ def cost_calculator(
     image_response: Any,
 ) -> float:
     """
-    Recraft image generation cost calculator
+    Vertex AI Image Generation Cost Calculator
     """
     _model_info = litellm.get_model_info(
         model=model,
-        custom_llm_provider=litellm.LlmProviders.RECRAFT.value,
+        custom_llm_provider="gemini",
     )
+
     output_cost_per_image: float = _model_info.get("output_cost_per_image") or 0.0
     num_images: int = 0
     if isinstance(image_response, ImageResponse):

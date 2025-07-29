@@ -7187,6 +7187,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.image_generation import (
+                get_gemini_image_generation_config,
+            )
+
+            return get_gemini_image_generation_config(model)
         return None
 
     @staticmethod
