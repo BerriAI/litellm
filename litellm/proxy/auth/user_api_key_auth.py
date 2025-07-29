@@ -255,6 +255,7 @@ def get_api_key(
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
     """
+    from litellm.proxy.auth.route_checks import RouteChecks
     api_key = api_key
     passed_in_key: Optional[str] = None
     if isinstance(custom_litellm_key_header, str):
@@ -275,6 +276,9 @@ def get_api_key(
     elif isinstance(azure_apim_header, str):
         passed_in_key = azure_apim_header
         api_key = azure_apim_header
+    elif RouteChecks.is_generate_content_route(route=route) and request is not None and request.query_params.get("key"):
+        passed_in_key = request.query_params.get("key")
+        api_key = request.query_params.get("key")
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:

@@ -390,7 +390,9 @@ class RouteChecks:
     @staticmethod
     def is_generate_content_route(route: str) -> bool:
         """
-        Check if route is a generate content route
+        Returns True if this is a google generateContent or streamGenerateContent route
+
+        These routes from google allow passing key=api_key in the query params
         """
         if "generateContent" in route:
             return True
