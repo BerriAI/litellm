@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
@@ -473,7 +474,7 @@ class MCPServerManager:
             user_api_key_auth: Optional[UserAPIKeyAuth] = None,
             mcp_auth_header: Optional[str] = None,
             mcp_server_auth_headers: Optional[Dict[str, str]] = None,
-            litellm_logging_obj: Optional[Any] = None,
+            proxy_logging_obj: Optional[ProxyLogging] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -484,7 +485,7 @@ class MCPServerManager:
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
-            litellm_logging_obj: Optional logging object for hook integration
+            proxy_logging_obj: Optional ProxyLogging object for hook integration
 
         Returns:
             CallToolResult from the MCP server
@@ -510,14 +511,14 @@ class MCPServerManager:
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
         #########################################################
-        if litellm_logging_obj:
+        if proxy_logging_obj:
             pre_hook_kwargs = {
                 "name": name,
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
             }
-            pre_hook_result = await litellm_logging_obj.async_pre_mcp_tool_call_hook(
+            pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
                 kwargs=pre_hook_kwargs,
                 request_obj=None,  # Will be created in the hook
                 start_time=start_time,
@@ -554,7 +555,7 @@ class MCPServerManager:
         # During MCP Tool Call Hook
         # Allow concurrent monitoring and validation during execution
         #########################################################
-        if litellm_logging_obj:
+        if proxy_logging_obj:
             during_hook_kwargs = {
                 "name": name,
                 "arguments": arguments,
@@ -563,7 +564,7 @@ class MCPServerManager:
             
             # Start the during hook in a separate task for concurrent execution
             during_hook_task = asyncio.create_task(
-                litellm_logging_obj.async_during_mcp_tool_call_hook(
+                proxy_logging_obj.async_during_mcp_tool_call_hook(
                     kwargs=during_hook_kwargs,
                     request_obj=None,  # Will be created in the hook
                     start_time=start_time,
@@ -582,7 +583,7 @@ class MCPServerManager:
             #########################################################
             # Check during hook result if it completed
             #########################################################
-            if litellm_logging_obj and 'during_hook_task' in locals():
+            if proxy_logging_obj and 'during_hook_task' in locals():
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):
