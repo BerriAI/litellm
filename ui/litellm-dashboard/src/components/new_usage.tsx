@@ -69,8 +69,17 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     metadata: any
   }>({ results: [], metadata: {} })
 
-  // Add date range state
+  // Add loading state
+  const [loading, setLoading] = useState(false)
+
+  // Separate selected date from applied date
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
+    from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+    to: new Date(),
+  })
+
+  // Applied date that triggers data fetching
+  const [appliedDateValue, setAppliedDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
     to: new Date(),
   })
@@ -284,10 +293,13 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
   }
 
   const fetchUserSpendData = async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return
+    if (!accessToken || !appliedDateValue.from || !appliedDateValue.to) return
+
+    setLoading(true)
+
     // Create new Date objects to avoid mutating the original dates
-    const startTime = new Date(dateValue.from)
-    const endTime = new Date(dateValue.to)
+    const startTime = new Date(appliedDateValue.from)
+    const endTime = new Date(appliedDateValue.to)
 
     try {
       // Get first page
@@ -328,16 +340,35 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     } catch (error) {
       console.error("Error fetching user spend data:", error)
       throw error
+    } finally {
+      setLoading(false)
     }
   }
 
+  // Handle apply button click
+  const handleApplyDateRange = () => {
+    setAppliedDateValue(dateValue)
+  }
+
+  // Check if dates are different from applied dates
+  const hasUnappliedChanges =
+    dateValue.from?.getTime() !== appliedDateValue.from?.getTime() ||
+    dateValue.to?.getTime() !== appliedDateValue.to?.getTime()
+
   useEffect(() => {
     fetchUserSpendData()
-  }, [accessToken, dateValue])
+  }, [accessToken, appliedDateValue])
 
   const modelMetrics = processActivityData(userSpendData, "models")
   const keyMetrics = processActivityData(userSpendData, "api_keys")
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers")
+
+  // Loading component for charts
+  const ChartLoader = () => (
+    <div className="flex items-center justify-center h-40">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div>
+    </div>
+  )
 
   return (
     <div style={{ width: "100%" }} className="p-8 relative">
@@ -388,14 +419,25 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabPanels>
           {/* Your Usage Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-2 w-full mb-4">
-              <Col>
+            <Grid numItems={3} className="gap-2 w-full mb-4">
+              <Col numColSpan={2}>
                 <UsageDatePicker
                   value={dateValue}
                   onValueChange={(value) => {
                     setDateValue(value)
                   }}
                 />
+              </Col>
+              <Col numColSpan={1} className="flex items-end">
+                <Button
+                  onClick={handleApplyDateRange}
+                  disabled={!hasUnappliedChanges || loading}
+                  className={`w-full ${
+                    hasUnappliedChanges ? "bg-cyan-600 hover:bg-cyan-700" : "bg-gray-400 cursor-not-allowed"
+                  }`}
+                >
+                  {loading ? "Loading..." : "Apply"}
+                </Button>
               </Col>
             </Grid>
             <TabGroup>
@@ -475,31 +517,37 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                     <Col numColSpan={2}>
                       <Card>
                         <Title>Daily Spend</Title>
-                        <BarChart
-                          data={[...userSpendData.results].sort(
-                            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
-                          )}
-                          index="date"
-                          categories={["metrics.spend"]}
-                          colors={["cyan"]}
-                          valueFormatter={valueFormatterSpend}
-                          yAxisWidth={100}
-                          showLegend={false}
-                          customTooltip={({ payload, active }) => {
-                            if (!active || !payload?.[0]) return null
-                            const data = payload[0].payload
-                            return (
-                              <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                <p className="font-bold">{data.date}</p>
-                                <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
-                                <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                              </div>
-                            )
-                          }}
-                        />
+                        {loading ? (
+                          <ChartLoader />
+                        ) : (
+                          <BarChart
+                            data={[...userSpendData.results].sort(
+                              (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+                            )}
+                            index="date"
+                            categories={["metrics.spend"]}
+                            colors={["cyan"]}
+                            valueFormatter={valueFormatterSpend}
+                            yAxisWidth={100}
+                            showLegend={false}
+                            customTooltip={({ payload, active }) => {
+                              if (!active || !payload?.[0]) return null
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                  <p className="font-bold">{data.date}</p>
+                                  <p className="text-cyan-500">
+                                    Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                  </p>
+                                  <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                                  <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                                  <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                                  <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                                </div>
+                              )
+                            }}
+                          />
+                        )}
                       </Card>
                     </Col>
                     {/* Top API Keys */}
@@ -545,33 +593,37 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                             </button>
                           </div>
                         </div>
-                        <BarChart
-                          className="mt-4 h-40"
-                          data={modelViewType === "groups" ? getTopModelGroups() : getTopModels()}
-                          index="key"
-                          categories={["spend"]}
-                          colors={["cyan"]}
-                          valueFormatter={valueFormatterSpend}
-                          layout="vertical"
-                          yAxisWidth={200}
-                          showLegend={false}
-                          customTooltip={({ payload, active }) => {
-                            if (!active || !payload?.[0]) return null
-                            const data = payload[0].payload
-                            return (
-                              <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                <p className="font-bold">{data.key}</p>
-                                <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
-                                <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
-                                <p className="text-green-600">
-                                  Successful: {data.successful_requests.toLocaleString()}
-                                </p>
-                                <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
-                                <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                              </div>
-                            )
-                          }}
-                        />
+                        {loading ? (
+                          <ChartLoader />
+                        ) : (
+                          <BarChart
+                            className="mt-4 h-40"
+                            data={modelViewType === "groups" ? getTopModelGroups() : getTopModels()}
+                            index="key"
+                            categories={["spend"]}
+                            colors={["cyan"]}
+                            valueFormatter={valueFormatterSpend}
+                            layout="vertical"
+                            yAxisWidth={200}
+                            showLegend={false}
+                            customTooltip={({ payload, active }) => {
+                              if (!active || !payload?.[0]) return null
+                              const data = payload[0].payload
+                              return (
+                                <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                  <p className="font-bold">{data.key}</p>
+                                  <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
+                                  <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
+                                  <p className="text-green-600">
+                                    Successful: {data.successful_requests.toLocaleString()}
+                                  </p>
+                                  <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
+                                  <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                                </div>
+                              )
+                            }}
+                          />
+                        )}
                       </Card>
                     </Col>
 
@@ -581,48 +633,52 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                         <div className="flex justify-between items-center mb-4">
                           <Title>Spend by Provider</Title>
                         </div>
-                        <Grid numItems={2}>
-                          <Col numColSpan={1}>
-                            <DonutChart
-                              className="mt-4 h-40"
-                              data={getProviderSpend()}
-                              index="provider"
-                              category="spend"
-                              valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-                              colors={["cyan"]}
-                            />
-                          </Col>
-                          <Col numColSpan={1}>
-                            <Table>
-                              <TableHead>
-                                <TableRow>
-                                  <TableHeaderCell>Provider</TableHeaderCell>
-                                  <TableHeaderCell>Spend</TableHeaderCell>
-                                  <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                                  <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                                  <TableHeaderCell>Tokens</TableHeaderCell>
-                                </TableRow>
-                              </TableHead>
-                              <TableBody>
-                                {getProviderSpend()
-                                  .filter((provider) => provider.spend > 0)
-                                  .map((provider) => (
-                                    <TableRow key={provider.provider}>
-                                      <TableCell>{provider.provider}</TableCell>
-                                      <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
-                                      <TableCell className="text-green-600">
-                                        {provider.successful_requests.toLocaleString()}
-                                      </TableCell>
-                                      <TableCell className="text-red-600">
-                                        {provider.failed_requests.toLocaleString()}
-                                      </TableCell>
-                                      <TableCell>{provider.tokens.toLocaleString()}</TableCell>
-                                    </TableRow>
-                                  ))}
-                              </TableBody>
-                            </Table>
-                          </Col>
-                        </Grid>
+                        {loading ? (
+                          <ChartLoader />
+                        ) : (
+                          <Grid numItems={2}>
+                            <Col numColSpan={1}>
+                              <DonutChart
+                                className="mt-4 h-40"
+                                data={getProviderSpend()}
+                                index="provider"
+                                category="spend"
+                                valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
+                                colors={["cyan"]}
+                              />
+                            </Col>
+                            <Col numColSpan={1}>
+                              <Table>
+                                <TableHead>
+                                  <TableRow>
+                                    <TableHeaderCell>Provider</TableHeaderCell>
+                                    <TableHeaderCell>Spend</TableHeaderCell>
+                                    <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
+                                    <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
+                                    <TableHeaderCell>Tokens</TableHeaderCell>
+                                  </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                  {getProviderSpend()
+                                    .filter((provider) => provider.spend > 0)
+                                    .map((provider) => (
+                                      <TableRow key={provider.provider}>
+                                        <TableCell>{provider.provider}</TableCell>
+                                        <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
+                                        <TableCell className="text-green-600">
+                                          {provider.successful_requests.toLocaleString()}
+                                        </TableCell>
+                                        <TableCell className="text-red-600">
+                                          {provider.failed_requests.toLocaleString()}
+                                        </TableCell>
+                                        <TableCell>{provider.tokens.toLocaleString()}</TableCell>
+                                      </TableRow>
+                                    ))}
+                                </TableBody>
+                              </Table>
+                            </Col>
+                          </Grid>
+                        )}
                       </Card>
                     </Col>
 
