@@ -169,7 +169,10 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 messages
             )
         )
-        output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
+        output_meta = OutputMeta(messages=self._get_response_messages(
+            response_obj=response_obj,
+            call_type=standard_logging_payload.get("call_type")
+        ))
 
         meta = Meta(
             kind=self._get_datadog_span_kind(standard_logging_payload.get("call_type")),
@@ -221,13 +224,15 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             return 0.0
 
 
-    def _get_response_messages(self, response_obj: Any) -> List[Any]:
+    def _get_response_messages(
+        self, response_obj: Any, call_type: Optional[str]
+    ) -> List[Any]:
         """
         Get the messages from the response object
 
         for now this handles logging /chat/completions responses
         """
-        if isinstance(response_obj, litellm.ModelResponse):
+        if call_type in [CallTypes.completion.value, CallTypes.acompletion.value]:
             return [response_obj["choices"][0]["message"].json()]
         return []
 
