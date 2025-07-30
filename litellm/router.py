@@ -1084,7 +1084,7 @@ class Router:
         model_response: CustomStreamWrapper,
         messages: List[Dict[str, str]],
         initial_kwargs: dict,
-    ) -> AsyncGenerator[Optional[ModelResponseStream], None]:
+    ) -> CustomStreamWrapper:
         """
         Helper to iterate over a streaming response.
 
@@ -1092,69 +1092,92 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
-        try:
-            async for item in model_response:
-                yield item
-        except MidStreamFallbackError as e:
+        class FallbackStreamWrapper(CustomStreamWrapper):
+            def __init__(self, async_generator):
+                # Copy attributes from the original model_response
+                super().__init__(
+                    completion_stream=async_generator,
+                    model=getattr(model_response, "model", ""),
+                    custom_llm_provider=getattr(
+                        model_response, "custom_llm_provider", ""
+                    ),
+                    logging_obj=getattr(model_response, "logging_obj", None),
+                )
+                self._async_generator = async_generator
+
+            def __aiter__(self):
+                return self._async_generator
+
+            async def __anext__(self):
+                return await self._async_generator.__anext__()
+
+        async def stream_with_fallbacks():
             try:
-                # Use the router's fallback system
-                model_group = cast(str, initial_kwargs.get("model"))
-                fallbacks: Optional[List] = initial_kwargs.get(
-                    "fallbacks", self.fallbacks
-                )
-                context_window_fallbacks: Optional[List] = initial_kwargs.get(
-                    "context_window_fallbacks", self.context_window_fallbacks
-                )
-                content_policy_fallbacks: Optional[List] = initial_kwargs.get(
-                    "content_policy_fallbacks", self.content_policy_fallbacks
-                )
-                initial_kwargs["original_function"] = self._acompletion
-                initial_kwargs["messages"] = messages + [
-                    {
-                        "role": "system",
-                        "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
-                    },
-                    {
-                        "role": "assistant",
-                        "content": e.generated_content,
-                        "prefix": True,
-                    },
-                ]
-                self._update_kwargs_before_fallbacks(
-                    model=model_group, kwargs=initial_kwargs
-                )
-                fallback_response = (
-                    await self.async_function_with_fallbacks_common_utils(
-                        e=e,
-                        disable_fallbacks=False,
-                        fallbacks=fallbacks,
-                        context_window_fallbacks=context_window_fallbacks,
-                        content_policy_fallbacks=content_policy_fallbacks,
-                        model_group=model_group,
-                        args=(),
-                        kwargs=initial_kwargs,
+                async for item in model_response:
+                    yield item
+            except MidStreamFallbackError as e:
+                try:
+                    # Use the router's fallback system
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", self.fallbacks
                     )
-                )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks", self.context_window_fallbacks
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks", self.content_policy_fallbacks
+                    )
+                    initial_kwargs["original_function"] = self._acompletion
+                    initial_kwargs["messages"] = messages + [
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+                        },
+                        {
+                            "role": "assistant",
+                            "content": e.generated_content,
+                            "prefix": True,
+                        },
+                    ]
+                    self._update_kwargs_before_fallbacks(
+                        model=model_group, kwargs=initial_kwargs
+                    )
+                    fallback_response = (
+                        await self.async_function_with_fallbacks_common_utils(
+                            e=e,
+                            disable_fallbacks=False,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
+                            args=(),
+                            kwargs=initial_kwargs,
+                        )
+                    )
 
-                # If fallback returns a streaming response, iterate over it
-                if hasattr(fallback_response, "__aiter__"):
-                    async for fallback_item in fallback_response:  # type: ignore
-                        yield fallback_item
-                else:
-                    # If fallback returns a non-streaming response, yield None
-                    yield None
+                    # If fallback returns a streaming response, iterate over it
+                    if hasattr(fallback_response, "__aiter__"):
+                        async for fallback_item in fallback_response:  # type: ignore
+                            yield fallback_item
+                    else:
+                        # If fallback returns a non-streaming response, yield None
+                        yield None
 
-            except Exception as fallback_error:
-                # If fallback also fails, log and re-raise original error
-                verbose_router_logger.error(f"Fallback also failed: {fallback_error}")
-                raise e  # Re-raise the original error
+                except Exception as fallback_error:
+                    # If fallback also fails, log and re-raise original error
+                    verbose_router_logger.error(
+                        f"Fallback also failed: {fallback_error}"
+                    )
+                    raise e  # Re-raise the original error
+
+        return FallbackStreamWrapper(stream_with_fallbacks())
 
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[
         ModelResponse,
         CustomStreamWrapper,
-        AsyncGenerator[Optional[ModelResponseStream], None],
     ]:
         """
         - Get an available deployment
@@ -1275,7 +1298,7 @@ class Router:
             )
 
             if isinstance(response, CustomStreamWrapper):
-                return self._acompletion_streaming_iterator(
+                return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,
                     initial_kwargs=input_kwargs_for_streaming_fallback,
@@ -1659,7 +1682,8 @@ class Router:
             Wrapper around self.acompletion that catches exceptions and returns them as a result
             """
             try:
-                return await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)  # type: ignore
+                result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)  # type: ignore
+                return result
             except asyncio.CancelledError:
                 verbose_router_logger.debug(
                     "Received 'task.cancel'. Cancelling call w/ model={}.".format(model)
@@ -1707,6 +1731,7 @@ class Router:
             )
             for completed_task in done:
                 result = await check_response(completed_task)
+
                 if result is not None:
                     # Return the first successful result
                     result._hidden_params["fastest_response_batch_completion"] = True
