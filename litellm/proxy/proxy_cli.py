@@ -5,7 +5,6 @@ import os
 import random
 import subprocess
 import sys
-import urllib.parse
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
