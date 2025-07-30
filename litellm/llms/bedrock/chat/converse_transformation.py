@@ -49,9 +49,6 @@ from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoni
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
-# Bedrock Computer Use Tools (Anthropic Claude on Bedrock)
-BEDROCK_COMPUTER_USE_TOOLS = ["computer_", "bash_", "text_editor_", "web_search_"]
-
 
 class AmazonConverseConfig(BaseConfig):
     """
@@ -220,72 +217,6 @@ class AmazonConverseConfig(BaseConfig):
             + self.get_supported_document_types()
             + self.get_supported_video_types()
         )
-
-    def is_computer_use_tool_used(
-        self, tools: Optional[List[OpenAIChatCompletionToolParam]], model: str
-    ) -> bool:
-        """Check if computer use tools are being used in the request."""
-        if tools is None:
-            return False
-        
-        # Computer use tools are only supported on Anthropic Claude models
-        if not self._is_anthropic_model(model):
-            return False
-            
-        for tool in tools:
-            if "type" in tool:
-                tool_type = tool["type"]
-                for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
-                    if tool_type.startswith(computer_use_prefix):
-                        return True
-        return False
-
-    def _transform_computer_use_tools(
-        self, computer_use_tools: List[OpenAIChatCompletionToolParam]
-    ) -> List[dict]:
-        """Transform computer use tools to Bedrock format."""
-        transformed_tools: List[dict] = []
-        
-        for tool in computer_use_tools:
-            tool_type = tool.get("type", "")
-            
-            # Check if this is a computer use tool with the startswith method
-            is_computer_use_tool = False
-            for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
-                if tool_type.startswith(computer_use_prefix):
-                    is_computer_use_tool = True
-                    break
-            
-            transformed_tool: dict = {}
-            if is_computer_use_tool:
-                if tool_type.startswith("computer_") and "function" in tool:
-                    # Computer use tool with function format
-                    func = tool["function"]
-                    transformed_tool = {
-                        "type": tool_type,
-                        "name": func.get("name", "computer"),
-                        **func.get("parameters", {})
-                    }
-                else:
-                    # Direct tools - just need to ensure name is present
-                    transformed_tool = dict(tool)
-                    if "name" not in transformed_tool:
-                        if tool_type.startswith("bash_"):
-                            transformed_tool["name"] = "bash"
-                        elif tool_type.startswith("text_editor_"):
-                            transformed_tool["name"] = "str_replace_editor"
-            else:
-                # Pass through other tools as-is
-                transformed_tool = dict(tool)
-                
-            transformed_tools.append(transformed_tool)
-            
-        return transformed_tools
-
-    def _is_anthropic_model(self, model: str) -> bool:
-        """Check if the model is an Anthropic Claude model that supports computer use."""
-        model_lower = model.lower()
-        return "anthropic" in model_lower or "claude" in model_lower
 
     def _create_json_tool_call_for_response_format(
         self,
@@ -615,42 +546,9 @@ class AmazonConverseConfig(BaseConfig):
             self._handle_top_k_value(model, inference_params)
         )
 
-        original_tools = inference_params.get("tools", [])
-        
-        # Separate computer use tools from regular function tools
-        # Only for Anthropic models that support computer use
-        computer_use_tools = []
-        regular_tools = []
-        
-        if self._is_anthropic_model(model):
-            for tool in original_tools:
-                if "type" in tool:
-                    tool_type = tool["type"]
-                    is_computer_use_tool = False
-                    for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
-                        if tool_type.startswith(computer_use_prefix):
-                            is_computer_use_tool = True
-                            break
-                    if is_computer_use_tool:
-                        computer_use_tools.append(tool)
-                    else:
-                        regular_tools.append(tool)
-                else:
-                    regular_tools.append(tool)
-        else:
-            # For non-Anthropic models, treat all tools as regular tools
-            regular_tools = original_tools
-        
-        # Process regular function tools using existing logic
-        bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(regular_tools)
-        
-        # Add computer use tools and anthropic_beta if needed (only for Anthropic models)
-        if computer_use_tools and self._is_anthropic_model(model):
-            additional_request_params["anthropic_beta"] = ["computer-use-2024-10-22"]
-            # Transform computer use tools to proper Bedrock format
-            transformed_computer_tools = self._transform_computer_use_tools(computer_use_tools)
-            additional_request_params["tools"] = transformed_computer_tools
-        
+        bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
+            inference_params.pop("tools", [])
+        )
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
             tool_choice_values: ToolChoiceValuesBlock = inference_params.pop(
