@@ -67,7 +67,7 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
         return env_data
 
 
-def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVersionType]) -> MCPSpecVersion:
+def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVersionType]) -> MCPSpecVersionType:
     """
     Convert string protocol version to MCPSpecVersion enum.
     
@@ -75,24 +75,24 @@ def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVe
         protocol_version: String protocol version, enum, or None
         
     Returns:
-        MCPSpecVersion: The enum value
+        MCPSpecVersionType: The enum value
     """
     if not protocol_version:
-        return MCPSpecVersion.jun_2025  # Default
+        return MCPSpecVersion.jun_2025  # type: ignore
     
-    # If it's already an enum, return it
-    if hasattr(protocol_version, 'value') and hasattr(protocol_version, '__class__') and protocol_version.__class__.__name__.startswith('MCPSpecVersion'):
-        return protocol_version
+    # If it's already an MCPSpecVersion enum, return it
+    if isinstance(protocol_version, MCPSpecVersion):
+        return protocol_version  # type: ignore
     
     # If it's a string, try to match it to enum values
     if isinstance(protocol_version, str):
         for version in MCPSpecVersion:
             if version.value == protocol_version:
-                return version
+                return version  # type: ignore
     
     # If no match found, return default
     verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
-    return MCPSpecVersion.jun_2025
+    return MCPSpecVersion.jun_2025  # type: ignore
 
 
 class MCPServerManager:
@@ -611,39 +611,32 @@ class MCPServerManager:
             protocol_version=mcp_protocol_version,
         )
         
-        #########################################################
-        # During MCP Tool Call Hook
-        # Allow concurrent monitoring and validation during execution
-        #########################################################
-        if litellm_logging_obj:
-            during_hook_kwargs = {
-                "name": name,
-                "arguments": arguments,
-                "server_name": server_name_from_prefix,
-            }
-            
-            # Start the during hook in a separate task for concurrent execution
-            during_hook_task = asyncio.create_task(
-                litellm_logging_obj.async_during_mcp_tool_call_hook(
-                    kwargs=during_hook_kwargs,
-                    request_obj=None,  # Will be created in the hook
-                    start_time=start_time,
-                    end_time=start_time,
-                )
-            )
-
         async with client:
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
                 arguments=arguments,
             )
+            
+            # Initialize during_hook_task as None
+            during_hook_task = None
+            
+            # Start during hook if litellm_logging_obj is available
+            if litellm_logging_obj:
+                try:
+                    during_hook_task = litellm_logging_obj.async_during_mcp_tool_call_hook(
+                        kwargs=litellm_logging_obj.model_call_details,
+                        start_time=start_time,
+                    )
+                except Exception as e:
+                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
+            
             result = await client.call_tool(call_tool_params)
             
             #########################################################
             # Check during hook result if it completed
             #########################################################
-            if litellm_logging_obj and 'during_hook_task' in locals():
+            if litellm_logging_obj and during_hook_task is not None:
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):
