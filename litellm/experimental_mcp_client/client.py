@@ -17,8 +17,6 @@ from mcp.types import Tool as MCPTool
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
@@ -46,7 +44,6 @@ class MCPClient:
         auth_value: Optional[str] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
-        protocol_version: MCPSpecVersionType = MCPSpecVersion.jun_2025,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -60,7 +57,6 @@ class MCPClient:
         self._session_ctx = None
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
-        self.protocol_version: MCPSpecVersionType = protocol_version
 
         # handle the basic auth value if provided
         if auth_value:
@@ -173,18 +169,16 @@ class MCPClient:
 
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
-        headers = {}
-        
-        if self._mcp_auth_value:
-            if self.auth_type == MCPAuth.bearer_token:
-                headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
-            elif self.auth_type == MCPAuth.basic:
-                headers["Authorization"] = f"Basic {self._mcp_auth_value}"
-            elif self.auth_type == MCPAuth.api_key:
-                headers["X-API-Key"] = self._mcp_auth_value
+        if not self._mcp_auth_value:
+            return {}
 
-        headers["MCP-Protocol-Version"] = self.protocol_version.value
-        return headers
+        if self.auth_type == MCPAuth.bearer_token:
+            return {"Authorization": f"Bearer {self._mcp_auth_value}"}
+        elif self.auth_type == MCPAuth.basic:
+            return {"Authorization": f"Basic {self._mcp_auth_value}"}
+        elif self.auth_type == MCPAuth.api_key:
+            return {"X-API-Key": self._mcp_auth_value}
+        return {}
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
