@@ -23,6 +23,7 @@ from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Callable,
     Dict,
     List,
@@ -146,7 +147,7 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import GenericBudgetConfigType, LiteLLMBatch
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import ModelResponseStream, StandardLoggingPayload
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -1078,9 +1079,22 @@ class Router:
             )
             raise e
 
+    async def _acompletion_streaming_iterator(
+        self, model_response: CustomStreamWrapper
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Helper to iterate over a streaming response.
+
+        Catches errors for fallbacks
+        """
+        async for item in model_response:
+            yield item
+
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
+    ) -> Union[
+        ModelResponse, CustomStreamWrapper, AsyncGenerator[ModelResponseStream, None]
+    ]:
         """
         - Get an available deployment
         - call it with a semaphore over the call
@@ -1198,6 +1212,9 @@ class Router:
                 response=response,
                 parent_otel_span=parent_otel_span,
             )
+
+            if isinstance(response, CustomStreamWrapper):
+                return self._acompletion_streaming_iterator(model_response=response)
 
             return response
         except litellm.Timeout as e:
