@@ -45,7 +45,7 @@ async def test_get_available_deployments():
         model_group=model_group, healthy_deployments=model_list
     )
     print("selected model: ", selected_model)
-
+    assert selected_model is not None
     assert selected_model["model_info"]["id"] == "groq-llama"
 
 
@@ -95,39 +95,41 @@ async def test_get_available_deployments_custom_price():
         model_group=model_group, healthy_deployments=model_list
     )
     print("selected model: ", selected_model)
-
+    assert selected_model is not None
     assert selected_model["model_info"]["id"] == "chatgpt-v-1"
 
 
 @pytest.mark.asyncio
-async def test_lowest_cost_routing():
+async def test_lowest_cost_routing(mocker):
     """
     Test if router, returns model with the lowest cost
     """
     model_list = [
         {
             "model_name": "gpt-4",
-            "litellm_params": {"model": "gpt-4"},
+            "litellm_params": {"model": "gpt-4", "api_key": "anything"},
             "model_info": {"id": "openai-gpt-4"},
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "gpt-3.5-turbo"},
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "anything"},
             "model_info": {"id": "gpt-3.5-turbo"},
         },
     ]
 
     # init router
     router = Router(model_list=model_list, routing_strategy="cost-based-routing")
-    response = await router.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    print(response)
-    print(
-        response._hidden_params["model_id"]
-    )  # expect groq-llama, since groq/llama has lowest cost
-    assert "gpt-3.5-turbo" == response._hidden_params["model_id"]
+
+    async def mock_acompletion(*args, **kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.router.Router.acompletion", side_effect=mock_acompletion
+    )  # just check if it routes to the correct model
+
+    model_id = router.get_available_deployment(model="gpt-3.5-turbo")
+
+    assert "gpt-3.5-turbo" == model_id["model_info"]["id"]
 
 
 async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
@@ -195,7 +197,61 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
 
     await asyncio.gather(*[_deploy(*t) for t in [*d1, *d2]])
 
-    asyncio.sleep(3)
+    await asyncio.sleep(3)
+
+    ## CHECK WHAT'S SELECTED ##
+    d_ans = await lowest_cost_logger.async_get_available_deployments(
+        model_group=model_group, healthy_deployments=model_list
+    )
+    assert (d_ans and d_ans["model_info"]["id"]) == ans
+
+    print("selected deployment:", d_ans)
+
+
+@pytest.mark.parametrize(
+    "ans_rpd", [1, 5]
+)  # 1 should produce nothing, 10 should select first
+@pytest.mark.asyncio
+async def test_get_available_endpoints_tpd_rpd_check_async(ans_rpd):
+    """
+    Pass in list of 2 valid models
+
+    Update cache with 1 model clearly being at tpm/rpm limit
+
+    assert that only the valid model is returned
+    """
+    from litellm._logging import verbose_router_logger
+    import logging
+
+    verbose_router_logger.setLevel(logging.DEBUG)
+    test_cache = DualCache()
+    ans = "1234"
+    non_ans_rpd = 3
+    assert ans_rpd != non_ans_rpd, "invalid test"
+    if ans_rpd < non_ans_rpd:
+        ans = None
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "1234", "rpd": ans_rpd},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "groq/llama3-8b-8192"},
+            "model_info": {"id": "5678", "rpd": non_ans_rpd},
+        },
+    ]
+    lowest_cost_logger = LowestCostLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+    model_group = "gpt-3.5-turbo"
+    d1 = [(lowest_cost_logger, "1234", 50, 0.01)] * non_ans_rpd
+    d2 = [(lowest_cost_logger, "5678", 50, 0.01)] * non_ans_rpd
+
+    await asyncio.gather(*[_deploy(*t) for t in [*d1, *d2]])
+
+    await asyncio.sleep(3)
 
     ## CHECK WHAT'S SELECTED ##
     d_ans = await lowest_cost_logger.async_get_available_deployments(

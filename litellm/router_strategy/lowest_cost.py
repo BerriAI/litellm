@@ -1,5 +1,5 @@
 #### What this does ####
-#   picks based on response time (for streaming, this is time to first token)
+#   picks based on cost
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Union
 
@@ -79,8 +79,22 @@ class LowestCostLoggingHandler(CustomLogger):
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
 
+                # daily
+                if current_date not in request_count_dict[id]:
+                    request_count_dict[id][current_date] = {}
+
+                # minute
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
+
+                ## TPD
+                request_count_dict[id][current_date]["tpd"] = (
+                    request_count_dict[id][current_date].get("tpd", 0) + total_tokens
+                )
+                ## RPD
+                request_count_dict[id][current_date]["rpd"] = (
+                    request_count_dict[id][current_date].get("rpd", 0) + 1
+                )
 
                 ## TPM
                 request_count_dict[id][precise_minute]["tpm"] = (
@@ -165,8 +179,23 @@ class LowestCostLoggingHandler(CustomLogger):
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
+
+                # daily
+                if current_date not in request_count_dict[id]:
+                    request_count_dict[id][current_date] = {}
+
+                # minute
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
+
+                ## TPD
+                request_count_dict[id][current_date]["tpd"] = (
+                    request_count_dict[id][current_date].get("tpd", 0) + total_tokens
+                )
+                ## RPD
+                request_count_dict[id][current_date]["rpd"] = (
+                    request_count_dict[id][current_date].get("rpd", 0) + 1
+                )
 
                 ## TPM
                 request_count_dict[id][precise_minute]["tpm"] = (
@@ -263,6 +292,18 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
+            _deployment_tpd = (
+                _deployment.get("tpd", None)
+                or _deployment.get("litellm_params", {}).get("tpd", None)
+                or _deployment.get("model_info", {}).get("tpd", None)
+                or float("inf")
+            )
+            _deployment_rpd = (
+                _deployment.get("rpd", None)
+                or _deployment.get("litellm_params", {}).get("rpd", None)
+                or _deployment.get("model_info", {}).get("rpd", None)
+                or float("inf")
+            )
             item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
             item_litellm_model_cost_map = litellm.model_cost.get(
                 item_litellm_model_name, {}
@@ -295,11 +336,16 @@ class LowestCostLoggingHandler(CustomLogger):
 
             item_cost = item_input_cost + item_output_cost
 
+            # get minute usage
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
+            # get daily usage
+            item_rpd = item_map.get(current_date, {}).get("rpd", 0)
+            item_tpd = item_map.get(current_date, {}).get("tpd", 0)
+
             verbose_router_logger.debug(
-                f"item_cost: {item_cost}, item_tpm: {item_tpm}, item_rpm: {item_rpm}, model_id: {_deployment.get('model_info', {}).get('id')}"
+                f"item_cost: {item_cost}, item_tpm: {item_tpm}, item_rpm: {item_rpm}, item_tpd: {item_tpd}, item_rpd: {item_rpd}, model_id: {_deployment.get('model_info', {}).get('id')}"
             )
 
             # -------------- #
@@ -316,10 +362,25 @@ class LowestCostLoggingHandler(CustomLogger):
             # End of Debugging Logic
             # -------------- #
 
-            if (
-                item_tpm + input_tokens > _deployment_tpm
-                or item_rpm + 1 > _deployment_rpm
-            ):  # if user passed in tpm / rpm in the model_list
+            if item_tpm + input_tokens > _deployment_tpm:
+                verbose_router_logger.debug(
+                    f"Deployment {_deployment.get('model_info', {}).get('id')} skipped due to TPM limit. Usage: {item_tpm + input_tokens}, Limit: {_deployment_tpm}"
+                )
+                continue
+            elif item_rpm + 1 > _deployment_rpm:
+                verbose_router_logger.debug(
+                    f"Deployment {_deployment.get('model_info', {}).get('id')} skipped due to RPM limit. Usage: {item_rpm + 1}, Limit: {_deployment_rpm}"
+                )
+                continue
+            elif item_tpd + input_tokens > _deployment_tpd:
+                verbose_router_logger.debug(
+                    f"Deployment {_deployment.get('model_info', {}).get('id')} skipped due to TPD limit. Usage: {item_tpd + input_tokens}, Limit: {_deployment_tpd}"
+                )
+                continue
+            elif item_rpd + 1 > _deployment_rpd:
+                verbose_router_logger.debug(
+                    f"Deployment {_deployment.get('model_info', {}).get('id')} skipped due to RPD limit. Usage: {item_rpd + 1}, Limit: {_deployment_rpd}"
+                )
                 continue
             else:
                 potential_deployments.append((_deployment, item_cost))
