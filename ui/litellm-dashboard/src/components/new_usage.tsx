@@ -39,6 +39,7 @@ import { Tag } from "./tag_management/types";
 import ViewUserSpend from "./view_user_spend";
 import TopKeyView from "./top_key_view";
 import { ActivityMetrics, processActivityData } from "./activity_metrics";
+import UserAgentActivity from "./user_agent_activity";
 import {
   SpendMetrics,
   DailyData,
@@ -443,6 +444,11 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
           ) : (
             <></>
           )}
+          {all_admin_roles.includes(userRole || "") ? (
+            <Tab>User Agent Activity</Tab>
+          ) : (
+            <></>
+          )}
         </TabList>
         <TabPanels>
           {/* Your Usage Panel */}
@@ -784,6 +790,13 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({
               userRole={userRole}
               entityList={allTags}
               premiumUser={premiumUser}
+            />
+          </TabPanel>
+          {/* User Agent Activity Panel */}
+          <TabPanel>
+            <UserAgentActivity
+              accessToken={accessToken}
+              userRole={userRole}
             />
           </TabPanel>
         </TabPanels>
