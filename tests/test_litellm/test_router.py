@@ -2,7 +2,7 @@ import copy
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +13,7 @@ sys.path.insert(
 
 
 import litellm
+from litellm.router_utils.fallback_event_handlers import run_async_fallback
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -1321,3 +1322,47 @@ async def test_acompletion_streaming_iterator_edge_cases():
         print("✓ Handles empty generated content correctly")
 
     print("✓ Edge case tests passed!")
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_common_utils():
+    """Test the async_function_with_fallbacks_common_utils method"""
+    # Create a basic router for testing
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            }
+        ],
+        max_fallbacks=5,
+    )
+
+    # Test case 1: disable_fallbacks=True should raise original exception
+    test_exception = Exception("Test error")
+    with pytest.raises(Exception, match="Test error"):
+        await router.async_function_with_fallbacks_common_utils(
+            e=test_exception,
+            disable_fallbacks=True,
+            fallbacks=None,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="gpt-3.5-turbo",
+            args=(),
+            kwargs=MagicMock(),
+        )
+
+    # Test case 2: original_model_group=None should raise original exception
+    with pytest.raises(Exception, match="Test error"):
+        await router.async_function_with_fallbacks_common_utils(
+            e=test_exception,
+            disable_fallbacks=False,
+            fallbacks=None,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="gpt-3.5-turbo",
+            args=(),
+            kwargs={},  # No model key
+        )
