@@ -2766,13 +2766,13 @@ class ProxyConfig:
 
             return current_config
 
-        # For dictionary values, update only non-empty values
+        # For dictionary values, update only non-none values
         if isinstance(current_config[param_name], dict):
             # Only keep non None values from db_param_value
-            non_empty_values = {k: v for k, v in db_param_value.items() if v}
+            non_none_values = {k: v for k, v in db_param_value.items() if v is not None}
 
-            # Update the config with non-empty values
-            current_config[param_name].update(non_empty_values)
+            # Update the config with non-none values
+            current_config[param_name].update(non_none_values)
         else:
             current_config[param_name] = db_param_value
 
