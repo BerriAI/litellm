@@ -408,10 +408,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             {/* Per User Usage Tab Panel */}
             <TabPanel>
               <PerUserUsage
-                analyticsData={analyticsData}
-                currentPage={currentPage}
-                handlePrevPage={handlePrevPage}
-                handleNextPage={handleNextPage}
+                accessToken={accessToken}
+                dateValue={dateValue}
                 formatAbbreviatedNumber={formatAbbreviatedNumber}
               />
             </TabPanel>
