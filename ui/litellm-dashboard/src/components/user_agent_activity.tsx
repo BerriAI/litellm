@@ -244,7 +244,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       </Grid>
 
       {/* Charts */}
-      <Grid numItems={1} className="gap-4"> {/* Changed from 2 to 1 */}
+      <Grid numItems={1} className="gap-4">
         <Card>
           <Title>Success Generations by User Agent</Title>
           <BarChart
@@ -252,11 +252,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             index="user_agent"
             categories={["successful_requests", "total_tokens"]}
             colors={["green", "blue"]}
-            valueFormatter={(value, idx, category) =>
-              category === "total_tokens"
-                ? formatNumberWithCommas(value)
-                : formatNumberWithCommas(value)
-            }
+            valueFormatter={(value: number) => formatNumberWithCommas(value)}
             yAxisWidth={60}
             showLegend={true}
           />
