@@ -640,7 +640,8 @@ class ModelResponseIterator:
                 ]
             ] = None
 
-            index = int(chunk.get("index", 0))
+            # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
+            index = 0
             if type_chunk == "content_block_delta":
                 """
                 Anthropic content chunk
