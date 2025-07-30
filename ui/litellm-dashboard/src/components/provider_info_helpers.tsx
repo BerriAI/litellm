@@ -29,8 +29,10 @@ export enum Providers {
     FireworksAI = "Fireworks AI",
     Triton = "Triton",
     Deepgram = "Deepgram",
-    ElevenLabs = "ElevenLabs"
-
+    ElevenLabs = "ElevenLabs",
+    Voyage = "Voyage AI",
+    JinaAI = "Jina AI",
+    VolcEngine = "VolcEngine"
   }
   
 export const provider_map: Record<string, string> = {
@@ -61,7 +63,10 @@ export const provider_map: Record<string, string> = {
     Triton: "triton",
     Deepgram: "deepgram",
     ElevenLabs: "elevenlabs",
-    SageMaker: "sagemaker_chat"
+    SageMaker: "sagemaker_chat",
+    Voyage: "voyage",
+    JinaAI: "jina_ai",
+    VolcEngine: "volcengine"
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -94,7 +99,10 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
     [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
     [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
-    [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`
+    [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
+    [Providers.Voyage]: `${asset_logos_folder}voyage.webp`, 
+    [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
+    [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
@@ -140,6 +148,12 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "azure_ai/command-r-plus";
     } else if (selectedProvider == Providers.Azure) {
       return "azure/my-deployment";
+    } else if (selectedProvider == Providers.Voyage) {
+      return "voyage/";
+    } else if (selectedProvider == Providers.JinaAI) {
+      return "jina_ai/";
+    } else if (selectedProvider == Providers.VolcEngine) {
+      return "volcengine/<any-model-on-volcengine>";
     } else {
       return "gpt-3.5-turbo";
     }
