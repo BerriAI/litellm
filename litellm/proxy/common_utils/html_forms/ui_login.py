@@ -2,10 +2,7 @@ import os
 
 # Use relative URL to preserve the protocol (HTTP/HTTPS) the user is currently using
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
-if server_root_path:
-    url_to_redirect_to = server_root_path + "/login"
-else:
-    url_to_redirect_to = "/login"
+url_to_redirect_to = server_root_path + "/login"
 html_form = f"""
 <!DOCTYPE html>
 <html lang="en">
