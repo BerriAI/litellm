@@ -194,10 +194,14 @@ class LiteLLM_Proxy_MCP_Handler:
                 
                 parsed_arguments = LiteLLM_Proxy_MCP_Handler._parse_tool_arguments(tool_arguments)
                 
+                # Import here to avoid circular import
+                from litellm.proxy.proxy_server import proxy_logging_obj
+                
                 result = await global_mcp_server_manager.call_tool(
                     name=tool_name,
                     arguments=parsed_arguments,
                     user_api_key_auth=user_api_key_auth,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
                 
                 # Format result for inclusion in response

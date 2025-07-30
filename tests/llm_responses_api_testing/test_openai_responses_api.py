@@ -1128,36 +1128,47 @@ def test_mcp_tools_with_responses_api():
     USER_QUERY = "how does tiktoken work?"
     #########################################################
     # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval 
-    response = litellm.responses(
-        model=MODEL,
-        tools=MCP_TOOLS,
-        input=USER_QUERY
-    )
-    print(response)
-
-    response = cast(ResponsesAPIResponse, response)
-
-    mcp_approval_id: Optional[str] = None
-    for output in response.output:
-        if output.type == "mcp_approval_request":
-            mcp_approval_id = output.id
-            break
-
-    # Step 2: Send followup with approval for the MCP call
-    if mcp_approval_id:
-        response_with_mcp_call = litellm.responses(
+    try:
+        response = litellm.responses(
             model=MODEL,
             tools=MCP_TOOLS,
-            input=[
-                {
-                    "type": "mcp_approval_response",
-                    "approve": True,
-                    "approval_request_id": mcp_approval_id
-                }
-            ],
-            previous_response_id=response.id,
+            input=USER_QUERY
         )
-        print(response_with_mcp_call)
+        print(response)
+
+        response = cast(ResponsesAPIResponse, response)
+
+        mcp_approval_id: Optional[str] = None
+        for output in response.output:
+            if output.type == "mcp_approval_request":
+                mcp_approval_id = output.id
+                break
+
+        # Step 2: Send followup with approval for the MCP call
+        if mcp_approval_id:
+            response_with_mcp_call = litellm.responses(
+                model=MODEL,
+                tools=MCP_TOOLS,
+                input=[
+                    {
+                        "type": "mcp_approval_response",
+                        "approve": True,
+                        "approval_request_id": mcp_approval_id
+                    }
+                ],
+                previous_response_id=response.id,
+            )
+            print(response_with_mcp_call)
+    except litellm.APIError as e:
+        if "424" in str(e) or "Failed Dependency" in str(e) or "external_connector_error" in str(e):
+            pytest.skip(f"Skipping test due to external MCP server error: {e}")
+        else:
+            raise e
+    except litellm.InternalServerError as e:
+        if "500" in str(e) or "server_error" in str(e):
+            pytest.skip(f"Skipping test due to OpenAI server error (likely MCP server unavailable): {e}")
+        else:
+            raise e
 
 
 @pytest.mark.asyncio

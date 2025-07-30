@@ -64,7 +64,7 @@ if MCP_AVAILABLE:
         global_mcp_tool_registry,
     )
     from litellm.proxy._experimental.mcp_server.utils import (
-        get_server_name_prefix_tool_mcp,
+    get_server_name_prefix_tool_mcp,
     )
 
     ######################################################
@@ -516,14 +516,16 @@ if MCP_AVAILABLE:
         litellm_logging_obj: Optional[Any] = None,
     ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
         """Handle tool execution for managed server tools"""
+        # Import here to avoid circular import
+        from litellm.proxy.proxy_server import proxy_logging_obj
+        
         call_tool_result = await global_mcp_server_manager.call_tool(
             name=name,
             arguments=arguments,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
-            mcp_protocol_version=mcp_protocol_version,
-            litellm_logging_obj=litellm_logging_obj,
+            proxy_logging_obj=proxy_logging_obj,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result.content  # type: ignore[return-value]
