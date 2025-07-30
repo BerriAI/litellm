@@ -10,34 +10,68 @@ oci_compartment_id = os.environ.get("OCI_COMPARTMENT_ID")
 
 response = completion(
     # model="oci/meta.llama-3.3-70b-instruct",
-    # model="oci/xai.grok-4",
-    model="oci/cohere.command-latest",
+    model="oci/xai.grok-4",
+    # model="oci/cohere.command-latest",
     # model="oci/cohere.command-r-plus-08-2024",
-    messages=[{"role": "system", "content": "You are a helpful assistant."},
-              {"role": "user", "content": "What is the capital of Brazil?"}],
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        
+        {"role": "user", "content": "What is the capital of Brazil?"},
+        
+        # Modelo chama a ferramenta
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "tool_call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_capital",
+                        "arguments": '{"country": "Brazil"}'
+                    }
+                }
+            ]
+        },
+
+        # Sua aplicação responde a tool_call
+        {
+            "role": "tool",
+            "tool_call_id": "tool_call_1",
+            "content": '{"capital": "Brasília"}'
+        },
+
+        # Modelo responde com base na resposta da ferramenta
+        {
+            "role": "assistant",
+            "content": "The capital of Brazil is Brasília."
+        },
+
+        # Novo input do usuário
+        {"role": "user", "content": "What about France?"}
+    ],
     oci_region=oci_region,
     oci_user=oci_user,
     oci_fingerprint=oci_fingerprint,
     oci_tenancy=oci_tenancy,
     oci_key=oci_key,
     oci_compartment_id=oci_compartment_id,
-    # tools=[{
-    #     "type": "function",
-    #     "function": {
-    #         "name": "get_capital",
-    #         "description": "Get the capital of a country.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "country": {
-    #                     "type": "string",
-    #                     "description": "The name of the country."
-    #                 }
-    #             },
-    #             "required": ["country"]
-    #         }
-    #     }
-    # }]
+    tools=[{
+        "type": "function",
+        "function": {
+            "name": "get_capital",
+            "description": "Get the capital of a country.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "country": {
+                        "type": "string",
+                        "description": "The name of the country."
+                    }
+                },
+                "required": ["country"]
+            }
+        }
+    }]
 )
 
 print(response)
