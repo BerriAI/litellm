@@ -244,29 +244,21 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       </Grid>
 
       {/* Charts */}
-      <Grid numItems={2} className="gap-4">
+      <Grid numItems={1} className="gap-4"> {/* Changed from 2 to 1 */}
         <Card>
-          <Title>Requests by User Agent</Title>
+          <Title>Success Generations by User Agent</Title>
           <BarChart
             data={chartData.slice(0, 10)} // Top 10
             index="user_agent"
-            categories={["total_requests"]}
-            colors={["blue"]}
-            valueFormatter={(value) => formatNumberWithCommas(value)}
+            categories={["successful_requests", "total_tokens"]}
+            colors={["green", "blue"]}
+            valueFormatter={(value, idx, category) =>
+              category === "total_tokens"
+                ? formatNumberWithCommas(value)
+                : formatNumberWithCommas(value)
+            }
             yAxisWidth={60}
-            showLegend={false}
-          />
-        </Card>
-        <Card>
-          <Title>Success Rate by User Agent</Title>
-          <BarChart
-            data={successRateData.slice(0, 10)} // Top 10
-            index="user_agent"
-            categories={["success_rate"]}
-            colors={["green"]}
-            valueFormatter={(value) => `${value.toFixed(1)}%`}
-            yAxisWidth={60}
-            showLegend={false}
+            showLegend={true}
           />
         </Card>
       </Grid>
