@@ -1169,9 +1169,6 @@ class Router:
         try:
             input_kwargs_for_streaming_fallback = kwargs.copy()
             input_kwargs_for_streaming_fallback["model"] = model
-            verbose_router_logger.debug(
-                f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
-            )
 
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             start_time = time.time()
