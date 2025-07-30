@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Set
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -226,25 +226,29 @@ class MCPRequestHandler:
         """
         from typing import List
 
-        allowed_mcp_servers: List[str] = []
-        allowed_mcp_servers_for_key = (
-            await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
-        )
-        allowed_mcp_servers_for_team = (
-            await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
-        )
+        try:
+            allowed_mcp_servers: List[str] = []
+            allowed_mcp_servers_for_key = (
+                await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
+            )
+            allowed_mcp_servers_for_team = (
+                await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
+            )
 
-        #########################################################
-        # If team has mcp_servers, then key must have a subset of the team's mcp_servers
-        #########################################################
-        if len(allowed_mcp_servers_for_team) > 0:
-            for _mcp_server in allowed_mcp_servers_for_key:
-                if _mcp_server in allowed_mcp_servers_for_team:
-                    allowed_mcp_servers.append(_mcp_server)
-        else:
-            allowed_mcp_servers = allowed_mcp_servers_for_key
+            #########################################################
+            # If team has mcp_servers, then key must have a subset of the team's mcp_servers
+            #########################################################
+            if len(allowed_mcp_servers_for_team) > 0:
+                for _mcp_server in allowed_mcp_servers_for_key:
+                    if _mcp_server in allowed_mcp_servers_for_team:
+                        allowed_mcp_servers.append(_mcp_server)
+            else:
+                allowed_mcp_servers = allowed_mcp_servers_for_key
 
-        return list(set(allowed_mcp_servers))
+            return list(set(allowed_mcp_servers))
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}")
+            return []
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_key(
@@ -262,25 +266,29 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        key_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": user_api_key_auth.object_permission_id},
+        try:
+            key_object_permission = (
+                await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                    where={"object_permission_id": user_api_key_auth.object_permission_id},
+                )
             )
-        )
-        if key_object_permission is None:
-            return []
+            if key_object_permission is None:
+                return []
 
-        # Get direct MCP servers
-        direct_mcp_servers = key_object_permission.mcp_servers or []
-        
-        # Get MCP servers from access groups
-        access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            key_object_permission.mcp_access_groups or []
-        )
-        
-        # Combine both lists
-        all_servers = direct_mcp_servers + access_group_servers
-        return list(set(all_servers))
+            # Get direct MCP servers
+            direct_mcp_servers = key_object_permission.mcp_servers or []
+            
+            # Get MCP servers from access groups
+            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                key_object_permission.mcp_access_groups or []
+            )
+            
+            # Combine both lists
+            all_servers = direct_mcp_servers + access_group_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get allowed MCP servers for key: {str(e)}")
+            return []
 
     @staticmethod
     async def _get_allowed_mcp_servers_for_team(
@@ -304,37 +312,41 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        team_obj: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": user_api_key_auth.team_id},
+        try:
+            team_obj: Optional[LiteLLM_TeamTable] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": user_api_key_auth.team_id},
+                )
             )
-        )
-        if team_obj is None:
-            verbose_logger.debug("team_obj is None")
-            return []
+            if team_obj is None:
+                verbose_logger.debug("team_obj is None")
+                return []
 
-        object_permissions = team_obj.object_permission
-        if object_permissions is None:
-            return []
+            object_permissions = team_obj.object_permission
+            if object_permissions is None:
+                return []
 
-        # Get direct MCP servers
-        direct_mcp_servers = object_permissions.mcp_servers or []
-        
-        # Get MCP servers from access groups
-        access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            object_permissions.mcp_access_groups or []
-        )
-        
-        # Combine both lists
-        all_servers = direct_mcp_servers + access_group_servers
-        return list(set(all_servers))
+            # Get direct MCP servers
+            direct_mcp_servers = object_permissions.mcp_servers or []
+            
+            # Get MCP servers from access groups
+            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                object_permissions.mcp_access_groups or []
+            )
+            
+            # Combine both lists
+            all_servers = direct_mcp_servers + access_group_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get allowed MCP servers for team: {str(e)}")
+            return []
 
     @staticmethod
-    def _get_config_server_ids_for_access_groups(config_mcp_servers, access_groups: List[str]) -> set:
+    def _get_config_server_ids_for_access_groups(config_mcp_servers, access_groups: List[str]) -> Set[str]:
         """
         Helper to get server_ids from config-loaded servers that match any of the given access groups.
         """
-        server_ids = set()
+        server_ids: Set[str] = set()
         for server_id, server in config_mcp_servers.items():
             if server.access_groups:
                 if any(group in server.access_groups for group in access_groups):
@@ -342,11 +354,11 @@ class MCPRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_db_server_ids_for_access_groups(prisma_client, access_groups: List[str]) -> set:
+    async def _get_db_server_ids_for_access_groups(prisma_client, access_groups: List[str]) -> Set[str]:
         """
         Helper to get server_ids from DB servers that match any of the given access groups.
         """
-        server_ids = set()
+        server_ids: Set[str] = set()
         if access_groups and prisma_client is not None:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
@@ -370,20 +382,26 @@ class MCPRequestHandler:
         Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers
         """
         from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
-        # Use the new helper for config-loaded servers
-        server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
-            global_mcp_server_manager.config_mcp_servers, access_groups
-        )
+        try:
+            # Import here to avoid circular import
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+            
+            # Use the new helper for config-loaded servers
+            server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
+                global_mcp_server_manager.config_mcp_servers, access_groups
+            )
 
-        # Use the new helper for DB servers
-        db_server_ids = await MCPRequestHandler._get_db_server_ids_for_access_groups(
-            prisma_client, access_groups
-        )
-        server_ids.update(db_server_ids)
+            # Use the new helper for DB servers
+            db_server_ids = await MCPRequestHandler._get_db_server_ids_for_access_groups(
+                prisma_client, access_groups
+            )
+            server_ids.update(db_server_ids)
 
-        return list(server_ids)
+            return list(server_ids)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get MCP servers from access groups: {str(e)}")
+            return []
 
     @staticmethod
     async def get_mcp_access_groups(
