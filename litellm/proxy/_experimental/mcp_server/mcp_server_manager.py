@@ -67,6 +67,34 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
         return env_data
 
 
+def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVersionType]) -> MCPSpecVersionType:
+    """
+    Convert string protocol version to MCPSpecVersion enum.
+    
+    Args:
+        protocol_version: String protocol version, enum, or None
+        
+    Returns:
+        MCPSpecVersionType: The enum value
+    """
+    if not protocol_version:
+        return MCPSpecVersion.jun_2025  # type: ignore
+    
+    # If it's already an MCPSpecVersion enum, return it
+    if isinstance(protocol_version, MCPSpecVersion):
+        return protocol_version  # type: ignore
+    
+    # If it's a string, try to match it to enum values
+    if isinstance(protocol_version, str):
+        for version in MCPSpecVersion:
+            if version.value == protocol_version:
+                return version  # type: ignore
+    
+    # If no match found, return default
+    verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
+    return MCPSpecVersion.jun_2025  # type: ignore
+
+
 class MCPServerManager:
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -231,7 +259,7 @@ class MCPServerManager:
                 server_name=getattr(mcp_server, 'server_name', None),
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
-                spec_version=cast(MCPSpecVersionType, mcp_server.spec_version),
+                spec_version=_convert_protocol_version_to_enum(mcp_server.spec_version),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=MCPInfo(
                     server_name=mcp_server.server_name or mcp_server.server_id,
@@ -354,6 +382,9 @@ class MCPServerManager:
         """
         transport = server.transport or MCPTransport.sse
         
+        # Convert protocol version string to enum
+        protocol_version_enum = _convert_protocol_version_to_enum(protocol_version or server.spec_version)
+        
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             # For stdio, we need to get the stdio config from the server
@@ -372,7 +403,7 @@ class MCPServerManager:
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
                 stdio_config=stdio_config,
-                protocol_version=cast(MCPSpecVersionType, protocol_version or server.spec_version),
+                protocol_version=protocol_version_enum,
             )
         else:
             # For HTTP/SSE transports
@@ -383,7 +414,7 @@ class MCPServerManager:
                 auth_type=server.auth_type,
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
-                protocol_version=cast(MCPSpecVersionType, protocol_version or server.spec_version),
+                protocol_version=protocol_version_enum,
             )
 
     async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None, mcp_protocol_version: Optional[str] = None) -> List[MCPTool]:
@@ -400,6 +431,9 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
+        # Use protocol version from request if provided, otherwise use server's default
+        protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
+        
         client = None
         try:
             # Use protocol version from request if provided, otherwise use server's default
@@ -562,39 +596,32 @@ class MCPServerManager:
             protocol_version=mcp_protocol_version,
         )
         
-        #########################################################
-        # During MCP Tool Call Hook
-        # Allow concurrent monitoring and validation during execution
-        #########################################################
-        if litellm_logging_obj:
-            during_hook_kwargs = {
-                "name": name,
-                "arguments": arguments,
-                "server_name": server_name_from_prefix,
-            }
-            
-            # Start the during hook in a separate task for concurrent execution
-            during_hook_task = asyncio.create_task(
-                litellm_logging_obj.async_during_mcp_tool_call_hook(
-                    kwargs=during_hook_kwargs,
-                    request_obj=None,  # Will be created in the hook
-                    start_time=start_time,
-                    end_time=start_time,
-                )
-            )
-
         async with client:
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
                 arguments=arguments,
             )
+            
+            # Initialize during_hook_task as None
+            during_hook_task = None
+            
+            # Start during hook if litellm_logging_obj is available
+            if litellm_logging_obj:
+                try:
+                    during_hook_task = litellm_logging_obj.async_during_mcp_tool_call_hook(
+                        kwargs=litellm_logging_obj.model_call_details,
+                        start_time=start_time,
+                    )
+                except Exception as e:
+                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
+            
             result = await client.call_tool(call_tool_params)
             
             #########################################################
             # Check during hook result if it completed
             #########################################################
-            if litellm_logging_obj and 'during_hook_task' in locals():
+            if litellm_logging_obj and during_hook_task is not None:
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):
@@ -727,6 +754,224 @@ class MCPServerManager:
 
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
+
+    async def health_check_server(self, server_id: str, mcp_auth_header: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Perform a health check on a specific MCP server.
+        
+        Args:
+            server_id: The ID of the server to health check
+            mcp_auth_header: Optional authentication header for the MCP server
+            
+        Returns:
+            Dict containing health check results
+        """
+        import time
+        from datetime import datetime
+        
+        server = self.get_mcp_server_by_id(server_id)
+        if not server:
+            return {
+                "server_id": server_id,
+                "status": "unknown",
+                "error": "Server not found",
+                "last_health_check": datetime.now().isoformat(),
+                "response_time_ms": None
+            }
+        
+        start_time = time.time()
+        try:
+            # Try to get tools from the server as a health check
+            tools = await self._get_tools_from_server(server, mcp_auth_header)
+            response_time = (time.time() - start_time) * 1000
+            
+            return {
+                "server_id": server_id,
+                "status": "healthy",
+                "tools_count": len(tools),
+                "last_health_check": datetime.now().isoformat(),
+                "response_time_ms": round(response_time, 2),
+                "error": None
+            }
+        except Exception as e:
+            response_time = (time.time() - start_time) * 1000
+            error_message = str(e)
+            
+            return {
+                "server_id": server_id,
+                "status": "unhealthy",
+                "last_health_check": datetime.now().isoformat(),
+                "response_time_ms": round(response_time, 2),
+                "error": error_message
+            }
+
+    async def health_check_all_servers(self, mcp_auth_header: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Perform health checks on all MCP servers.
+        
+        Args:
+            mcp_auth_header: Optional authentication header for the MCP servers
+            
+        Returns:
+            Dict containing health check results for all servers
+        """
+        all_servers = self.get_registry()
+        results = {}
+        
+        for server_id, server in all_servers.items():
+            results[server_id] = await self.health_check_server(server_id, mcp_auth_header)
+        
+        return results
+
+    async def health_check_allowed_servers(
+        self, 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Perform health checks on all MCP servers that the user has access to.
+        
+        Args:
+            user_api_key_auth: User authentication info for access control
+            mcp_auth_header: Optional authentication header for the MCP servers
+            
+        Returns:
+            Dict containing health check results for accessible servers
+        """
+        # Get allowed servers for the user
+        allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
+        
+        # Perform health checks on allowed servers
+        results = {}
+        for server_id in allowed_server_ids:
+            results[server_id] = await self.health_check_server(server_id, mcp_auth_header)
+        
+        return results
+
+    async def get_all_mcp_servers_with_health_and_teams(
+        self, 
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        include_health: bool = True
+    ) -> List[LiteLLM_MCPServerTable]:
+        """
+        Get all MCP servers that the user has access to, with health status and team information.
+        
+        Args:
+            user_api_key_auth: User authentication info for access control
+            include_health: Whether to include health check information
+            
+        Returns:
+            List of MCP server objects with health and team data
+        """
+        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+        from litellm.proxy._experimental.mcp_server.db import get_mcp_servers, get_all_mcp_servers
+        
+        # Get allowed server IDs
+        allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
+        
+        # Get servers from database
+        list_mcp_servers = []
+        if prisma_client is not None:
+            list_mcp_servers = await get_mcp_servers(prisma_client, allowed_server_ids)
+            
+            # If admin, also get all servers from database
+            if user_api_key_auth and _user_has_admin_view(user_api_key_auth):
+                all_mcp_servers = await get_all_mcp_servers(prisma_client)
+                for server in all_mcp_servers:
+                    if server.server_id not in allowed_server_ids:
+                        list_mcp_servers.append(server)
+
+        # Add config.yaml servers
+        for _server_id, _server_config in self.config_mcp_servers.items():
+            if _server_id in allowed_server_ids:
+                list_mcp_servers.append(
+                    LiteLLM_MCPServerTable(
+                        server_id=_server_id,
+                        server_name=_server_config.name,
+                        alias=_server_config.alias,
+                        url=_server_config.url,
+                        transport=_server_config.transport,
+                        spec_version=_server_config.spec_version,
+                        auth_type=_server_config.auth_type,
+                        created_at=datetime.datetime.now(),
+                        updated_at=datetime.datetime.now(),
+                        mcp_info=_server_config.mcp_info,
+                        # Stdio-specific fields
+                        command=getattr(_server_config, 'command', None),
+                        args=getattr(_server_config, 'args', None) or [],
+                        env=getattr(_server_config, 'env', None) or {},
+                    )
+                )
+
+        # Get team information for non-admin users
+        server_to_teams_map: Dict[str, List[Dict[str, str]]] = {}
+        if user_api_key_auth and not _user_has_admin_view(user_api_key_auth) and prisma_client is not None:
+            teams = await prisma_client.db.litellm_teamtable.find_many(
+                include={"object_permission": True}
+            )
+            
+            user_teams = []
+            for team in teams:
+                if team.members_with_roles:
+                    for member in team.members_with_roles:
+                        if (
+                            "user_id" in member
+                            and member["user_id"] is not None
+                            and member["user_id"] == user_api_key_auth.user_id
+                        ):
+                            user_teams.append(team)
+
+            # Create a mapping of server_id to teams that have access to it
+            for team in user_teams:
+                if team.object_permission and team.object_permission.mcp_servers:
+                    for server_id in team.object_permission.mcp_servers:
+                        if server_id not in server_to_teams_map:
+                            server_to_teams_map[server_id] = []
+                        server_to_teams_map[server_id].append({
+                            "team_id": team.team_id,
+                            "team_alias": team.team_alias,
+                            "organization_id": team.organization_id
+                        })
+
+        # Get health check results if requested
+        all_health_results = {}
+        if include_health:
+            try:
+                all_health_results = await self.health_check_allowed_servers(user_api_key_auth)
+            except Exception as e:
+                verbose_logger.debug(f"Error performing health checks: {e}")
+
+        # Map servers to their teams and return with health data
+        from typing import cast
+        return [
+            LiteLLM_MCPServerTable(
+                server_id=server.server_id,
+                server_name=server.server_name,
+                alias=server.alias,
+                description=server.description,
+                url=server.url,
+                transport=server.transport,
+                spec_version=server.spec_version,
+                auth_type=server.auth_type,
+                created_at=server.created_at,
+                created_by=server.created_by,
+                updated_at=server.updated_at,
+                updated_by=server.updated_by,
+                mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
+                mcp_info=server.mcp_info,
+                teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
+                # Health check status
+                status=all_health_results.get(server.server_id, {}).get("status", "unknown"),
+                last_health_check=datetime.datetime.fromisoformat(all_health_results.get(server.server_id, {}).get("last_health_check", datetime.datetime.now().isoformat())) if all_health_results.get(server.server_id, {}).get("last_health_check") else None,
+                health_check_error=all_health_results.get(server.server_id, {}).get("error"),
+                # Stdio-specific fields
+                command=getattr(server, 'command', None),
+                args=getattr(server, 'args', None) or [],
+                env=getattr(server, 'env', None) or {},
+            )
+            for server in list_mcp_servers
+        ]
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()
