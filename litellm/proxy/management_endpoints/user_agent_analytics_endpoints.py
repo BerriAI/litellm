@@ -300,7 +300,7 @@ async def get_user_agent_analytics(
                     daily_data_by_tag_and_date[tag][date_str] = daily_data
         
         # Calculate DAU/WAU/MAU for each date and tag combination
-        unique_dates = set()
+        unique_dates: set[str] = set()
         for tag_data in daily_data_by_tag_and_date.values():
             unique_dates.update(tag_data.keys())
         
@@ -476,7 +476,7 @@ async def get_user_agent_summary(
                 }
                 for ua, metrics in user_agent_totals.items()
             ],
-            key=lambda x: x["requests"],
+            key=lambda x: int(x["requests"]),
             reverse=True,
         )[:10]  # Top 10
         
