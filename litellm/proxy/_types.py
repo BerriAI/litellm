@@ -919,6 +919,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
+    # Health check status
+    status: Optional[str] = Field(default="unknown", description="Health status: 'healthy', 'unhealthy', 'unknown'")
+    last_health_check: Optional[datetime] = None
+    health_check_error: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
