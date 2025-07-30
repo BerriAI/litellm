@@ -12,6 +12,7 @@ export enum Providers {
     Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
     Google_AI_Studio = "Google AI Studio",
     Bedrock = "Amazon Bedrock",
+    SageMaker = "AWS SageMaker",
     Groq = "Groq",
     MistralAI = "Mistral AI",
     Deepseek = "Deepseek",
@@ -59,7 +60,8 @@ export const provider_map: Record<string, string> = {
     FireworksAI: "fireworks_ai",
     Triton: "triton",
     Deepgram: "deepgram",
-    ElevenLabs: "elevenlabs"
+    ElevenLabs: "elevenlabs",
+    SageMaker: "sagemaker_chat"
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -70,6 +72,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
     [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
     [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
+    [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
     [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
     [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
     [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
@@ -129,6 +132,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "claude-3-opus";
     } else if (selectedProvider == Providers.Bedrock) {
       return "claude-3-opus";
+    } else if (selectedProvider == Providers.SageMaker) {
+      return "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b";
     } else if (selectedProvider == Providers.Google_AI_Studio) {
       return "gemini-pro";
     } else if (selectedProvider == Providers.Azure_AI_Studio) {
@@ -171,6 +176,22 @@ export const getPlaceholder = (selectedProvider: string): string => {
             typeof value === "object" &&
             "litellm_provider" in (value as object) &&
             ((value as any)["litellm_provider"] === "cohere_chat")
+          ) {
+            providerModels.push(key);
+          }
+        });
+      }
+      
+      // Special case for sagemaker
+      // we need both sagemaker and sagemaker_chat models to show on dropdown
+      if (providerKey == Providers.SageMaker) {
+        console.log("Adding sagemaker chat models");
+        Object.entries(modelMap).forEach(([key, value]) => {
+          if (
+            value !== null &&
+            typeof value === "object" &&
+            "litellm_provider" in (value as object) &&
+            ((value as any)["litellm_provider"] === "sagemaker_chat")
           ) {
             providerModels.push(key);
           }
