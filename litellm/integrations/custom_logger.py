@@ -562,7 +562,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         
         This is useful for logging payloads that contain sensitive information.
         """
-        from copy import deepcopy
+        from copy import copy
 
         from litellm import Choices, Message, ModelResponse
         from litellm.types.utils import LiteLLMCommonStrings
@@ -570,19 +570,26 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if self.turn_off_message_logging is False:
             return model_call_details
         
-        model_call_details = deepcopy(model_call_details)
+        # Only make a shallow copy of the top-level dict to avoid deepcopy issues
+        # with complex objects like AuthenticationError that may be present
+        model_call_details_copy = copy(model_call_details)
         redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
         standard_logging_object = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
-            return model_call_details
+            return model_call_details_copy
 
-        if standard_logging_object.get("messages") is not None:
-            standard_logging_object["messages"] = [Message(content=redacted_str)]
+        # Make a copy of just the standard_logging_object to avoid modifying the original
+        standard_logging_object_copy = copy(standard_logging_object)
 
-        if standard_logging_object.get("response") is not None:
-            standard_logging_object["response"] = cast(Any, ModelResponse(
+        if standard_logging_object_copy.get("messages") is not None:
+            standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
+
+        if standard_logging_object_copy.get("response") is not None:
+            model_response = ModelResponse(
                 choices=[Choices(message=Message(content=redacted_str))]
-            ))
+            )
+            model_response_dict = model_response.model_dump()
+            standard_logging_object_copy["response"] = model_response_dict
 
-        model_call_details["standard_logging_object"] = standard_logging_object
-        return model_call_details
+        model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
+        return model_call_details_copy

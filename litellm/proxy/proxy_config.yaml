@@ -5,5 +5,8 @@ model_list:
 
 
 litellm_settings:
-  success_callback: ["mlflow"]
-  failure_callback: ["mlflow"]
+  callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
+
+  # Params to apply only for "datadog_llm_observability" callback
+  datadog_llm_observability_params:
+    turn_off_message_logging: true # turn off message logging just for this callback
