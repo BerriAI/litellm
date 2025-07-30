@@ -1081,7 +1081,7 @@ class Router:
 
     async def _acompletion_streaming_iterator(
         self, model_response: CustomStreamWrapper, input_kwargs: dict
-    ) -> AsyncGenerator[Optional[ModelResponseStream]]:
+    ) -> AsyncGenerator[Optional[ModelResponseStream], None]:
         """
         Helper to iterate over a streaming response.
 
@@ -1094,12 +1094,16 @@ class Router:
                 yield item
         except MidStreamFallbackError as e:
             # Prepare fallback request
+            litellm._turn_on_debug()
             fallback_kwargs = input_kwargs.copy()
-            fallback_kwargs["model"] = "gpt-3.5-turbo"
+            fallback_kwargs["model"] = "gpt-4o-mini"
+            fallback_kwargs["api_base"] = None
+            fallback_kwargs["api_key"] = None
             fallback_kwargs["messages"] = fallback_kwargs["messages"] + [
                 {
-                    "role": "user",
-                    "content": f"The following is the beginning of an assistant's response. Continue from where it left off: {e.generated_content}",
+                    "role": "assistant",
+                    "content": e.generated_content,
+                    "prefix": True,
                 }
             ]
 
@@ -1128,7 +1132,7 @@ class Router:
     ) -> Union[
         ModelResponse,
         CustomStreamWrapper,
-        AsyncGenerator[Optional[ModelResponseStream]],
+        AsyncGenerator[Optional[ModelResponseStream], None],
     ]:
         """
         - Get an available deployment
