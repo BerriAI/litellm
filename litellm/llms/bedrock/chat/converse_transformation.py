@@ -615,7 +615,7 @@ class AmazonConverseConfig(BaseConfig):
             self._handle_top_k_value(model, inference_params)
         )
 
-        original_tools = inference_params.get("tools", [])
+        original_tools = inference_params.pop("tools", [])
         
         # Separate computer use tools from regular function tools
         # Only for Anthropic models that support computer use
