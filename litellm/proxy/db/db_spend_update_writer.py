@@ -893,7 +893,7 @@ class DBSpendUpdateWriter:
                                 "model_group": transaction.get("model_group"),
                                 "mcp_namespaced_tool_name": transaction.get(
                                     "mcp_namespaced_tool_name"
-                                ),
+                                ) or "",
                                 "custom_llm_provider": transaction.get(
                                     "custom_llm_provider"
                                 ),
