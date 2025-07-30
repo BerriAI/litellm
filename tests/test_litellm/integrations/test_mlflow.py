@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.abspath("../.."))
 import pytest
 
 import litellm
-from litellm.integrations.mlflow import MlflowLogger
 
 
 @pytest.mark.asyncio
@@ -23,9 +22,27 @@ async def test_mlflow_request_tags_functionality():
     mock_span.request_id = "test_trace_id"
     mock_client.start_trace.return_value = mock_span
     
-    with patch('mlflow.tracking.MlflowClient', return_value=mock_client), \
-         patch('mlflow.get_current_active_span', return_value=None):
-        
+    # Mock all MLflow-related imports to avoid requiring MLflow as a dependency
+    mock_mlflow_tracking = MagicMock()
+    mock_mlflow_tracking.MlflowClient = MagicMock(return_value=mock_client)
+    
+    mock_mlflow_entities = MagicMock()
+    mock_mlflow_entities.SpanStatusCode.OK = "OK"
+    mock_mlflow_entities.SpanStatusCode.ERROR = "ERROR"
+    mock_mlflow_entities.SpanType.LLM = "LLM"
+    
+    mock_mlflow = MagicMock()
+    mock_mlflow.get_current_active_span.return_value = None
+    
+    with patch.dict('sys.modules', {
+        'mlflow': mock_mlflow,
+        'mlflow.tracking': mock_mlflow_tracking,
+        'mlflow.entities': mock_mlflow_entities,
+        'mlflow.tracing.utils': MagicMock(),
+    }):
+        # Now we can safely import MlflowLogger
+        from litellm.integrations.mlflow import MlflowLogger
+
         # Create MlflowLogger instance
         mlflow_logger = MlflowLogger()
         litellm.callbacks = [mlflow_logger]
@@ -56,5 +73,3 @@ async def test_mlflow_request_tags_functionality():
         assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
         
         print("✅ Request tags properly transformed and passed to MLflow trace")
-
-
