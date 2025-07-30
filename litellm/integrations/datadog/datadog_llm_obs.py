@@ -58,10 +58,32 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[LLMObsPayload] = []
+            
+            #########################################################
+            # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params
+            #########################################################
+            dict_datadog_llm_obs_params = self._get_datadog_llm_obs_params()
+            kwargs.update(dict_datadog_llm_obs_params)
             CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
             raise e
+
+    def _get_datadog_llm_obs_params(self) -> Dict:
+        """
+        Get the datadog_llm_observability_params from litellm.datadog_llm_observability_params
+
+        These are params specific to initializing the DataDogLLMObsLogger e.g. turn_off_message_logging
+        """
+        dict_datadog_llm_obs_params: Dict = {}
+        if litellm.datadog_llm_observability_params is not None:
+            if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
+                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump()
+            elif isinstance(litellm.datadog_llm_observability_params, Dict):
+                # only allow params that are of DatadogLLMObsInitParams
+                dict_datadog_llm_obs_params = DatadogLLMObsInitParams(**litellm.datadog_llm_observability_params).model_dump()
+        return dict_datadog_llm_obs_params
+            
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
