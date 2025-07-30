@@ -28,8 +28,6 @@ from enum import Enum
 
 telemetry = None
 
-from litellm.proxy.utils import construct_database_url_from_env_vars
-
 
 class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_limit = 10
@@ -687,6 +685,7 @@ def run_server(  # noqa: PLR0915
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:
                 # Use helper function to construct DATABASE_URL from individual variables
+                from litellm.proxy.utils import construct_database_url_from_env_vars
                 database_url = construct_database_url_from_env_vars()
                 if database_url:
                     os.environ["DATABASE_URL"] = database_url
@@ -715,6 +714,7 @@ def run_server(  # noqa: PLR0915
         # Handle database URL construction when no config file is used
         if config is None and os.getenv("DATABASE_URL") is None:
             # Use helper function to construct DATABASE_URL from individual variables
+            from litellm.proxy.utils import construct_database_url_from_env_vars
             database_url = construct_database_url_from_env_vars()
             if database_url:
                 os.environ["DATABASE_URL"] = database_url
