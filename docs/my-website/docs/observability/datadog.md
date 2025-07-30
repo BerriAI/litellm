@@ -9,8 +9,7 @@ LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
 - `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
-<Tabs>
-<TabItem value="datadog" label="Datadog Logs">
+## Datadog Logs / Traces
 
 We will use the `--config` to set `litellm.callbacks = ["datadog"]` this will log all successful LLM calls to DataDog
 
@@ -26,8 +25,8 @@ litellm_settings:
   service_callback: ["datadog"] # logs redis, postgres failures on datadog
 ```
 
-</TabItem>
-<TabItem value="datadog_llm_observability" label="Datadog LLM Observability">
+
+## Datadog LLM Observability
 
 ```yaml
 model_list:
@@ -38,8 +37,7 @@ litellm_settings:
   callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
 ```
 
-</TabItem>
-</Tabs>
+
 
 **Step 2**: Set Required env variables for datadog
 
@@ -104,7 +102,7 @@ docker run \
     --config /app/config.yaml --detailed_debug
 ```
 
-### Set DD variables (`DD_SERVICE` etc)
+## Set DD variables (`DD_SERVICE` etc)
 
 LiteLLM supports customizing the following Datadog environment variables
 
