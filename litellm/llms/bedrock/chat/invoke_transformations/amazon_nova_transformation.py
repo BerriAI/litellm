@@ -50,25 +50,11 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        # Nova invoke API doesn't support computer use tools or additionalModelRequestFields
-        # Filter out any computer use tools to prevent additionalModelRequestFields from being added
-        filtered_optional_params = optional_params.copy()
-        if "tools" in filtered_optional_params:
-            # Filter out computer use tools since Nova invoke doesn't support them
-            computer_use_prefixes = ["computer_", "bash_", "text_editor_", "web_search_"]
-            regular_tools = []
-            for tool in filtered_optional_params["tools"]:
-                tool_type = tool.get("type", "")
-                is_computer_use_tool = any(tool_type.startswith(prefix) for prefix in computer_use_prefixes)
-                if not is_computer_use_tool:
-                    regular_tools.append(tool)
-            filtered_optional_params["tools"] = regular_tools
-        
         _transformed_nova_request = AmazonConverseConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=filtered_optional_params,
+            optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
