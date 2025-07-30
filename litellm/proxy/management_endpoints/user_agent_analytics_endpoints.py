@@ -14,7 +14,7 @@ tracked by the system.
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -476,7 +476,7 @@ async def get_user_agent_summary(
                 }
                 for ua, metrics in user_agent_totals.items()
             ],
-            key=lambda x: int(x["requests"]),
+            key=lambda x: cast(int, x["requests"]),
             reverse=True,
         )[:10]  # Top 10
         
