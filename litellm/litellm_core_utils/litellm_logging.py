@@ -79,9 +79,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.mcp import (
-    MCPPostCallResponseObject,
-)
+from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
@@ -169,10 +167,10 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
 
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
@@ -947,7 +945,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"
-            curl_command += additional_args.get("request_str", None)
+            request_str = additional_args.get("request_str", "")
+            curl_command += request_str
         elif api_base == "":
             curl_command = str(self.model_call_details)
         return curl_command
@@ -2267,7 +2266,15 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                         )
+                
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    ##################################
+                    # call redaction hook for custom logger
+                    callback.redact_standard_logging_payload(
+                        standard_logging_object=self.model_call_details.get("standard_logging_object", {})
+                    )
+                    ##################################
+
                     if self.stream is True:
                         if (
                             "async_complete_streaming_response"
@@ -2913,34 +2920,36 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
 
         if "httpx_response" in self.model_call_details:
-            result = litellm.AnthropicConfig().transform_response(
-                raw_response=self.model_call_details.get("httpx_response", None),
-                model_response=litellm.ModelResponse(),
-                model=self.model,
-                messages=[],
-                logging_obj=self,
-                optional_params={},
-                api_key="",
-                request_data={},
-                encoding=litellm.encoding,
-                json_mode=False,
-                litellm_params={},
-            )
-        else:
-            from litellm.types.llms.anthropic import AnthropicResponse
+            httpx_response = self.model_call_details.get("httpx_response")
+            if httpx_response is not None:
+                result = litellm.AnthropicConfig().transform_response(
+                    raw_response=httpx_response,
+                    model_response=litellm.ModelResponse(),
+                    model=self.model,
+                    messages=[],
+                    logging_obj=self,
+                    optional_params={},
+                    api_key="",
+                    request_data={},
+                    encoding=litellm.encoding,
+                    json_mode=False,
+                    litellm_params={},
+                )
+            else:
+                from litellm.types.llms.anthropic import AnthropicResponse
 
-            pydantic_result = AnthropicResponse.model_validate(result)
-            import httpx
+                pydantic_result = AnthropicResponse.model_validate(result)
+                import httpx
 
-            result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
-                raw_response=httpx.Response(
-                    status_code=200,
-                    headers={},
-                ),
-                model_response=litellm.ModelResponse(),
-                json_mode=None,
-            )
+                result = litellm.AnthropicConfig().transform_parsed_response(
+                    completion_response=pydantic_result.model_dump(),
+                    raw_response=httpx.Response(
+                        status_code=200,
+                        headers={},
+                    ),
+                    model_response=litellm.ModelResponse(),
+                    json_mode=None,
+                )
         return result
 
     def _handle_non_streaming_google_genai_generate_content_response_logging(
@@ -3211,13 +3220,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
         elif logging_integration == "prometheus":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PrometheusLogger):
-                    return callback  # type: ignore
+            if PrometheusLogger is not None:
+                for callback in _in_memory_loggers:
+                    if isinstance(callback, PrometheusLogger):
+                        return callback  # type: ignore
 
-            _prometheus_logger = PrometheusLogger()
-            _in_memory_loggers.append(_prometheus_logger)
-            return _prometheus_logger  # type: ignore
+                _prometheus_logger = PrometheusLogger()
+                _in_memory_loggers.append(_prometheus_logger)
+                return _prometheus_logger  # type: ignore
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
@@ -3574,9 +3584,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, LiteralAILogger):
                     return callback
         elif logging_integration == "prometheus":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PrometheusLogger):
-                    return callback
+            if PrometheusLogger is not None:
+                for callback in _in_memory_loggers:
+                    if isinstance(callback, PrometheusLogger):
+                        return callback
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
