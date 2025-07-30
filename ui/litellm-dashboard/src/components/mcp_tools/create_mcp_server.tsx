@@ -348,8 +348,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               rules={[{ required: true, message: "Please select a spec version" }]}
             >
               <Select placeholder="Select MCP version" className="rounded-lg" size="large">
-                <Select.Option value="2025-06-18">2025-06-18 (Latest)</Select.Option>
-                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
+                <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
                 <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>

@@ -250,7 +250,7 @@ class TestMCPRequestHandler:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == expected_api_key
@@ -260,7 +260,6 @@ class TestMCPRequestHandler:
             assert mcp_server_auth_headers == expected_server_auth_headers
             # For these tests, mcp_servers should be None
             assert mcp_servers is None
-            assert mcp_protocol_version is None
 
     @pytest.mark.parametrize(
         "headers,expected_result",
@@ -419,14 +418,12 @@ class TestMCPRequestHandler:
             mock_user_api_key_auth.return_value = mock_auth_result
 
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers_result, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers_result, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
             assert auth_result == mock_auth_result
             assert mcp_auth_header == expected_result["mcp_auth"]
             assert mcp_servers_result == expected_result["mcp_servers"]
             # For these tests, mcp_server_auth_headers should be empty
             assert mcp_server_auth_headers == {}
-            # For these tests, mcp_protocol_version should be None
-            assert mcp_protocol_version is None
 
 
 class TestMCPCustomHeaderName:
@@ -585,14 +582,13 @@ class TestMCPCustomHeaderName:
                 side_effect=mock_user_api_key_auth,
             ) as mock_auth:
                 # Call the method
-                auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
+                auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
 
                 # Assert the results
                 assert auth_result.api_key == "test-api-key"
                 assert mcp_auth_header == "custom-auth-token"
                 assert mcp_servers is None
                 assert mcp_server_auth_headers == {}
-                assert mcp_protocol_version is None
 
                 # Verify the mock was called
                 mock_auth.assert_called_once()
@@ -743,14 +739,15 @@ class TestMCPAccessGroupsE2E:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == "test-api-key"
             assert mcp_auth_header is None
-            assert mcp_servers is None  # x-mcp-access-groups is not parsed as mcp_servers
+            assert mcp_servers is None
+            # The access groups header should not be parsed as a server auth header
+            # It should be handled separately by the access groups parsing logic
             assert mcp_server_auth_headers == {}
-            assert mcp_protocol_version is None
 
             # Verify the mock was called
             mock_auth.assert_called_once()
@@ -786,14 +783,13 @@ class TestMCPAccessGroupsE2E:
             side_effect=mock_user_api_key_auth,
         ) as mock_auth:
             # Call the method
-            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_auth_header, mcp_servers, mcp_server_auth_headers = await MCPRequestHandler.process_mcp_request(scope)
 
             # Assert the results
             assert auth_result.api_key == "test-api-key"
             assert mcp_auth_header is None
             assert mcp_servers == ["server1", "dev_group", "server2"]
             assert mcp_server_auth_headers == {}
-            assert mcp_protocol_version is None
 
             # Verify the mock was called
             mock_auth.assert_called_once()
@@ -810,7 +806,7 @@ def test_mcp_path_based_server_segregation(monkeypatch):
     async def dummy_handle_request(scope, receive, send):
         """Dummy handler for testing"""
         # Get auth context
-        user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = get_auth_context()
+        user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers = get_auth_context()
         
         # Capture the MCP servers for testing
         captured_mcp_servers["servers"] = mcp_servers
