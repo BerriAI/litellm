@@ -123,10 +123,15 @@ class MCPClient:
                 self._session_ctx = ClientSession(self._transport[0], self._transport[1])
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
+        except ValueError as e:
+            # Re-raise ValueError exceptions (like missing stdio_config)
+            verbose_logger.warning(f"MCP client connection failed: {str(e)}")
+            await self.disconnect()
+            raise
         except Exception as e:
             verbose_logger.warning(f"MCP client connection failed: {str(e)}")
             await self.disconnect()
-            # Don't raise the exception, let the calling code handle it gracefully
+            # Don't raise other exceptions, let the calling code handle it gracefully
             # This allows the server manager to continue with other servers
             # Instead of raising, we'll let the calling code handle the failure
             pass
