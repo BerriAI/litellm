@@ -54,7 +54,7 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import OCIError
-from .transformation import OCIChatConfig
+from .transformation import OCIChatConfig, OCICustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -469,7 +469,6 @@ class OCIChatCompletion(BaseLLM):
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
-                data["stream"] = stream
                 completion_stream, headers = make_sync_call(
                     client=client,
                     api_base=api_base,
@@ -482,12 +481,11 @@ class OCIChatCompletion(BaseLLM):
                     json_mode=json_mode,
                     signed_json_body=signed_json_body,
                 )
-                return CustomStreamWrapper(
+                return OCICustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
-                    custom_llm_provider="anthropic",
+                    custom_llm_provider="oci",
                     logging_obj=logging_obj,
-                    # _response_headers=process_anthropic_headers(headers),
                 )
 
             else:
