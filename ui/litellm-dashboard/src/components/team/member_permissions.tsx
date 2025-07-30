@@ -107,12 +107,12 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
           <Table className=" min-w-full">
             <TableHead>
               <TableRow>
-                <TableHeaderCell className="sticky left-0 bg-white shadow-[4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
-                  Allow Access
-                </TableHeaderCell>
                 <TableHeaderCell>Method</TableHeaderCell>
                 <TableHeaderCell>Endpoint</TableHeaderCell>
                 <TableHeaderCell>Description</TableHeaderCell>
+                <TableHeaderCell className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
+                  Allow Access
+                </TableHeaderCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -120,13 +120,6 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
                 const permInfo = getPermissionInfo(permission)
                 return (
                   <TableRow key={permission} className="hover:bg-gray-50 transition-colors">
-                    <TableCell className="sticky left-0 bg-white shadow-[4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
-                      <Checkbox
-                        checked={selectedPermissions.includes(permission)}
-                        onChange={(e) => handlePermissionChange(permission, e.target.checked)}
-                        disabled={!canEditTeam}
-                      />
-                    </TableCell>
                     <TableCell>
                       <span
                         className={`px-2 py-1 rounded text-xs font-medium ${
@@ -140,6 +133,13 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
                       <span className="font-mono text-sm text-gray-800">{permInfo.endpoint}</span>
                     </TableCell>
                     <TableCell className="text-gray-700">{permInfo.description}</TableCell>
+                    <TableCell className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
+                      <Checkbox
+                        checked={selectedPermissions.includes(permission)}
+                        onChange={(e) => handlePermissionChange(permission, e.target.checked)}
+                        disabled={!canEditTeam}
+                      />
+                    </TableCell>
                   </TableRow>
                 )
               })}
