@@ -614,8 +614,7 @@ async def get_per_user_analytics(
         
         # Aggregate metrics by user
         user_metrics: Dict[str, PerUserMetrics] = {}
-        user_agents: Dict[str, str] = {}  # Track primary user agent per user
-        
+
         for record in tag_records:
             if record.api_key in api_key_to_user_id:
                 user_id = api_key_to_user_id[record.api_key]
