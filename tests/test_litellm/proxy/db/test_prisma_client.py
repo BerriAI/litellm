@@ -41,18 +41,17 @@ async def test_recreate_prisma_client_successful_disconnect():
     """
     Test that recreate_prisma_client works normally when disconnect succeeds.
     """
-    # Create a PrismaWrapper instance
-    wrapper = PrismaWrapper(db_url="postgresql://test:test@localhost:5432/test")
-    
     # Mock the original prisma client
     mock_prisma = AsyncMock()
-    wrapper._original_prisma = mock_prisma
+    
+    # Create a PrismaWrapper instance
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
     
     # Configure disconnect to succeed
     mock_prisma.disconnect.return_value = None
     
     # Mock the Prisma class constructor
-    with patch("litellm.proxy.db.prisma_client.Prisma") as mock_prisma_class:
+    with patch("prisma.Prisma") as mock_prisma_class:
         mock_new_prisma = AsyncMock()
         mock_prisma_class.return_value = mock_new_prisma
         
