@@ -1109,7 +1109,13 @@ class Router:
                     "content_policy_fallbacks", self.content_policy_fallbacks
                 )
                 initial_kwargs["original_function"] = self._acompletion
-                initial_kwargs["messages"] = messages
+                initial_kwargs["messages"] = messages + [
+                    {
+                        "role": "assistant",
+                        "content": e.generated_content,
+                        "prefix": True,
+                    }
+                ]
                 self._update_kwargs_before_fallbacks(
                     model=model_group, kwargs=initial_kwargs
                 )
