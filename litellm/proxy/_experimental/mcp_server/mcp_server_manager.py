@@ -200,7 +200,7 @@ class MCPServerManager:
                 server_name=server_name,
                 url=server_config.get("url", None) or "",
                 transport=server_config.get("transport", MCPTransport.http),
-                spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
+                spec_version=server_config.get("spec_version", MCPSpecVersion.jun_2025),
                 auth_type=server_config.get("auth_type", None),
                 alias=alias,
             )
@@ -216,7 +216,7 @@ class MCPServerManager:
                 env=server_config.get("env", None) or {},
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
-                spec_version=server_config.get("spec_version", MCPSpecVersion.mar_2025),
+                spec_version=server_config.get("spec_version", MCPSpecVersion.jun_2025),
                 auth_type=server_config.get("auth_type", None),
                 mcp_info=mcp_info,
                 access_groups=server_config.get("access_groups", None),
@@ -321,6 +321,7 @@ class MCPServerManager:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+        mcp_protocol_version: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         List all tools available across all MCP Servers.
@@ -329,6 +330,7 @@ class MCPServerManager:
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            mcp_protocol_version: Optional MCP protocol version from request header
 
         Returns:
             List[MCPTool]: Combined list of tools from all servers
@@ -359,6 +361,7 @@ class MCPServerManager:
                 tools = await self._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
+                    mcp_protocol_version=mcp_protocol_version,
                 )
                 list_tools_result.extend(tools)
                 verbose_logger.info(f"Successfully fetched {len(tools)} tools from server {server.name}")
@@ -374,13 +377,14 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
-    def _create_mcp_client(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> MCPClient:
+    def _create_mcp_client(self, server: MCPServer, mcp_auth_header: Optional[str] = None, protocol_version: Optional[str] = None) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
 
         Args:
             server (MCPServer): The server configuration
             mcp_auth_header: MCP auth header to be passed to the MCP server. This is optional and will be used if provided.
+            protocol_version: Optional MCP protocol version to use. If not provided, uses server's default.
 
         Returns:
             MCPClient: Configured MCP client instance
@@ -422,7 +426,7 @@ class MCPServerManager:
                 protocol_version=protocol_version_enum,
             )
 
-    async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None) -> List[MCPTool]:
+    async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None, mcp_protocol_version: Optional[str] = None) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
 
@@ -441,9 +445,12 @@ class MCPServerManager:
         
         client = None
         try:
+            # Use protocol version from request if provided, otherwise use server's default
+            protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
+                protocol_version=protocol_version,
             )
 
             # Create a task for the client operations to ensure proper cancellation handling
@@ -524,6 +531,7 @@ class MCPServerManager:
             user_api_key_auth: Optional[UserAPIKeyAuth] = None,
             mcp_auth_header: Optional[str] = None,
             mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+            mcp_protocol_version: Optional[str] = None,
             litellm_logging_obj: Optional[Any] = None,
     ) -> CallToolResult:
         """
@@ -535,6 +543,7 @@ class MCPServerManager:
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            mcp_protocol_version: Optional MCP protocol version from request header
             litellm_logging_obj: Optional logging object for hook integration
 
         Returns:
@@ -599,6 +608,7 @@ class MCPServerManager:
         client = self._create_mcp_client(
             server=mcp_server,
             mcp_auth_header=server_auth_header,
+            protocol_version=mcp_protocol_version,
         )
         
         #########################################################
