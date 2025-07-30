@@ -27,6 +27,7 @@ import {
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { userAgentAnalyticsCall, userAgentSummaryCall } from "./networking";
 import UsageDatePicker from "./shared/usage_date_picker";
+import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
 
 interface UserAgentMetrics {
@@ -332,63 +333,86 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         ))}
       </Grid>
 
-      {/* DAU/WAU/MAU Chart */}
+      {/* Main TabGroup for DAU/WAU/MAU vs Per User Usage */}
       <Card>
-        <div className="mb-6">
-          <Title>DAU, WAU & MAU per Agent</Title>
-          <Subtitle>Active users across different time periods</Subtitle>
-        </div>
-
         <TabGroup>
           <TabList className="mb-6">
-            <Tab>DAU</Tab>
-            <Tab>WAU</Tab>
-            <Tab>MAU</Tab>
+            <Tab>DAU/WAU/MAU</Tab>
+            <Tab>Per User Usage</Tab>
           </TabList>
           
           <TabPanels>
+            {/* DAU/WAU/MAU Tab Panel */}
             <TabPanel>
-              <div className="mb-4">
-                <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
+              <div className="mb-6">
+                <Title>DAU, WAU & MAU per Agent</Title>
+                <Subtitle>Active users across different time periods</Subtitle>
               </div>
-              <BarChart
-                data={dailyChartData}
-                index="date"
-                categories={uniqueUserAgents.slice(0, 3)}
-                colors={["blue", "green", "orange"]}
-                valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                yAxisWidth={60}
-                showLegend={true}
-              />
+
+              <TabGroup>
+                <TabList className="mb-6">
+                  <Tab>DAU</Tab>
+                  <Tab>WAU</Tab>
+                  <Tab>MAU</Tab>
+                </TabList>
+                
+                <TabPanels>
+                  <TabPanel>
+                    <div className="mb-4">
+                      <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
+                    </div>
+                    <BarChart
+                      data={dailyChartData}
+                      index="date"
+                      categories={uniqueUserAgents.slice(0, 3)}
+                      colors={["blue", "green", "orange"]}
+                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                      yAxisWidth={60}
+                      showLegend={true}
+                    />
+                  </TabPanel>
+                  
+                  <TabPanel>
+                    <div className="mb-4">
+                      <Title className="text-lg">Weekly Active Users - Last 4 Weeks</Title>
+                    </div>
+                    <BarChart
+                      data={weeklyChartData}
+                      index="week"
+                      categories={uniqueUserAgents.slice(0, 3)}
+                      colors={["blue", "green", "orange"]}
+                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                      yAxisWidth={60}
+                      showLegend={true}
+                    />
+                  </TabPanel>
+                  
+                  <TabPanel>
+                    <div className="mb-4">
+                      <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
+                    </div>
+                    <BarChart
+                      data={monthlyChartData}
+                      index="month"
+                      categories={uniqueUserAgents.slice(0, 3)}
+                      colors={["blue", "green", "orange"]}
+                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                      yAxisWidth={60}
+                      showLegend={true}
+                    />
+                  </TabPanel>
+                </TabPanels>
+              </TabGroup>
             </TabPanel>
             
+            {/* Per User Usage Tab Panel */}
             <TabPanel>
-              <div className="mb-4">
-                <Title className="text-lg">Weekly Active Users - Last 4 Weeks</Title>
-              </div>
-              <BarChart
-                data={weeklyChartData}
-                index="week"
-                categories={uniqueUserAgents.slice(0, 3)}
-                colors={["blue", "green", "orange"]}
-                valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                yAxisWidth={60}
-                showLegend={true}
-              />
-            </TabPanel>
-            
-            <TabPanel>
-              <div className="mb-4">
-                <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
-              </div>
-              <BarChart
-                data={monthlyChartData}
-                index="month"
-                categories={uniqueUserAgents.slice(0, 3)}
-                colors={["blue", "green", "orange"]}
-                valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                yAxisWidth={60}
-                showLegend={true}
+              <PerUserUsage
+                analyticsData={analyticsData}
+                currentPage={currentPage}
+                handlePrevPage={handlePrevPage}
+                handleNextPage={handleNextPage}
+                formatAbbreviatedNumber={formatAbbreviatedNumber}
               />
             </TabPanel>
           </TabPanels>
