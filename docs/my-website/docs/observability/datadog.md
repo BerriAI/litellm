@@ -93,6 +93,27 @@ Expected output on Datadog
 
 <Image img={require('../../img/dd_small1.png')} />
 
+### Redacting Messages, Response
+
+This section covers how to redact messages and response from the logged payload on Datadog LLM Observability.
+
+When this is enabled, the messages and response will not be logged on Datadog LLM Observability.
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
+
+  # Params to apply only for "datadog_llm_observability" callback
+  datadog_llm_observability_params:
+    turn_off_message_logging: true # turn off message logging just for this callback
+```
+
+
+
 #### Datadog Tracing
 
 Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
