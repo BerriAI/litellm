@@ -282,18 +282,22 @@ class MCPServerManager:
         """
         Get the allowed MCP Servers for the user
         """
-        allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
-            user_api_key_auth
-        )
-        verbose_logger.debug(
-            f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
-        )
-        if len(allowed_mcp_servers) > 0:
-            return allowed_mcp_servers
-        else:
-            verbose_logger.debug(
-                "No allowed MCP Servers found for user api key auth, returning default registry servers"
+        try:
+            allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
+                user_api_key_auth
             )
+            verbose_logger.debug(
+                f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
+            )
+            if len(allowed_mcp_servers) > 0:
+                return allowed_mcp_servers
+            else:
+                verbose_logger.debug(
+                    "No allowed MCP Servers found for user api key auth, returning default registry servers"
+                )
+                return list(self.get_registry().keys())
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}. Returning default registry servers.")
             return list(self.get_registry().keys())
 
 
@@ -301,10 +305,15 @@ class MCPServerManager:
         """
         Get the tools for a given server
         """
-        server = self.get_mcp_server_by_id(server_id)
-        if server is None:
+        try:
+            server = self.get_mcp_server_by_id(server_id)
+            if server is None:
+                verbose_logger.warning(f"MCP Server {server_id} not found")
+                return []
+            return await self._get_tools_from_server(server)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get tools from server {server_id}: {str(e)}")
             return []
-        return await self._get_tools_from_server(server)
         
 
     async def list_tools(
@@ -440,16 +449,22 @@ class MCPServerManager:
             # Create a task for the client operations to ensure proper cancellation handling
             async def _list_tools_task():
                 try:
-                    async with client:
-                        tools = await client.list_tools()
-                        verbose_logger.debug(f"Tools from {server.name}: {tools}")
-                        return tools
+                    # Don't use context manager to avoid stream closure issues
+                    await client.connect()
+                    tools = await client.list_tools()
+                    verbose_logger.debug(f"Tools from {server.name}: {tools}")
+                    return tools
                 except asyncio.CancelledError:
                     verbose_logger.warning(f"Client operation cancelled for {server.name}")
                     return []
                 except Exception as e:
                     verbose_logger.warning(f"Client operation failed for {server.name}: {str(e)}")
                     return []
+                finally:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
 
             try:
                 # Add timeout to prevent hanging

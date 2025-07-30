@@ -181,16 +181,20 @@ if MCP_AVAILABLE:
                 f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
             # Get mcp_servers from context variable
-            return await _list_mcp_tools(
+            verbose_logger.debug(f"MCP list_tools - Calling _list_mcp_tools")
+            tools = await _list_mcp_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 mcp_protocol_version=mcp_protocol_version,
             )
+            verbose_logger.info(f"MCP list_tools - Successfully returned {len(tools)} tools")
+            return tools
         except Exception as e:
             verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
             # Return empty list instead of failing completely
+            # This prevents the HTTP stream from failing and allows the client to get a response
             return []
 
     @server.call_tool()
@@ -373,6 +377,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 mcp_protocol_version=mcp_protocol_version,
             )
+            verbose_logger.debug(f"Successfully fetched {len(managed_tools)} tools from managed MCP servers")
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
             # Continue with empty managed tools list instead of failing completely
@@ -587,7 +592,21 @@ if MCP_AVAILABLE:
             await session_manager.handle_request(scope, receive, send)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            raise e
+            # Instead of re-raising, try to send a graceful error response
+            try:
+                # Send a proper HTTP error response instead of letting the exception bubble up
+                from starlette.responses import JSONResponse
+                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
+                
+                error_response = JSONResponse(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": "MCP request failed", "details": str(e)}
+                )
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(f"Failed to send error response: {response_error}")
+                # If we can't send a proper response, re-raise the original error
+                raise e
 
     async def handle_sse_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through SSE."""
@@ -610,7 +629,21 @@ if MCP_AVAILABLE:
             await sse_session_manager.handle_request(scope, receive, send)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
-            raise e
+            # Instead of re-raising, try to send a graceful error response
+            try:
+                # Send a proper HTTP error response instead of letting the exception bubble up
+                from starlette.responses import JSONResponse
+                from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
+                
+                error_response = JSONResponse(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": "MCP request failed", "details": str(e)}
+                )
+                await error_response(scope, receive, send)
+            except Exception as response_error:
+                verbose_logger.exception(f"Failed to send error response: {response_error}")
+                # If we can't send a proper response, re-raise the original error
+                raise e
 
     app = FastAPI(
         title=LITELLM_MCP_SERVER_NAME,

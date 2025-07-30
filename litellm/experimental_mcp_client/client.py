@@ -14,6 +14,7 @@ from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
 
+from litellm._logging import verbose_logger
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
@@ -118,9 +119,13 @@ class MCPClient:
                 self._session_ctx = ClientSession(self._transport[0], self._transport[1])
                 self._session = await self._session_ctx.__aenter__()
                 await self._session.initialize()
-        except Exception:
+        except Exception as e:
+            verbose_logger.warning(f"MCP client connection failed: {str(e)}")
             await self.disconnect()
-            raise
+            # Don't raise the exception, let the calling code handle it gracefully
+            # This allows the server manager to continue with other servers
+            # Instead of raising, we'll let the calling code handle the failure
+            pass
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Cleanup when exiting context manager."""
@@ -194,9 +199,15 @@ class MCPClient:
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
         if not self._session:
-            await self.connect()
+            try:
+                await self.connect()
+            except Exception as e:
+                verbose_logger.warning(f"MCP client connection failed: {str(e)}")
+                return []
+        
         if self._session is None:
-            raise ValueError("Session is not initialized")
+            verbose_logger.warning("MCP client session is not initialized")
+            return []
 
         try:
             result = await self._session.list_tools()
@@ -204,9 +215,11 @@ class MCPClient:
         except asyncio.CancelledError:
             await self.disconnect()
             raise
-        except Exception:
+        except Exception as e:
+            verbose_logger.warning(f"MCP client list_tools failed: {str(e)}")
             await self.disconnect()
-            raise
+            # Return empty list instead of raising to allow graceful degradation
+            return []
 
     async def call_tool(
         self, call_tool_request_params: MCPCallToolRequestParams
@@ -215,10 +228,23 @@ class MCPClient:
         Call an MCP Tool.
         """
         if not self._session:
-            await self.connect()
+            try:
+                await self.connect()
+            except Exception as e:
+                verbose_logger.warning(f"MCP client connection failed: {str(e)}")
+                return MCPCallToolResult(
+                    content=[],
+                    isError=True,
+                    error="Connection failed"
+                )
 
         if self._session is None:
-            raise ValueError("Session is not initialized")
+            verbose_logger.warning("MCP client session is not initialized")
+            return MCPCallToolResult(
+                content=[],
+                isError=True,
+                error="Session not initialized"
+            )
         
         try:
             tool_result = await self._session.call_tool(
@@ -229,8 +255,14 @@ class MCPClient:
         except asyncio.CancelledError:
             await self.disconnect()
             raise
-        except Exception:
+        except Exception as e:
+            verbose_logger.warning(f"MCP client call_tool failed: {str(e)}")
             await self.disconnect()
-            raise
+            # Return a default error result instead of raising
+            return MCPCallToolResult(
+                content=[],  # Empty content for error case
+                isError=True,
+                error="Tool call failed"
+            )
         
 

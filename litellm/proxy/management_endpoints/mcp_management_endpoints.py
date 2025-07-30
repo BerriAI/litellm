@@ -107,10 +107,21 @@ if MCP_AVAILABLE:
         server_ids = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_dict)
 
         tools = []
+        errors = []
         for server_id in server_ids:
-            tools.extend(await global_mcp_server_manager.get_tools_for_server(server_id))
+            try:
+                server_tools = await global_mcp_server_manager.get_tools_for_server(server_id)
+                tools.extend(server_tools)
+                verbose_proxy_logger.debug(f"Successfully fetched {len(server_tools)} tools from server {server_id}")
+            except Exception as e:
+                error_msg = f"Failed to get tools from server {server_id}: {str(e)}"
+                verbose_proxy_logger.warning(error_msg)
+                errors.append(error_msg)
+                # Continue with other servers instead of failing completely
 
         verbose_proxy_logger.debug(f"Available tools: {tools}")
+        if errors:
+            verbose_proxy_logger.warning(f"Some servers failed to respond: {errors}")
 
         return {"tools": tools}
 
