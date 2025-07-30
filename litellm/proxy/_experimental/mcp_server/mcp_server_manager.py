@@ -67,6 +67,34 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
         return env_data
 
 
+def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVersionType]) -> MCPSpecVersionType:
+    """
+    Convert string protocol version to MCPSpecVersion enum.
+    
+    Args:
+        protocol_version: String protocol version, enum, or None
+        
+    Returns:
+        MCPSpecVersionType: The enum value
+    """
+    if not protocol_version:
+        return MCPSpecVersion.jun_2025  # type: ignore
+    
+    # If it's already an MCPSpecVersion enum, return it
+    if isinstance(protocol_version, MCPSpecVersion):
+        return protocol_version  # type: ignore
+    
+    # If it's a string, try to match it to enum values
+    if isinstance(protocol_version, str):
+        for version in MCPSpecVersion:
+            if version.value == protocol_version:
+                return version  # type: ignore
+    
+    # If no match found, return default
+    verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
+    return MCPSpecVersion.jun_2025  # type: ignore
+
+
 class MCPServerManager:
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -231,7 +259,7 @@ class MCPServerManager:
                 server_name=getattr(mcp_server, 'server_name', None),
                 url=mcp_server.url,
                 transport=cast(MCPTransportType, mcp_server.transport),
-                spec_version=cast(MCPSpecVersionType, mcp_server.spec_version),
+                spec_version=_convert_protocol_version_to_enum(mcp_server.spec_version),
                 auth_type=cast(MCPAuthType, mcp_server.auth_type),
                 mcp_info=MCPInfo(
                     server_name=mcp_server.server_name or mcp_server.server_id,
@@ -354,6 +382,9 @@ class MCPServerManager:
         """
         transport = server.transport or MCPTransport.sse
         
+        # Convert protocol version string to enum
+        protocol_version_enum = _convert_protocol_version_to_enum(protocol_version or server.spec_version)
+        
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             # For stdio, we need to get the stdio config from the server
@@ -372,7 +403,7 @@ class MCPServerManager:
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
                 stdio_config=stdio_config,
-                protocol_version=cast(MCPSpecVersionType, protocol_version or server.spec_version),
+                protocol_version=protocol_version_enum,
             )
         else:
             # For HTTP/SSE transports
@@ -383,7 +414,7 @@ class MCPServerManager:
                 auth_type=server.auth_type,
                 auth_value=mcp_auth_header or server.authentication_token,
                 timeout=60.0,
-                protocol_version=cast(MCPSpecVersionType, protocol_version or server.spec_version),
+                protocol_version=protocol_version_enum,
             )
 
     async def _get_tools_from_server(self, server: MCPServer, mcp_auth_header: Optional[str] = None, mcp_protocol_version: Optional[str] = None) -> List[MCPTool]:
@@ -400,6 +431,9 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
+        # Use protocol version from request if provided, otherwise use server's default
+        protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
+        
         client = None
         try:
             # Use protocol version from request if provided, otherwise use server's default
@@ -562,39 +596,32 @@ class MCPServerManager:
             protocol_version=mcp_protocol_version,
         )
         
-        #########################################################
-        # During MCP Tool Call Hook
-        # Allow concurrent monitoring and validation during execution
-        #########################################################
-        if litellm_logging_obj:
-            during_hook_kwargs = {
-                "name": name,
-                "arguments": arguments,
-                "server_name": server_name_from_prefix,
-            }
-            
-            # Start the during hook in a separate task for concurrent execution
-            during_hook_task = asyncio.create_task(
-                litellm_logging_obj.async_during_mcp_tool_call_hook(
-                    kwargs=during_hook_kwargs,
-                    request_obj=None,  # Will be created in the hook
-                    start_time=start_time,
-                    end_time=start_time,
-                )
-            )
-
         async with client:
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
                 arguments=arguments,
             )
+            
+            # Initialize during_hook_task as None
+            during_hook_task = None
+            
+            # Start during hook if litellm_logging_obj is available
+            if litellm_logging_obj:
+                try:
+                    during_hook_task = litellm_logging_obj.async_during_mcp_tool_call_hook(
+                        kwargs=litellm_logging_obj.model_call_details,
+                        start_time=start_time,
+                    )
+                except Exception as e:
+                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
+            
             result = await client.call_tool(call_tool_params)
             
             #########################################################
             # Check during hook result if it completed
             #########################################################
-            if litellm_logging_obj and 'during_hook_task' in locals():
+            if litellm_logging_obj and during_hook_task is not None:
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):

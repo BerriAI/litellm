@@ -183,8 +183,17 @@ class MCPClient:
             elif self.auth_type == MCPAuth.api_key:
                 headers["X-API-Key"] = self._mcp_auth_value
 
-        headers["MCP-Protocol-Version"] = self.protocol_version.value
+        # Handle protocol version - it might be a string or enum
+        if hasattr(self.protocol_version, 'value'):
+            # It's an enum
+            protocol_version_str = self.protocol_version.value
+        else:
+            # It's a string
+            protocol_version_str = str(self.protocol_version)
+        
+        headers["MCP-Protocol-Version"] = protocol_version_str
         return headers
+
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
