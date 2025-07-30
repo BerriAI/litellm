@@ -694,16 +694,18 @@ def run_server(  # noqa: PLR0915
                 if (
                     database_host
                     and database_username
-                    and database_password
                     and database_name
                 ):
                     # Handle the problem of special character escaping in the database URL
                     database_username_enc = urllib.parse.quote_plus(database_username)
-                    database_password_enc = urllib.parse.quote_plus(database_password)
+                    database_password_enc = urllib.parse.quote_plus(database_password) if database_password else ""
                     database_name_enc = urllib.parse.quote_plus(database_name)
 
                     # Construct DATABASE_URL from the provided variables
-                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+                    if database_password:
+                        database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+                    else:
+                        database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
 
                     os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
@@ -727,6 +729,37 @@ def run_server(  # noqa: PLR0915
                 os.chdir(original_dir)
             if database_url is not None and isinstance(database_url, str):
                 os.environ["DATABASE_URL"] = database_url
+
+        # Handle database URL construction when no config file is used
+        if config is None and os.getenv("DATABASE_URL") is None:
+            # Check if all required variables are provided
+            database_host = os.getenv("DATABASE_HOST")
+            database_username = os.getenv("DATABASE_USERNAME")
+            database_password = os.getenv("DATABASE_PASSWORD")
+            database_name = os.getenv("DATABASE_NAME")
+
+            if (
+                database_host
+                and database_username
+                and database_name
+            ):
+                # Handle the problem of special character escaping in the database URL
+                database_username_enc = urllib.parse.quote_plus(database_username)
+                database_password_enc = urllib.parse.quote_plus(database_password) if database_password else ""
+                database_name_enc = urllib.parse.quote_plus(database_name)
+
+                # Construct DATABASE_URL from the provided variables
+                if database_password:
+                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+                else:
+                    database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
+
+                os.environ["DATABASE_URL"] = database_url
+
+        # Set default values for connection pool settings when no config is used
+        if config is None:
+            db_connection_pool_limit = LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value
+            db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
 
         if (
             os.getenv("DATABASE_URL", None) is not None
