@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Set
 
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -342,11 +342,11 @@ class MCPRequestHandler:
             return []
 
     @staticmethod
-    def _get_config_server_ids_for_access_groups(config_mcp_servers, access_groups: List[str]) -> set[str]:
+    def _get_config_server_ids_for_access_groups(config_mcp_servers, access_groups: List[str]) -> Set[str]:
         """
         Helper to get server_ids from config-loaded servers that match any of the given access groups.
         """
-        server_ids: set[str] = set()
+        server_ids: Set[str] = set()
         for server_id, server in config_mcp_servers.items():
             if server.access_groups:
                 if any(group in server.access_groups for group in access_groups):
@@ -354,11 +354,11 @@ class MCPRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_db_server_ids_for_access_groups(prisma_client, access_groups: List[str]) -> set[str]:
+    async def _get_db_server_ids_for_access_groups(prisma_client, access_groups: List[str]) -> Set[str]:
         """
         Helper to get server_ids from DB servers that match any of the given access groups.
         """
-        server_ids: set[str] = set()
+        server_ids: Set[str] = set()
         if access_groups and prisma_client is not None:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
