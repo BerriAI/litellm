@@ -184,6 +184,23 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     total_requests: ua.requests,
   }));
 
+  // Format numbers with K, M abbreviations
+  const formatAbbreviatedNumber = (value: number): string => {
+    if (value >= 100000000) {
+      return (value / 1000000).toFixed(0) + 'M';
+    } else if (value >= 10000000) {
+      return (value / 1000000).toFixed(0) + 'M';
+    } else if (value >= 1000000) {
+      return (value / 1000000).toFixed(0) + 'M';
+    } else if (value >= 10000) {
+      return (value / 1000).toFixed(0) + 'K';
+    } else if (value >= 1000) {
+      return (value / 1000).toFixed(0) + 'K';
+    } else {
+      return value.toString();
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Date Range Picker */}
@@ -252,7 +269,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             index="user_agent"
             categories={["successful_requests", "total_tokens"]}
             colors={["green", "blue"]}
-            valueFormatter={(value: number) => formatNumberWithCommas(value)}
+            valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
             yAxisWidth={60}
             showLegend={true}
           />
