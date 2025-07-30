@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import React, { useState, useEffect, useMemo } from "react"
+import React, { useState, useEffect, useMemo, useCallback } from "react"
 import {
   BarChart,
   Card,
@@ -70,8 +70,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     metadata: any
   }>({ results: [], metadata: {} })
 
-  // Add loading state
+  // Separate loading states for better UX
   const [loading, setLoading] = useState(false)
+  const [isDateChanging, setIsDateChanging] = useState(false)
 
   // Create initial dates outside of state to prevent recreation
   const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), [])
@@ -291,7 +292,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
       .slice(0, 5)
   }
 
-  const fetchUserSpendData = async () => {
+  const fetchUserSpendData = useCallback(async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return
 
     setLoading(true)
@@ -333,30 +334,53 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
       })
     } catch (error) {
       console.error("Error fetching user spend data:", error)
-      throw error
     } finally {
       setLoading(false)
+      setIsDateChanging(false)
     }
-  }
+  }, [accessToken, dateValue.from, dateValue.to])
 
-  // Fetch data directly when date changes (no apply button)
+  // Super responsive date change handler
+  const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
+    // Instant visual feedback
+    setIsDateChanging(true)
+    setLoading(true)
+
+    // Update date immediately for UI responsiveness
+    setDateValue(newValue)
+  }, [])
+
+  // Debounced effect for data fetching with shorter delay
   useEffect(() => {
-    fetchUserSpendData()
-  }, [accessToken, dateValue])
+    if (!dateValue.from || !dateValue.to) return
+
+    const timeoutId = setTimeout(() => {
+      fetchUserSpendData()
+    }, 50) // Very short debounce
+
+    return () => clearTimeout(timeoutId)
+  }, [fetchUserSpendData])
+
+  // Enhanced loading component with better visual feedback
+  const ChartLoader = () => (
+    <div className="flex items-center justify-center h-40">
+      <div className="flex items-center justify-center gap-3">
+        <UiLoadingSpinner className="size-5" />
+        <div className="flex flex-col">
+          <span className="text-gray-600 text-sm font-medium">
+            {isDateChanging ? "Processing date selection..." : "Loading chart data..."}
+          </span>
+          <span className="text-gray-400 text-xs mt-1">
+            {isDateChanging ? "This will only take a moment" : "Fetching your data"}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 
   const modelMetrics = processActivityData(userSpendData, "models")
   const keyMetrics = processActivityData(userSpendData, "api_keys")
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers")
-
-  // Loading component for charts - Reusing app's existing loader
-  const ChartLoader = () => (
-    <div className="flex items-center justify-center h-40">
-      <div className="flex items-center justify-center gap-2">
-        <UiLoadingSpinner className="size-6" />
-        <span className="text-gray-600 text-sm">Loading...</span>
-      </div>
-    </div>
-  )
 
   return (
     <div style={{ width: "100%" }} className="p-8 relative">
@@ -409,12 +433,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full mb-4">
               <Col>
-                <UsageDatePicker
-                  value={dateValue}
-                  onValueChange={(value) => {
-                    setDateValue(value)
-                  }}
-                />
+                <UsageDatePicker value={dateValue} onValueChange={handleDateChange} />
               </Col>
             </Grid>
             <TabGroup>
