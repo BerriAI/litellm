@@ -17693,10 +17693,10 @@
         "mode": "chat"
     },
     "vercel_ai_gateway/deepseek/deepseek-r1": {
-        "max_tokens": 64000,
+        "max_tokens": 128000,
         "input_cost_per_token": 5.5e-07,
         "output_cost_per_token": 2.19e-06,
-        "max_input_tokens": 64000,
+        "max_input_tokens": 128000,
         "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
@@ -17999,10 +17999,10 @@
         "mode": "chat"
     },
     "vercel_ai_gateway/meta/llama-3.1-8b": {
-        "max_tokens": 128000,
+        "max_tokens": 131000,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 8e-08,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131000,
         "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
@@ -18426,10 +18426,10 @@
         "mode": "chat"
     },
     "vercel_ai_gateway/openai/gpt-3.5-turbo": {
-        "max_tokens": 4096,
+        "max_tokens": 16385,
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 1.5e-06,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 16385,
         "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
@@ -19278,10 +19278,10 @@
         "mode": "chat"
     },
     "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": {
-        "max_tokens": 2048,
+        "max_tokens": 65536,
         "input_cost_per_token": 1.2e-06,
         "output_cost_per_token": 1.2e-06,
-        "max_input_tokens": 2048,
+        "max_input_tokens": 65536,
         "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
@@ -19496,9 +19496,9 @@
     },
     "openrouter/qwen/qwen3-235b-a22b-2507": {
         "max_tokens": 262144,
-        "input_cost_per_token": 1.2e-07,
+        "input_cost_per_token": 1.179e-07,
         "max_output_tokens": 262144,
-        "output_cost_per_token": 5.9e-07,
+        "output_cost_per_token": 1.179e-07,
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
@@ -19743,10 +19743,10 @@
         "mode": "chat"
     },
     "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": {
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "input_cost_per_token": 1.5e-06,
         "output_cost_per_token": 2e-06,
-        "max_input_tokens": 4096,
+        "max_input_tokens": 8192,
         "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
