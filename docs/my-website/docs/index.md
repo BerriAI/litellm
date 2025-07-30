@@ -232,7 +232,7 @@ response = completion(
 from litellm import completion
 import os
 
-## set ENV variables.
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for insturctions on obtaining a key
 os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
 
 response = completion(
@@ -469,7 +469,7 @@ response = completion(
 from litellm import completion
 import os
 
-## set ENV variables. V
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for insturctions on obtaining a key
 os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
 
 response = completion(
