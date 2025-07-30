@@ -427,6 +427,9 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
+        # Use protocol version from request if provided, otherwise use server's default
+        protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
+        
         client = None
         try:
             client = self._create_mcp_client(
