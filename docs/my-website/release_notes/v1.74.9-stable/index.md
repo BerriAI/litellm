@@ -21,11 +21,25 @@ import TabItem from '@theme/TabItem';
 
 ## Deploy this version
 
-:::info
+<Tabs>
+<TabItem value="docker" label="Docker">
 
-This release is not live yet. 
+``` showLineNumbers title="docker run litellm"
+docker run \
+-e STORE_MODEL_IN_DB=True \
+-p 4000:4000 \
+ghcr.io/berriai/litellm:v1.74.9.rc.1
+```
+</TabItem>
 
-:::
+<TabItem value="pip" label="Pip">
+
+``` showLineNumbers title="pip install litellm"
+pip install litellm==1.74.9.post1
+```
+
+</TabItem>
+</Tabs>
 
 ---
 
@@ -35,7 +49,7 @@ This release is not live yet.
 
 | Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) |
 | ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- |
-| Fireworks AI | `fireworks/models/kimi-k2-instruct | 131k | $0.6 | $2.5 | 
+| Fireworks AI | `fireworks/models/kimi-k2-instruct` | 131k | $0.6 | $2.5 | 
 | OpenRouter | `openrouter/qwen/qwen-vl-plus` | 8192 | $0.21 | $0.63 | 
 | OpenRouter | `openrouter/qwen/qwen3-coder` | 8192 | $1 | $5 | 
 | OpenRouter | `openrouter/bytedance/ui-tars-1.5-7b` | 128k | $0.10 | $0.20 | 
