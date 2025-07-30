@@ -14,7 +14,7 @@ tracked by the system.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Dict, List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -24,8 +24,6 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendData,
-    SpendAnalyticsPaginatedResponse,
-    SpendMetrics,
 )
 
 router = APIRouter()
