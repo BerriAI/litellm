@@ -1035,3 +1035,32 @@ def test_router_apply_default_settings():
     assert (
         has_forward_headers_check
     ), "Expected ForwardClientSideHeadersByModelGroup to be added to callbacks"
+
+
+def test_router_get_model_access_groups_team_only_models():
+    """
+    Test that Router.get_model_access_groups returns the correct response for team-only models
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model-name",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {
+                    "team_id": "team_1",
+                    "access_groups": ["default-models"],
+                    "team_public_model_name": "gpt-3.5-turbo",
+                },
+            },
+        ]
+    )
+
+    access_groups = router.get_model_access_groups(
+        model_name="gpt-3.5-turbo", team_id=None
+    )
+    assert len(access_groups) == 0
+
+    access_groups = router.get_model_access_groups(
+        model_name="gpt-3.5-turbo", team_id="team_1"
+    )
+    assert list(access_groups.keys()) == ["default-models"]
