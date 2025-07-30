@@ -96,6 +96,7 @@ def test_litellm_proxy_server_config_no_general_settings():
     try:
         subprocess.run(["pip", "install", "-e", ".[proxy]"])
         subprocess.run(["pip", "install", "-e", ".[extra_proxy]"])
+        subprocess.run(["prisma", "run", "generate"])
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         server_process = subprocess.Popen(
