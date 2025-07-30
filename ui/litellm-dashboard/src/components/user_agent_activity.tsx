@@ -228,7 +228,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             <Text className="mt-2">
               <span className="font-semibold">{formatNumberWithCommas(ua.tokens)}</span> tokens
             </Text>
-          </Card>
+        </Card>
         ))}
         {/* Fill remaining slots if less than 4 agents */}
         {Array.from({ length: Math.max(0, 4 - summaryData.top_user_agents.length) }).map((_, index) => (
@@ -238,8 +238,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             <Subtitle>Successful Requests</Subtitle>
             <Text className="mt-2">
               <span className="font-semibold">-</span> tokens
-            </Text>
-          </Card>
+          </Text>
+        </Card>
         ))}
       </Grid>
 
