@@ -17,8 +17,6 @@ from mcp.types import Tool as MCPTool
 from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
-    MCPSpecVersion,
-    MCPSpecVersionType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
@@ -46,7 +44,6 @@ class MCPClient:
         auth_value: Optional[str] = None,
         timeout: float = 60.0,
         stdio_config: Optional[MCPStdioConfig] = None,
-        protocol_version: MCPSpecVersionType = MCPSpecVersion.jun_2025,
     ):
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
@@ -60,7 +57,6 @@ class MCPClient:
         self._session_ctx = None
         self._task: Optional[asyncio.Task] = None
         self.stdio_config: Optional[MCPStdioConfig] = stdio_config
-        self.protocol_version: MCPSpecVersionType = protocol_version
 
         # handle the basic auth value if provided
         if auth_value:
@@ -193,6 +189,7 @@ class MCPClient:
         
         headers["MCP-Protocol-Version"] = protocol_version_str
         return headers
+
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
