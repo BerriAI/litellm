@@ -243,6 +243,29 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
       tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
     }
   ],
+  [Providers.SageMaker]: [
+    {
+      key: "aws_access_key_id",
+      label: "AWS Access Key ID",
+      type: "password",
+      required: false,
+      tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
+    },
+    {
+      key: "aws_secret_access_key",
+      label: "AWS Secret Access Key",
+      type: "password",
+      required: false,
+      tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
+    },
+    {
+      key: "aws_region_name",
+      label: "AWS Region Name",
+      placeholder: "us-east-1",
+      required: false,
+      tooltip: "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`)."
+    }
+  ],
   [Providers.Ollama]: [
     {
       key: "api_base",

@@ -301,6 +301,7 @@ class ProxyInitializationHelpers:
             return None  # Let uvicorn choose the default loop on Windows
         return "uvloop"
 
+
 @click.command()
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
@@ -467,7 +468,7 @@ class ProxyInitializationHelpers:
 @click.option(
     "--use_prisma_migrate",
     is_flag=True,
-    default=False,
+    default=True,
     help="Use prisma migrate instead of prisma db push for database schema updates",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
@@ -789,13 +790,12 @@ def run_server(  # noqa: PLR0915
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app  # noqa
-        
+
         # --- SEPARATE HEALTH APP LOGIC ---
         # To run the health app separately, use:
         #   uvicorn litellm.proxy.health_app_factory:build_health_app --factory --host 0.0.0.0 --port=4001
         # This is compatible with the SEPARATE_HEALTH_APP Docker/supervisord pattern.
         # --- END SEPARATE HEALTH APP LOGIC ---
-        
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print(  # noqa
