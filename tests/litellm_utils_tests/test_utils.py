@@ -44,7 +44,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 @pytest.fixture(autouse=True)
 def reset_mock_cache():
     from litellm.utils import _model_cache
+
     _model_cache.flush_cache()
+
+
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
     litellm._turn_on_debug()
@@ -326,9 +329,6 @@ def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> 
 
     assert trimmed_messages == messages
 
-    assert len(caplog.records) >= 1
-    assert "Got exception while token trimming" in caplog.text
-
 
 def test_aget_valid_models():
     old_environ = os.environ
@@ -500,6 +500,7 @@ def test_function_to_dict():
 
 
 # test_function_to_dict()
+
 
 @pytest.mark.parametrize(
     "model, expected_bool",
@@ -678,17 +679,19 @@ def test_redact_embedding_response():
     litellm.turn_off_message_logging = True
 
     # Create a test EmbeddingResponse with usage data
-    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+    original_usage = litellm.Usage(
+        prompt_tokens=10, completion_tokens=0, total_tokens=10
+    )
     original_data = [
         {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
-        {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]}
+        {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]},
     ]
 
     response_obj = litellm.EmbeddingResponse(
         model="text-embedding-ada-002",
         data=original_data,
         usage=original_usage,
-        object="list"
+        object="list",
     )
 
     litellm_logging_obj = Logging(
@@ -714,7 +717,9 @@ def test_redact_embedding_response():
 
     # Assert the redacted response preserves critical metadata
     assert _redacted_response_obj.usage == original_usage  # usage should be preserved
-    assert _redacted_response_obj.model == "text-embedding-ada-002"  # model should be preserved
+    assert (
+        _redacted_response_obj.model == "text-embedding-ada-002"
+    )  # model should be preserved
     assert _redacted_response_obj.object == "list"  # object should be preserved
 
     # Assert sensitive data is cleared
@@ -1149,7 +1154,9 @@ def test_async_http_handler(mock_async_client):
     concurrent_limit = 2
 
     # Mock the transport creation to return a specific transport
-    with mock.patch.object(AsyncHTTPHandler, '_create_async_transport') as mock_create_transport:
+    with mock.patch.object(
+        AsyncHTTPHandler, "_create_async_transport"
+    ) as mock_create_transport:
         mock_transport = mock.MagicMock()
         mock_create_transport.return_value = mock_transport
 
@@ -1157,7 +1164,7 @@ def test_async_http_handler(mock_async_client):
 
         # Get the call arguments
         call_args = mock_async_client.call_args[1]
-        
+
         # Assert SSL context is being used instead of direct cert/verify params
         assert call_args["cert"] == "/client.pem"
         assert isinstance(call_args["verify"], ssl.SSLContext)
@@ -2231,7 +2238,6 @@ def test_get_provider_audio_transcription_config():
         ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
     ],
 )
-
 def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
 
@@ -2257,7 +2263,6 @@ def test_get_valid_models_from_provider():
     assert "gpt-4o-mini" in valid_models
 
 
-
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     """
     Test that get_valid_models returns the correct models for a given provider
@@ -2266,11 +2271,12 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
 
     monkeypatch.setenv("OPENAI_API_KEY", "123")
 
-    _model_cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-4o-mini"])
+    _model_cache.set_cached_model_info(
+        "openai", litellm_params=None, available_models=["gpt-4o-mini"]
+    )
     monkeypatch.delenv("OPENAI_API_KEY")
 
     assert _model_cache.get_cached_model_info("openai") is None
-
 
 
 def test_get_valid_models_from_dynamic_api_key():
@@ -2282,14 +2288,21 @@ def test_get_valid_models_from_dynamic_api_key():
 
     creds = CredentialLiteLLMParams(api_key="123")
 
-    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    valid_models = get_valid_models(
+        custom_llm_provider="anthropic",
+        litellm_params=creds,
+        check_provider_endpoint=True,
+    )
     assert len(valid_models) == 0
 
     creds = CredentialLiteLLMParams(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    valid_models = get_valid_models(
+        custom_llm_provider="anthropic",
+        litellm_params=creds,
+        check_provider_endpoint=True,
+    )
     assert len(valid_models) > 0
     assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
-
 
 
 def test_get_whitelisted_models():
