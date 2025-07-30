@@ -79,10 +79,8 @@ async def _get_unique_users_for_tags(
     tag_records = await db_client.db.litellm_dailytagspend.find_many(
         where={
             "tag": {"in": tags},
-            "date": {"gte": start_date, "lte": end_date},
-            "api_key": {"not": None}
-        },
-        select={"tag": True, "api_key": True, "date": True}
+            "date": {"gte": start_date, "lte": end_date}
+        }
     )
     
     # Get unique api_keys
@@ -93,8 +91,7 @@ async def _get_unique_users_for_tags(
     
     # Lookup user_id for each api_key
     api_key_records = await db_client.db.litellm_verificationtoken.find_many(
-        where={"token": {"in": list(api_keys)}},
-        select={"token": True, "user_id": True}
+        where={"token": {"in": list(api_keys)}}
     )
     
     # Create mapping from api_key to user_id
