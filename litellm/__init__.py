@@ -6,8 +6,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 import threading
 import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args, TYPE_CHECKING
-if TYPE_CHECKING:
-    from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
+from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
