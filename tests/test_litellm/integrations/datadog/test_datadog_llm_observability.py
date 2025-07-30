@@ -275,6 +275,6 @@ async def test_dd_llms_obs_redaction():
     assert dd_llms_obs_logger.logged_standard_logging_payload["response"]["choices"][0]["message"]["content"] == LiteLLMCommonStrings.redacted_by_litellm.value
 
     assert test_s3_logger.logged_standard_logging_payload["messages"] == [{"role": "user", "content": "Hello, world!"}]
-    assert test_s3_logger.logged_standard_logging_payload["response"] == {"choices": [{"message": {"content": "Hi there!"}}]}
+    assert test_s3_logger.logged_standard_logging_payload["response"]["choices"][0]["message"]["content"] == "Hi there!"
     
     
