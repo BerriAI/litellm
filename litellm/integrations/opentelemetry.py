@@ -286,7 +286,7 @@ class OpenTelemetry(CustomLogger):
             meter_provider = MeterProvider(
                 metric_readers=[_metric_reader], resource=_get_litellm_resource()
             )
-            meter = get_meter(__name__, schema_url=None)
+            meter = meter_provider.get_meter(__name__)
         else:
             meter = meter_provider.get_meter(__name__)
 
