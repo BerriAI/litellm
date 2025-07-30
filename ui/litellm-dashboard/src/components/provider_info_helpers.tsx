@@ -2,38 +2,39 @@ import OpenAI from "openai";
 import React from "react";
 
 export enum Providers {
-    OpenAI = "OpenAI",
-    OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
-    OpenAI_Text = "OpenAI Text Completion",
-    OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
-    Azure = "Azure",
-    Azure_AI_Studio = "Azure AI Foundry (Studio)",
-    Anthropic = "Anthropic",
-    Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
-    Google_AI_Studio = "Google AI Studio",
-    Bedrock = "Amazon Bedrock",
-    SageMaker = "AWS SageMaker",
-    Groq = "Groq",
-    MistralAI = "Mistral AI",
-    Deepseek = "Deepseek",
-    Cohere = "Cohere",
-    Databricks = "Databricks",
-    Ollama = "Ollama",
-    xAI = "xAI",
-    AssemblyAI = "AssemblyAI",
-    Cerebras = "Cerebras",
-    Sambanova = "Sambanova",
-    Perplexity = "Perplexity",
-    TogetherAI = "TogetherAI",
-    Openrouter = "Openrouter",
-    FireworksAI = "Fireworks AI",
-    Triton = "Triton",
-    Deepgram = "Deepgram",
-    ElevenLabs = "ElevenLabs",
-    Voyage = "Voyage AI",
-    JinaAI = "Jina AI",
-    VolcEngine = "VolcEngine"
-  }
+  Bedrock = "Amazon Bedrock",           
+  Anthropic = "Anthropic",              
+  AssemblyAI = "AssemblyAI",            
+  SageMaker = "AWS SageMaker",         
+  Azure = "Azure",                     
+  Azure_AI_Studio = "Azure AI Foundry (Studio)", 
+  Cerebras = "Cerebras",                
+  Cohere = "Cohere",                    
+  Databricks = "Databricks",            
+  DeepInfra = "DeepInfra",             
+  Deepgram = "Deepgram",                
+  Deepseek = "Deepseek",               
+  ElevenLabs = "ElevenLabs",            
+  FireworksAI = "Fireworks AI",         
+  Google_AI_Studio = "Google AI Studio",
+  Groq = "Groq",                       
+  JinaAI = "Jina AI",                 
+  MistralAI = "Mistral AI",             
+  Ollama = "Ollama",                   
+  OpenAI = "OpenAI",                    
+  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
+  OpenAI_Text = "OpenAI Text Completion",
+  OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
+  Openrouter = "Openrouter",            
+  Perplexity = "Perplexity",           
+  Sambanova = "Sambanova",              
+  TogetherAI = "TogetherAI",            
+  Triton = "Triton",                    
+  Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)", 
+  VolcEngine = "VolcEngine",           
+  Voyage = "Voyage AI",                
+  xAI = "xAI",                          
+}
   
 export const provider_map: Record<string, string> = {
     OpenAI: "openai",
@@ -66,7 +67,8 @@ export const provider_map: Record<string, string> = {
     SageMaker: "sagemaker_chat",
     Voyage: "voyage",
     JinaAI: "jina_ai",
-    VolcEngine: "volcengine"
+    VolcEngine: "volcengine",
+    DeepInfra: "deepinfra"
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -102,7 +104,8 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
     [Providers.Voyage]: `${asset_logos_folder}voyage.webp`, 
     [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
-    [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`
+    [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
+    [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
@@ -154,6 +157,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "jina_ai/";
     } else if (selectedProvider == Providers.VolcEngine) {
       return "volcengine/<any-model-on-volcengine>";
+    } else if (selectedProvider == Providers.DeepInfra) {
+      return "deepinfra/<any-model-on-deepinfra>";
     } else {
       return "gpt-3.5-turbo";
     }

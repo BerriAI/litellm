@@ -403,6 +403,12 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Key",
     type: "password",
     required: true
+  }],
+  [Providers.DeepInfra]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
   }]
 };
 
