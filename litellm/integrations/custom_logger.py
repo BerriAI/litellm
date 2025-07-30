@@ -567,7 +567,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         from litellm import Choices, Message, ModelResponse
         from litellm.types.utils import LiteLLMCommonStrings
         
-        if self.turn_off_message_logging is False:
+        if hasattr(self, "turn_off_message_logging") and self.turn_off_message_logging is False:
             return model_call_details
         
         # Only make a shallow copy of the top-level dict to avoid deepcopy issues

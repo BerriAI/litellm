@@ -233,7 +233,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         for now this handles logging /chat/completions responses
         """
         if call_type in [CallTypes.completion.value, CallTypes.acompletion.value]:
-            return [response_obj["choices"][0]["message"].json()]
+            return [response_obj["choices"][0]["message"]]
         return []
 
     def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
