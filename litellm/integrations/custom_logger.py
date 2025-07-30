@@ -549,9 +549,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
     
-    def redact_standard_logging_payload(
-        self, standard_logging_object: StandardLoggingPayload
-    ) -> StandardLoggingPayload:
+    def redact_standard_logging_payload_from_model_call_details(
+        self, model_call_details: Dict
+    ) -> Dict:
         """
         Only redacts messages and responses when self.turn_off_message_logging is True
         
@@ -562,23 +562,27 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         
         This is useful for logging payloads that contain sensitive information.
         """
-        if self.turn_off_message_logging is True:
-            return standard_logging_object
-        
         from copy import deepcopy
 
         from litellm import Choices, Message, ModelResponse
         from litellm.types.utils import LiteLLMCommonStrings
-
-        payload = deepcopy(standard_logging_object)
+        
+        if self.turn_off_message_logging is False:
+            return model_call_details
+        
+        model_call_details = deepcopy(model_call_details)
         redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        standard_logging_object = model_call_details.get("standard_logging_object")
+        if standard_logging_object is None:
+            return model_call_details
 
-        if payload.get("messages") is not None:
-            payload["messages"] = [Message(content=redacted_str)]
+        if standard_logging_object.get("messages") is not None:
+            standard_logging_object["messages"] = [Message(content=redacted_str)]
 
-        if payload.get("response") is not None:
-            payload["response"] = cast(Any, ModelResponse(
+        if standard_logging_object.get("response") is not None:
+            standard_logging_object["response"] = cast(Any, ModelResponse(
                 choices=[Choices(message=Message(content=redacted_str))]
             ))
 
-        return payload
+        model_call_details["standard_logging_object"] = standard_logging_object
+        return model_call_details

@@ -2268,21 +2268,21 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                 
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    model_call_details: Dict = self.model_call_details
                     ##################################
                     # call redaction hook for custom logger
-                    callback.redact_standard_logging_payload(
-                        standard_logging_object=self.model_call_details.get("standard_logging_object", {})
+                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                        model_call_details=model_call_details
                     )
                     ##################################
-
                     if self.stream is True:
                         if (
                             "async_complete_streaming_response"
-                            in self.model_call_details
+                            in model_call_details
                         ):
                             await callback.async_log_success_event(
-                                kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
+                                kwargs=model_call_details,
+                                response_obj=model_call_details[
                                     "async_complete_streaming_response"
                                 ],
                                 start_time=start_time,
@@ -2290,14 +2290,14 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
-                                kwargs=self.model_call_details,
+                                kwargs=model_call_details,
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
                         await callback.async_log_success_event(
-                            kwargs=self.model_call_details,
+                            kwargs=model_call_details,
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,

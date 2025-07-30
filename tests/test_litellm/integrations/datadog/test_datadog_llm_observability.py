@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -10,9 +11,14 @@ import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
-
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
-from litellm.types.integrations.datadog_llm_obs import LLMMetrics, LLMObsPayload
+from litellm.types.integrations.datadog_llm_obs import (
+    DatadogLLMObsInitParams,
+    LLMMetrics,
+    LLMObsPayload,
+)
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -212,3 +218,63 @@ class TestDataDogLLMObsLogger:
         assert logger._get_datadog_span_kind(None) == "llm"
 
 
+
+class TestDataDogLLMObsLogger(DataDogLLMObsLogger):
+    """Test suite for DataDog LLM Observability Logger"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_standard_logging_payload = kwargs.get("standard_logging_object")
+
+
+class TestS3Logger(CustomLogger):
+    """Test suite for S3 Logger"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_standard_logging_payload = kwargs.get("standard_logging_object")
+
+
+@pytest.mark.asyncio
+async def test_dd_llms_obs_redaction():
+    # init DD with turn_off_message_logging=True
+    litellm._turn_on_debug()
+    from litellm.types.utils import LiteLLMCommonStrings
+    litellm.datadog_llm_observability_params = DatadogLLMObsInitParams(turn_off_message_logging=True)
+    dd_llms_obs_logger = TestDataDogLLMObsLogger()
+    test_s3_logger = TestS3Logger()
+    litellm.callbacks = [
+        dd_llms_obs_logger,
+        test_s3_logger
+    ]
+
+    # call litellm
+    await litellm.acompletion(
+        model="gpt-4o",
+        mock_response="Hi there!",
+        messages=[{"role": "user", "content": "Hello, world!"}]
+    )
+
+    # sleep 1 second for logging to complete
+    await asyncio.sleep(1)
+
+    #################
+    # test validation 
+    # 1. both loggers logged a standard_logging_payload
+    # 2. DD LLM Obs standard_logging_payload has messages and response redacted
+    # 3. S3 standard_logging_payload does not have messages and response redacted
+
+    assert dd_llms_obs_logger.logged_standard_logging_payload is not None
+    assert test_s3_logger.logged_standard_logging_payload is not None
+
+    assert dd_llms_obs_logger.logged_standard_logging_payload["messages"][0]["content"] == LiteLLMCommonStrings.redacted_by_litellm.value
+    assert dd_llms_obs_logger.logged_standard_logging_payload["response"]["choices"][0]["message"]["content"] == LiteLLMCommonStrings.redacted_by_litellm.value
+
+    assert test_s3_logger.logged_standard_logging_payload["messages"] == [{"role": "user", "content": "Hello, world!"}]
+    assert test_s3_logger.logged_standard_logging_payload["response"] == {"choices": [{"message": {"content": "Hi there!"}}]}
+    
+    
