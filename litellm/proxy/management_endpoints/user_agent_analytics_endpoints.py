@@ -14,17 +14,17 @@ tracked by the system.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union, Set
+from typing import Any, Dict, List, Optional, Set, Union
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.proxy_server import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    SpendAnalyticsPaginatedResponse,
     DailySpendData,
+    SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
 
@@ -277,7 +277,7 @@ async def get_user_agent_analytics(
             date_str = daily_data.date.strftime("%Y-%m-%d")
             
             # Get tag from breakdown data
-            for tag, tag_metrics in daily_data.breakdown.tags.items():
+            for tag, tag_metrics in daily_data.breakdown.entities.items():
                 if tag.startswith("User-Agent: "):
                     if tag not in daily_data_by_tag_and_date:
                         daily_data_by_tag_and_date[tag] = {}
@@ -294,7 +294,7 @@ async def get_user_agent_analytics(
             for date_str in sorted(unique_dates):
                 if tag in daily_data_by_tag_and_date and date_str in daily_data_by_tag_and_date[tag]:
                     daily_data = daily_data_by_tag_and_date[tag][date_str]
-                    tag_breakdown = daily_data.breakdown.tags.get(tag)
+                    tag_breakdown = daily_data.breakdown.entities.get(tag)
                     
                     if tag_breakdown:
                         # Calculate DAU/WAU/MAU for this specific date and tag
@@ -425,19 +425,20 @@ async def get_user_agent_summary(
         user_agent_totals: Dict[str, UserAgentMetrics] = {}
         
         for daily_data in daily_activity_response.results:
-            for tag, tag_metrics in daily_data.breakdown.tags.items():
+            for tag, tag_metrics in daily_data.breakdown.entities.items():
                 if tag.startswith("User-Agent: "):
                     user_agent = _extract_user_agent_from_tag(tag)
-                    if user_agent not in user_agent_totals:
+                    if user_agent is not None and user_agent not in user_agent_totals:
                         user_agent_totals[user_agent] = UserAgentMetrics()
                     
-                    totals = user_agent_totals[user_agent]
-                    totals.successful_requests += tag_metrics.metrics.successful_requests
-                    totals.failed_requests += tag_metrics.metrics.failed_requests
-                    totals.total_requests += tag_metrics.metrics.api_requests
-                    totals.completed_tokens += tag_metrics.metrics.completion_tokens
-                    totals.total_tokens += tag_metrics.metrics.total_tokens
-                    totals.spend += tag_metrics.metrics.spend
+                    if user_agent is not None:
+                        totals = user_agent_totals[user_agent]
+                        totals.successful_requests += tag_metrics.metrics.successful_requests
+                        totals.failed_requests += tag_metrics.metrics.failed_requests
+                        totals.total_requests += tag_metrics.metrics.api_requests
+                        totals.completed_tokens += tag_metrics.metrics.completion_tokens
+                        totals.total_tokens += tag_metrics.metrics.total_tokens
+                        totals.spend += tag_metrics.metrics.spend
         
         # Calculate summary statistics
         total_requests = sum(ua.total_requests for ua in user_agent_totals.values())
