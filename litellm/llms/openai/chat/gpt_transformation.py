@@ -705,8 +705,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if api_key is None:
             api_key = get_secret_str("OPENAI_API_KEY")
 
+        # Strip api_base to just the base URL (scheme + host + port)
+        parsed_url = httpx.URL(api_base)
+        base_url = f"{parsed_url.scheme}://{parsed_url.host}"
+        if parsed_url.port:
+            base_url += f":{parsed_url.port}"
+
         response = litellm.module_level_client.get(
-            url=f"{api_base}/v1/models",
+            url=f"{base_url}/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
