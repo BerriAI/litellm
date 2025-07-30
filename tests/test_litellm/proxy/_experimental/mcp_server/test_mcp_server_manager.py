@@ -110,7 +110,7 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = MagicMock(side_effect=lambda x: server1 if x == "github" else server2)
         
         # Mock _get_tools_from_server to return different results
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+        async def mock_get_tools_from_server(server, mcp_auth_header=None):
             if server.name == "github":
                 tool1 = MagicMock()
                 tool1.name = "github_tool_1"
@@ -157,7 +157,7 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
         
         # Mock _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+        async def mock_get_tools_from_server(server, mcp_auth_header=None):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
             tool.name = "github_tool_1"
@@ -190,7 +190,7 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
         
         # Mock _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+        async def mock_get_tools_from_server(server, mcp_auth_header=None):
             assert mcp_auth_header == "server-specific-token"  # Should use server-specific header
             tool = MagicMock()
             tool.name = "github_tool_1"
@@ -223,7 +223,7 @@ class TestMCPServerManager:
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
         
         # Mock _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+        async def mock_get_tools_from_server(server, mcp_auth_header=None):
             assert mcp_auth_header == "server-specific-token"  # Should use server-specific header via server_name
             tool = MagicMock()
             tool.name = "github_tool_1"

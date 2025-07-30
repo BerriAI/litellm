@@ -100,7 +100,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         working_server if server_id == "working_server" else failing_server
     )
     
-    async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None):
         if server.name == "working_server":
             # Working server returns tools
             tool1 = MagicMock()
@@ -131,8 +131,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=None,
                 mcp_servers=None,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                mcp_protocol_version=None
+                mcp_server_auth_headers=mcp_server_auth_headers
             )
             
             # Verify that tools from the working server are returned
@@ -177,7 +176,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         failing_server1 if server_id == "failing_server1" else failing_server2
     )
     
-    async def mock_get_tools_from_server(server, mcp_auth_header=None, mcp_protocol_version=None):
+    async def mock_get_tools_from_server(server, mcp_auth_header=None):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
     
@@ -200,8 +199,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=None,
                 mcp_servers=None,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                mcp_protocol_version=None
+                mcp_server_auth_headers=mcp_server_auth_headers
             )
             
             # Verify that empty list is returned
