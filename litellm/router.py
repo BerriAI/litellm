@@ -23,6 +23,7 @@ from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Callable,
     Dict,
     List,
@@ -146,7 +147,7 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import GenericBudgetConfigType, LiteLLMBatch
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import ModelResponseStream, StandardLoggingPayload, Usage
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -1092,7 +1093,7 @@ class Router:
         from litellm.exceptions import MidStreamFallbackError
 
         class FallbackStreamWrapper(CustomStreamWrapper):
-            def __init__(self, async_generator):
+            def __init__(self, async_generator: AsyncGenerator):
                 # Copy attributes from the original model_response
                 super().__init__(
                     completion_stream=async_generator,
@@ -1103,7 +1104,7 @@ class Router:
                 self._async_generator = async_generator
 
             def __aiter__(self):
-                return self._async_generator
+                return self
 
             async def __anext__(self):
                 return await self._async_generator.__anext__()
@@ -1113,6 +1114,15 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
+                from litellm.main import stream_chunk_builder
+
+                complete_response_object = stream_chunk_builder(
+                    chunks=model_response.chunks
+                )
+                complete_response_object_usage = cast(
+                    Optional[Usage],
+                    getattr(complete_response_object, "usage", None),
+                )
                 try:
                     # Use the router's fallback system
                     model_group = cast(str, initial_kwargs.get("model"))
@@ -1156,6 +1166,37 @@ class Router:
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
                         async for fallback_item in fallback_response:  # type: ignore
+                            if (
+                                fallback_item
+                                and isinstance(fallback_item, ModelResponseStream)
+                                and hasattr(fallback_item, "usage")
+                            ):
+                                from litellm.cost_calculator import (
+                                    BaseTokenUsageProcessor,
+                                )
+
+                                usage = cast(
+                                    Optional[Usage],
+                                    getattr(fallback_item, "usage", None),
+                                )
+                                if usage is not None:
+                                    usage_objects = [usage]
+                                else:
+                                    usage_objects = []
+
+                                if (
+                                    complete_response_object_usage is not None
+                                    and hasattr(complete_response_object_usage, "usage")
+                                    and complete_response_object_usage.usage is not None  # type: ignore
+                                ):
+                                    usage_objects.append(complete_response_object_usage)
+
+                                combined_usage = (
+                                    BaseTokenUsageProcessor.combine_usage_objects(
+                                        usage_objects=usage_objects
+                                    )
+                                )
+                                setattr(fallback_item, "usage", combined_usage)
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None
@@ -1166,7 +1207,7 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
-                    raise e  # Re-raise the original error
+                    raise fallback_error  # Re-raise the original error
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
