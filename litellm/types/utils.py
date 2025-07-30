@@ -29,7 +29,7 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
@@ -580,21 +580,6 @@ class Message(OpenAIObject):
         default=None, exclude=True
     )
     annotations: Optional[List[ChatCompletionAnnotation]] = None
-    
-    @field_serializer('tool_calls', mode='plain')
-    def serialize_tool_calls(self, value):
-        """Ensure tool_calls is an empty list when None for OpenAI compatibility."""
-        return [] if value is None else value
-    
-    @field_serializer('function_call', mode='plain')
-    def serialize_function_call(self, value):
-        """Ensure function_call is an empty dict when None for OpenAI compatibility."""
-        return {} if value is None else value
-    
-    @field_serializer('annotations', mode='plain')
-    def serialize_annotations(self, value):
-        """Ensure annotations is an empty list when None for OpenAI compatibility."""
-        return [] if value is None else value
 
     def __init__(
         self,
@@ -617,7 +602,7 @@ class Message(OpenAIObject):
             "content": content,
             "role": role or "assistant",  # handle null input
             "function_call": (
-                FunctionCall(**function_call) if function_call is not None and function_call != {} else None
+                FunctionCall(**function_call) if function_call is not None else None
             ),
             "tool_calls": (
                 [
@@ -692,7 +677,6 @@ class Message(OpenAIObject):
         except Exception:
             # if using pydantic v1
             return self.dict()
-
 
 
 class Delta(OpenAIObject):
