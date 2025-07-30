@@ -28,6 +28,8 @@ os.environ["VERCEL_AI_GATEWAY_API_KEY"] = ""  # your Vercel AI Gateway API key
 os.environ["VERCEL_OIDC_TOKEN"] = ""  # your Vercel OIDC token for authentication
 ```
 
+Note: see the [Vercel AI Gateway docs](https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key) for instructions on obtaining a key.
+
 ## Usage - LiteLLM Python SDK
 
 ### Non-streaming
