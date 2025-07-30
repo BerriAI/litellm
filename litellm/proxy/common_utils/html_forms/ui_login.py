@@ -1,8 +1,10 @@
 import os
 
-# Use relative URL to preserve the protocol (HTTP/HTTPS) the user is currently using
+url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
-url_to_redirect_to = server_root_path + "/login"
+if server_root_path != "":
+    url_to_redirect_to += server_root_path
+url_to_redirect_to += "/login"
 html_form = f"""
 <!DOCTYPE html>
 <html lang="en">
