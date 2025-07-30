@@ -103,6 +103,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [currentView, setCurrentView] = useState<"dau" | "wau" | "mau">("dau");
 
   const fetchData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -183,6 +184,27 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     success_rate: ua.successful_requests / (ua.requests || 1) * 100,
     total_requests: ua.requests,
   }));
+
+  // Get unique user agents for chart
+  const uniqueUserAgents = Array.from(
+    new Set(analyticsData.results.map(item => item.user_agent || "Unknown"))
+  ).slice(0, 3); // Top 3 user agents
+
+  // Prepare daily chart data
+  const dailyChartData = analyticsData.results.reduce((acc, item) => {
+    const existingDate = acc.find(d => d.date === item.date);
+    if (existingDate) {
+      const metricKey = currentView;
+      existingDate[item.user_agent || "Unknown"] = item.metrics[metricKey];
+    } else {
+      const newDateEntry: any = { 
+        date: item.date,
+        [item.user_agent || "Unknown"]: item.metrics[currentView]
+      };
+      acc.push(newDateEntry);
+    }
+    return acc;
+  }, [] as any[]);
 
   // Format numbers with K, M abbreviations
   const formatAbbreviatedNumber = (value: number, decimalPlaces: number = 0): string => {
@@ -276,174 +298,53 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         ))}
       </Grid>
 
-      {/* Charts */}
-      <Grid numItems={1} className="gap-4">
-        <Card>
-          <Title>Success Generations by User Agent</Title>
-          <BarChart
-            data={chartData.slice(0, 10)} // Top 10
-            index="user_agent"
-            categories={["successful_requests", "total_tokens"]}
-            colors={["green", "blue"]}
-            valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-            yAxisWidth={60}
-            showLegend={true}
-          />
-        </Card>
-      </Grid>
-
-      {/* Top User Agents Table */}
+      {/* DAU/WAU/MAU Chart */}
       <Card>
-        <Title>Top User Agents</Title>
-        <Table className="mt-4">
-          <TableHead>
-            <TableRow>
-              <TableHeaderCell>User Agent</TableHeaderCell>
-              <TableHeaderCell className="text-right">Requests</TableHeaderCell>
-              <TableHeaderCell className="text-right">Success Rate</TableHeaderCell>
-              <TableHeaderCell className="text-right">Tokens</TableHeaderCell>
-              <TableHeaderCell className="text-right">Spend</TableHeaderCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {summaryData.top_user_agents.map((ua, index) => (
-              <TableRow key={index}>
-                <TableCell className="font-medium">{ua.user_agent}</TableCell>
-                <TableCell className="text-right">
-                  {formatNumberWithCommas(ua.requests)}
-                </TableCell>
-                <TableCell className="text-right">
-                  <span
-                    className={
-                      (ua.successful_requests / ua.requests) * 100 > 95
-                        ? "text-green-600"
-                        : (ua.successful_requests / ua.requests) * 100 > 90
-                        ? "text-yellow-600"
-                        : "text-red-600"
-                    }
-                  >
-                    {((ua.successful_requests / ua.requests) * 100).toFixed(1)}%
-                  </span>
-                </TableCell>
-                <TableCell className="text-right">
-                  {formatNumberWithCommas(ua.tokens)}
-                </TableCell>
-                <TableCell className="text-right">
-                  ${formatNumberWithCommas(ua.spend, 2)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Card>
-
-      {/* Daily Activity Table */}
-      <Card>
-        <div className="flex justify-between items-center mb-4">
-          <Title>Daily User Agent Activity</Title>
-          <div className="flex items-center space-x-2">
+        <div className="mb-6">
+          <div className="flex items-center space-x-4 mb-2">
             <Button
-              variant="secondary"
-              size="xs"
-              onClick={handlePrevPage}
-              disabled={currentPage <= 1 || loading}
+              variant={currentView === "dau" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => setCurrentView("dau")}
             >
-              Previous
+              DAU
             </Button>
-            <Text className="text-sm">
-              Page {currentPage} of {analyticsData.total_pages}
-            </Text>
             <Button
-              variant="secondary"
-              size="xs"
-              onClick={handleNextPage}
-              disabled={currentPage >= analyticsData.total_pages || loading}
+              variant={currentView === "wau" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => setCurrentView("wau")}
             >
-              Next
+              WAU
+            </Button>
+            <Button
+              variant={currentView === "mau" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => setCurrentView("mau")}
+            >
+              MAU
             </Button>
           </div>
+          <Title>DAU, WAU & MAU per Code Editor</Title>
+          <Subtitle>Active users across different time periods</Subtitle>
         </div>
-        
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableHeaderCell>Date</TableHeaderCell>
-              <TableHeaderCell>User Agent</TableHeaderCell>
-              <TableHeaderCell className="text-right">DAU</TableHeaderCell>
-              <TableHeaderCell className="text-right">WAU</TableHeaderCell>
-              <TableHeaderCell className="text-right">MAU</TableHeaderCell>
-              <TableHeaderCell className="text-right">Requests</TableHeaderCell>
-              <TableHeaderCell className="text-right">Success Rate</TableHeaderCell>
-              <TableHeaderCell className="text-right">Tokens</TableHeaderCell>
-              <TableHeaderCell className="text-right">Spend</TableHeaderCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {analyticsData.results.map((item, index) => (
-              <TableRow key={index}>
-                <TableCell>{item.date}</TableCell>
-                <TableCell className="font-medium">
-                  {item.user_agent || "Unknown"}
-                </TableCell>
-                <TableCell className="text-right">
-                  {formatNumberWithCommas(item.metrics.dau)}
-                </TableCell>
-                <TableCell className="text-right">
-                  {formatNumberWithCommas(item.metrics.wau)}
-                </TableCell>
-                <TableCell className="text-right">
-                  {formatNumberWithCommas(item.metrics.mau)}
-                </TableCell>
-                <TableCell className="text-right">
-                  <div>
-                    <div>{formatNumberWithCommas(item.metrics.total_requests)}</div>
-                    <div className="text-xs text-gray-500">
-                      {formatNumberWithCommas(item.metrics.successful_requests)} success
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="text-right">
-                  <span
-                    className={
-                      (item.metrics.successful_requests / item.metrics.total_requests) * 100 > 95
-                        ? "text-green-600"
-                        : (item.metrics.successful_requests / item.metrics.total_requests) * 100 > 90
-                        ? "text-yellow-600"
-                        : "text-red-600"
-                    }
-                  >
-                    {item.metrics.total_requests > 0
-                      ? ((item.metrics.successful_requests / item.metrics.total_requests) * 100).toFixed(1)
-                      : "0"}%
-                  </span>
-                </TableCell>
-                <TableCell className="text-right">
-                  <div>
-                    <div>{formatNumberWithCommas(item.metrics.total_tokens)}</div>
-                    <div className="text-xs text-gray-500">
-                      {formatNumberWithCommas(item.metrics.completed_tokens)} completed
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="text-right">
-                  ${formatNumberWithCommas(item.metrics.spend, 4)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        
-        {analyticsData.results.length === 0 && !loading && (
-          <div className="text-center py-8">
-            <Text>No user agent activity data found for the selected period.</Text>
-          </div>
-        )}
-        
-        {loading && (
-          <div className="text-center py-8">
-            <Text>Loading...</Text>
-          </div>
-        )}
+
+        <div className="mb-4">
+          <Title className="text-lg">
+            {currentView === "dau" && "Daily Active Users - Last 7 Days"}
+            {currentView === "wau" && "Weekly Active Users - Last 7 Days"}
+            {currentView === "mau" && "Monthly Active Users - Last 7 Days"}
+          </Title>
+        </div>
+
+        <BarChart
+          data={dailyChartData}
+          index="date"
+          categories={uniqueUserAgents.slice(0, 3)} // Top 3 user agents
+          colors={["blue", "green", "orange"]}
+          valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+          yAxisWidth={60}
+          showLegend={true}
+        />
       </Card>
     </div>
   );
