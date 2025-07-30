@@ -9,7 +9,14 @@ LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
 - `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
-## Datadog Logs / Traces
+## Datadog Logs
+
+| Feature | Details |
+|---------|---------|
+| **What is logged** | [StandardLoggingPayload](../proxy/logging_spec) |
+| **Events** | Success + Failure |
+| **Product Link** | [Datadog Logs](https://docs.datadoghq.com/logs/) |
+
 
 We will use the `--config` to set `litellm.callbacks = ["datadog"]` this will log all successful LLM calls to DataDog
 
@@ -27,6 +34,14 @@ litellm_settings:
 
 
 ## Datadog LLM Observability
+
+**Overview**
+
+| Feature | Details |
+|---------|---------|
+| **What is logged** | [StandardLoggingPayload](../proxy/logging_spec) |
+| **Events** | Success + Failure |
+| **Product Link** | [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/) |
 
 ```yaml
 model_list:
