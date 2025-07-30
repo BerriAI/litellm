@@ -385,8 +385,31 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     label: "API Base",
     placeholder: "http://localhost:8000/generate",
     required: false
-  }
-]
+  }],
+  [Providers.Voyage]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
+  [Providers.JinaAI]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
+  [Providers.VolcEngine]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
+  [Providers.DeepInfra]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }]
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
