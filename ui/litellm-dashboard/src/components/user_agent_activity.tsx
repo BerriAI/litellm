@@ -185,19 +185,19 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   }));
 
   // Format numbers with K, M abbreviations
-  const formatAbbreviatedNumber = (value: number): string => {
+  const formatAbbreviatedNumber = (value: number, decimalPlaces: number = 0): string => {
     if (value >= 100000000) {
-      return (value / 1000000).toFixed(0) + 'M';
+      return (value / 1000000).toFixed(decimalPlaces) + 'M';
     } else if (value >= 10000000) {
-      return (value / 1000000).toFixed(0) + 'M';
+      return (value / 1000000).toFixed(decimalPlaces) + 'M';
     } else if (value >= 1000000) {
-      return (value / 1000000).toFixed(0) + 'M';
+      return (value / 1000000).toFixed(decimalPlaces) + 'M';
     } else if (value >= 10000) {
-      return (value / 1000).toFixed(0) + 'K';
+      return (value / 1000).toFixed(decimalPlaces) + 'K';
     } else if (value >= 1000) {
-      return (value / 1000).toFixed(0) + 'K';
+      return (value / 1000).toFixed(decimalPlaces) + 'K';
     } else {
-      return value.toString();
+      return value.toFixed(decimalPlaces);
     }
   };
 
@@ -238,24 +238,40 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             <Title className="truncate" title={ua.user_agent}>
               {ua.user_agent}
             </Title>
-            <Metric className="text-green-600">
-              {formatAbbreviatedNumber(ua.successful_requests)}
-            </Metric>
-            <Subtitle>Successful Requests</Subtitle>
-            <Text className="mt-2">
-              <span className="font-semibold">{formatAbbreviatedNumber(ua.tokens)}</span> tokens
-            </Text>
+            <div className="mt-4 space-y-3">
+              <div>
+                <Text className="text-sm text-gray-600">Success Requests</Text>
+                <Metric className="text-lg">{formatAbbreviatedNumber(ua.successful_requests)}</Metric>
+              </div>
+              <div>
+                <Text className="text-sm text-gray-600">Total Tokens</Text>
+                <Metric className="text-lg">{formatAbbreviatedNumber(ua.tokens)}</Metric>
+              </div>
+              <div>
+                <Text className="text-sm text-gray-600">Total Cost</Text>
+                <Metric className="text-lg">${formatAbbreviatedNumber(ua.spend, 4)}</Metric>
+              </div>
+            </div>
         </Card>
         ))}
         {/* Fill remaining slots if less than 4 agents */}
         {Array.from({ length: Math.max(0, 4 - summaryData.top_user_agents.length) }).map((_, index) => (
           <Card key={`empty-${index}`}>
             <Title>No Data</Title>
-            <Metric>-</Metric>
-            <Subtitle>Successful Requests</Subtitle>
-            <Text className="mt-2">
-              <span className="font-semibold">-</span> tokens
-          </Text>
+            <div className="mt-4 space-y-3">
+              <div>
+                <Text className="text-sm text-gray-600">Success Requests</Text>
+                <Metric className="text-lg">-</Metric>
+              </div>
+              <div>
+                <Text className="text-sm text-gray-600">Total Tokens</Text>
+                <Metric className="text-lg">-</Metric>
+              </div>
+              <div>
+                <Text className="text-sm text-gray-600">Total Cost</Text>
+                <Metric className="text-lg">-</Metric>
+              </div>
+            </div>
         </Card>
         ))}
       </Grid>
