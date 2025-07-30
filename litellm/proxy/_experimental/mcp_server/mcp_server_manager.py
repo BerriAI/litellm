@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
@@ -78,21 +79,21 @@ def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVe
         MCPSpecVersionType: The enum value
     """
     if not protocol_version:
-        return MCPSpecVersion.jun_2025  # type: ignore
+        return MCPSpecVersion.jun_2025
     
     # If it's already an MCPSpecVersion enum, return it
     if isinstance(protocol_version, MCPSpecVersion):
-        return protocol_version  # type: ignore
+        return protocol_version
     
     # If it's a string, try to match it to enum values
     if isinstance(protocol_version, str):
         for version in MCPSpecVersion:
             if version.value == protocol_version:
-                return version  # type: ignore
+                return version
     
     # If no match found, return default
     verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
-    return MCPSpecVersion.jun_2025  # type: ignore
+    return MCPSpecVersion.jun_2025
 
 
 class MCPServerManager:
@@ -517,7 +518,7 @@ class MCPServerManager:
             mcp_auth_header: Optional[str] = None,
             mcp_server_auth_headers: Optional[Dict[str, str]] = None,
             mcp_protocol_version: Optional[str] = None,
-            litellm_logging_obj: Optional[Any] = None,
+            proxy_logging_obj: Optional[ProxyLogging] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -528,8 +529,8 @@ class MCPServerManager:
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
-            mcp_protocol_version: Optional MCP protocol version from request header
-            litellm_logging_obj: Optional logging object for hook integration
+            proxy_logging_obj: Optional ProxyLogging object for hook integration
+
 
         Returns:
             CallToolResult from the MCP server
@@ -555,14 +556,14 @@ class MCPServerManager:
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
         #########################################################
-        if litellm_logging_obj:
+        if proxy_logging_obj:
             pre_hook_kwargs = {
                 "name": name,
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
             }
-            pre_hook_result = await litellm_logging_obj.async_pre_mcp_tool_call_hook(
+            pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
                 kwargs=pre_hook_kwargs,
                 request_obj=None,  # Will be created in the hook
                 start_time=start_time,
@@ -606,12 +607,20 @@ class MCPServerManager:
             # Initialize during_hook_task as None
             during_hook_task = None
             
-            # Start during hook if litellm_logging_obj is available
-            if litellm_logging_obj:
+            # Start during hook if proxy_logging_obj is available
+            if proxy_logging_obj:
                 try:
-                    during_hook_task = litellm_logging_obj.async_during_mcp_tool_call_hook(
-                        kwargs=litellm_logging_obj.model_call_details,
-                        start_time=start_time,
+                    during_hook_task = asyncio.create_task(
+                        proxy_logging_obj.async_during_mcp_tool_call_hook(
+                            kwargs={
+                                "name": name,
+                                "arguments": arguments,
+                                "server_name": server_name_from_prefix,
+                            },
+                            request_obj=None,  # Will be created in the hook
+                            start_time=start_time,
+                            end_time=start_time,
+                        )
                     )
                 except Exception as e:
                     verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
@@ -621,7 +630,7 @@ class MCPServerManager:
             #########################################################
             # Check during hook result if it completed
             #########################################################
-            if litellm_logging_obj and during_hook_task is not None:
+            if proxy_logging_obj and during_hook_task is not None:
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):
