@@ -91,7 +91,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 f"DataDogLLMObs: Logging success event for model {kwargs.get('model', 'unknown')}"
             )
             payload = self.create_llm_obs_payload(
-                kwargs, response_obj, start_time, end_time
+                kwargs, start_time, end_time
             )
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
@@ -150,7 +150,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
 
     def create_llm_obs_payload(
-        self, kwargs: Dict, response_obj: Any, start_time: datetime, end_time: datetime
+        self, kwargs: Dict, start_time: datetime, end_time: datetime
     ) -> LLMObsPayload:
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
@@ -160,6 +160,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         messages = standard_logging_payload["messages"]
         messages = self._ensure_string_content(messages=messages)
+        response_obj = standard_logging_payload.get("response")
 
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
