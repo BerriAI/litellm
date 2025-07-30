@@ -34,13 +34,20 @@ import {
 import AdvancedDatePicker from "./shared/advanced_date_picker"
 import { AreaChart } from "@tremor/react"
 
-import { userDailyActivityCall, tagListCall } from "./networking"
-import { Tag } from "./tag_management/types"
-import ViewUserSpend from "./view_user_spend"
-import TopKeyView from "./top_key_view"
-import { ActivityMetrics, processActivityData } from "./activity_metrics"
-import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types"
-import EntityUsage from "./entity_usage"
+import { userDailyActivityCall, tagListCall } from "./networking";
+import { Tag } from "./tag_management/types";
+import ViewUserSpend from "./view_user_spend";
+import TopKeyView from "./top_key_view";
+import { ActivityMetrics, processActivityData } from "./activity_metrics";
+import UserAgentActivity from "./user_agent_activity";
+import {
+  SpendMetrics,
+  DailyData,
+  ModelActivityData,
+  MetricWithMetadata,
+  KeyMetricWithMetadata,
+} from "./usage/types";
+import EntityUsage from "./entity_usage";
 import {
   old_admin_roles,
   v2_admin_role_names,
@@ -426,7 +433,16 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabList variant="solid" className="mt-1">
           {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
           <Tab>Team Usage</Tab>
-          {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
+          {all_admin_roles.includes(userRole || "") ? (
+            <Tab>Tag Usage</Tab>
+          ) : (
+            <></>
+          )}
+          {all_admin_roles.includes(userRole || "") ? (
+            <Tab>User Agent Activity</Tab>
+          ) : (
+            <></>
+          )}
         </TabList>
         <TabPanels>
           {/* Your Usage Panel */}
@@ -722,6 +738,13 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
               userRole={userRole}
               entityList={allTags}
               premiumUser={premiumUser}
+            />
+          </TabPanel>
+          {/* User Agent Activity Panel */}
+          <TabPanel>
+            <UserAgentActivity
+              accessToken={accessToken}
+              userRole={userRole}
             />
           </TabPanel>
         </TabPanels>
