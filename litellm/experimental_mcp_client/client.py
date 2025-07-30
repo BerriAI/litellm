@@ -12,6 +12,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
+from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
@@ -242,17 +243,15 @@ class MCPClient:
             except Exception as e:
                 verbose_logger.warning(f"MCP client connection failed: {str(e)}")
                 return MCPCallToolResult(
-                    content=[],
-                    isError=True,
-                    error="Connection failed"
+                    content=[TextContent(type="text", text=f"{str(e)}")],
+                    isError=True
                 )
 
         if self._session is None:
             verbose_logger.warning("MCP client session is not initialized")
             return MCPCallToolResult(
-                content=[],
+                content=[TextContent(type="text", text="MCP client session is not initialized")],
                 isError=True,
-                error="Session not initialized"
             )
         
         try:
@@ -269,9 +268,8 @@ class MCPClient:
             await self.disconnect()
             # Return a default error result instead of raising
             return MCPCallToolResult(
-                content=[],  # Empty content for error case
+                content=[TextContent(type="text", text=f"{str(e)}")],  # Empty content for error case
                 isError=True,
-                error="Tool call failed"
             )
         
 
