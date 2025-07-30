@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from litellm.proxy.db.prisma_client import should_update_prisma_schema
+from litellm.proxy.db.prisma_client import PrismaWrapper, should_update_prisma_schema
 
 
 def test_should_update_prisma_schema(monkeypatch):
@@ -33,3 +34,37 @@ def test_should_update_prisma_schema(monkeypatch):
 
     monkeypatch.setenv("DISABLE_SCHEMA_UPDATE", None)  # Set env var opposite to param
     assert should_update_prisma_schema(False) == True  # Param False -> should update
+
+
+@pytest.mark.asyncio
+async def test_recreate_prisma_client_successful_disconnect():
+    """
+    Test that recreate_prisma_client works normally when disconnect succeeds.
+    """
+    # Create a PrismaWrapper instance
+    wrapper = PrismaWrapper(db_url="postgresql://test:test@localhost:5432/test")
+    
+    # Mock the original prisma client
+    mock_prisma = AsyncMock()
+    wrapper._original_prisma = mock_prisma
+    
+    # Configure disconnect to succeed
+    mock_prisma.disconnect.return_value = None
+    
+    # Mock the Prisma class constructor
+    with patch("litellm.proxy.db.prisma_client.Prisma") as mock_prisma_class:
+        mock_new_prisma = AsyncMock()
+        mock_prisma_class.return_value = mock_new_prisma
+        
+        # Call the method
+        await wrapper.recreate_prisma_client("postgresql://new:new@localhost:5432/new")
+        
+        # Verify that disconnect was called
+        mock_prisma.disconnect.assert_called_once()
+
+        # Verify that a new Prisma client was created and connected
+        mock_prisma_class.assert_called_once()
+        mock_new_prisma.connect.assert_called_once()
+        
+        # Verify that the new client replaced the original
+        assert wrapper._original_prisma == mock_new_prisma
