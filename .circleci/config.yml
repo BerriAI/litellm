@@ -925,6 +925,7 @@ jobs:
           command: |
             pwd
             ls
+            prisma generate
             python -m pytest -vv tests/enterprise --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit-enterprise.xml --durations=10 -n 8
           no_output_timeout: 120m
       - run:
