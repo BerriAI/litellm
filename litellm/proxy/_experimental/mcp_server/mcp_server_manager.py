@@ -440,89 +440,103 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
-        # Use protocol version from request if provided, otherwise use server's default
         protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
-        
         client = None
+        
         try:
-            # Use protocol version from request if provided, otherwise use server's default
-            protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 protocol_version=protocol_version,
             )
 
-            # Create a task for the client operations to ensure proper cancellation handling
-            async def _list_tools_task():
-                try:
-                    # Don't use context manager to avoid stream closure issues
-                    await client.connect()
-                    tools = await client.list_tools()
-                    verbose_logger.debug(f"Tools from {server.name}: {tools}")
-                    return tools
-                except asyncio.CancelledError:
-                    verbose_logger.warning(f"Client operation cancelled for {server.name}")
-                    return []
-                except Exception as e:
-                    verbose_logger.warning(f"Client operation failed for {server.name}: {str(e)}")
-                    return []
-                finally:
-                    try:
-                        await client.disconnect()
-                    except Exception:
-                        pass
-
-            try:
-                # Add timeout to prevent hanging
-                tools = await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-
-                # Create new tools with prefixed names
-                prefixed_tools = []
-                for tool in tools:
-                    # Always use alias for prefixing if present
-                    prefix = get_server_prefix(server)
-                    prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
-
-                    # Create new tool with prefixed name
-                    prefixed_tool = MCPTool(
-                        name=prefixed_name,
-                        description=tool.description,
-                        inputSchema=tool.inputSchema
-                    )
-                    prefixed_tools.append(prefixed_tool)
-
-                    # Update tool to server mapping with both original and prefixed names
-                    self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
-
-                verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
-                return prefixed_tools
-            except asyncio.TimeoutError:
-                verbose_logger.warning(f"Timeout while listing tools from {server.name}")
-                # Don't re-raise the exception, just return empty list
-                return []
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Task cancelled while listing tools from {server.name}")
-                # Don't re-raise cancellation, just return empty list
-                return []
-            except ConnectionError as e:
-                verbose_logger.warning(f"Connection error while listing tools from {server.name}: {str(e)}")
-                # Don't re-raise the exception, just return empty list
-                return []
-            except Exception as e:
-                verbose_logger.warning(f"Error listing tools from {server.name}: {str(e)}")
-                # Don't re-raise the exception, just return empty list
-                return []
+            tools = await self._fetch_tools_with_timeout(client, server.name)
+            return self._create_prefixed_tools(tools, server)
+            
         except Exception as e:
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
-            return []  # Return empty list on failure
+            return []
         finally:
             if client:
                 try:
                     await client.disconnect()
                 except Exception:
                     pass
+
+    async def _fetch_tools_with_timeout(self, client: MCPClient, server_name: str) -> List[MCPTool]:
+        """
+        Fetch tools from MCP client with timeout and error handling.
+        
+        Args:
+            client: MCP client instance
+            server_name: Name of the server for logging
+            
+        Returns:
+            List of tools from the server
+        """
+        async def _list_tools_task():
+            try:
+                await client.connect()
+                tools = await client.list_tools()
+                verbose_logger.debug(f"Tools from {server_name}: {tools}")
+                return tools
+            except asyncio.CancelledError:
+                verbose_logger.warning(f"Client operation cancelled for {server_name}")
+                return []
+            except Exception as e:
+                verbose_logger.warning(f"Client operation failed for {server_name}: {str(e)}")
+                return []
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
+        try:
+            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
+        except asyncio.TimeoutError:
+            verbose_logger.warning(f"Timeout while listing tools from {server_name}")
+            return []
+        except asyncio.CancelledError:
+            verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
+            return []
+        except ConnectionError as e:
+            verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
+            return []
+        except Exception as e:
+            verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
+            return []
+
+    def _create_prefixed_tools(self, tools: List[MCPTool], server: MCPServer) -> List[MCPTool]:
+        """
+        Create prefixed tools and update tool mapping.
+        
+        Args:
+            tools: List of original tools from server
+            server: Server instance
+            
+        Returns:
+            List of tools with prefixed names
+        """
+        prefixed_tools = []
+        prefix = get_server_prefix(server)
+        
+        for tool in tools:
+            prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
+
+            prefixed_tool = MCPTool(
+                name=prefixed_name,
+                description=tool.description,
+                inputSchema=tool.inputSchema
+            )
+            prefixed_tools.append(prefixed_tool)
+
+            # Update tool to server mapping with both original and prefixed names
+            self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
+            self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
+
+        verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
+        return prefixed_tools
 
     async def call_tool(
             self,

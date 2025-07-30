@@ -181,7 +181,7 @@ if MCP_AVAILABLE:
                 f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
             # Get mcp_servers from context variable
-            verbose_logger.debug(f"MCP list_tools - Calling _list_mcp_tools")
+            verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
             tools = await _list_mcp_tools(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
