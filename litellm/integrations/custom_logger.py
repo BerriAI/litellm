@@ -11,7 +11,6 @@ from typing import (
     Optional,
     Tuple,
     Union,
-    cast,
 )
 
 from pydantic import BaseModel
