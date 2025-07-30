@@ -489,21 +489,21 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com",
+                    "api_base": "https://us.api.openai.com",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com-2",
+                    "api_base": "https://us.api.openai.com-2",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com-3",
+                    "api_base": "https://us.api.openai.com-3",
                 },
             },
         ],
@@ -582,21 +582,21 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com",
+                    "api_base": "https://us.api.openai.com",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com-2",
+                    "api_base": "https://us.api.openai.com-2",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com-3",
+                    "api_base": "https://us.api.openai.com-3",
                 },
             },
         ],
@@ -680,21 +680,21 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com",
+                    "api_base": "https://us.api.openai.com",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com-2",
+                    "api_base": "https://us.api.openai.com-2",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_base": "https://api.openai.com-3",
+                    "api_base": "https://us.api.openai.com-3",
                 },
             },
         ],

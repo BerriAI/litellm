@@ -207,7 +207,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
     ):
         request = httpx.Request(
             method="POST",
-            url="https://api.openai.com/v1",
+            url="https://us.api.openai.com/v1",
         )
         super().__init__(
             request=request
@@ -344,7 +344,7 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=message,
@@ -390,7 +390,7 @@ class RejectedRequestError(BadRequestError):  # type: ignore
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
         self.request_data = request_data
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
@@ -432,7 +432,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=self.message,
@@ -572,7 +572,7 @@ class APIError(openai.APIError):  # type: ignore
         self.max_retries = max_retries
         self.num_retries = num_retries
         if request is None:
-            request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+            request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)  # type: ignore
 
     def __str__(self):
@@ -609,7 +609,7 @@ class APIConnectionError(openai.APIConnectionError):  # type: ignore
         self.model = model
         self.status_code = 500
         self.litellm_debug_info = litellm_debug_info
-        self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        self.request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(message=self.message, request=self.request)
@@ -645,7 +645,7 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
         self.message = "litellm.APIResponseValidationError: {}".format(message)
         self.llm_provider = llm_provider
         self.model = model
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         response = httpx.Response(status_code=500, request=request)
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
@@ -792,7 +792,7 @@ class MockException(openai.APIError):
         self.max_retries = max_retries
         self.num_retries = num_retries
         if request is None:
-            request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+            request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         super().__init__(self.message, request=request, body=None)  # type: ignore
 
 

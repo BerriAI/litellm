@@ -46,7 +46,7 @@
                     "hidden_params": {
                         "model_id": null,
                         "cache_key": null,
-                        "api_base": "https://api.openai.com",
+                        "api_base": "https://us.api.openai.com",
                         "response_cost": 5.4999999999999995e-05,
                         "additional_headers": {},
                         "litellm_overhead_time_ms": null

@@ -147,7 +147,7 @@ litellm_settings:
 Use the OpenAI Responses API to connect to your LiteLLM MCP server:
 
 ```bash title="cURL Example" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'https://us.api.openai.com/v1/responses' \
 --header 'Content-Type: application/json' \
 --header "Authorization: Bearer $OPENAI_API_KEY" \
 --data '{
@@ -281,7 +281,7 @@ LiteLLM Proxy supports URL-based namespacing for MCP servers using the format `/
 <TabItem value="openai" label="OpenAI API">
 
 ```bash title="cURL Example with URL Namespacing" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'https://us.api.openai.com/v1/responses' \
 --header 'Content-Type: application/json' \
 --header "Authorization: Bearer $OPENAI_API_KEY" \
 --data '{
@@ -380,7 +380,7 @@ The header accepts a comma-separated list of server aliases: `"alias_1,Server2,S
 <TabItem value="openai" label="OpenAI API">
 
 ```bash title="cURL Example with Header Namespacing" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'https://us.api.openai.com/v1/responses' \
 --header 'Content-Type: application/json' \
 --header "Authorization: Bearer $OPENAI_API_KEY" \
 --data '{
@@ -474,7 +474,7 @@ This configuration in Cursor IDE settings will limit tool access to only the spe
 <TabItem value="openai" label="OpenAI API">
 
 ```bash title="cURL Example with Server Segregation" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'https://us.api.openai.com/v1/responses' \
 --header 'Content-Type: application/json' \
 --header "Authorization: Bearer $OPENAI_API_KEY" \
 --data '{
@@ -655,7 +655,7 @@ You can also specify your MCP auth token using the header `x-mcp-auth`. This wil
 Use the OpenAI Responses API and include server-specific auth headers:
 
 ```bash title="cURL Example with Server-Specific Auth" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'https://us.api.openai.com/v1/responses' \
 --header 'Content-Type: application/json' \
 --header "Authorization: Bearer $OPENAI_API_KEY" \
 --data '{
@@ -683,7 +683,7 @@ curl --location 'https://api.openai.com/v1/responses' \
 Use the OpenAI Responses API and include the `x-mcp-auth` header for your MCP server authentication:
 
 ```bash title="cURL Example with Legacy MCP Auth" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'https://us.api.openai.com/v1/responses' \
 --header 'Content-Type: application/json' \
 --header "Authorization: Bearer $OPENAI_API_KEY" \
 --data '{

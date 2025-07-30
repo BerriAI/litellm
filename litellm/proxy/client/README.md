@@ -76,7 +76,7 @@ client.models.add(
     model_name="gpt-4",
     litellm_params={
         "api_key": "your-openai-key",
-        "api_base": "https://api.openai.com/v1"
+        "api_base": "https://us.api.openai.com/v1"
     }
 )
 
@@ -207,7 +207,7 @@ response = client.http.request(
         "litellm_params": {
             "model": "gpt-4",
             "api_key": "your-api-key",
-            "api_base": "https://api.openai.com/v1"
+            "api_base": "https://us.api.openai.com/v1"
         },
         "mode": "chat"
     }

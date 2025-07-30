@@ -79,7 +79,7 @@ def get_error_message(error_obj) -> Optional[str]:
 
     Example:
     {
-        'request': "<Request('POST', 'https://api.openai.com/v1/chat/completions')>",
+        'request': "<Request('POST', 'https://us.api.openai.com/v1/chat/completions')>",
         'message': "Error code: 400 - {\'error\': {\'message\': \"Invalid 'temperature': decimal above maximum value. Expected a value <= 2, but got 200 instead.\", 'type': 'invalid_request_error', 'param': 'temperature', 'code': 'decimal_above_max_value'}}",
         'body': {
             'message': "Invalid 'temperature': decimal above maximum value. Expected a value <= 2, but got 200 instead.",
@@ -430,7 +430,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif "Mistral API raised a streaming error" in error_str:
                     exception_mapping_worked = True
                     _request = httpx.Request(
-                        method="POST", url="https://api.openai.com/v1"
+                        method="POST", url="https://us.api.openai.com/v1"
                     )
                     raise APIError(
                         status_code=500,
@@ -542,7 +542,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         litellm_debug_info=extra_information,
                         request=httpx.Request(
-                            method="POST", url="https://api.openai.com/v1/"
+                            method="POST", url="https://us.api.openai.com/v1/"
                         ),
                     )
             elif (
@@ -976,7 +976,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             response=httpx.Response(
                                 status_code=500,
                                 request=httpx.Request(
-                                    method="POST", url="https://api.openai.com/v1/"
+                                    method="POST", url="https://us.api.openai.com/v1/"
                                 ),
                             ),
                         )
@@ -1092,7 +1092,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             response=httpx.Response(
                                 status_code=500,
                                 request=httpx.Request(
-                                    method="POST", url="https://api.openai.com/v1/"
+                                    method="POST", url="https://us.api.openai.com/v1/"
                                 ),
                             ),
                         )
@@ -2247,7 +2247,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         litellm_debug_info=extra_information,
                         request=httpx.Request(
-                            method="POST", url="https://api.openai.com/v1/"
+                            method="POST", url="https://us.api.openai.com/v1/"
                         ),
                     )
         if (
@@ -2281,7 +2281,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(
-                        method="POST", url="https://api.openai.com/v1/"
+                        method="POST", url="https://us.api.openai.com/v1/"
                     ),  # stub the request
                 )
     except Exception as e:

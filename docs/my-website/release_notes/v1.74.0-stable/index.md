@@ -65,7 +65,7 @@ This is useful when you want to point MCP clients to specific MCP Servers on Lit
 <TabItem value="openai" label="OpenAI API">
 
 ```bash title="cURL Example with Server Segregation" showLineNumbers
-curl --location 'https://api.openai.com/v1/responses' \
+curl --location 'https://us.api.openai.com/v1/responses' \
 --header 'Content-Type: application/json' \
 --header "Authorization: Bearer $OPENAI_API_KEY" \
 --data '{

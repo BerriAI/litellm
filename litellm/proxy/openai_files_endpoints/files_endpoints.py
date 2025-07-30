@@ -208,7 +208,7 @@ async def create_file(
 ):
     """
     Upload a file that can be used across - Assistants API, Batch API 
-    This is the equivalent of POST https://api.openai.com/v1/files
+    This is the equivalent of POST https://us.api.openai.com/v1/files
 
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/files/create
 
@@ -387,7 +387,7 @@ async def get_file_content(
 ):
     """
     Returns information about a specific file. that can be used across - Assistants API, Batch API 
-    This is the equivalent of GET https://api.openai.com/v1/files/{file_id}/content
+    This is the equivalent of GET https://us.api.openai.com/v1/files/{file_id}/content
 
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/files/retrieve-contents
 
@@ -568,7 +568,7 @@ async def get_file(
 ):
     """
     Returns information about a specific file. that can be used across - Assistants API, Batch API 
-    This is the equivalent of GET https://api.openai.com/v1/files/{file_id}
+    This is the equivalent of GET https://us.api.openai.com/v1/files/{file_id}
 
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/files/retrieve
 
@@ -708,7 +708,7 @@ async def delete_file(
 ):
     """
     Deletes a specified file. that can be used across - Assistants API, Batch API 
-    This is the equivalent of DELETE https://api.openai.com/v1/files/{file_id}
+    This is the equivalent of DELETE https://us.api.openai.com/v1/files/{file_id}
 
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/files/delete
 
@@ -860,7 +860,7 @@ async def list_files(
 ):
     """
     Returns information about a specific file. that can be used across - Assistants API, Batch API 
-    This is the equivalent of GET https://api.openai.com/v1/files/
+    This is the equivalent of GET https://us.api.openai.com/v1/files/
 
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/files/list
 

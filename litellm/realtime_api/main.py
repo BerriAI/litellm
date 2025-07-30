@@ -116,7 +116,7 @@ async def _arealtime(
             dynamic_api_base
             or litellm_params.api_base
             or litellm.api_base
-            or "https://api.openai.com/"
+            or "https://us.api.openai.com/"
         )
         # set API KEY
         api_key = (
@@ -173,7 +173,7 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", query_params=RealtimeQueryParams(model=model)
+            api_base=api_base or "https://us.api.openai.com/", query_params=RealtimeQueryParams(model=model)
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

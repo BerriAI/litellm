@@ -3823,7 +3823,7 @@ def test_streaming_api_base():
         messages=[{"role": "user", "content": "Hey"}],
         stream=True,
     )
-    assert "https://api.openai.com" in stream._hidden_params["api_base"]
+    assert "https://us.api.openai.com" in stream._hidden_params["api_base"]
 
 
 def test_mock_response_iterator_tool_use():

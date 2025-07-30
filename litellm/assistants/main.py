@@ -112,7 +112,7 @@ def get_assistants(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization
@@ -317,7 +317,7 @@ def create_assistants(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization
@@ -494,7 +494,7 @@ def delete_assistant(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization
@@ -683,7 +683,7 @@ def create_thread(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization
@@ -839,7 +839,7 @@ def get_thread(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization
@@ -1028,7 +1028,7 @@ def add_message(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization
@@ -1190,7 +1190,7 @@ def get_messages(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization
@@ -1389,7 +1389,7 @@ def run_thread(
             or litellm.api_base
             or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
         organization = (
             optional_params.organization

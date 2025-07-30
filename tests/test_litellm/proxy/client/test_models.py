@@ -183,7 +183,7 @@ def test_client_without_api_key(base_url):
 def test_new_request_creation(client, base_url, api_key):
     """Test that new creates a request with correct URL, headers, and body when return_request=True"""
     model_name = "gpt-4"
-    model_params = {"model": "openai/gpt-4", "api_base": "https://api.openai.com/v1"}
+    model_params = {"model": "openai/gpt-4", "api_base": "https://us.api.openai.com/v1"}
     model_info = {"description": "GPT-4 model", "metadata": {"version": "1.0"}}
 
     request = client.new(
@@ -212,7 +212,7 @@ def test_new_request_creation(client, base_url, api_key):
 def test_new_without_model_info(client):
     """Test that new works correctly without optional model_info"""
     model_name = "gpt-4"
-    model_params = {"model": "openai/gpt-4", "api_base": "https://api.openai.com/v1"}
+    model_params = {"model": "openai/gpt-4", "api_base": "https://us.api.openai.com/v1"}
 
     request = client.new(
         model_name=model_name, model_params=model_params, return_request=True
@@ -389,7 +389,7 @@ def test_info_success(client):
                 "model_info": {"id": "model-123", "description": "GPT-4 model"},
                 "litellm_params": {
                     "model": "openai/gpt-4",
-                    "api_base": "https://api.openai.com/v1",
+                    "api_base": "https://us.api.openai.com/v1",
                 },
             },
             {
@@ -498,7 +498,7 @@ def test_get_success_by_id(client):
                 "model_info": {"id": model_id},
                 "litellm_params": {
                     "model": "openai/gpt-4",
-                    "api_base": "https://api.openai.com/v1",
+                    "api_base": "https://us.api.openai.com/v1",
                 },
             },
         ]
@@ -601,7 +601,7 @@ def test_get_server_error(client):
 def test_update_request_creation(client, base_url, api_key):
     """Test that update creates a request with correct URL, headers, and body when return_request=True"""
     model_id = "model-123"
-    model_params = {"model": "openai/gpt-4", "api_base": "https://api.openai.com/v1"}
+    model_params = {"model": "openai/gpt-4", "api_base": "https://us.api.openai.com/v1"}
     model_info = {"description": "Updated GPT-4 model", "metadata": {"version": "2.0"}}
 
     request = client.update(
@@ -630,7 +630,7 @@ def test_update_request_creation(client, base_url, api_key):
 def test_update_without_model_info(client):
     """Test that update works correctly without optional model_info"""
     model_id = "model-123"
-    model_params = {"model": "openai/gpt-4", "api_base": "https://api.openai.com/v1"}
+    model_params = {"model": "openai/gpt-4", "api_base": "https://us.api.openai.com/v1"}
 
     request = client.update(
         model_id=model_id, model_params=model_params, return_request=True

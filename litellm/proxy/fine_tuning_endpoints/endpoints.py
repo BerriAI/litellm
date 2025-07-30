@@ -80,7 +80,7 @@ async def create_fine_tuning_job(
 ):
     """
     Creates a fine-tuning job which begins the process of creating a new model from a given dataset.
-    This is the equivalent of POST https://api.openai.com/v1/fine_tuning/jobs
+    This is the equivalent of POST https://us.api.openai.com/v1/fine_tuning/jobs
 
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/fine-tuning/create
 
@@ -240,7 +240,7 @@ async def retrieve_fine_tuning_job(
 ):
     """
     Retrieves a fine-tuning job.
-    This is the equivalent of GET https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}
+    This is the equivalent of GET https://us.api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}
 
     Supported Query Params:
     - `custom_llm_provider`: Name of the LiteLLM provider
@@ -399,7 +399,7 @@ async def list_fine_tuning_jobs(
 ):
     """
     Lists fine-tuning jobs for the organization.
-    This is the equivalent of GET https://api.openai.com/v1/fine_tuning/jobs
+    This is the equivalent of GET https://us.api.openai.com/v1/fine_tuning/jobs
 
     Supported Query Params:
     - `custom_llm_provider`: Name of the LiteLLM provider
@@ -529,7 +529,7 @@ async def cancel_fine_tuning_job(
     """
     Cancel a fine-tuning job.
 
-    This is the equivalent of POST https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel
+    This is the equivalent of POST https://us.api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel
 
     Supported Query Params:
     - `custom_llm_provider`: Name of the LiteLLM provider

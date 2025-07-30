@@ -86,7 +86,7 @@ Options:
 Example:
 
 ```bash
-litellm-proxy models add gpt-4 -p api_key=sk-123 -p api_base=https://api.openai.com -i description="GPT-4 model"
+litellm-proxy models add gpt-4 -p api_key=sk-123 -p api_base=https://us.api.openai.com -i description="GPT-4 model"
 ```
 
 #### Get Model Info

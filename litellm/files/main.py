@@ -58,7 +58,7 @@ async def acreate_file(
     """
     Async: Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
-    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    LiteLLM Equivalent of POST: POST https://us.api.openai.com/v1/files
     """
     try:
         loop = asyncio.get_event_loop()
@@ -102,7 +102,7 @@ def create_file(
     """
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
-    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    LiteLLM Equivalent of POST: POST https://us.api.openai.com/v1/files
 
     Specify either provider_list or custom_llm_provider.
     """
@@ -167,7 +167,7 @@ def create_file(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization
@@ -278,7 +278,7 @@ async def afile_retrieve(
     """
     Async: Get file contents
 
-    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    LiteLLM Equivalent of GET https://us.api.openai.com/v1/files
     """
     try:
         loop = asyncio.get_event_loop()
@@ -318,7 +318,7 @@ def file_retrieve(
     """
     Returns the contents of the specified file.
 
-    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    LiteLLM Equivalent of POST: POST https://us.api.openai.com/v1/files
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -347,7 +347,7 @@ def file_retrieve(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization
@@ -432,7 +432,7 @@ async def afile_delete(
     """
     Async: Delete file
 
-    LiteLLM Equivalent of DELETE https://api.openai.com/v1/files
+    LiteLLM Equivalent of DELETE https://us.api.openai.com/v1/files
     """
     try:
         loop = asyncio.get_event_loop()
@@ -472,7 +472,7 @@ def file_delete(
     """
     Delete file
 
-    LiteLLM Equivalent of DELETE https://api.openai.com/v1/files
+    LiteLLM Equivalent of DELETE https://us.api.openai.com/v1/files
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -501,7 +501,7 @@ def file_delete(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization
@@ -587,7 +587,7 @@ async def afile_list(
     """
     Async: List files
 
-    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    LiteLLM Equivalent of GET https://us.api.openai.com/v1/files
     """
     try:
         loop = asyncio.get_event_loop()
@@ -627,7 +627,7 @@ def file_list(
     """
     List files
 
-    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    LiteLLM Equivalent of GET https://us.api.openai.com/v1/files
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -655,7 +655,7 @@ def file_list(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization
@@ -739,7 +739,7 @@ async def afile_content(
     """
     Async: Get file contents
 
-    LiteLLM Equivalent of GET https://api.openai.com/v1/files
+    LiteLLM Equivalent of GET https://us.api.openai.com/v1/files
     """
     try:
         loop = asyncio.get_event_loop()
@@ -784,7 +784,7 @@ def file_content(
     """
     Returns the contents of the specified file.
 
-    LiteLLM Equivalent of POST: POST https://api.openai.com/v1/files
+    LiteLLM Equivalent of POST: POST https://us.api.openai.com/v1/files
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -829,7 +829,7 @@ def file_content(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization

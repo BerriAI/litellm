@@ -662,7 +662,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             str: The complete URL for the API call.
         """
         if api_base is None:
-            api_base = "https://api.openai.com"
+            api_base = "https://us.api.openai.com"
         endpoint = "chat/completions"
 
         # Remove trailing slash from api_base if present
@@ -701,7 +701,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
 
         if api_base is None:
-            api_base = "https://api.openai.com"
+            api_base = "https://us.api.openai.com"
         if api_key is None:
             api_key = get_secret_str("OPENAI_API_KEY")
 
@@ -732,7 +732,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             or litellm.api_base
             or get_secret_str("OPENAI_BASE_URL")
             or get_secret_str("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
 
     @staticmethod

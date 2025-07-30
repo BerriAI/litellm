@@ -112,7 +112,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Expect to see the following response header when this works
 ```shell
-x-litellm-model-api-base: https://api.openai.com
+x-litellm-model-api-base: https://us.api.openai.com
 ```
 
 Response

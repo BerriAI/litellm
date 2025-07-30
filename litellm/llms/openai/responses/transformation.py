@@ -123,7 +123,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             or litellm.api_base
             or get_secret_str("OPENAI_BASE_URL")
             or get_secret_str("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )
 
         # Remove trailing slashes

@@ -205,7 +205,7 @@ def test_is_langfuse_route():
 
     # Test negative cases
     assert (
-        handler.is_langfuse_route("https://api.openai.com/v1/chat/completions") == False
+        handler.is_langfuse_route("https://us.api.openai.com/v1/chat/completions") == False
     )
     assert (
         handler.is_langfuse_route("http://localhost:4000/anthropic/v1/messages")

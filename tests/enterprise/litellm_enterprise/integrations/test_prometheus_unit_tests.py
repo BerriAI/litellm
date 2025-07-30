@@ -281,13 +281,13 @@ async def test_router_cooldown_event_callback():
     assert prometheus_logger.deployment_complete_outages[0] == [
         "gpt-3.5-turbo",
         "test-model-id",
-        "https://api.openai.com",
+        "https://us.api.openai.com",
         "openai",
     ]
     assert prometheus_logger.deployment_cooled_downs[0] == [
         "gpt-3.5-turbo",
         "test-model-id",
-        "https://api.openai.com",
+        "https://us.api.openai.com",
         "openai",
         "429",
     ]

@@ -21,8 +21,8 @@ class OpenAIModerationGuardrailConfigModel(BaseOpenAIModerationGuardrailConfigMo
     )
     
     api_base: Optional[str] = Field(
-        default="https://api.openai.com/v1",
-        description="OpenAI API base URL. Defaults to 'https://api.openai.com/v1'.",
+        default="https://us.api.openai.com/v1",
+        description="OpenAI API base URL. Defaults to 'https://us.api.openai.com/v1'.",
     )
 
     

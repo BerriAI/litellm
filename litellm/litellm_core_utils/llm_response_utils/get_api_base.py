@@ -114,6 +114,6 @@ def get_api_base(
             )
         return _api_base
     elif custom_llm_provider == "openai":
-        _api_base = "https://api.openai.com"
+        _api_base = "https://us.api.openai.com"
         return _api_base
     return None

@@ -367,7 +367,7 @@ const MCPConnect: React.FC<MCPConnectProps> = ({ currentServerAccessGroups = [] 
           accessGroups={["dev"]}
         >
           <CodeBlock
-            code={`curl --location 'https://api.openai.com/v1/responses' \\
+            code={`curl --location 'https://us.api.openai.com/v1/responses' \\
 --header 'Content-Type: application/json' \\
 --header "Authorization: Bearer $OPENAI_API_KEY" \\
 --data '{

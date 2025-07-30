@@ -36,13 +36,13 @@ model_list:
     litellm_params:
       model: openai/codex-mini
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
+      api_base: https://us.api.openai.com/v1
   
   - model_name: o3-pro
     litellm_params:
       model: openai/o3-pro
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
+      api_base: https://us.api.openai.com/v1
 
 litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
@@ -132,13 +132,13 @@ model_list:
     litellm_params:
       model: openai/codex-mini
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
+      api_base: https://us.api.openai.com/v1
   
   - model_name: o3-pro
     litellm_params:
       model: openai/o3-pro
       api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
+      api_base: https://us.api.openai.com/v1
 
   # Standard models
   - model_name: gpt-4o

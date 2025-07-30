@@ -155,7 +155,7 @@ class TestBaseOpenAIPassThroughHandler:
             request=mock_request,
             fastapi_response=mock_response,
             user_api_key_dict=mock_user_api_key_dict,
-            base_target_url="https://api.openai.com",
+            base_target_url="https://us.api.openai.com",
             api_key="test_api_key",
             custom_llm_provider=litellm.LlmProviders.OPENAI.value,
         )
@@ -171,7 +171,7 @@ class TestBaseOpenAIPassThroughHandler:
         )
         print(f"create_pass_through_route called with target: {call_args['target']}")
         assert call_args["endpoint"] == "/chat/completions"
-        assert call_args["target"] == "https://api.openai.com/v1/chat/completions"
+        assert call_args["target"] == "https://us.api.openai.com/v1/chat/completions"
 
         # Verify endpoint_func was called with correct parameters
         print("Verifying endpoint_func call parameters...")

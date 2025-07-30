@@ -358,7 +358,7 @@ async def test_output_file_id_for_batch_retrieve():
 
     batch._hidden_params = {
         "litellm_call_id": "dcd789e0-c0ad-4244-9564-4e611448d650",
-        "api_base": "https://api.openai.com",
+        "api_base": "https://us.api.openai.com",
         "model_id": "12345679",
         "response_cost": 0.0,
         "additional_headers": {},

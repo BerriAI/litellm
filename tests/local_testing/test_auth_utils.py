@@ -24,12 +24,12 @@ from litellm.router import Router
     [
         ("api_base", {"api_base": "http://dummy.com"}, True),
         (
-            {"api_base": "https://api.openai.com/v1"},
-            {"api_base": "https://api.openai.com/v1"},
+            {"api_base": "https://us.api.openai.com/v1"},
+            {"api_base": "https://us.api.openai.com/v1"},
             True,
         ),  # should return True
         (
-            {"api_base": "https://api.openai.com/v1"},
+            {"api_base": "https://us.api.openai.com/v1"},
             {"api_base": "https://api.anthropic.com/v1"},
             False,
         ),  # should return False

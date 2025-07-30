@@ -58,7 +58,7 @@ def test_router_multi_org_list():
                 "litellm_params": {
                     "model": "openai/*",
                     "api_key": "my-key",
-                    "api_base": "https://api.openai.com/v1",
+                    "api_base": "https://us.api.openai.com/v1",
                     "organization": ["org-1", "org-2", "org-3"],
                 },
             }
@@ -82,7 +82,7 @@ async def test_router_provider_wildcard_routing():
                 "litellm_params": {
                     "model": "openai/*",
                     "api_key": os.environ["OPENAI_API_KEY"],
-                    "api_base": "https://api.openai.com/v1",
+                    "api_base": "https://us.api.openai.com/v1",
                 },
             },
             {

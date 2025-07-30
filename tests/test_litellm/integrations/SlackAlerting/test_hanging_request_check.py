@@ -56,14 +56,14 @@ class TestAlertingHangingRequestCheck:
         request_data = {
             "litellm_call_id": "test_request_123",
             "model": "gpt-4",
-            "deployment": {"litellm_params": {"api_base": "https://api.openai.com/v1"}},
+            "deployment": {"litellm_params": {"api_base": "https://us.api.openai.com/v1"}},
             "metadata": {
                 "user_api_key_alias": "test_key",
                 "user_api_key_team_alias": "test_team",
             },
         }
 
-        with patch("litellm.get_api_base", return_value="https://api.openai.com/v1"):
+        with patch("litellm.get_api_base", return_value="https://us.api.openai.com/v1"):
             await hanging_request_checker.add_request_to_hanging_request_check(
                 request_data
             )
@@ -79,7 +79,7 @@ class TestAlertingHangingRequestCheck:
         assert isinstance(cached_data, HangingRequestData)
         assert cached_data.request_id == "test_request_123"
         assert cached_data.model == "gpt-4"
-        assert cached_data.api_base == "https://api.openai.com/v1"
+        assert cached_data.api_base == "https://us.api.openai.com/v1"
 
     @pytest.mark.asyncio
     async def test_add_request_to_hanging_request_check_none_request_data(
@@ -131,7 +131,7 @@ class TestAlertingHangingRequestCheck:
         hanging_request_data = HangingRequestData(
             request_id="test_hanging_request",
             model="gpt-4",
-            api_base="https://api.openai.com/v1",
+            api_base="https://us.api.openai.com/v1",
             key_alias="test_key",
             team_alias="test_team",
         )
@@ -147,7 +147,7 @@ class TestAlertingHangingRequestCheck:
 
         assert "Requests are hanging - 300s+ request time" in message
         assert "Request Model: `gpt-4`" in message
-        assert "API Base: `https://api.openai.com/v1`" in message
+        assert "API Base: `https://us.api.openai.com/v1`" in message
         assert "Key Alias: `test_key`" in message
         assert "Team Alias: `test_team`" in message
         assert call_args[1]["level"] == "Medium"
@@ -178,7 +178,7 @@ class TestAlertingHangingRequestCheck:
         hanging_data = HangingRequestData(
             request_id="completed_request_789",
             model="gpt-4",
-            api_base="https://api.openai.com/v1",
+            api_base="https://us.api.openai.com/v1",
         )
         await hanging_request_checker.hanging_request_cache.async_set_cache(
             key="completed_request_789", value=hanging_data, ttl=300
@@ -212,7 +212,7 @@ class TestAlertingHangingRequestCheck:
         hanging_data = HangingRequestData(
             request_id="hanging_request_999",
             model="gpt-4",
-            api_base="https://api.openai.com/v1",
+            api_base="https://us.api.openai.com/v1",
             key_alias="test_key",
             team_alias="test_team",
         )

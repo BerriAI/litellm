@@ -33,7 +33,7 @@ async def test_route_request_dynamic_credentials(route_type):
     data = {
         "model": "openai/gpt-4o-mini-2024-07-18",
         "api_key": "my-bad-key",
-        "api_base": "https://api.openai.com/v1 ",
+        "api_base": "https://us.api.openai.com/v1 ",
     }
     llm_router = MagicMock()
     # Ensure that the dynamic method exists on the llm_router mock.

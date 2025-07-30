@@ -178,7 +178,7 @@ def image_generation(  # noqa: PLR0915
         Coroutine[Any, Any, ImageResponse],
     ]:
     """
-    Maps the https://api.openai.com/v1/images/generations endpoint.
+    Maps the https://us.api.openai.com/v1/images/generations endpoint.
 
     Currently supports just Azure + OpenAI.
     """

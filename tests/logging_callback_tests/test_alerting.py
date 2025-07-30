@@ -43,7 +43,7 @@ from litellm.utils import get_api_base
     "model, optional_params, expected_api_base",
     [
         ("openai/my-fake-model", {"api_base": "my-fake-api-base"}, "my-fake-api-base"),
-        ("gpt-3.5-turbo", {}, "https://api.openai.com"),
+        ("gpt-3.5-turbo", {}, "https://us.api.openai.com"),
     ],
 )
 def test_get_api_base_unit_test(model, optional_params, expected_api_base):

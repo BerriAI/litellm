@@ -41,7 +41,7 @@ def create_standard_logging_payload_with_cache() -> StandardLoggingPayload:
         model="gpt-4",
         model_id="model-123",
         model_group="openai-gpt",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         metadata=StandardLoggingMetadata(
             user_api_key_hash="test_hash",
             user_api_key_org_id=None,
@@ -66,7 +66,7 @@ def create_standard_logging_payload_with_cache() -> StandardLoggingPayload:
         hidden_params=StandardLoggingHiddenParams(
             model_id="model-123",
             cache_key="test-cache-key-789",
-            api_base="https://api.openai.com",
+            api_base="https://us.api.openai.com",
             response_cost="0.05",
             additional_headers=None,
         ),

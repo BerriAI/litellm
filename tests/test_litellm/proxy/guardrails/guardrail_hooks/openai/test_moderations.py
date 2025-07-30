@@ -30,7 +30,7 @@ async def test_openai_moderation_guardrail_init():
         assert guardrail.guardrail_name == "test-openai-moderation"
         assert guardrail.api_key == "test-key"
         assert guardrail.model == "omni-moderation-latest"
-        assert guardrail.api_base == "https://api.openai.com/v1"
+        assert guardrail.api_base == "https://us.api.openai.com/v1"
 
 
 @pytest.mark.asyncio

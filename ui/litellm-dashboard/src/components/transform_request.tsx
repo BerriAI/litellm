@@ -231,7 +231,7 @@ ${formattedBody}
             }}
           >
             {transformedResponse || `curl -X POST \\
-  https://api.openai.com/v1/chat/completions \\
+  https://us.api.openai.com/v1/chat/completions \\
   -H 'Authorization: Bearer sk-xxx' \\
   -H 'Content-Type: application/json' \\
   -d '{

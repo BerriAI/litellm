@@ -124,7 +124,7 @@ print(response)
 ```
 POST Request Sent from LiteLLM:
 curl -X POST \
-https://api.openai.com/v1/ \
+https://us.api.openai.com/v1/ \
 -d '{'model': 'gpt-3.5-turbo', 'messages': <YOUR LANGFUSE PROMPT TEMPLATE>}'
 ```
 

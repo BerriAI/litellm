@@ -872,7 +872,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 status_code=200,
                 headers=response.headers,
                 content=json.dumps(result).encode("utf-8"),
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+                request=httpx.Request(method="POST", url="https://us.api.openai.com/v1"),
             )
         return await async_handler.post(
             url=api_base,
@@ -970,7 +970,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 status_code=200,
                 headers=response.headers,
                 content=json.dumps(result).encode("utf-8"),
-                request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+                request=httpx.Request(method="POST", url="https://us.api.openai.com/v1"),
             )
         return sync_handler.post(
             url=api_base,

@@ -31,7 +31,7 @@ async def test_assistants_passthrough_logging():
     test_custom_logger = TestCustomLogger()
     litellm._async_success_callback = [test_custom_logger]
 
-    TARGET_URL = "https://api.openai.com/v1/assistants"
+    TARGET_URL = "https://us.api.openai.com/v1/assistants"
     REQUEST_BODY = {
         "instructions": "You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
         "name": "Math Tutor",
@@ -95,7 +95,7 @@ async def test_threads_passthrough_logging():
     test_custom_logger = TestCustomLogger()
     litellm._async_success_callback = [test_custom_logger]
 
-    TARGET_URL = "https://api.openai.com/v1/threads"
+    TARGET_URL = "https://us.api.openai.com/v1/threads"
     REQUEST_BODY = {} 
     TARGET_METHOD = "POST"
 

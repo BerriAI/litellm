@@ -36,7 +36,7 @@ class OpenAIError(BaseLLMException):
         if request:
             self.request = request
         else:
-            self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+            self.request = httpx.Request(method="POST", url="https://us.api.openai.com/v1")
         if response:
             self.response = response
         else:

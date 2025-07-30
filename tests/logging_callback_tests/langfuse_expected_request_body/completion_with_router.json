@@ -38,7 +38,7 @@
                     "hidden_params": {
                         "model_id": "0f1cd8f9e6a22e499303d479486395563ea04decade83fe7334dc2f079a857c2",
                         "cache_key": null,
-                        "api_base": "https://api.openai.com",
+                        "api_base": "https://us.api.openai.com",
                         "response_cost": 3.5e-05,
                         "additional_headers": {},
                         "litellm_overhead_time_ms": null,

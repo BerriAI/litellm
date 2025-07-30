@@ -52,7 +52,7 @@ async def create_batch(
 ):
     """
     Create large batches of API requests for asynchronous processing.
-    This is the equivalent of POST https://api.openai.com/v1/batch
+    This is the equivalent of POST https://us.api.openai.com/v1/batch
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/batch
 
     Example Curl
@@ -225,7 +225,7 @@ async def retrieve_batch(
 ):
     """
     Retrieves a batch.
-    This is the equivalent of GET https://api.openai.com/v1/batches/{batch_id}
+    This is the equivalent of GET https://us.api.openai.com/v1/batches/{batch_id}
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/batch/retrieve
 
     Example Curl
@@ -358,7 +358,7 @@ async def list_batches(
 ):
     """
     Lists 
-    This is the equivalent of GET https://api.openai.com/v1/batches/
+    This is the equivalent of GET https://us.api.openai.com/v1/batches/
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/batch/list
 
     Example Curl
@@ -457,7 +457,7 @@ async def cancel_batch(
 ):
     """
     Cancel a batch.
-    This is the equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
+    This is the equivalent of POST https://us.api.openai.com/v1/batches/{batch_id}/cancel
 
     Supports Identical Params as: https://platform.openai.com/docs/api-reference/batch/cancel
 

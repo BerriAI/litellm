@@ -4728,7 +4728,7 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         model_id=str("model-123"),
         model_group=str("openai-gpt"),
         custom_llm_provider=str("openai"),
-        api_base=str("https://api.openai.com"),
+        api_base=str("https://us.api.openai.com"),
         metadata=metadata,
         cache_hit=bool(False),
         cache_key=None,

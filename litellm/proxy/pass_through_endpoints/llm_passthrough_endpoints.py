@@ -1017,7 +1017,7 @@ async def openai_proxy_route(
 
 
     """
-    base_target_url = "https://api.openai.com/"
+    base_target_url = "https://us.api.openai.com/"
     # Add or update query parameters
     openai_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.OPENAI.value,

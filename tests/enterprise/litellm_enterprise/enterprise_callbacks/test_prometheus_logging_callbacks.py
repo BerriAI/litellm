@@ -65,7 +65,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         model_id="model-123",
         model_group="openai-gpt",
         custom_llm_provider="openai",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         metadata=StandardLoggingMetadata(
             user_api_key_hash="test_hash",
             user_api_key_alias="test_alias",
@@ -92,7 +92,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         hidden_params=StandardLoggingHiddenParams(
             model_id="model-123",
             cache_key=None,
-            api_base="https://api.openai.com",
+            api_base="https://us.api.openai.com",
             response_cost="0.1",
             additional_headers=None,
         ),
@@ -639,7 +639,7 @@ async def test_async_log_failure_event(prometheus_logger):
     prometheus_logger.set_deployment_partial_outage.assert_called_once_with(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
     )
 
@@ -647,7 +647,7 @@ async def test_async_log_failure_event(prometheus_logger):
     prometheus_logger.litellm_deployment_failure_responses.labels.assert_called_once_with(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
         exception_status="None",
         exception_class="Exception",
@@ -663,7 +663,7 @@ async def test_async_log_failure_event(prometheus_logger):
     prometheus_logger.litellm_deployment_total_requests.labels.assert_called_once_with(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
         requested_model="openai-gpt",  # passed in standard logging payload
         hashed_api_key="test_hash",
@@ -843,7 +843,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
     prometheus_logger.litellm_remaining_requests_metric.labels.assert_called_once_with(
         model_group="my_custom_model_group",  # model_group / requested model from create_standard_logging_payload()
         api_provider="openai",  # llm provider
-        api_base="https://api.openai.com",  # api base
+        api_base="https://us.api.openai.com",  # api base
         litellm_model_name="gpt-3.5-turbo",  # actual model used - litellm model name
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
@@ -855,7 +855,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
 
     # Verify remaining tokens metric
     prometheus_logger.litellm_remaining_tokens_metric.labels.assert_called_once_with(
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         api_provider="openai",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
@@ -871,7 +871,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
     prometheus_logger.set_deployment_healthy.assert_called_once_with(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
     )
 
@@ -879,7 +879,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
     prometheus_logger.litellm_deployment_success_responses.labels.assert_called_once_with(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
         requested_model="my_custom_model_group",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
@@ -893,7 +893,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
     prometheus_logger.litellm_deployment_total_requests.labels.assert_called_once_with(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
         requested_model="my_custom_model_group",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
@@ -907,7 +907,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
     prometheus_logger.litellm_deployment_latency_per_output_token.labels.assert_called_once_with(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
@@ -915,7 +915,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
     )
     prometheus_logger.litellm_overhead_latency_metric.labels.assert_called_once_with(
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         api_provider="openai",
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
@@ -1010,7 +1010,7 @@ def test_deployment_state_management(prometheus_logger):
     test_params = {
         "litellm_model_name": "gpt-3.5-turbo",
         "model_id": "model-123",
-        "api_base": "https://api.openai.com",
+        "api_base": "https://us.api.openai.com",
         "api_provider": "openai",
     }
 
@@ -1040,13 +1040,13 @@ def test_increment_deployment_cooled_down(prometheus_logger):
     prometheus_logger.increment_deployment_cooled_down(
         litellm_model_name="gpt-3.5-turbo",
         model_id="model-123",
-        api_base="https://api.openai.com",
+        api_base="https://us.api.openai.com",
         api_provider="openai",
         exception_status="429",
     )
 
     prometheus_logger.litellm_deployment_cooled_down.labels.assert_called_once_with(
-        "gpt-3.5-turbo", "model-123", "https://api.openai.com", "openai", "429"
+        "gpt-3.5-turbo", "model-123", "https://us.api.openai.com", "openai", "429"
     )
     prometheus_logger.litellm_deployment_cooled_down.labels().inc.assert_called_once()
 

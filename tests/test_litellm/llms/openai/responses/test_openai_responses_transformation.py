@@ -251,7 +251,7 @@ class TestOpenAIResponsesAPIConfig:
                     litellm_params={},
                 )
 
-                assert result == "https://api.openai.com/v1/responses"
+                assert result == "https://us.api.openai.com/v1/responses"
 
         # Test with trailing slash in API base
         api_base = "https://custom-openai.example.com/v1/"
@@ -323,7 +323,7 @@ class TestTransformListInputItemsRequest:
         self.openai_config = OpenAIResponsesAPIConfig()
         self.azure_config = AzureOpenAIResponsesAPIConfig()
         self.response_id = "resp_abc123"
-        self.api_base = "https://api.openai.com/v1/responses"
+        self.api_base = "https://us.api.openai.com/v1/responses"
         self.litellm_params = GenericLiteLLMParams()
         self.headers = {"Authorization": "Bearer test-key"}
 
@@ -496,7 +496,7 @@ class TestTransformListInputItemsRequest:
         # Mock the provider config
         mock_provider_config = Mock(spec=OpenAIResponsesAPIConfig)
         mock_provider_config.transform_list_input_items_request.return_value = (
-            "https://api.openai.com/v1/responses/resp_123/input_items",
+            "https://us.api.openai.com/v1/responses/resp_123/input_items",
             {"limit": 20, "order": "desc"},
         )
 
@@ -511,7 +511,7 @@ class TestTransformListInputItemsRequest:
         # Execute
         url, params = mock_provider_config.transform_list_input_items_request(
             response_id=response_id,
-            api_base="https://api.openai.com/v1/responses",
+            api_base="https://us.api.openai.com/v1/responses",
             litellm_params=GenericLiteLLMParams(),
             headers={"Authorization": "Bearer test"},
             after="cursor_123",
@@ -522,14 +522,14 @@ class TestTransformListInputItemsRequest:
         # Assert
         mock_provider_config.transform_list_input_items_request.assert_called_once_with(
             response_id=response_id,
-            api_base="https://api.openai.com/v1/responses",
+            api_base="https://us.api.openai.com/v1/responses",
             litellm_params=GenericLiteLLMParams(),
             headers={"Authorization": "Bearer test"},
             after="cursor_123",
             include=["metadata"],
             limit=30,
         )
-        assert url == "https://api.openai.com/v1/responses/resp_123/input_items"
+        assert url == "https://us.api.openai.com/v1/responses/resp_123/input_items"
         assert params == {"limit": 20, "order": "desc"}
 
     @patch("litellm.list_input_items")
@@ -607,11 +607,11 @@ class TestTransformListInputItemsRequest:
         """Test URL construction with different API base formats"""
         test_cases = [
             {
-                "api_base": "https://api.openai.com/v1/responses",
+                "api_base": "https://us.api.openai.com/v1/responses",
                 "expected_suffix": "/resp_abc123/input_items",
             },
             {
-                "api_base": "https://api.openai.com/v1/responses/",  # with trailing slash
+                "api_base": "https://us.api.openai.com/v1/responses/",  # with trailing slash
                 "expected_suffix": "/resp_abc123/input_items",
             },
             {

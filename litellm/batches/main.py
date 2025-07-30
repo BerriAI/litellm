@@ -55,7 +55,7 @@ async def acreate_batch(
     """
     Async: Creates and executes a batch from an uploaded file of request
 
-    LiteLLM Equivalent of POST: https://api.openai.com/v1/batches
+    LiteLLM Equivalent of POST: https://us.api.openai.com/v1/batches
     """
     try:
         loop = asyncio.get_event_loop()
@@ -103,7 +103,7 @@ def create_batch(
     """
     Creates and executes a batch from an uploaded file of request
 
-    LiteLLM Equivalent of POST: https://api.openai.com/v1/batches
+    LiteLLM Equivalent of POST: https://us.api.openai.com/v1/batches
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -159,7 +159,7 @@ def create_batch(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization
@@ -276,7 +276,7 @@ async def aretrieve_batch(
     """
     Async: Retrieves a batch.
 
-    LiteLLM Equivalent of GET https://api.openai.com/v1/batches/{batch_id}
+    LiteLLM Equivalent of GET https://us.api.openai.com/v1/batches/{batch_id}
     """
     try:
         loop = asyncio.get_event_loop()
@@ -318,7 +318,7 @@ def retrieve_batch(
     """
     Retrieves a batch.
 
-    LiteLLM Equivalent of GET https://api.openai.com/v1/batches/{batch_id}
+    LiteLLM Equivalent of GET https://us.api.openai.com/v1/batches/{batch_id}
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -364,7 +364,7 @@ def retrieve_batch(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization
@@ -563,7 +563,7 @@ def list_batches(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization
@@ -642,7 +642,7 @@ async def acancel_batch(
     """
     Async: Cancels a batch.
 
-    LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
+    LiteLLM Equivalent of POST https://us.api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
         loop = asyncio.get_event_loop()
@@ -683,7 +683,7 @@ def cancel_batch(
     """
     Cancels a batch.
 
-    LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
+    LiteLLM Equivalent of POST https://us.api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
@@ -721,7 +721,7 @@ def cancel_batch(
                 or litellm.api_base
                 or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 optional_params.organization

@@ -100,7 +100,7 @@ https://github.com/FastEval/FastEval/pull/90/files
 try:
     api_base = os.environ["OPENAI_BASE_URL"] #changed: read api base from .env
     if api_base == None:
-        api_base = "https://api.openai.com/v1"
+        api_base = "https://us.api.openai.com/v1"
     response = await self.reply_two_attempts_with_different_max_new_tokens(
         conversation=conversation,
         api_base=api_base, # #changed: pass api_base

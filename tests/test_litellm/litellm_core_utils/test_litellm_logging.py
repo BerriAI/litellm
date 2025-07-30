@@ -30,9 +30,9 @@ def logging_obj():
 
 
 def test_get_masked_api_base(logging_obj):
-    api_base = "https://api.openai.com/v1"
+    api_base = "https://us.api.openai.com/v1"
     masked_api_base = logging_obj._get_masked_api_base(api_base)
-    assert masked_api_base == "https://api.openai.com/v1"
+    assert masked_api_base == "https://us.api.openai.com/v1"
     assert type(masked_api_base) == str
 
 

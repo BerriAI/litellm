@@ -597,7 +597,7 @@ def _handle_mock_potential_exceptions(
                 mock_response, "llm_provider", custom_llm_provider or "openai"
             ),  # type: ignore
             model=model,  # type: ignore
-            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            request=httpx.Request(method="POST", url="https://us.api.openai.com/v1/"),
         )
     elif isinstance(mock_response, str) and mock_response == "litellm.RateLimitError":
         raise litellm.RateLimitError(
@@ -637,7 +637,7 @@ def _handle_mock_potential_exceptions(
             message=mock_response,
             llm_provider="azure",
             model=model,  # type: ignore
-            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+            request=httpx.Request(method="POST", url="https://us.api.openai.com/v1/"),
         )
 
 
@@ -1659,7 +1659,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_base
                 or get_secret("OPENAI_BASE_URL")
                 or get_secret("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
 
             openai.api_version = None
@@ -1845,7 +1845,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_base
                 or get_secret("OPENAI_BASE_URL")
                 or get_secret("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             # set API KEY
             api_key = (
@@ -1899,7 +1899,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or litellm.api_base
                 or get_secret("OPENAI_BASE_URL")
                 or get_secret("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             organization = (
                 organization
@@ -3817,7 +3817,7 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_base
                 or get_secret_str("OPENAI_BASE_URL")
                 or get_secret_str("OPENAI_API_BASE")
-                or "https://api.openai.com/v1"
+                or "https://us.api.openai.com/v1"
             )
             openai.organization = (
                 litellm.organization
@@ -5086,7 +5086,7 @@ def transcription(
             or litellm.api_base
             or get_secret("OPENAI_BASE_URL")
             or get_secret("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )  # type: ignore
         openai.organization = (
             litellm.organization
@@ -5262,7 +5262,7 @@ def speech(  # noqa: PLR0915
             or litellm.api_base
             or get_secret("OPENAI_BASE_URL")
             or get_secret("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
+            or "https://us.api.openai.com/v1"
         )  # type: ignore
         # set API KEY
         api_key = (

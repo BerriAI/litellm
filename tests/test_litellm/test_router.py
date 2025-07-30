@@ -742,7 +742,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
                     "api_key": "test-key",
-                    "api_base": "https://api.openai.com/v1",
+                    "api_base": "https://us.api.openai.com/v1",
                 },
                 "model_info": {
                     "tpm": 1000,
@@ -762,7 +762,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             "litellm_params": {
                 "model": "gpt-3.5-turbo",
                 "api_key": "test-key",
-                "api_base": "https://api.openai.com/v1",
+                "api_base": "https://us.api.openai.com/v1",
             },
         }
 
@@ -831,7 +831,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             "litellm_params": {
                 "model": "gpt-3.5-turbo",
                 "api_key": "test-key",
-                "api_base": "https://api.openai.com/v1",
+                "api_base": "https://us.api.openai.com/v1",
             },
         }
 
@@ -870,7 +870,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
             "litellm_params": {
                 "model": "gpt-3.5-turbo",
                 "api_key": "test-key",
-                "api_base": "https://api.openai.com/v1",
+                "api_base": "https://us.api.openai.com/v1",
             },
         }
 

@@ -80,7 +80,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         # Store configuration
         self.api_key = api_key or self._get_api_key()
-        self.api_base = api_base or "https://api.openai.com/v1"
+        self.api_base = api_base or "https://us.api.openai.com/v1"
         self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = model or "omni-moderation-latest"
 
         if not self.api_key:

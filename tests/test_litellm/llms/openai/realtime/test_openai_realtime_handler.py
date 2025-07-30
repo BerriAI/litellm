@@ -12,7 +12,7 @@ sys.path.insert(
 
 
 @pytest.mark.parametrize(
-    "api_base", ["https://api.openai.com/v1", "https://api.openai.com"]
+    "api_base", ["https://us.api.openai.com/v1", "https://us.api.openai.com"]
 )
 def test_openai_realtime_handler_url_construction(api_base):
     from litellm.llms.openai.realtime.handler import OpenAIRealtime
@@ -34,7 +34,7 @@ def test_openai_realtime_handler_url_with_extra_params():
     from litellm.types.realtime import RealtimeQueryParams
 
     handler = OpenAIRealtime()
-    api_base = "https://api.openai.com/v1"
+    api_base = "https://us.api.openai.com/v1"
     query_params: RealtimeQueryParams = {
         "model": "gpt-4o-realtime-preview-2024-10-01",
         "intent": "chat"
@@ -56,7 +56,7 @@ async def test_async_realtime_success():
     from litellm.types.realtime import RealtimeQueryParams
 
     handler = OpenAIRealtime()
-    api_base = "https://api.openai.com/v1"
+    api_base = "https://us.api.openai.com/v1"
     api_key = "test-key"
     model = "gpt-4o-realtime-preview-2024-10-01"
     query_params: RealtimeQueryParams = {"model": model, "intent": "chat"}

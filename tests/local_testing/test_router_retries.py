@@ -367,7 +367,7 @@ rate_limit_error = openai.RateLimitError(
     message="Rate limit exceeded",
     response=httpx.Response(
         status_code=429,
-        request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+        request=httpx.Request(method="POST", url="https://us.api.openai.com/v1"),
     ),
     body={
         "error": {
@@ -454,7 +454,7 @@ def test_raise_context_window_exceeded_error():
         message="Context window exceeded",
         response=httpx.Response(
             status_code=400,
-            request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            request=httpx.Request(method="POST", url="https://us.api.openai.com/v1"),
         ),
         llm_provider="azure",
         model="gpt-3.5-turbo",
@@ -496,7 +496,7 @@ def test_raise_context_window_exceeded_error_no_retry():
         message="Context window exceeded",
         response=httpx.Response(
             status_code=400,
-            request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            request=httpx.Request(method="POST", url="https://us.api.openai.com/v1"),
         ),
         llm_provider="azure",
         model="gpt-3.5-turbo",

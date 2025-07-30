@@ -130,7 +130,7 @@ def test_is_assemblyai_route():
     # Test negative cases
     assert handler.is_assemblyai_route("https://example.com/other") == False
     assert (
-        handler.is_assemblyai_route("https://api.openai.com/v1/chat/completions")
+        handler.is_assemblyai_route("https://us.api.openai.com/v1/chat/completions")
         == False
     )
     assert handler.is_assemblyai_route("") == False
