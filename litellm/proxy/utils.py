@@ -1219,8 +1219,11 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
-        except Exception:
-            raise Exception("Unable to find Prisma binaries.")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
+            verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
+            verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
+            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),

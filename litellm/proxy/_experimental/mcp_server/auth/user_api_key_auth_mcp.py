@@ -382,9 +382,11 @@ class MCPRequestHandler:
         Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers
         """
         from litellm.proxy.proxy_server import prisma_client
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
         try:
+            # Import here to avoid circular import
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+            
             # Use the new helper for config-loaded servers
             server_ids = MCPRequestHandler._get_config_server_ids_for_access_groups(
                 global_mcp_server_manager.config_mcp_servers, access_groups
