@@ -23,7 +23,6 @@ from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     Callable,
     Dict,
     List,
@@ -147,7 +146,7 @@ from litellm.types.services import ServiceTypes
 from litellm.types.utils import GenericBudgetConfigType, LiteLLMBatch
 from litellm.types.utils import ModelInfo
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import ModelResponseStream, StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
