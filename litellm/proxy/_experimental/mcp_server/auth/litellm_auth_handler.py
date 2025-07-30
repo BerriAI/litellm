@@ -16,8 +16,9 @@ class MCPAuthenticatedUser(AuthenticatedUser):
     4. Server-specific authentication headers
     """
 
-    def __init__(self, user_api_key_auth: UserAPIKeyAuth, mcp_auth_header: Optional[str] = None, mcp_servers: Optional[List[str]] = None, mcp_server_auth_headers: Optional[Dict[str, str]] = None):
+    def __init__(self, user_api_key_auth: UserAPIKeyAuth, mcp_auth_header: Optional[str] = None, mcp_servers: Optional[List[str]] = None, mcp_server_auth_headers: Optional[Dict[str, str]] = None, mcp_protocol_version: Optional[str] = None):
         self.user_api_key_auth = user_api_key_auth
         self.mcp_auth_header = mcp_auth_header
         self.mcp_servers = mcp_servers
         self.mcp_server_auth_headers = mcp_server_auth_headers or {}
+        self.mcp_protocol_version = mcp_protocol_version
