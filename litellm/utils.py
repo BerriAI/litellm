@@ -5283,7 +5283,7 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("GOOGLE_API_KEY")
-                missing_keys.append("GEMINI_API_KEY") 
+                missing_keys.append("GEMINI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -5640,7 +5640,7 @@ def _calculate_retry_after(
     min_timeout: int = 0,
 ) -> Union[float, int]:
     retry_after = _get_retry_after_from_exception_header(response_headers)
-    
+
     # Add some jitter (default JITTER is 0.75 - so upto 0.75s)
     jitter = JITTER * random.random()
 
@@ -5654,8 +5654,8 @@ def _calculate_retry_after(
 
     # Make sure sleep_seconds is boxed between min_timeout and MAX_RETRY_DELAY
     sleep_seconds = max(sleep_seconds, min_timeout)
-    sleep_seconds = min(sleep_seconds, MAX_RETRY_DELAY)    
-    
+    sleep_seconds = min(sleep_seconds, MAX_RETRY_DELAY)
+
     return sleep_seconds + jitter
 
 
