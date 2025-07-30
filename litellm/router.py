@@ -1097,11 +1097,9 @@ class Router:
                 # Copy attributes from the original model_response
                 super().__init__(
                     completion_stream=async_generator,
-                    model=getattr(model_response, "model", ""),
-                    custom_llm_provider=getattr(
-                        model_response, "custom_llm_provider", ""
-                    ),
-                    logging_obj=getattr(model_response, "logging_obj", None),
+                    model=model_response.model,
+                    custom_llm_provider=model_response.custom_llm_provider,
+                    logging_obj=model_response.logging_obj,
                 )
                 self._async_generator = async_generator
 
