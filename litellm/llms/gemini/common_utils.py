@@ -44,7 +44,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        return api_key or (get_secret_str("GEMINI_API_KEY"))
+        return api_key or (get_secret_str("GOOGLE_API_KEY")) or (get_secret_str("GEMINI_API_KEY"))
 
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:
@@ -66,7 +66,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
         endpoint = f"/{self.api_version}/models"
         if api_base is None or api_key is None:
             raise ValueError(
-                "GEMINI_API_BASE or GEMINI_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
+                "GEMINI_API_BASE or GEMINI_API_KEY/GOOGLE_API_KEY is not set. Please set the environment variable, to query Gemini's `/models` endpoint."
             )
 
         response = litellm.module_level_client.get(
@@ -133,3 +133,7 @@ def encode_unserializable_types(
         else:
             processed_data[key] = value
     return processed_data
+
+
+def get_api_key_from_env() -> Optional[str]:
+    return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")

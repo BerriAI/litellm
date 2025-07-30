@@ -28,9 +28,12 @@ class MCPRequestHandler:
     LITELLM_MCP_SERVERS_HEADER_NAME = SpecialHeaders.mcp_servers.value
 
     LITELLM_MCP_ACCESS_GROUPS_HEADER_NAME = SpecialHeaders.mcp_access_groups.value
+    
+    # MCP Protocol Version header
+    MCP_PROTOCOL_VERSION_HEADER_NAME = "MCP-Protocol-Version"
 
     @staticmethod
-    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]], Optional[Dict[str, str]]]:
+    async def process_mcp_request(scope: Scope) -> Tuple[UserAPIKeyAuth, Optional[str], Optional[List[str]], Optional[Dict[str, str]], Optional[str]]:
         """
         Process and validate MCP request headers from the ASGI scope.
         This includes:
@@ -46,6 +49,7 @@ class MCPRequestHandler:
             mcp_auth_header: Optional[str] MCP auth header to be passed to the MCP server (deprecated)
             mcp_servers: Optional[List[str]] List of MCP servers and access groups to use
             mcp_server_auth_headers: Optional[Dict[str, str]] Server-specific auth headers in format {server_alias: auth_value}
+            mcp_protocol_version: Optional[str] MCP protocol version from request header
 
         Raises:
             HTTPException: If headers are invalid or missing required headers
@@ -60,6 +64,9 @@ class MCPRequestHandler:
         
         # Get the new server-specific auth headers
         mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+
+        # Get MCP protocol version from header
+        mcp_protocol_version = headers.get(MCPRequestHandler.MCP_PROTOCOL_VERSION_HEADER_NAME)
 
         # Parse MCP servers from header
         mcp_servers_header = headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
@@ -82,7 +89,7 @@ class MCPRequestHandler:
         validated_user_api_key_auth = await user_api_key_auth(
             api_key=litellm_api_key, request=request
         )
-        return validated_user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers
+        return validated_user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version
     
 
     @staticmethod
