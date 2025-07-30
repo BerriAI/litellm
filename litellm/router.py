@@ -1080,20 +1080,55 @@ class Router:
             raise e
 
     async def _acompletion_streaming_iterator(
-        self, model_response: CustomStreamWrapper
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+        self, model_response: CustomStreamWrapper, input_kwargs: dict
+    ) -> AsyncGenerator[Optional[ModelResponseStream]]:
         """
         Helper to iterate over a streaming response.
 
         Catches errors for fallbacks
         """
-        async for item in model_response:
-            yield item
+        from litellm.exceptions import MidStreamFallbackError
+
+        try:
+            async for item in model_response:
+                yield item
+        except MidStreamFallbackError as e:
+            # Prepare fallback request
+            fallback_kwargs = input_kwargs.copy()
+            fallback_kwargs["model"] = "gpt-3.5-turbo"
+            fallback_kwargs["messages"] = fallback_kwargs["messages"] + [
+                {
+                    "role": "user",
+                    "content": f"The following is the beginning of an assistant's response. Continue from where it left off: {e.generated_content}",
+                }
+            ]
+
+            # Ensure streaming is enabled for fallback
+            fallback_kwargs["stream"] = True
+
+            try:
+                # Make fallback call
+                fallback_response = await litellm.acompletion(**fallback_kwargs)
+
+                # If fallback returns a streaming response, iterate over it
+                if hasattr(fallback_response, "__aiter__"):
+                    async for fallback_item in fallback_response:  # type: ignore
+                        yield fallback_item
+                else:
+                    # If fallback returns a non-streaming response, yield None
+                    yield None
+
+            except Exception as fallback_error:
+                # If fallback also fails, log and re-raise original error
+                verbose_router_logger.error(f"Fallback also failed: {fallback_error}")
+                raise e  # Re-raise the original error
 
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[
-        ModelResponse, CustomStreamWrapper, AsyncGenerator[ModelResponseStream, None]
+        ModelResponse,
+        CustomStreamWrapper,
+        AsyncGenerator[Optional[ModelResponseStream]],
     ]:
         """
         - Get an available deployment
@@ -1148,15 +1183,15 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            _response = litellm.acompletion(
-                **{
-                    **data,
-                    "messages": messages,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
+            input_kwargs = {
+                **data,
+                "messages": messages,
+                "caching": self.cache_responses,
+                "client": model_client,
+                **kwargs,
+            }
+
+            _response = litellm.acompletion(**input_kwargs)
 
             logging_obj: Optional[LiteLLMLogging] = kwargs.get(
                 "litellm_logging_obj", None
@@ -1214,7 +1249,9 @@ class Router:
             )
 
             if isinstance(response, CustomStreamWrapper):
-                return self._acompletion_streaming_iterator(model_response=response)
+                return self._acompletion_streaming_iterator(
+                    model_response=response, input_kwargs=input_kwargs
+                )
 
             return response
         except litellm.Timeout as e:
@@ -3615,18 +3652,18 @@ class Router:
 
                 if isinstance(e, litellm.ContextWindowExceededError):
                     if context_window_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
+                        context_window_fallback_model_group: Optional[List[str]] = (
                             self._get_fallback_model_group_from_fallbacks(
                                 fallbacks=context_window_fallbacks,
                                 model_group=model_group,
                             )
                         )
-                        if fallback_model_group is None:
+                        if context_window_fallback_model_group is None:
                             raise original_exception
 
                         input_kwargs.update(
                             {
-                                "fallback_model_group": fallback_model_group,
+                                "fallback_model_group": context_window_fallback_model_group,
                                 "original_model_group": original_model_group,
                             }
                         )
@@ -3651,18 +3688,18 @@ class Router:
                         e.message += "\n{}".format(error_message)
                 elif isinstance(e, litellm.ContentPolicyViolationError):
                     if content_policy_fallbacks is not None:
-                        fallback_model_group: Optional[List[str]] = (
+                        content_policy_fallback_model_group: Optional[List[str]] = (
                             self._get_fallback_model_group_from_fallbacks(
                                 fallbacks=content_policy_fallbacks,
                                 model_group=model_group,
                             )
                         )
-                        if fallback_model_group is None:
+                        if content_policy_fallback_model_group is None:
                             raise original_exception
 
                         input_kwargs.update(
                             {
-                                "fallback_model_group": fallback_model_group,
+                                "fallback_model_group": content_policy_fallback_model_group,
                                 "original_model_group": original_model_group,
                             }
                         )
