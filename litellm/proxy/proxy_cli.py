@@ -29,6 +29,8 @@ from enum import Enum
 
 telemetry = None
 
+from litellm.proxy.utils import construct_database_url_from_env_vars
+
 
 class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_limit = 10
@@ -685,28 +687,9 @@ def run_server(  # noqa: PLR0915
                 )
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:
-                # Check if all required variables are provided
-                database_host = os.getenv("DATABASE_HOST")
-                database_username = os.getenv("DATABASE_USERNAME")
-                database_password = os.getenv("DATABASE_PASSWORD")
-                database_name = os.getenv("DATABASE_NAME")
-
-                if (
-                    database_host
-                    and database_username
-                    and database_name
-                ):
-                    # Handle the problem of special character escaping in the database URL
-                    database_username_enc = urllib.parse.quote_plus(database_username)
-                    database_password_enc = urllib.parse.quote_plus(database_password) if database_password else ""
-                    database_name_enc = urllib.parse.quote_plus(database_name)
-
-                    # Construct DATABASE_URL from the provided variables
-                    if database_password:
-                        database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
-                    else:
-                        database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
-
+                # Use helper function to construct DATABASE_URL from individual variables
+                database_url = construct_database_url_from_env_vars()
+                if database_url:
                     os.environ["DATABASE_URL"] = database_url
             db_connection_pool_limit = general_settings.get(
                 "database_connection_pool_limit",
@@ -732,28 +715,9 @@ def run_server(  # noqa: PLR0915
 
         # Handle database URL construction when no config file is used
         if config is None and os.getenv("DATABASE_URL") is None:
-            # Check if all required variables are provided
-            database_host = os.getenv("DATABASE_HOST")
-            database_username = os.getenv("DATABASE_USERNAME")
-            database_password = os.getenv("DATABASE_PASSWORD")
-            database_name = os.getenv("DATABASE_NAME")
-
-            if (
-                database_host
-                and database_username
-                and database_name
-            ):
-                # Handle the problem of special character escaping in the database URL
-                database_username_enc = urllib.parse.quote_plus(database_username)
-                database_password_enc = urllib.parse.quote_plus(database_password) if database_password else ""
-                database_name_enc = urllib.parse.quote_plus(database_name)
-
-                # Construct DATABASE_URL from the provided variables
-                if database_password:
-                    database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
-                else:
-                    database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
-
+            # Use helper function to construct DATABASE_URL from individual variables
+            database_url = construct_database_url_from_env_vars()
+            if database_url:
                 os.environ["DATABASE_URL"] = database_url
 
         # Set default values for connection pool settings when no config is used
