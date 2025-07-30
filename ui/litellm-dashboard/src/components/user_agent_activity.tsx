@@ -18,6 +18,11 @@ import {
   Select,
   SelectItem,
   Button,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
 } from "@tremor/react";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { userAgentAnalyticsCall, userAgentSummaryCall } from "./networking";
@@ -103,7 +108,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [currentView, setCurrentView] = useState<"dau" | "wau" | "mau">("dau");
 
   const fetchData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
@@ -190,16 +194,46 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     new Set(analyticsData.results.map(item => item.user_agent || "Unknown"))
   ).slice(0, 3); // Top 3 user agents
 
-  // Prepare daily chart data
+  // Prepare daily chart data (DAU)
   const dailyChartData = analyticsData.results.reduce((acc, item) => {
     const existingDate = acc.find(d => d.date === item.date);
     if (existingDate) {
-      const metricKey = currentView;
-      existingDate[item.user_agent || "Unknown"] = item.metrics[metricKey];
+      existingDate[item.user_agent || "Unknown"] = item.metrics.dau;
     } else {
       const newDateEntry: any = { 
         date: item.date,
-        [item.user_agent || "Unknown"]: item.metrics[currentView]
+        [item.user_agent || "Unknown"]: item.metrics.dau
+      };
+      acc.push(newDateEntry);
+    }
+    return acc;
+  }, [] as any[]);
+
+  // Prepare weekly chart data (WAU)
+  const weeklyChartData = analyticsData.results.reduce((acc, item) => {
+    const existingDate = acc.find(d => d.week === item.date);
+    if (existingDate) {
+      existingDate[item.user_agent || "Unknown"] = item.metrics.wau;
+    } else {
+      const newDateEntry: any = { 
+        week: `Week ${acc.length + 1}`,
+        [item.user_agent || "Unknown"]: item.metrics.wau
+      };
+      acc.push(newDateEntry);
+    }
+    return acc;
+  }, [] as any[]);
+
+  // Prepare monthly chart data (MAU)
+  const monthlyChartData = analyticsData.results.reduce((acc, item) => {
+    const existingDate = acc.find(d => d.month === item.date);
+    if (existingDate) {
+      existingDate[item.user_agent || "Unknown"] = item.metrics.mau;
+    } else {
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"];
+      const newDateEntry: any = { 
+        month: monthNames[acc.length % 7] || `Month ${acc.length + 1}`,
+        [item.user_agent || "Unknown"]: item.metrics.mau
       };
       acc.push(newDateEntry);
     }
@@ -301,50 +335,64 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       {/* DAU/WAU/MAU Chart */}
       <Card>
         <div className="mb-6">
-          <div className="flex items-center space-x-4 mb-2">
-            <Button
-              variant={currentView === "dau" ? "primary" : "secondary"}
-              size="sm"
-              onClick={() => setCurrentView("dau")}
-            >
-              DAU
-            </Button>
-            <Button
-              variant={currentView === "wau" ? "primary" : "secondary"}
-              size="sm"
-              onClick={() => setCurrentView("wau")}
-            >
-              WAU
-            </Button>
-            <Button
-              variant={currentView === "mau" ? "primary" : "secondary"}
-              size="sm"
-              onClick={() => setCurrentView("mau")}
-            >
-              MAU
-            </Button>
-          </div>
-          <Title>DAU, WAU & MAU per Code Editor</Title>
+          <Title>DAU, WAU & MAU per Agent</Title>
           <Subtitle>Active users across different time periods</Subtitle>
         </div>
 
-        <div className="mb-4">
-          <Title className="text-lg">
-            {currentView === "dau" && "Daily Active Users - Last 7 Days"}
-            {currentView === "wau" && "Weekly Active Users - Last 7 Days"}
-            {currentView === "mau" && "Monthly Active Users - Last 7 Days"}
-          </Title>
-        </div>
-
-        <BarChart
-          data={dailyChartData}
-          index="date"
-          categories={uniqueUserAgents.slice(0, 3)} // Top 3 user agents
-          colors={["blue", "green", "orange"]}
-          valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-          yAxisWidth={60}
-          showLegend={true}
-        />
+        <TabGroup>
+          <TabList className="mb-6">
+            <Tab>DAU</Tab>
+            <Tab>WAU</Tab>
+            <Tab>MAU</Tab>
+          </TabList>
+          
+          <TabPanels>
+            <TabPanel>
+              <div className="mb-4">
+                <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
+              </div>
+              <BarChart
+                data={dailyChartData}
+                index="date"
+                categories={uniqueUserAgents.slice(0, 3)}
+                colors={["blue", "green", "orange"]}
+                valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                yAxisWidth={60}
+                showLegend={true}
+              />
+            </TabPanel>
+            
+            <TabPanel>
+              <div className="mb-4">
+                <Title className="text-lg">Weekly Active Users - Last 4 Weeks</Title>
+              </div>
+              <BarChart
+                data={weeklyChartData}
+                index="week"
+                categories={uniqueUserAgents.slice(0, 3)}
+                colors={["blue", "green", "orange"]}
+                valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                yAxisWidth={60}
+                showLegend={true}
+              />
+            </TabPanel>
+            
+            <TabPanel>
+              <div className="mb-4">
+                <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
+              </div>
+              <BarChart
+                data={monthlyChartData}
+                index="month"
+                categories={uniqueUserAgents.slice(0, 3)}
+                colors={["blue", "green", "orange"]}
+                valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                yAxisWidth={60}
+                showLegend={true}
+              />
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
       </Card>
     </div>
   );
