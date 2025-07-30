@@ -14,29 +14,7 @@ import TabItem from '@theme/TabItem';
 
 :::
 
-### SSO for UI
-
-#### Step 1: Set upperbounds for keys
-Control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
-
-```yaml
-litellm_settings:
-  upperbound_key_generate_params:
-    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
-    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
-    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
-    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
-    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
-    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
-
-```
-
-** Expected Behavior **
-
-- Send a `/key/generate` request with `max_budget=200`
-- Key will be created with `max_budget=100` since 100 is the upper bound
-
-#### Step 2: Setup Oauth Client
+### Usage (Google, Microsoft, Okta, etc.)
 
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
