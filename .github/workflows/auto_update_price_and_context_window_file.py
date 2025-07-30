@@ -43,8 +43,8 @@ def write_to_file(file_path, data):
         # Print an error message if writing to file fails
         print("Error updating JSON file:", e)
 
-# Update the existing models and add the missing models
-def transform_remote_data(data):
+# Update the existing models and add the missing models for OpenRouter
+def transform_openrouter_data(data):
     transformed = {}
     for row in data:
         # Add the fields 'max_tokens' and 'input_cost_per_token'
@@ -81,6 +81,27 @@ def transform_remote_data(data):
 
     return transformed
 
+# Update the existing models and add the missing models for Vercel AI Gateway
+def transform_vercel_ai_gateway_data(data):
+    transformed = {}
+    for row in data:
+        obj = {
+            "max_tokens": row["context_window"],
+            "input_cost_per_token": float(row["pricing"]["input"]),
+            "output_cost_per_token": float(row["pricing"]["output"]),
+        }
+        
+        obj['max_input_tokens'] = row["context_window"]
+
+        obj.update({
+            "litellm_provider": "vercel_ai_gateway",
+            "mode": "chat"
+        })
+
+        transformed[f'vercel_ai_gateway/{row["id"]}'] = obj
+
+    return transformed
+
 
 # Load local data from a specified file
 def load_local_data(file_path):
@@ -100,18 +121,28 @@ def load_local_data(file_path):
 
 def main():
     local_file_path = "model_prices_and_context_window.json"  # Path to the local data file
-    url = "https://openrouter.ai/api/v1/models"  # URL to fetch remote data
+    openrouter_url = "https://openrouter.ai/api/v1/models"  # URL to fetch OpenRouter data
+    vercel_ai_gateway_url = "https://ai-gateway.vercel.sh/v1/models"  # URL to fetch Vercel AI Gateway data
 
     # Load local data from file
     local_data = load_local_data(local_file_path)
-    # Fetch remote data asynchronously
-    remote_data = asyncio.run(fetch_data(url))
-    # Transform the fetched remote data
-    remote_data = transform_remote_data(remote_data)
+    
+    # Fetch OpenRouter data
+    openrouter_data = asyncio.run(fetch_data(openrouter_url))
+    # Transform the fetched OpenRouter data
+    openrouter_data = transform_openrouter_data(openrouter_data)
+    
+    # Fetch Vercel AI Gateway data
+    vercel_data = asyncio.run(fetch_data(vercel_ai_gateway_url))
+    # Transform the fetched Vercel AI Gateway data
+    vercel_data = transform_vercel_ai_gateway_data(vercel_data)
+    
+    # Combine both datasets
+    all_remote_data = {**openrouter_data, **vercel_data}
 
-    # If both local and remote data are available, synchronize and save
-    if local_data and remote_data:
-        sync_local_data_with_remote(local_data, remote_data)
+    # If both local and openrouter data are available, synchronize and save
+    if local_data and all_remote_data:
+        sync_local_data_with_remote(local_data, all_remote_data)
         write_to_file(local_file_path, local_data)
     else:
         print("Failed to fetch model data from either local file or URL.")

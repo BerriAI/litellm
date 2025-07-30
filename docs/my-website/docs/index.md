@@ -73,154 +73,20 @@ response = completion(
 ```
 
 </TabItem>
-<TabItem value="anthropic" label="Anthropic">
+
+<TabItem value="vercel" label="Vercel AI Gateway">
 
 ```python
 from litellm import completion
 import os
 
 ## set ENV variables
-os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="anthropic/claude-3-sonnet-20240229",
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-<TabItem value="xai" label="xAI">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["XAI_API_KEY"] = "your-api-key"
-
-response = completion(
-  model="xai/grok-2-latest",
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-</TabItem>
-<TabItem value="vertex" label="VertexAI">
-
-```python
-from litellm import completion
-import os
-
-# auth: run 'gcloud auth application-default'
-os.environ["VERTEXAI_PROJECT"] = "hardy-device-386718"
-os.environ["VERTEXAI_LOCATION"] = "us-central1"
-
-response = completion(
-  model="vertex_ai/gemini-1.5-pro",
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-
-<TabItem value="nvidia" label="NVIDIA">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
-os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
-
-response = completion(
-  model="nvidia_nim/<model_name>",
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-
-<TabItem value="hugging" label="HuggingFace">
-
-```python
-from litellm import completion
-import os
-
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
-
-# e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
-response = completion(
-  model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0",
+  model="vercel_ai_gateway/openai/gpt-4o",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
-  api_base="https://my-endpoint.huggingface.cloud"
-)
-
-print(response)
-```
-
-</TabItem>
-
-<TabItem value="azure" label="Azure OpenAI">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["AZURE_API_KEY"] = ""
-os.environ["AZURE_API_BASE"] = ""
-os.environ["AZURE_API_VERSION"] = ""
-
-# azure call
-response = completion(
-  "azure/<your_deployment_name>",
-  messages = [{ "content": "Hello, how are you?","role": "user"}]
-)
-```
-
-</TabItem>
-
-<TabItem value="ollama" label="Ollama">
-
-```python
-from litellm import completion
-
-response = completion(
-            model="ollama/llama2",
-            messages = [{ "content": "Hello, how are you?","role": "user"}],
-            api_base="http://localhost:11434"
-)
-```
-
-</TabItem>
-<TabItem value="or" label="Openrouter">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables
-os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key"
-
-response = completion(
-  model="openrouter/google/palm-2-chat-bison",
-  messages = [{ "content": "Hello, how are you?","role": "user"}],
-)
-```
-
-</TabItem>
-<TabItem value="novita" label="Novita AI">
-
-```python
-from litellm import completion
-import os
-
-## set ENV variables. Visit https://novita.ai/settings/key-management to get your API key
-os.environ["NOVITA_API_KEY"] = "novita-api-key"
-
-response = completion(
-  model="novita/deepseek/deepseek-r1",
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
+  stream=True,
 )
 ```
 
