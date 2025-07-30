@@ -31,7 +31,7 @@ import {
   DateRangePickerValue,
   Button,
 } from "@tremor/react"
-import UsageDatePicker from "./shared/usage_date_picker"
+import AdvancedDatePicker from "./shared/advanced_date_picker"
 import { AreaChart } from "@tremor/react"
 
 import { userDailyActivityCall, tagListCall } from "./networking"
@@ -431,9 +431,9 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabPanels>
           {/* Your Usage Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-2 w-full mb-4">
+            <Grid numItems={2} className="gap-10 w-1/2 mb-4">
               <Col>
-                <UsageDatePicker value={dateValue} onValueChange={handleDateChange} />
+                <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
               </Col>
             </Grid>
             <TabGroup>
