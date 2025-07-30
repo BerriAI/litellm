@@ -5,7 +5,9 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 ### INIT VARIABLES ####################
 import threading
 import os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
+from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args, TYPE_CHECKING
+if TYPE_CHECKING:
+    from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -297,6 +299,7 @@ model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/mai
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+datadog_llm_observability_params: Optional[DatadogLLMObsInitParams] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
