@@ -214,27 +214,33 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         </Col>
       </Grid>
 
-      {/* Summary Cards */}
+      {/* Top 4 User Agents Cards */}
       <Grid numItems={4} className="gap-4">
-        <Card>
-          <Title>Total User Agents</Title>
-          <Metric>{summaryData.total_user_agents}</Metric>
-        </Card>
-        <Card>
-          <Title>Total Requests</Title>
-          <Metric>{formatNumberWithCommas(summaryData.total_requests)}</Metric>
-          <Text className="text-green-600">
-            {formatNumberWithCommas(summaryData.total_successful_requests)} successful
-          </Text>
-        </Card>
-        <Card>
-          <Title>Total Tokens</Title>
-          <Metric>{formatNumberWithCommas(summaryData.total_tokens)}</Metric>
-        </Card>
-        <Card>
-          <Title>Total Spend</Title>
-          <Metric>${formatNumberWithCommas(summaryData.total_spend, 2)}</Metric>
-        </Card>
+        {summaryData.top_user_agents.slice(0, 4).map((ua, index) => (
+          <Card key={index}>
+            <Title className="truncate" title={ua.user_agent}>
+              {ua.user_agent}
+            </Title>
+            <Metric className="text-green-600">
+              {formatNumberWithCommas(ua.successful_requests)}
+            </Metric>
+            <Subtitle>Successful Requests</Subtitle>
+            <Text className="mt-2">
+              <span className="font-semibold">{formatNumberWithCommas(ua.tokens)}</span> tokens
+            </Text>
+          </Card>
+        ))}
+        {/* Fill remaining slots if less than 4 agents */}
+        {Array.from({ length: Math.max(0, 4 - summaryData.top_user_agents.length) }).map((_, index) => (
+          <Card key={`empty-${index}`}>
+            <Title>No Data</Title>
+            <Metric>-</Metric>
+            <Subtitle>Successful Requests</Subtitle>
+            <Text className="mt-2">
+              <span className="font-semibold">-</span> tokens
+            </Text>
+          </Card>
+        ))}
       </Grid>
 
       {/* Charts */}
