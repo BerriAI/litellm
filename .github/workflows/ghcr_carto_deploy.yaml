@@ -24,7 +24,7 @@ on:
         default: "main"
       tag:
         description: "Extra tag (e.g., v1.2.3). Leave blank for none."
-        required: false
+        required: true
 
 env:
   REGISTRY: ghcr.io
@@ -48,9 +48,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    concurrency:
-        group: ${{ github.workflow }}-${{ github.ref_name || 'manual' }}
-        cancel-in-progress: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -63,15 +60,31 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure tags
+        id: tag-config
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # For workflow_dispatch: only use the input tag (now required)
+            echo "tags=type=raw,value=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            # For push/pull_request: use channel-latest and just SHA
+            echo "tags=type=raw,value=${{ env.CHANNEL }}-latest" >> $GITHUB_OUTPUT
+            echo "tags<<EOF" >> $GITHUB_OUTPUT
+            echo "type=raw,value=${{ env.DOCKER_GIT_REVISION_SHA }}" >> $GITHUB_OUTPUT
+            if [ -n "${{ github.event.inputs.tag }}" ]; then
+              echo "type=raw,value=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            fi
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
       - name: Extract metadata for tags & labels
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-non_root
           tags: |
-            type=raw,value=${{ env.CHANNEL }}-latest
-            type=raw,value=${{ env.CHANNEL }}-${{ env.DOCKER_GIT_REVISION_SHA }}
-            ${{ github.event.inputs.tag && format('type=raw,value={0}', github.event.inputs.tag) }}
+            ${{ steps.tag-config.outputs.tags }}
   
       # Configure multi platform Docker builds
       - name: Set up QEMU
