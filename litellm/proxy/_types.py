@@ -1849,7 +1849,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
