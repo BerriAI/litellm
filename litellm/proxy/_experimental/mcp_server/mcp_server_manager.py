@@ -67,23 +67,28 @@ def _deserialize_env_dict(env_data: Any) -> Optional[Dict[str, str]]:
         return env_data
 
 
-def _convert_protocol_version_to_enum(protocol_version: Optional[str]) -> MCPSpecVersionType:
+def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVersionType]) -> MCPSpecVersion:
     """
     Convert string protocol version to MCPSpecVersion enum.
     
     Args:
-        protocol_version: String protocol version or None
+        protocol_version: String protocol version, enum, or None
         
     Returns:
-        MCPSpecVersionType: The enum value
+        MCPSpecVersion: The enum value
     """
     if not protocol_version:
         return MCPSpecVersion.jun_2025  # Default
     
-    # Try to match the string to enum values
-    for version in MCPSpecVersion:
-        if version.value == protocol_version:
-            return version
+    # If it's already an enum, return it
+    if hasattr(protocol_version, 'value') and hasattr(protocol_version, '__class__') and protocol_version.__class__.__name__.startswith('MCPSpecVersion'):
+        return protocol_version
+    
+    # If it's a string, try to match it to enum values
+    if isinstance(protocol_version, str):
+        for version in MCPSpecVersion:
+            if version.value == protocol_version:
+                return version
     
     # If no match found, return default
     verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
