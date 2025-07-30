@@ -168,25 +168,30 @@ if MCP_AVAILABLE:
         """
         List all available tools
         """
-        # Get user authentication from context variable
-        user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = get_auth_context()
-        verbose_logger.debug(
-            f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
-        )
-        verbose_logger.debug(
-            f"MCP list_tools - MCP servers from context: {mcp_servers}"
-        )
-        verbose_logger.debug(
-            f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
-        )
-        # Get mcp_servers from context variable
-        return await _list_mcp_tools(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            mcp_protocol_version=mcp_protocol_version,
-        )
+        try:
+            # Get user authentication from context variable
+            user_api_key_auth, mcp_auth_header, mcp_servers, mcp_server_auth_headers, mcp_protocol_version = get_auth_context()
+            verbose_logger.debug(
+                f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
+            )
+            verbose_logger.debug(
+                f"MCP list_tools - MCP servers from context: {mcp_servers}"
+            )
+            verbose_logger.debug(
+                f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
+            )
+            # Get mcp_servers from context variable
+            return await _list_mcp_tools(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_protocol_version=mcp_protocol_version,
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error in list_tools endpoint: {str(e)}")
+            # Return empty list instead of failing completely
+            return []
 
     @server.call_tool()
     async def mcp_server_tool_call(
@@ -363,28 +368,37 @@ if MCP_AVAILABLE:
         if not MCP_AVAILABLE:
             return []
 
-        # Get tools from managed MCP servers
-        managed_tools = await _get_tools_from_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            mcp_protocol_version=mcp_protocol_version,
-        )
+        # Get tools from managed MCP servers with error handling
+        managed_tools = []
+        try:
+            managed_tools = await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_protocol_version=mcp_protocol_version,
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error getting tools from managed MCP servers: {str(e)}")
+            # Continue with empty managed tools list instead of failing completely
 
         # Get tools from local registry
-        local_tools_raw = global_mcp_tool_registry.list_tools()
-        
-        # Convert local tools to MCPTool format
         local_tools = []
-        for tool in local_tools_raw:
-            # Convert from litellm.types.mcp_server.tool_registry.MCPTool to mcp.types.Tool
-            mcp_tool = MCPTool(
-                name=tool.name,
-                description=tool.description,
-                inputSchema=tool.input_schema
-            )
-            local_tools.append(mcp_tool)
+        try:
+            local_tools_raw = global_mcp_tool_registry.list_tools()
+            
+            # Convert local tools to MCPTool format
+            for tool in local_tools_raw:
+                # Convert from litellm.types.mcp_server.tool_registry.MCPTool to mcp.types.Tool
+                mcp_tool = MCPTool(
+                    name=tool.name,
+                    description=tool.description,
+                    inputSchema=tool.input_schema
+                )
+                local_tools.append(mcp_tool)
+        except Exception as e:
+            verbose_logger.exception(f"Error getting tools from local registry: {str(e)}")
+            # Continue with empty local tools list instead of failing completely
 
         # Combine all tools
         all_tools = managed_tools + local_tools
