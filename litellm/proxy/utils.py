@@ -505,9 +505,28 @@ class ProxyLogging:
 
         for callback in callbacks:
             try:
-                if isinstance(callback, CustomLogger):
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        callback
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
+
+                    # Check if guardrail should be run for pre_mcp_call hook
+                    if (
+                        _callback.should_run_guardrail(
+                            data=kwargs, event_type=GuardrailEventHooks.pre_mcp_call
+                        )
+                        is not True
+                    ):
+                        continue
+
                     response: Optional[MCPPreCallResponseObject] = (
-                        await callback.async_pre_mcp_tool_call_hook(
+                        await _callback.async_pre_mcp_tool_call_hook(
                             kwargs=kwargs,
                             request_obj=request_obj,
                             start_time=start_time,
@@ -571,6 +590,7 @@ class ProxyLogging:
         """
         from litellm.types.llms.base import HiddenParams
         from litellm.types.mcp import MCPDuringCallResponseObject, MCPDuringCallRequestObject
+        from litellm.proxy.guardrails.guardrail_hooks.base_guardrail import CustomGuardrail
 
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
@@ -587,11 +607,21 @@ class ProxyLogging:
                 hidden_params=HiddenParams()
             )
 
-        for callback in callbacks:
+        for _callback in callbacks:
             try:
-                if isinstance(callback, CustomLogger):
+                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
+                    if (_callback.should_run_guardrail(data=kwargs, event_type=GuardrailEventHooks.during_mcp_call) is not True):
+                        continue
+                    response: Optional[MCPDuringCallResponseObject] = await _callback.async_during_mcp_tool_call_hook(
+                        kwargs=kwargs,
+                        request_obj=request_obj,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                elif isinstance(_callback, CustomLogger):
                     response: Optional[MCPDuringCallResponseObject] = (
-                        await callback.async_during_mcp_tool_call_hook(
+                        await _callback.async_during_mcp_tool_call_hook(
                             kwargs=kwargs,
                             request_obj=request_obj,
                             start_time=start_time,
