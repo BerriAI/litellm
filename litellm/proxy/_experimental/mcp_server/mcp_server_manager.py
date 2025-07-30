@@ -644,7 +644,6 @@ class MCPServerManager:
             # Check during hook result if it completed
             #########################################################
             if proxy_logging_obj and 'during_hook_task' in locals():
-            if litellm_logging_obj and during_hook_task is not None:
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):
