@@ -239,11 +239,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
               {ua.user_agent}
             </Title>
             <Metric className="text-green-600">
-              {formatNumberWithCommas(ua.successful_requests)}
+              {formatAbbreviatedNumber(ua.successful_requests)}
             </Metric>
             <Subtitle>Successful Requests</Subtitle>
             <Text className="mt-2">
-              <span className="font-semibold">{formatNumberWithCommas(ua.tokens)}</span> tokens
+              <span className="font-semibold">{formatAbbreviatedNumber(ua.tokens)}</span> tokens
             </Text>
         </Card>
         ))}
