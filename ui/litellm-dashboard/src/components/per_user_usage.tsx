@@ -90,10 +90,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({
                 {analyticsData.results.slice(0, 10).map((item, index) => (
                   <TableRow key={index}>
                     <TableCell>
-                      <div>
-                        <div className="font-medium">user_{String(index + 1).padStart(3, '0')}</div>
-                        <div className="text-sm text-gray-500">{item.user_agent || "Unknown"}</div>
-                      </div>
+                      <Text className="font-medium">{index + 1}</Text>
                     </TableCell>
                     <TableCell>
                       <Text>{item.user_agent || "Unknown"}</Text>
