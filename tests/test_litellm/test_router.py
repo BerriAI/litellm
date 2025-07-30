@@ -1126,11 +1126,17 @@ async def test_acompletion_streaming_iterator():
 
     mock_response = AsyncIterator(mock_chunks)
 
+    setattr(mock_response, "model", "gpt-4")
+    setattr(mock_response, "custom_llm_provider", "openai")
+    setattr(mock_response, "logging_obj", MagicMock())
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_response, messages=messages, initial_kwargs=initial_kwargs
+    )
+
     # Collect streamed chunks
     collected_chunks = []
-    async for chunk in router._acompletion_streaming_iterator(
-        model_response=mock_response, messages=messages, initial_kwargs=initial_kwargs
-    ):
+    async for chunk in result:
         collected_chunks.append(chunk)
 
     assert len(collected_chunks) == 3
@@ -1170,6 +1176,10 @@ async def test_acompletion_streaming_iterator():
         mock_chunks, 1
     )  # Error after first chunk
 
+    setattr(mock_error_response, "model", "gpt-4")
+    setattr(mock_error_response, "custom_llm_provider", "openai")
+    setattr(mock_error_response, "logging_obj", MagicMock())
+
     # Mock the fallback response
     fallback_chunks = [
         MagicMock(choices=[MagicMock(delta=MagicMock(content=" world"))]),
@@ -1186,11 +1196,13 @@ async def test_acompletion_streaming_iterator():
     ) as mock_fallback_utils:
 
         collected_chunks = []
-        async for chunk in router._acompletion_streaming_iterator(
+        result = await router._acompletion_streaming_iterator(
             model_response=mock_error_response,
             messages=messages,
             initial_kwargs=initial_kwargs,
-        ):
+        )
+
+        async for chunk in result:
             collected_chunks.append(chunk)
 
         # Verify fallback was called
@@ -1231,13 +1243,18 @@ async def test_acompletion_streaming_iterator():
 
         collected_chunks = []
         original_error = None
+        setattr(mock_error_response_2, "model", "gpt-4")
+        setattr(mock_error_response_2, "custom_llm_provider", "openai")
+        setattr(mock_error_response_2, "logging_obj", MagicMock())
 
         try:
-            async for chunk in router._acompletion_streaming_iterator(
+            result = await router._acompletion_streaming_iterator(
                 model_response=mock_error_response_2,
                 messages=messages,
                 initial_kwargs=initial_kwargs,
-            ):
+            )
+
+            async for chunk in result:
                 collected_chunks.append(chunk)
         except MidStreamFallbackError as e:
             original_error = e
