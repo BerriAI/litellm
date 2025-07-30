@@ -79,21 +79,21 @@ def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVe
         MCPSpecVersionType: The enum value
     """
     if not protocol_version:
-        return MCPSpecVersion.jun_2025  # type: ignore
+        return MCPSpecVersion.jun_2025
     
     # If it's already an MCPSpecVersion enum, return it
     if isinstance(protocol_version, MCPSpecVersion):
-        return protocol_version  # type: ignore
+        return protocol_version
     
     # If it's a string, try to match it to enum values
     if isinstance(protocol_version, str):
         for version in MCPSpecVersion:
             if version.value == protocol_version:
-                return version  # type: ignore
+                return version
     
     # If no match found, return default
     verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
-    return MCPSpecVersion.jun_2025  # type: ignore
+    return MCPSpecVersion.jun_2025
 
 
 class MCPServerManager:
@@ -517,8 +517,8 @@ class MCPServerManager:
             user_api_key_auth: Optional[UserAPIKeyAuth] = None,
             mcp_auth_header: Optional[str] = None,
             mcp_server_auth_headers: Optional[Dict[str, str]] = None,
+            mcp_protocol_version: Optional[str] = None,
             proxy_logging_obj: Optional[ProxyLogging] = None,
-
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -597,27 +597,6 @@ class MCPServerManager:
             protocol_version=mcp_protocol_version,
         )
         
-        #########################################################
-        # During MCP Tool Call Hook
-        # Allow concurrent monitoring and validation during execution
-        #########################################################
-        if proxy_logging_obj:
-            during_hook_kwargs = {
-                "name": name,
-                "arguments": arguments,
-                "server_name": server_name_from_prefix,
-            }
-            
-            # Start the during hook in a separate task for concurrent execution
-            during_hook_task = asyncio.create_task(
-                proxy_logging_obj.async_during_mcp_tool_call_hook(
-                    kwargs=during_hook_kwargs,
-                    request_obj=None,  # Will be created in the hook
-                    start_time=start_time,
-                    end_time=start_time,
-                )
-            )
-
         async with client:
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
@@ -628,12 +607,20 @@ class MCPServerManager:
             # Initialize during_hook_task as None
             during_hook_task = None
             
-            # Start during hook if litellm_logging_obj is available
-            if litellm_logging_obj:
+            # Start during hook if proxy_logging_obj is available
+            if proxy_logging_obj:
                 try:
-                    during_hook_task = litellm_logging_obj.async_during_mcp_tool_call_hook(
-                        kwargs=litellm_logging_obj.model_call_details,
-                        start_time=start_time,
+                    during_hook_task = asyncio.create_task(
+                        proxy_logging_obj.async_during_mcp_tool_call_hook(
+                            kwargs={
+                                "name": name,
+                                "arguments": arguments,
+                                "server_name": server_name_from_prefix,
+                            },
+                            request_obj=None,  # Will be created in the hook
+                            start_time=start_time,
+                            end_time=start_time,
+                        )
                     )
                 except Exception as e:
                     verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
@@ -643,7 +630,7 @@ class MCPServerManager:
             #########################################################
             # Check during hook result if it completed
             #########################################################
-            if proxy_logging_obj and 'during_hook_task' in locals():
+            if proxy_logging_obj and during_hook_task is not None:
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):
