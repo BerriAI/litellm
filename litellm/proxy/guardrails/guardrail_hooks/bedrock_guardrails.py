@@ -33,12 +33,6 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.mcp import (
-    MCPDuringCallRequestObject,
-    MCPDuringCallResponseObject,
-    MCPPreCallRequestObject,
-    MCPPreCallResponseObject,
-)
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockGuardrailOutput,
@@ -417,6 +411,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
@@ -475,6 +470,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (
@@ -876,194 +872,3 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         verbose_proxy_logger.debug(
                             "Applied masking to choice text content"
                         )
-
-    #### MCP TOOL CALL HOOKS ####
-    def _create_bedrock_mcp_input_content_request(
-        self, tool_name: str, arguments: dict
-    ) -> BedrockRequest:
-        """
-        Create a bedrock request for MCP tool call input content.
-        """
-        bedrock_request: BedrockRequest = BedrockRequest(source="INPUT") 
-        bedrock_request_content: List[BedrockContentItem] = []
-        
-        # Create content from tool name and arguments
-        tool_content = f"Tool: {tool_name}\nArguments: {json.dumps(arguments, indent=2)}"
-        
-        bedrock_content_item = BedrockContentItem(
-            text=BedrockTextContent(text=tool_content)
-        )
-        bedrock_request_content.append(bedrock_content_item)
-        
-        bedrock_request["content"] = bedrock_request_content
-        return bedrock_request
-
-    async def make_bedrock_mcp_api_request(
-        self,
-        source: Literal["INPUT", "OUTPUT"],
-        tool_name: Optional[str] = None,
-        arguments: Optional[dict] = None,
-        request_data: Optional[dict] = None,
-    ) -> BedrockGuardrailResponse:
-        """
-        Make a bedrock API request for MCP tool calls.
-        """
-        credentials, aws_region_name = self._load_credentials()
-        
-        if source == "INPUT" and tool_name and arguments:
-            bedrock_request_data: dict = dict(
-                self._create_bedrock_mcp_input_content_request(
-                    tool_name=tool_name, arguments=arguments
-                )
-            )
-        else:
-            # For OUTPUT or other cases, use empty content for now
-            bedrock_request_data = {"source": source, "content": []}
-        
-        bedrock_guardrail_response: BedrockGuardrailResponse = BedrockGuardrailResponse()
-        
-        if request_data:
-            bedrock_request_data.update(
-                self.get_guardrail_dynamic_request_body_params(request_data=request_data)
-            )
-            
-        prepared_request = self._prepare_request(
-            credentials=credentials,
-            data=bedrock_request_data,
-            optional_params=self.optional_params,
-            aws_region_name=aws_region_name,
-        )
-        
-        verbose_proxy_logger.debug(
-            "Bedrock MCP request body: %s, url %s, headers: %s",
-            bedrock_request_data,
-            prepared_request.url,
-            prepared_request.headers,
-        )
-
-        response = await self.async_handler.post(
-            url=prepared_request.url,
-            data=prepared_request.body,  # type: ignore
-            headers=prepared_request.headers,  # type: ignore
-        )
-        
-        verbose_proxy_logger.debug("Bedrock MCP response: %s", response.text)
-        
-        if response.status_code == 200:
-            _json_response = response.json()
-            bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
-            
-            if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
-                raise self._get_http_exception_for_blocked_guardrail(bedrock_guardrail_response)
-        else:
-            verbose_proxy_logger.error(
-                "Bedrock MCP: error in response. Status code: %s, response: %s",
-                response.status_code,
-                response.text,
-            )
-
-        return bedrock_guardrail_response
-
-    @log_guardrail_information
-    async def async_pre_mcp_tool_call_hook(
-        self,
-        kwargs: dict,
-        request_obj: MCPPreCallRequestObject,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> Optional[MCPPreCallResponseObject]:
-        """
-        Pre MCP Tool Call Hook for Bedrock Guardrails
-        
-        Validates MCP tool calls before execution using Bedrock Guardrails.
-        """
-        verbose_proxy_logger.debug("Inside Bedrock Pre-MCP-Call Hook")
-
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
-        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_mcp_call
-        if self.should_run_guardrail(data=kwargs, event_type=event_type) is not True:
-            return None
-
-        tool_name = request_obj.tool_name
-        arguments = request_obj.arguments
-
-        if not tool_name:
-            verbose_proxy_logger.warning(
-                "Bedrock MCP: not running guardrail. No tool_name in request"
-            )
-            return None
-
-        #########################################################
-        ########## 1. Make the Bedrock API request ##########
-        #########################################################
-        bedrock_guardrail_response = await self.make_bedrock_mcp_api_request(
-            source="INPUT", 
-            tool_name=tool_name, 
-            arguments=arguments, 
-            request_data=kwargs
-        )
-        #########################################################
-
-        #########################################################
-        ########## 2. Add the guardrail to the applied guardrails header ##########
-        #########################################################
-        add_guardrail_to_applied_guardrails_header(
-            request_data=kwargs, guardrail_name=self.guardrail_name
-        )
-
-        return None
-
-    @log_guardrail_information
-    async def async_during_mcp_tool_call_hook(
-        self,
-        kwargs: dict,
-        request_obj: MCPDuringCallRequestObject,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> Optional[MCPDuringCallResponseObject]:
-        """
-        During MCP Tool Call Hook for Bedrock Guardrails
-        
-        Monitors MCP tool call execution using Bedrock Guardrails.
-        """
-        verbose_proxy_logger.debug("Inside Bedrock During-MCP-Call Hook")
-
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_mcp_call
-        if self.should_run_guardrail(data=kwargs, event_type=event_type) is not True:
-            return None
-
-        tool_name = request_obj.tool_name
-        arguments = request_obj.arguments
-
-        if not tool_name:
-            verbose_proxy_logger.warning(
-                "Bedrock MCP: not running guardrail. No tool_name in request"
-            )
-            return None
-
-        #########################################################
-        ########## 1. Make the Bedrock API request ##########
-        #########################################################
-        bedrock_guardrail_response = await self.make_bedrock_mcp_api_request(
-            source="INPUT", 
-            tool_name=tool_name, 
-            arguments=arguments, 
-            request_data=kwargs
-        )
-        #########################################################
-
-        #########################################################
-        ########## 2. Add the guardrail to the applied guardrails header ##########
-        #########################################################
-        add_guardrail_to_applied_guardrails_header(
-            request_data=kwargs, guardrail_name=self.guardrail_name
-        )
-
-        return None

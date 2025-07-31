@@ -598,6 +598,7 @@ class MCPServerManager:
         )
         
         async with client:
+
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
@@ -606,7 +607,7 @@ class MCPServerManager:
             
             # Initialize during_hook_task as None
             during_hook_task = None
-            
+            tasks = []
             # Start during hook if proxy_logging_obj is available
             if proxy_logging_obj:
                 try:
@@ -622,11 +623,15 @@ class MCPServerManager:
                             end_time=start_time,
                         )
                     )
+                    tasks.append(during_hook_task)
                 except Exception as e:
                     verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
             
-            result = await client.call_tool(call_tool_params)
-            
+            call_tool_task = asyncio.create_task(client.call_tool(call_tool_params))
+            tasks.append(call_tool_task)
+            mcp_responses = await asyncio.gather(*tasks)
+
+            result = mcp_responses[1]
             #########################################################
             # Check during hook result if it completed
             #########################################################
