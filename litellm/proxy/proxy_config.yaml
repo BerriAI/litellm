@@ -1,8 +1,13 @@
 model_list:
-  - model_name: openai/*
+  - model_name: openai/ft:gpt-4.1-mini-2025-04-14:reliablekeystest::BZoOrBEv
     litellm_params:
-      model: openai/*
-
+      model: openai/ft:gpt-4.1-mini-2025-04-14:reliablekeystest::BZoOrBEv
+      api_key: os.environ/OPENAI_DEFAULT_API_KEY
+    model_info:
+      id: openai-fine-tuned
+      input_cost_per_token:  12
+      output_cost_per_token: 13
+      base_model: ft:gpt-4o-2024-11-20
 
 litellm_settings:
   success_callback: ["mlflow"]

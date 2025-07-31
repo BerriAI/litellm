@@ -79,9 +79,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.mcp import (
-    MCPPostCallResponseObject,
-)
+from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
@@ -169,10 +167,10 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
 
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
@@ -1178,6 +1176,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.litellm_params if hasattr(self, "litellm_params") else None
             )
         )
+        custom_pricing_fields: Optional[CustomPricingLiteLLMParams] = get_dynamic_custom_pricing_fields(
+            litellm_params=self.litellm_params if hasattr(self, "litellm_params") else None
+        )
 
         prompt = ""  # use for tts cost calc
         _input = self.model_call_details.get("input", None)
@@ -1205,6 +1206,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
                 "litellm_logging_obj": self,
+                "custom_pricing_fields": custom_pricing_fields,
             }
         except Exception as e:  # error creating kwargs for cost calculation
             debug_info = StandardLoggingModelCostFailureDebugInformation(
@@ -3740,9 +3742,21 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
             return True
         elif model_info.get(key, None) is not None:
             return True
-
     return False
 
+def get_dynamic_custom_pricing_fields(litellm_params: Optional[dict]) -> Optional[CustomPricingLiteLLMParams]: 
+    """
+    Get the dynamic cost per token and second for a model
+    """
+    if litellm_params is None:
+        return None
+
+    metadata: dict = litellm_params.get("metadata", None) or litellm_params.get("litellm_metadata", None) or {}
+    model_info: dict = metadata.get("model_info", {}) or {}
+
+    custom_pricing_dict = CustomPricingLiteLLMParams(**litellm_params).model_dump()
+    custom_pricing_dict.update(CustomPricingLiteLLMParams(**model_info).model_dump())
+    return CustomPricingLiteLLMParams(**custom_pricing_dict)
 
 def is_valid_sha256_hash(value: str) -> bool:
     # Check if the value is a valid SHA-256 hash (64 hexadecimal characters)

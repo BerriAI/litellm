@@ -98,11 +98,13 @@ from litellm.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.types.router import CustomPricingLiteLLMParams
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LitellmLoggingObject,
     )
 else:
     LitellmLoggingObject = Any
+    CustomPricingLiteLLMParams = Any
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -1031,6 +1033,7 @@ def response_cost_calculator(
     litellm_model_name: Optional[str] = None,
     router_model_id: Optional[str] = None,
     litellm_logging_obj: Optional[LitellmLoggingObject] = None,
+    custom_pricing_fields: Optional[CustomPricingLiteLLMParams] = None,
 ) -> float:
     """
     Returns
@@ -1050,7 +1053,12 @@ def response_cost_calculator(
                     )
                     if provider_response_cost is not None:
                         return provider_response_cost
-
+            cost_per_token_dict: Optional[CostPerToken] = None
+            if custom_pricing_fields is not None:
+                cost_per_token_dict = CostPerToken(
+                    input_cost_per_token=custom_pricing_fields.input_cost_per_token or 0,
+                    output_cost_per_token=custom_pricing_fields.output_cost_per_token or 0,
+                )
             response_cost = completion_cost(
                 completion_response=response_object,
                 model=model,
@@ -1064,6 +1072,8 @@ def response_cost_calculator(
                 litellm_model_name=litellm_model_name,
                 router_model_id=router_model_id,
                 litellm_logging_obj=litellm_logging_obj,
+                custom_cost_per_token = cost_per_token_dict,
+                custom_cost_per_second = custom_pricing_fields.output_cost_per_second if custom_pricing_fields is not None else None,
             )
         return response_cost
     except Exception as e:
