@@ -3143,6 +3143,7 @@ def set_callbacks(callback_list, function_id=None):  # noqa: PLR0915
                 print_verbose("Initialized Greenscale Logger")
             elif callable(callback):
                 customLogger = CustomLogger()
+                pass
     except Exception as e:
         raise e
     return None
