@@ -52,6 +52,11 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
+from litellm.types.mcp import (
+    MCPPreCallRequestObject,
+    MCPPreCallResponseObject,
+    MCPDuringCallResponseObject,
+)
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
@@ -467,6 +472,162 @@ class ProxyLogging:
             ttl=alerting_threshold,
             litellm_parent_otel_span=None,
         )
+
+    async def async_pre_mcp_tool_call_hook(
+            self,
+            kwargs: dict,
+            request_obj: Any,
+            start_time: datetime,
+            end_time: datetime,
+    ) -> Optional[Any]:
+        """
+        Pre MCP Tool Call Hook
+
+        Use this to validate and modify MCP tool calls before execution.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPPreCallRequestObject, MCPPreCallResponseObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
+            global_callbacks=litellm.success_callback,
+        )
+
+        # Create the request object if it's not already one
+        if not isinstance(request_obj, MCPPreCallRequestObject):
+            request_obj = MCPPreCallRequestObject(
+                tool_name=kwargs.get("name", ""),
+                arguments=kwargs.get("arguments", {}),
+                server_name=kwargs.get("server_name"),
+                user_api_key_auth=kwargs.get("user_api_key_auth"),
+                hidden_params=HiddenParams()
+            )
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    response: Optional[MCPPreCallResponseObject] = (
+                        await callback.async_pre_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            request_obj=request_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                    )
+                    ######################################################################
+                    # if any of the callbacks return a response, use the first one
+                    # this allows for validation failures or argument modifications
+                    ######################################################################
+                    if response is not None:
+                        return self._parse_pre_mcp_call_hook_response(
+                            response=response, original_request=request_obj
+                        )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return None
+
+    def get_combined_callback_list(
+        self, dynamic_success_callbacks: Optional[List], global_callbacks: List
+    ) -> List:
+        if dynamic_success_callbacks is None:
+            return global_callbacks
+        return list(set(dynamic_success_callbacks + global_callbacks))
+
+
+
+    def _parse_pre_mcp_call_hook_response(
+            self, response: MCPPreCallResponseObject, original_request: MCPPreCallRequestObject
+    ) -> Dict[str, Any]:
+        """
+        Parse the response from the pre_mcp_tool_call_hook
+
+        1. Check if the call should proceed
+        2. Apply any argument modifications
+        3. Handle validation errors
+        """
+        result = {
+            "should_proceed": response.should_proceed,
+            "modified_arguments": response.modified_arguments or original_request.arguments,
+            "error_message": response.error_message,
+            "hidden_params": response.hidden_params,
+        }
+        return result
+
+    async def async_during_mcp_tool_call_hook(
+            self,
+            kwargs: dict,
+            request_obj: Any,
+            start_time: datetime,
+            end_time: datetime,
+    ) -> Optional[Any]:
+        """
+        During MCP Tool Call Hook
+
+        Use this for concurrent monitoring and validation during tool execution.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPDuringCallResponseObject, MCPDuringCallRequestObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
+            global_callbacks=litellm.success_callback,
+        )
+
+        # Create the request object if it's not already one
+        if not isinstance(request_obj, MCPDuringCallRequestObject):
+            request_obj = MCPDuringCallRequestObject(
+                tool_name=kwargs.get("name", ""),
+                arguments=kwargs.get("arguments", {}),
+                server_name=kwargs.get("server_name"),
+                start_time=start_time.timestamp() if start_time else None,
+                hidden_params=HiddenParams()
+            )
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    response: Optional[MCPDuringCallResponseObject] = (
+                        await callback.async_during_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            request_obj=request_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                    )
+                    ######################################################################
+                    # if any of the callbacks return a response, use the first one
+                    # this allows for execution control decisions
+                    ######################################################################
+                    if response is not None:
+                        return self._parse_during_mcp_call_hook_response(response=response)
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return None
+
+    def _parse_during_mcp_call_hook_response(
+            self, response: MCPDuringCallResponseObject
+    ) -> Dict[str, Any]:
+        """
+        Parse the response from the during_mcp_tool_call_hook
+
+        1. Check if execution should continue
+        2. Handle any error messages
+        3. Apply any hidden parameter updates
+        """
+        result = {
+            "should_continue": response.should_continue,
+            "error_message": response.error_message,
+            "hidden_params": response.hidden_params,
+        }
+        return result
 
     async def process_pre_call_hook_response(self, response, data, call_type):
         if isinstance(response, Exception):
@@ -1219,8 +1380,11 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
-        except Exception:
-            raise Exception("Unable to find Prisma binaries.")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
+            verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
+            verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
+            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),

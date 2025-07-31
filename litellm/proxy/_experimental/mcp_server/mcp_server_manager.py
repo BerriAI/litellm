@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 
@@ -78,21 +79,21 @@ def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVe
         MCPSpecVersionType: The enum value
     """
     if not protocol_version:
-        return MCPSpecVersion.jun_2025  # type: ignore
+        return MCPSpecVersion.jun_2025
     
     # If it's already an MCPSpecVersion enum, return it
     if isinstance(protocol_version, MCPSpecVersion):
-        return protocol_version  # type: ignore
+        return protocol_version
     
     # If it's a string, try to match it to enum values
     if isinstance(protocol_version, str):
         for version in MCPSpecVersion:
             if version.value == protocol_version:
-                return version  # type: ignore
+                return version
     
     # If no match found, return default
     verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
-    return MCPSpecVersion.jun_2025  # type: ignore
+    return MCPSpecVersion.jun_2025
 
 
 class MCPServerManager:
@@ -282,18 +283,22 @@ class MCPServerManager:
         """
         Get the allowed MCP Servers for the user
         """
-        allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
-            user_api_key_auth
-        )
-        verbose_logger.debug(
-            f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
-        )
-        if len(allowed_mcp_servers) > 0:
-            return allowed_mcp_servers
-        else:
-            verbose_logger.debug(
-                "No allowed MCP Servers found for user api key auth, returning default registry servers"
+        try:
+            allowed_mcp_servers = await MCPRequestHandler.get_allowed_mcp_servers(
+                user_api_key_auth
             )
+            verbose_logger.debug(
+                f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
+            )
+            if len(allowed_mcp_servers) > 0:
+                return allowed_mcp_servers
+            else:
+                verbose_logger.debug(
+                    "No allowed MCP Servers found for user api key auth, returning default registry servers"
+                )
+                return list(self.get_registry().keys())
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}. Returning default registry servers.")
             return list(self.get_registry().keys())
 
 
@@ -301,10 +306,15 @@ class MCPServerManager:
         """
         Get the tools for a given server
         """
-        server = self.get_mcp_server_by_id(server_id)
-        if server is None:
+        try:
+            server = self.get_mcp_server_by_id(server_id)
+            if server is None:
+                verbose_logger.warning(f"MCP Server {server_id} not found")
+                return []
+            return await self._get_tools_from_server(server)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get tools from server {server_id}: {str(e)}")
             return []
-        return await self._get_tools_from_server(server)
         
 
     async def list_tools(
@@ -431,83 +441,103 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
-        # Use protocol version from request if provided, otherwise use server's default
         protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
-        
         client = None
+        
         try:
-            # Use protocol version from request if provided, otherwise use server's default
-            protocol_version = mcp_protocol_version if mcp_protocol_version else server.spec_version
             client = self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 protocol_version=protocol_version,
             )
 
-            # Create a task for the client operations to ensure proper cancellation handling
-            async def _list_tools_task():
-                try:
-                    async with client:
-                        tools = await client.list_tools()
-                        verbose_logger.debug(f"Tools from {server.name}: {tools}")
-                        return tools
-                except asyncio.CancelledError:
-                    verbose_logger.warning(f"Client operation cancelled for {server.name}")
-                    return []
-                except Exception as e:
-                    verbose_logger.warning(f"Client operation failed for {server.name}: {str(e)}")
-                    return []
-
-            try:
-                # Add timeout to prevent hanging
-                tools = await asyncio.wait_for(_list_tools_task(), timeout=30.0)
-
-                # Create new tools with prefixed names
-                prefixed_tools = []
-                for tool in tools:
-                    # Always use alias for prefixing if present
-                    prefix = get_server_prefix(server)
-                    prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
-
-                    # Create new tool with prefixed name
-                    prefixed_tool = MCPTool(
-                        name=prefixed_name,
-                        description=tool.description,
-                        inputSchema=tool.inputSchema
-                    )
-                    prefixed_tools.append(prefixed_tool)
-
-                    # Update tool to server mapping with both original and prefixed names
-                    self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
-                    self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
-
-                verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
-                return prefixed_tools
-            except asyncio.TimeoutError:
-                verbose_logger.warning(f"Timeout while listing tools from {server.name}")
-                # Don't re-raise the exception, just return empty list
-                return []
-            except asyncio.CancelledError:
-                verbose_logger.warning(f"Task cancelled while listing tools from {server.name}")
-                # Don't re-raise cancellation, just return empty list
-                return []
-            except ConnectionError as e:
-                verbose_logger.warning(f"Connection error while listing tools from {server.name}: {str(e)}")
-                # Don't re-raise the exception, just return empty list
-                return []
-            except Exception as e:
-                verbose_logger.warning(f"Error listing tools from {server.name}: {str(e)}")
-                # Don't re-raise the exception, just return empty list
-                return []
+            tools = await self._fetch_tools_with_timeout(client, server.name)
+            return self._create_prefixed_tools(tools, server)
+            
         except Exception as e:
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
-            return []  # Return empty list on failure
+            return []
         finally:
             if client:
                 try:
                     await client.disconnect()
                 except Exception:
                     pass
+
+    async def _fetch_tools_with_timeout(self, client: MCPClient, server_name: str) -> List[MCPTool]:
+        """
+        Fetch tools from MCP client with timeout and error handling.
+        
+        Args:
+            client: MCP client instance
+            server_name: Name of the server for logging
+            
+        Returns:
+            List of tools from the server
+        """
+        async def _list_tools_task():
+            try:
+                await client.connect()
+                tools = await client.list_tools()
+                verbose_logger.debug(f"Tools from {server_name}: {tools}")
+                return tools
+            except asyncio.CancelledError:
+                verbose_logger.warning(f"Client operation cancelled for {server_name}")
+                return []
+            except Exception as e:
+                verbose_logger.warning(f"Client operation failed for {server_name}: {str(e)}")
+                return []
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
+        try:
+            return await asyncio.wait_for(_list_tools_task(), timeout=30.0)
+        except asyncio.TimeoutError:
+            verbose_logger.warning(f"Timeout while listing tools from {server_name}")
+            return []
+        except asyncio.CancelledError:
+            verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
+            return []
+        except ConnectionError as e:
+            verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
+            return []
+        except Exception as e:
+            verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
+            return []
+
+    def _create_prefixed_tools(self, tools: List[MCPTool], server: MCPServer) -> List[MCPTool]:
+        """
+        Create prefixed tools and update tool mapping.
+        
+        Args:
+            tools: List of original tools from server
+            server: Server instance
+            
+        Returns:
+            List of tools with prefixed names
+        """
+        prefixed_tools = []
+        prefix = get_server_prefix(server)
+        
+        for tool in tools:
+            prefixed_name = add_server_prefix_to_tool_name(tool.name, prefix)
+
+            prefixed_tool = MCPTool(
+                name=prefixed_name,
+                description=tool.description,
+                inputSchema=tool.inputSchema
+            )
+            prefixed_tools.append(prefixed_tool)
+
+            # Update tool to server mapping with both original and prefixed names
+            self.tool_name_to_mcp_server_name_mapping[tool.name] = prefix
+            self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
+
+        verbose_logger.info(f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}")
+        return prefixed_tools
 
     async def call_tool(
             self,
@@ -517,7 +547,7 @@ class MCPServerManager:
             mcp_auth_header: Optional[str] = None,
             mcp_server_auth_headers: Optional[Dict[str, str]] = None,
             mcp_protocol_version: Optional[str] = None,
-            litellm_logging_obj: Optional[Any] = None,
+            proxy_logging_obj: Optional[ProxyLogging] = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments (handles prefixed tool names)
@@ -528,8 +558,8 @@ class MCPServerManager:
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
-            mcp_protocol_version: Optional MCP protocol version from request header
-            litellm_logging_obj: Optional logging object for hook integration
+            proxy_logging_obj: Optional ProxyLogging object for hook integration
+
 
         Returns:
             CallToolResult from the MCP server
@@ -555,14 +585,14 @@ class MCPServerManager:
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
         #########################################################
-        if litellm_logging_obj:
+        if proxy_logging_obj:
             pre_hook_kwargs = {
                 "name": name,
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
             }
-            pre_hook_result = await litellm_logging_obj.async_pre_mcp_tool_call_hook(
+            pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
                 kwargs=pre_hook_kwargs,
                 request_obj=None,  # Will be created in the hook
                 start_time=start_time,
@@ -606,12 +636,20 @@ class MCPServerManager:
             # Initialize during_hook_task as None
             during_hook_task = None
             
-            # Start during hook if litellm_logging_obj is available
-            if litellm_logging_obj:
+            # Start during hook if proxy_logging_obj is available
+            if proxy_logging_obj:
                 try:
-                    during_hook_task = litellm_logging_obj.async_during_mcp_tool_call_hook(
-                        kwargs=litellm_logging_obj.model_call_details,
-                        start_time=start_time,
+                    during_hook_task = asyncio.create_task(
+                        proxy_logging_obj.async_during_mcp_tool_call_hook(
+                            kwargs={
+                                "name": name,
+                                "arguments": arguments,
+                                "server_name": server_name_from_prefix,
+                            },
+                            request_obj=None,  # Will be created in the hook
+                            start_time=start_time,
+                            end_time=start_time,
+                        )
                     )
                 except Exception as e:
                     verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
@@ -621,7 +659,7 @@ class MCPServerManager:
             #########################################################
             # Check during hook result if it completed
             #########################################################
-            if litellm_logging_obj and during_hook_task is not None:
+            if proxy_logging_obj and during_hook_task is not None:
                 try:
                     during_hook_result = await during_hook_task
                     if during_hook_result and not during_hook_result.get("should_continue", True):
