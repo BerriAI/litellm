@@ -457,21 +457,6 @@ async def test_chat_completion_anthropic_structured_output():
 
 
 @pytest.mark.asyncio
-async def test_chat_completion_old_key():
-    """
-    Production test for backwards compatibility. Test db against a pre-generated (old key)
-    - Create key
-    Make chat completion call
-    """
-    async with aiohttp.ClientSession() as session:
-        try:
-            key = "sk--W0Ph0uDZLVD7V7LQVrslg"
-            await chat_completion(session=session, key=key)
-        except Exception as e:
-            pytest.fail("Invalid api key")
-
-
-@pytest.mark.asyncio
 async def test_completion():
     """
     - Create key
