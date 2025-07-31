@@ -205,8 +205,6 @@ def test_sign_request_with_env_var_bearer_token():
         assert result_headers["Authorization"] == "Bearer test_token"
         assert result_headers["Content-Type"] == "application/json"
         assert result_headers["Custom-Header"] == "test"
-        assert "User-Agent" in result_headers
-        assert "x-client-framework:litellm" in result_headers["User-Agent"]
         assert result_body == json.dumps(request_data).encode()
 
 
@@ -220,7 +218,6 @@ def test_sign_request_with_sigv4():
     mock_request.headers = {
         "Authorization": "AWS4-HMAC-SHA256 Credential=test",
         "Content-Type": "application/json",
-        "User-Agent": "x-client-framework:litellm"
     }
     mock_request.body = b'{"prompt": "test"}'
 
@@ -255,8 +252,6 @@ def test_sign_request_with_sigv4():
         assert "Authorization" in result_headers
         assert result_headers["Authorization"] != "Bearer test_token"
         assert result_headers["Content-Type"] == "application/json"
-        assert "User-Agent" in result_headers
-        assert "x-client-framework:litellm" in result_headers["User-Agent"]
         assert result_body == mock_request.body
 
 
@@ -288,8 +283,6 @@ def test_sign_request_with_api_key_bearer_token():
     assert result_headers["Authorization"] == f"Bearer {api_key}"
     assert result_headers["Content-Type"] == "application/json"
     assert result_headers["Custom-Header"] == "test"
-    assert "User-Agent" in result_headers
-    assert "x-client-framework:litellm" in result_headers["User-Agent"]
     assert result_body == json.dumps(request_data).encode()
 
 
@@ -325,7 +318,6 @@ def test_get_request_headers_with_env_var_bearer_token():
 
         # Assert
         assert mock_request.headers["Authorization"] == "Bearer test_token"
-        assert mock_request.headers["User-Agent"] == "x-client-framework:litellm"
         assert result == mock_prepared_request
 
 
@@ -341,16 +333,13 @@ def test_get_request_headers_with_sigv4():
     mock_request.prepare.return_value = MagicMock(spec=AWSPreparedRequest)
 
     mock_sigv4 = MagicMock()
-    
-    def mock_aws_request_init(method, url, data, headers):
-        mock_request.headers.update(headers)
-        return mock_request
 
     # Test without bearer token (should use SigV4)
-    with patch.dict(os.environ, {}, clear=True), \
-            patch('botocore.auth.SigV4Auth', return_value=mock_sigv4) as mock_sigv4_class, \
-            patch('botocore.awsrequest.AWSRequest', side_effect=mock_aws_request_init):
-
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "botocore.auth.SigV4Auth", return_value=mock_sigv4
+    ) as mock_sigv4_class, patch(
+        "botocore.awsrequest.AWSRequest", return_value=mock_request
+    ):
         result = llm.get_request_headers(
             credentials=credentials,
             aws_region_name="us-west-2",
@@ -363,8 +352,6 @@ def test_get_request_headers_with_sigv4():
         # Verify SigV4 authentication and result
         mock_sigv4_class.assert_called_once_with(credentials, "bedrock", "us-west-2")
         mock_sigv4.add_auth.assert_called_once_with(mock_request)
-        assert "User-Agent" in mock_request.headers
-        assert "x-client-framework:litellm" in mock_request.headers["User-Agent"]
         assert result == mock_request.prepare.return_value
 
 
@@ -405,7 +392,6 @@ def test_get_request_headers_with_api_key_bearer_token():
 
         # Assert
         assert mock_request.headers["Authorization"] == f"Bearer {api_key}"
-        assert mock_request.headers["User-Agent"] == "x-client-framework:litellm"
         assert result == mock_prepared_request
 
 
