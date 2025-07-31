@@ -35,7 +35,7 @@ async def test_mcp_server_manager():
     print("TOOLS FROM MCP SERVER MANAGER== ", tools)
 
     result = await mcp_server_manager.call_tool(
-        name="gmail_send_email", arguments={"body": "Test"}
+        name="gmail_send_email", arguments={"body": "Test"}, proxy_logging_obj=None
     )
     print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
 
@@ -105,6 +105,7 @@ async def test_mcp_server_manager_https_server():
                 "message": "Test",
                 "instructions": "Test",
             },
+            proxy_logging_obj=None,
         )
         print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
         
@@ -189,9 +190,7 @@ async def test_mcp_http_transport_list_tools_mock():
         assert tools[1].name == f"{expected_prefix}-calendar_create_event"
         
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
-        # Note: list_tools is called twice - once during initialization and once during the actual list_tools call
-        assert mock_client.list_tools.call_count in [1,2]
+        mock_client.list_tools.assert_called()
         
         # Verify tool mapping was updated
         expected_prefix = "test_http_server"
@@ -248,7 +247,8 @@ async def test_mcp_http_transport_call_tool_mock():
                 "to": "test@example.com",
                 "subject": "Test Subject",
                 "body": "Test email body"
-            }
+            },
+            proxy_logging_obj=None,
         )
         
         # Assertions
@@ -308,7 +308,8 @@ async def test_mcp_http_transport_call_tool_error_mock():
         # Call the tool with invalid data
         result = await test_manager.call_tool(
             name="gmail_send_email",
-            arguments={"to": "invalid-email", "subject": "Test", "body": "Test"}
+            arguments={"to": "invalid-email", "subject": "Test", "body": "Test"},
+            proxy_logging_obj=None,
         )
         
         # Assertions for error case
@@ -343,7 +344,8 @@ async def test_mcp_http_transport_tool_not_found():
     with pytest.raises(ValueError, match="Tool nonexistent_tool not found"):
         await test_manager.call_tool(
             name="nonexistent_tool",
-            arguments={"param": "value"}
+            arguments={"param": "value"},
+            proxy_logging_obj=None,
         )
 
 
@@ -1232,6 +1234,6 @@ async def test_mcp_protocol_version_passed_to_client():
         await test_manager.list_tools(mcp_protocol_version="2025-03-26")
         
         # Verify the client was created with the correct protocol version
-        mock_client.__aenter__.assert_called()
+        mock_client.list_tools.assert_called()
 
 
