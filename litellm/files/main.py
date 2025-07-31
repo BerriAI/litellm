@@ -18,7 +18,6 @@ from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
-from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
@@ -44,7 +43,6 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
-bedrock_files_instance = BedrockFilesHandler()
 #################################################
 
 
@@ -255,20 +253,55 @@ def create_file(
                 create_file_data=_create_file_request,
             )
         elif custom_llm_provider == "bedrock":
-            response = bedrock_files_instance.create_file(
-                _is_async=_is_async,
+            # Use llm_http_handler for Bedrock with AWS params in litellm_params
+            bedrock_litellm_params = litellm_params_dict.copy()
+            bedrock_litellm_params.update({
+                k: v for k, v in {
+                    "aws_access_key_id": optional_params.get("aws_access_key_id"),
+                    "aws_secret_access_key": optional_params.get("aws_secret_access_key"),
+                    "aws_session_token": optional_params.get("aws_session_token"),
+                    "aws_region_name": optional_params.get("aws_region_name"),
+                    "aws_role_name": optional_params.get("aws_role_name"),
+                    "aws_session_name": optional_params.get("aws_session_name"),
+                    "aws_profile_name": optional_params.get("aws_profile_name"),
+                    "aws_web_identity_token": optional_params.get("aws_web_identity_token"),
+                    "aws_sts_endpoint": optional_params.get("aws_sts_endpoint"),
+                }.items() if v is not None
+            })
+            
+            # Create a minimal Bedrock files config
+            from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+            from litellm.types.utils import LlmProviders
+            
+            class BedrockFilesConfig(BaseFilesConfig):
+                @property
+                def custom_llm_provider(self) -> LlmProviders:
+                    return LlmProviders.BEDROCK
+                
+                def get_supported_openai_params(self, model: str):
+                    return []
+                
+                def transform_create_file_request(self, model: str, create_file_data, litellm_params: dict, optional_params: dict):
+                    return create_file_data
+                
+                def transform_create_file_response(self, model, raw_response, logging_obj, litellm_params):
+                    return raw_response
+            
+            provider_config = BedrockFilesConfig()
+            response = base_llm_http_handler.create_file(
+                provider_config=provider_config,
+                litellm_params=bedrock_litellm_params,
                 create_file_data=_create_file_request,
+                headers=extra_headers or {},
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                logging_obj=logging_obj,
+                _is_async=_is_async,
+                client=client
+                if client is not None
+                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                else None,
                 timeout=timeout,
-                max_retries=optional_params.max_retries,
-                aws_access_key_id=optional_params.get("aws_access_key_id"),
-                aws_secret_access_key=optional_params.get("aws_secret_access_key"),
-                aws_session_token=optional_params.get("aws_session_token"),
-                aws_region_name=optional_params.get("aws_region_name"),
-                aws_role_name=optional_params.get("aws_role_name"),
-                aws_session_name=optional_params.get("aws_session_name"),
-                aws_profile_name=optional_params.get("aws_profile_name"),
-                aws_web_identity_token=optional_params.get("aws_web_identity_token"),
-                aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
             )
         else:
             raise litellm.exceptions.BadRequestError(
