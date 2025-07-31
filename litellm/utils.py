@@ -5646,11 +5646,11 @@ def _calculate_retry_after(
 
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
     if retry_after is not None and 0 < retry_after <= 60:
-        return retry_after + jitter
+        return retry_after
 
-    # Calculate exponential backoff
-    num_retries = max_retries - remaining_retries
-    sleep_seconds = INITIAL_RETRY_DELAY * pow(2.0, num_retries)
+    initial_retry_delay = INITIAL_RETRY_DELAY
+    max_retry_delay = MAX_RETRY_DELAY
+    nb_retries = max_retries - remaining_retries
 
     # Make sure sleep_seconds is boxed between min_timeout and MAX_RETRY_DELAY
     sleep_seconds = max(sleep_seconds, min_timeout)
