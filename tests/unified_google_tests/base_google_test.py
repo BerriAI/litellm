@@ -23,10 +23,10 @@ from litellm.types.utils import StandardLoggingPayload
 
 
 def load_vertex_ai_credentials(model: str):
-    """Fixture to load Vertex AI credentials for all tests"""
+    """Load Vertex AI credentials for tests"""
     # Define the path to the vertex_key.json file
     if "vertex_ai" not in model:
-        return
+        return None
     print("loading vertex ai credentials")
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/vertex_key.json"
@@ -64,14 +64,7 @@ def load_vertex_ai_credentials(model: str):
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
     
-    # Yield the path for tests that might need it
-    yield os.path.abspath(temp_file.name)
-    
-    # Cleanup: remove the temporary file after all tests complete
-    try:
-        os.unlink(temp_file.name)
-    except OSError:
-        pass  # File might already be deleted
+    return os.path.abspath(temp_file.name)
 
 
 class TestCustomLogger(CustomLogger):
@@ -94,6 +87,22 @@ class BaseGoogleGenAITest:
     def model_config(self) -> Dict[str, Any]:
         """Override in subclasses to provide model-specific configuration"""
         raise NotImplementedError("Subclasses must implement model_config")
+    
+    @property
+    def _temp_files_to_cleanup(self):
+        """Lazy initialization of temp files list"""
+        if not hasattr(self, '_temp_files_list'):
+            self._temp_files_list = []
+        return self._temp_files_list
+    
+    def cleanup_temp_files(self):
+        """Clean up any temporary files created during testing"""
+        for temp_file in self._temp_files_to_cleanup:
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass  # File might already be deleted
+        self._temp_files_to_cleanup.clear()
     
     
     def _validate_non_streaming_response(self, response: Any):
@@ -157,7 +166,9 @@ class BaseGoogleGenAITest:
             ],
             role="user",
         )
-        load_vertex_ai_credentials(model=request_params["model"])
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
             
         litellm._turn_on_debug()
 
@@ -187,7 +198,9 @@ class BaseGoogleGenAITest:
     async def test_streaming_base(self, is_async: bool):
         """Base test for streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
-        load_vertex_ai_credentials(model=request_params["model"])
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
         contents = ContentDict(
             parts=[
                 PartDict(
@@ -235,7 +248,9 @@ class BaseGoogleGenAITest:
         litellm.callbacks = [test_custom_logger]
         
         request_params = self.model_config
-        load_vertex_ai_credentials(model=request_params["model"])
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
         contents = ContentDict(
             parts=[
                 PartDict(
@@ -277,7 +292,9 @@ class BaseGoogleGenAITest:
         litellm.callbacks = [test_custom_logger]
         
         request_params = self.model_config
-        load_vertex_ai_credentials(model=request_params["model"])
+        temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
+        if temp_file_path:
+            self._temp_files_to_cleanup.append(temp_file_path)
         contents = ContentDict(
             parts=[
                 PartDict(
