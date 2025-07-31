@@ -219,7 +219,7 @@ Here's how to use it:
 ```
 general_settings: 
   background_health_checks: True # enable background health checks
-  health_check_interval: 300 # frequency of background health checks
+ health_check_interval: 300 # frequency of background health checks
 ```
 
 2. Start server 
@@ -229,7 +229,24 @@ $ litellm /path/to/config.yaml
 
 3. Query health endpoint: 
 ```
-curl --location 'http://0.0.0.0:4000/health'
+ curl --location 'http://0.0.0.0:4000/health'
+```
+
+### Disable Background Health Checks For Specific Models
+
+Use this if you want to disable background health checks for specific models.
+
+If `background_health_checks` is enabled you can skip individual models by
+setting `disable_background_health_check: true` in the model's `model_info`.
+
+```yaml
+model_list:
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      disable_background_health_check: true
 ```
 
 ### Hide details
