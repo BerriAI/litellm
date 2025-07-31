@@ -174,6 +174,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]
     tpm: Optional[int]
     rpm: Optional[int]
+    tpd: Optional[int]
+    rpd: Optional[int]
 
 
 class ModelInfo(ModelInfoBase, total=False):
