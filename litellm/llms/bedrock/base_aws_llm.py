@@ -678,6 +678,12 @@ class BaseAWSLLM:
         headers: dict,
         api_key: Optional[str] = None,
     ) -> AWSPreparedRequest:
+        # update User-Agent field in headers to include framework name
+        if "User-Agent" in headers:
+            headers["User-Agent"] += " x-client-framework:litellm"
+        else:
+            headers["User-Agent"] = "x-client-framework:litellm"
+                
         if api_key is not None:
             aws_bearer_token: Optional[str] = api_key
         else:
@@ -733,6 +739,13 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
+        # update User-Agent field in headers to include framework name
+        headers = headers or {}
+        if "User-Agent" in headers:
+            headers["User-Agent"] += " x-client-framework:litellm"
+        else:
+            headers["User-Agent"] = "x-client-framework:litellm"
+                
         if api_key is not None:
             aws_bearer_token: Optional[str] = api_key
         else:
@@ -740,7 +753,6 @@ class BaseAWSLLM:
 
         # If aws bearer token is set, use it directly in the header
         if aws_bearer_token:
-            headers = headers or {}
             headers["Content-Type"] = "application/json"
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
             return headers, json.dumps(request_data).encode()
