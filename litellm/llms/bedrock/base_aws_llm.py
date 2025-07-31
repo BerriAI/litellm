@@ -476,25 +476,40 @@ class BaseAWSLLM:
         # we need to use the web identity token flow
         if (web_identity_token_file and irsa_role_arn and 
             aws_access_key_id is None and aws_secret_access_key is None):
-            # Read the web identity token
+            # For IRSA, we need to use boto3's built-in support for web identity tokens
+            # boto3 will automatically read the token file and assume the role
+            verbose_logger.debug(f"IRSA detected: using web identity token from {web_identity_token_file}")
+            
+            # Create an STS client that will use the web identity token automatically
+            import boto3
+            from botocore.credentials import Credentials
+            
             try:
-                with open(web_identity_token_file, 'r') as f:
-                    web_identity_token = f.read().strip()
-            except Exception as e:
-                verbose_logger.debug(f"Failed to read web identity token file: {e}")
-                # Fall through to regular flow
-            else:
-                # Get the region from environment or use default
-                aws_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+                # boto3 will automatically use the web identity token file
+                with tracer.trace("boto3.client(sts) with IRSA"):
+                    sts_client = boto3.client("sts", region_name=os.getenv("AWS_REGION", "us-east-1"))
                 
-                # Use the web identity token authentication method
-                return self._auth_with_web_identity_token(
-                    aws_web_identity_token=web_identity_token,
-                    aws_role_name=aws_role_name,
-                    aws_session_name=aws_session_name,
-                    aws_region_name=aws_region,
-                    aws_sts_endpoint=None,
+                # Now assume the target role
+                sts_response = sts_client.assume_role(
+                    RoleArn=aws_role_name, RoleSessionName=aws_session_name
                 )
+                
+                # Extract the credentials from the response
+                sts_credentials = sts_response["Credentials"]
+                credentials = Credentials(
+                    access_key=sts_credentials["AccessKeyId"],
+                    secret_key=sts_credentials["SecretAccessKey"],
+                    token=sts_credentials["SessionToken"],
+                )
+                
+                # Calculate TTL based on expiration time
+                expiration_time = sts_credentials["Expiration"]
+                ttl = int((expiration_time - datetime.now(expiration_time.tzinfo)).total_seconds())
+                
+                return credentials, ttl
+            except Exception as e:
+                verbose_logger.debug(f"Failed to assume role via IRSA: {e}")
+                # Fall through to regular flow
         
         # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
         # This allows the web identity token to work automatically

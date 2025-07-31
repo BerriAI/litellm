@@ -954,13 +954,19 @@ def test_auth_with_aws_role_irsa_environment():
             'AWS_ROLE_ARN': 'arn:aws:iam::111111111111:role/eks-service-account-role',
             'AWS_REGION': 'us-east-1'
         }):
-            # Mock the _auth_with_web_identity_token method
-            mock_creds = MagicMock()
-            mock_creds.access_key = 'irsa-access-key'
-            mock_creds.secret_key = 'irsa-secret-key'
-            mock_creds.token = 'irsa-session-token'
+            # Mock the boto3 STS client
+            mock_sts_client = MagicMock()
+            mock_assume_role_response = {
+                'Credentials': {
+                    'AccessKeyId': 'irsa-access-key',
+                    'SecretAccessKey': 'irsa-secret-key',
+                    'SessionToken': 'irsa-session-token',
+                    'Expiration': datetime.now() + timedelta(hours=1)
+                }
+            }
+            mock_sts_client.assume_role.return_value = mock_assume_role_response
             
-            with patch.object(base_llm, '_auth_with_web_identity_token', return_value=(mock_creds, 3600)) as mock_web_auth:
+            with patch('boto3.client', return_value=mock_sts_client) as mock_boto3_client:
                 # Call _auth_with_aws_role without explicit credentials
                 creds, ttl = base_llm._auth_with_aws_role(
                     aws_access_key_id=None,
@@ -969,18 +975,20 @@ def test_auth_with_aws_role_irsa_environment():
                     aws_session_name='test-session'
                 )
                 
-                # Verify it used the web identity token flow
-                mock_web_auth.assert_called_once_with(
-                    aws_web_identity_token='test-web-identity-token',
-                    aws_role_name='arn:aws:iam::222222222222:role/target-role',
-                    aws_session_name='test-session',
-                    aws_region_name='us-east-1',
-                    aws_sts_endpoint=None
+                # Verify boto3.client was called with sts and region
+                mock_boto3_client.assert_called_with('sts', region_name='us-east-1')
+                
+                # Verify assume_role was called with correct parameters
+                mock_sts_client.assume_role.assert_called_once_with(
+                    RoleArn='arn:aws:iam::222222222222:role/target-role',
+                    RoleSessionName='test-session'
                 )
                 
                 # Verify the returned credentials
                 assert creds.access_key == 'irsa-access-key'
-                assert ttl == 3600
+                assert creds.secret_key == 'irsa-secret-key'
+                assert creds.token == 'irsa-session-token'
+                assert ttl > 0  # TTL should be positive
     finally:
         # Clean up the temporary file
         os.unlink(token_file)
