@@ -529,7 +529,6 @@ class BedrockEventStreamDecoderBase:
 # Helper functions for Bedrock file and batch operations
 def extract_bedrock_file_content(create_file_data: dict) -> tuple[bytes, str]:
     """Extract file content and filename from create_file_data"""
-    import uuid
     
     file_obj = create_file_data["file"]
     purpose = create_file_data.get("purpose", "batch")
