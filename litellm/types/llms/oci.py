@@ -35,16 +35,23 @@ OCIContentPartUnion = Union[OCITextContentPart, OCIImageContentPart]
 
 # --- Modelos para Tools e Tool Calls ---
 
-class OCIFunction(BaseModel):
-    """Define uma função que o modelo pode chamar."""
-    name: str
-    arguments: str # Argumentos devem ser um JSON serializado em string
+# class OCIFunction(BaseModel):
+#     """Define uma função que o modelo pode chamar."""
+#     name: str
+#     arguments: str # Argumentos devem ser um JSON serializado em string
+
+# class OCIToolCall(BaseModel):
+#     """Representa uma chamada de ferramenta feita pelo modelo."""
+#     id: str
+#     type: Literal["FUNCTION"] = "FUNCTION"
+#     function: OCIFunction
 
 class OCIToolCall(BaseModel):
     """Representa uma chamada de ferramenta feita pelo modelo."""
     id: str
     type: Literal["FUNCTION"] = "FUNCTION"
-    function: OCIFunction
+    name: str
+    arguments: str  # Argumentos devem ser um JSON serializado em string
 
 class OCIToolDefinition(BaseModel):
     """Define uma ferramenta que pode ser usada pelo modelo."""

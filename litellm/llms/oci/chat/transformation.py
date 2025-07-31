@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage, ChatCompletionTextObject
 from litellm.types.utils import LlmProviders
 from litellm.utils import ChatCompletionMessageToolCall, CustomStreamWrapper, ModelResponse, Usage
-from litellm.types.llms.oci import OCIChatRequestPayload, OCICompletionPayload, OCICompletionResponse, OCIFunction, OCIImageContentPart, OCIMessage, OCIRoles, OCIServingMode, OCITextContentPart, OCIToolCall, OCIToolDefinition, OCIVendors
+from litellm.types.llms.oci import OCIChatRequestPayload, OCICompletionPayload, OCICompletionResponse, OCIImageContentPart, OCIMessage, OCIRoles, OCIServingMode, OCITextContentPart, OCIToolCall, OCIToolDefinition, OCIVendors
 from litellm.llms.oci.common_utils import OCIError
 
 if TYPE_CHECKING:
@@ -613,15 +613,22 @@ def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list
         if not isinstance(arguments, str):
             raise Exception("Prop `arguments` is not a string")
 
+        # tool_calls_formated.append(OCIToolCall(
+        #     id=tool_call_id,
+        #     type="FUNCTION",
+        #     function=OCIFunction(
+        #         name=function_name,
+        #         arguments=arguments
+        #     )
+        # ))
+    
         tool_calls_formated.append(OCIToolCall(
             id=tool_call_id,
             type="FUNCTION",
-            function=OCIFunction(
-                name=function_name,
-                arguments=arguments
-            )
+            name=function_name,
+            arguments=arguments
         ))
-    
+
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
         content=None,
@@ -696,8 +703,8 @@ def adapt_tools_to_openai_standard(tools: list[OCIToolCall]) -> list[ChatComplet
             id=tool.id,
             type="function",
             function={
-                "name": tool.function.name,
-                "arguments": tool.function.arguments,
+                "name": tool.name,
+                "arguments": tool.arguments,
             }
         )
         new_tools.append(new_tool)
