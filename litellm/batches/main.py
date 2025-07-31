@@ -21,6 +21,7 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
+from litellm.llms.bedrock.batches.handler import BedrockBatchesHandler
 from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.secret_managers.main import get_secret_str
@@ -38,6 +39,7 @@ from litellm.utils import client, get_litellm_params, supports_httpx_timeout
 openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
 vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
+bedrock_batches_instance = BedrockBatchesHandler()
 #################################################
 
 
@@ -46,7 +48,7 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -94,7 +96,7 @@ def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -246,6 +248,23 @@ def create_batch(
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
             )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_batches_instance.create_batch(
+                _is_async=_is_async,
+                create_batch_data=_create_batch_request,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                model_id=optional_params.get("model"),
+                aws_access_key_id=optional_params.get("aws_access_key_id"),
+                aws_secret_access_key=optional_params.get("aws_secret_access_key"),
+                aws_session_token=optional_params.get("aws_session_token"),
+                aws_region_name=optional_params.get("aws_region_name"),
+                aws_role_name=optional_params.get("aws_role_name"),
+                aws_session_name=optional_params.get("aws_session_name"),
+                aws_profile_name=optional_params.get("aws_profile_name"),
+                aws_web_identity_token=optional_params.get("aws_web_identity_token"),
+                aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support custom_llm_provider={} for 'create_batch'".format(
@@ -267,7 +286,7 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -309,7 +328,7 @@ async def aretrieve_batch(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -451,9 +470,25 @@ def retrieve_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_batches_instance.retrieve_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                aws_access_key_id=optional_params.get("aws_access_key_id"),
+                aws_secret_access_key=optional_params.get("aws_secret_access_key"),
+                aws_session_token=optional_params.get("aws_session_token"),
+                aws_region_name=optional_params.get("aws_region_name"),
+                aws_role_name=optional_params.get("aws_role_name"),
+                aws_session_name=optional_params.get("aws_session_name"),
+                aws_profile_name=optional_params.get("aws_profile_name"),
+                aws_web_identity_token=optional_params.get("aws_web_identity_token"),
+                aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'retrieve_batch'. Only ['openai', 'azure', 'vertex_ai', 'bedrock'] are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
