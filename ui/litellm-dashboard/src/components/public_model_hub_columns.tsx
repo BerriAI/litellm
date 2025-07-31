@@ -14,6 +14,8 @@ interface ModelGroupInfo {
   mode?: string;
   tpm?: number;
   rpm?: number;
+  tpd?: number;
+  rpd?: number;
   supports_parallel_function_calling: boolean;
   supports_vision: boolean;
   supports_function_calling: boolean;
@@ -33,10 +35,12 @@ const formatTokens = (tokens: number | undefined) => {
   return tokens.toString();
 };
 
-const formatLimits = (rpm?: number, tpm?: number) => {
+const formatLimits = (rpm?: number, tpm?: number, rpd?: number, tpd?: number) => {
   const limits = [];
   if (rpm) limits.push(`RPM: ${rpm.toLocaleString()}`);
   if (tpm) limits.push(`TPM: ${tpm.toLocaleString()}`);
+  if (rpd) limits.push(`RPD: ${rpd.toLocaleString()}`);
+  if (tpd) limits.push(`TPD: ${tpd.toLocaleString()}`);
   return limits.length > 0 ? limits.join(", ") : "N/A";
 };
 
@@ -209,10 +213,10 @@ export const publicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => [
       const model = row.original;
       return (
         <Text className="text-xs text-gray-600">
-          {formatLimits(model.rpm, model.tpm)}
+          {formatLimits(model.rpm, model.tpm, model.rpd, model.tpd)}
         </Text>
       );
     },
     size: 150,
   },
-]; 
+];

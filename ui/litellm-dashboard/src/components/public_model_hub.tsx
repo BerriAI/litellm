@@ -30,6 +30,8 @@ interface ModelGroupInfo {
   mode?: string;
   tpm?: number;
   rpm?: number;
+  tpd?: number;
+  rpd?: number;
   supports_parallel_function_calling: boolean;
   supports_vision: boolean;
   supports_function_calling: boolean;
@@ -253,10 +255,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
     return tokens.toString();
   };
 
-  const formatLimits = (rpm?: number, tpm?: number) => {
+  const formatLimits = (rpm?: number, tpm?: number, rpd?: number, tpd?: number) => {
     const limits = [];
     if (rpm) limits.push(`RPM: ${rpm.toLocaleString()}`);
     if (tpm) limits.push(`TPM: ${tpm.toLocaleString()}`);
+    if (rpd) limits.push(`RPD: ${rpd.toLocaleString()}`);
+    if (tpd) limits.push(`TPD: ${tpd.toLocaleString()}`);
     return limits.length > 0 ? limits.join(", ") : "N/A";
   };
 
@@ -467,7 +471,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
         const model = row.original;
         return (
           <Text className="text-xs text-gray-600">
-            {formatLimits(model.rpm, model.tpm)}
+            {formatLimits(model.rpm, model.tpm, model.rpd, model.tpd)}
           </Text>
         );
       },
@@ -770,7 +774,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
             </div>
 
             {/* Rate Limits */}
-            {(selectedModel.tpm || selectedModel.rpm) && (
+            {(selectedModel.tpm || selectedModel.rpm || selectedModel.tpd || selectedModel.rpd) && (
               <div>
                 <Text className="text-lg font-semibold mb-4">Rate Limits</Text>
                 <div className="grid grid-cols-2 gap-4">
@@ -784,6 +788,18 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
                     <div>
                       <Text className="font-medium">Requests per Minute:</Text>
                       <Text>{selectedModel.rpm.toLocaleString()}</Text>
+                    </div>
+                  )}
+                  {selectedModel.tpd && (
+                    <div>
+                      <Text className="font-medium">Tokens per Day:</Text>
+                      <Text>{selectedModel.tpd.toLocaleString()}</Text>
+                    </div>
+                  )}
+                  {selectedModel.rpd && (
+                    <div>
+                      <Text className="font-medium">Requests per Day:</Text>
+                      <Text>{selectedModel.rpd.toLocaleString()}</Text>
                     </div>
                   )}
                 </div>
@@ -860,4 +876,4 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken }) => {
   );
 };
 
-export default PublicModelHub; 
+export default PublicModelHub;

@@ -176,6 +176,8 @@ export default function ModelInfoView({
         organization: values.organization,
         tpm: values.tpm,
         rpm: values.rpm,
+        tpd: values.tpd,
+        rpd: values.rpd,
         max_retries: values.max_retries,
         timeout: values.timeout,
         stream_timeout: values.stream_timeout,
@@ -319,16 +321,15 @@ export default function ModelInfoView({
               {modelData.model_info.id}
             </Text>
             <Button
-                type="text"
-                size="small"
-                icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-                className={`left-2 z-10 transition-all duration-200 ${
-                  copiedStates["model-id"] 
-                    ? 'text-green-600 bg-green-50 border-green-200' 
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+              type="text"
+              size="small"
+              icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
+                ? 'text-green-600 bg-green-50 border-green-200'
+                : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
                 }`}
-              />
+            />
           </div>
         </div>
         <div className="flex gap-2">
@@ -430,12 +431,12 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(
-                      modelData.model_info.created_at
-                    ).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })
+                    modelData.model_info.created_at
+                  ).toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -494,6 +495,8 @@ export default function ModelInfoView({
                     organization: localModelData.litellm_params.organization,
                     tpm: localModelData.litellm_params.tpm,
                     rpm: localModelData.litellm_params.rpm,
+                    tpd: localModelData.litellm_params.tpd,
+                    rpd: localModelData.litellm_params.rpd,
                     max_retries: localModelData.litellm_params.max_retries,
                     timeout: localModelData.litellm_params.timeout,
                     stream_timeout:
@@ -501,15 +504,15 @@ export default function ModelInfoView({
                     input_cost: localModelData.litellm_params
                       .input_cost_per_token
                       ? localModelData.litellm_params.input_cost_per_token *
-                        1_000_000
+                      1_000_000
                       : localModelData.model_info?.input_cost_per_token *
-                          1_000_000 || null,
+                      1_000_000 || null,
                     output_cost: localModelData.litellm_params
                       ?.output_cost_per_token
                       ? localModelData.litellm_params.output_cost_per_token *
-                        1_000_000
+                      1_000_000
                       : localModelData.model_info?.output_cost_per_token *
-                          1_000_000 || null,
+                      1_000_000 || null,
                     cache_control: localModelData.litellm_params
                       ?.cache_control_injection_points
                       ? true
@@ -572,14 +575,14 @@ export default function ModelInfoView({
                             {localModelData?.litellm_params
                               ?.input_cost_per_token
                               ? (
-                                  localModelData.litellm_params
-                                    ?.input_cost_per_token * 1_000_000
-                                ).toFixed(4)
+                                localModelData.litellm_params
+                                  ?.input_cost_per_token * 1_000_000
+                              ).toFixed(4)
                               : localModelData?.model_info?.input_cost_per_token
                                 ? (
-                                    localModelData.model_info
-                                      .input_cost_per_token * 1_000_000
-                                  ).toFixed(4)
+                                  localModelData.model_info
+                                    .input_cost_per_token * 1_000_000
+                                ).toFixed(4)
                                 : null}
                           </div>
                         )}
@@ -598,15 +601,15 @@ export default function ModelInfoView({
                             {localModelData?.litellm_params
                               ?.output_cost_per_token
                               ? (
-                                  localModelData.litellm_params
+                                localModelData.litellm_params
+                                  .output_cost_per_token * 1_000_000
+                              ).toFixed(4)
+                              : localModelData?.model_info
+                                ?.output_cost_per_token
+                                ? (
+                                  localModelData.model_info
                                     .output_cost_per_token * 1_000_000
                                 ).toFixed(4)
-                              : localModelData?.model_info
-                                    ?.output_cost_per_token
-                                ? (
-                                    localModelData.model_info
-                                      .output_cost_per_token * 1_000_000
-                                  ).toFixed(4)
                                 : null}
                           </div>
                         )}
@@ -688,6 +691,36 @@ export default function ModelInfoView({
                       </div>
 
                       <div>
+                        <Text className="font-medium">
+                          TPD (Tokens per Day)
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="tpd" className="mb-0">
+                            <NumericalInput placeholder="Enter TPD" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.tpd || "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">
+                          RPD (Requests per Day)
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="rpd" className="mb-0">
+                            <NumericalInput placeholder="Enter RPD" />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.rpd || "Not Set"}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
                         <Text className="font-medium">Max Retries</Text>
                         {isEditing ? (
                           <Form.Item name="max_retries" className="mb-0">
@@ -757,7 +790,7 @@ export default function ModelInfoView({
                                 localModelData.model_info.access_groups
                               ) ? (
                                 localModelData.model_info.access_groups.length >
-                                0 ? (
+                                  0 ? (
                                   <div className="flex flex-wrap gap-1">
                                     {localModelData.model_info.access_groups.map(
                                       (group: string, index: number) => (
@@ -787,14 +820,14 @@ export default function ModelInfoView({
                         <Text className="font-medium">
                           Guardrails{' '}
                           <Tooltip title="Apply safety guardrails to this model to filter content or enforce policies">
-                            <a 
-                              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                              target="_blank" 
+                            <a
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                              target="_blank"
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
                             >
                               <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                            </a>  
+                            </a>
                           </Tooltip>
                         </Text>
                         {isEditing ? (
@@ -814,34 +847,34 @@ export default function ModelInfoView({
                               }))}
                             />
                           </Form.Item>
-                                                 ) : (
-                           <div className="mt-1 p-2 bg-gray-50 rounded">
-                             {localModelData.litellm_params?.guardrails ? (
-                               Array.isArray(localModelData.litellm_params.guardrails) ? (
-                                 localModelData.litellm_params.guardrails.length > 0 ? (
-                                   <div className="flex flex-wrap gap-1">
-                                     {localModelData.litellm_params.guardrails.map(
-                                       (guardrail: string, index: number) => (
-                                         <span
-                                           key={index}
-                                           className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
-                                         >
-                                           {guardrail}
-                                         </span>
-                                       )
-                                     )}
-                                   </div>
-                                 ) : (
-                                   "No guardrails assigned"
-                                 )
-                               ) : (
-                                 localModelData.litellm_params.guardrails
-                               )
-                             ) : (
-                               "Not Set"
-                             )}
-                           </div>
-                         )}
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.guardrails ? (
+                              Array.isArray(localModelData.litellm_params.guardrails) ? (
+                                localModelData.litellm_params.guardrails.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {localModelData.litellm_params.guardrails.map(
+                                      (guardrail: string, index: number) => (
+                                        <span
+                                          key={index}
+                                          className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
+                                        >
+                                          {guardrail}
+                                        </span>
+                                      )
+                                    )}
+                                  </div>
+                                ) : (
+                                  "No guardrails assigned"
+                                )
+                              ) : (
+                                localModelData.litellm_params.guardrails
+                              )
+                            ) : (
+                              "Not Set"
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Cache Control Section */}

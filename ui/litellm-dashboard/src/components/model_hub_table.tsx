@@ -39,6 +39,8 @@ interface ModelGroupInfo {
   mode?: string;
   tpm?: number;
   rpm?: number;
+  tpd?: number;
+  rpd?: number;
   supports_parallel_function_calling: boolean;
   supports_vision: boolean;
   supports_function_calling: boolean;
@@ -195,7 +197,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   if (publicPage && publicPageAllowed) {
     return <PublicModelHub accessToken={accessToken} />;
   }
-  
+  debugger;
   return (
     <div className="w-full mx-4 h-[75vh]">
       {publicPage == false ? (
@@ -393,7 +395,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             </div>
 
             {/* Rate Limits */}
-            {(selectedModel.tpm || selectedModel.rpm) && (
+            {(selectedModel.tpm || selectedModel.rpm || selectedModel.tpd || selectedModel.rpd) && (
               <div>
                 <Text className="text-lg font-semibold mb-4">Rate Limits</Text>
                 <div className="grid grid-cols-2 gap-4">
@@ -407,6 +409,18 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     <div>
                       <Text className="font-medium">Requests per Minute:</Text>
                       <Text>{selectedModel.rpm.toLocaleString()}</Text>
+                    </div>
+                  )}
+                  {selectedModel.tpd && (
+                    <div>
+                      <Text className="font-medium">Tokens per Day:</Text>
+                      <Text>{selectedModel.tpd.toLocaleString()}</Text>
+                    </div>
+                  )}
+                  {selectedModel.rpd && (
+                    <div>
+                      <Text className="font-medium">Requests per Day:</Text>
+                      <Text>{selectedModel.rpd.toLocaleString()}</Text>
                     </div>
                   )}
                 </div>
@@ -465,4 +479,4 @@ print(response.choices[0].message.content)`}
   );
 };
 
-export default ModelHubTable; 
+export default ModelHubTable;

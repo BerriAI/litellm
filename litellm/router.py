@@ -5333,6 +5333,8 @@ class Router:
 
         total_tpm: Optional[int] = None
         total_rpm: Optional[int] = None
+        total_tpd: Optional[int] = None
+        total_rpd: Optional[int] = None
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         model_list = self.get_model_list(model_name=model_group)
         if model_list is None:
@@ -5374,6 +5376,24 @@ class Router:
                 _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)  # type: ignore
             if _deployment_rpm is None:
                 _deployment_rpm = model.get("model_info", {}).get("rpm", None)  # type: ignore
+
+            # get model tpd
+            _deployment_tpd: Optional[int] = None
+            if _deployment_tpd is None:
+                _deployment_tpd = model.get("tpd", None)  # type: ignore
+            if _deployment_tpd is None:
+                _deployment_tpd = model.get("litellm_params", {}).get("tpd", None)  # type: ignore
+            if _deployment_tpd is None:
+                _deployment_tpd = model.get("model_info", {}).get("tpd", None)  # type: ignore
+
+            # get model rpd
+            _deployment_rpd: Optional[int] = None
+            if _deployment_rpd is None:
+                _deployment_rpd = model.get("rpd", None)  # type: ignore
+            if _deployment_rpd is None:
+                _deployment_rpd = model.get("litellm_params", {}).get("rpd", None)  # type: ignore
+            if _deployment_rpd is None:
+                _deployment_rpd = model.get("model_info", {}).get("rpd", None)  # type: ignore
 
             # get model info
             try:
@@ -5515,6 +5535,10 @@ class Router:
                     _deployment_tpm = model_info.get("tpm")
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
+                if model_info.get("tpd", None) is not None and _deployment_tpd is None:
+                    _deployment_tpd = model_info.get("tpd")
+                if model_info.get("rpd", None) is not None and _deployment_rpd is None:
+                    _deployment_rpd = model_info.get("rpd")
 
             if _deployment_tpm is not None:
                 if total_tpm is None:
@@ -5525,6 +5549,16 @@ class Router:
                 if total_rpm is None:
                     total_rpm = 0
                 total_rpm += _deployment_rpm  # type: ignore
+
+            if _deployment_tpd is not None:
+                if total_tpd is None:
+                    total_tpd = 0
+                total_tpd += _deployment_tpd  # type: ignore
+
+            if _deployment_rpd is not None:
+                if total_rpd is None:
+                    total_rpd = 0
+                total_rpd += _deployment_rpd  # type: ignore
         if model_group_info is not None:
             ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
             if total_tpm is not None:
@@ -5532,6 +5566,12 @@ class Router:
 
             if total_rpm is not None:
                 model_group_info.rpm = total_rpm
+
+            if total_tpd is not None:
+                model_group_info.tpd = total_tpd
+
+            if total_rpd is not None:
+                model_group_info.rpd = total_rpd
 
             ## UPDATE WITH CONFIGURABLE CLIENTSIDE AUTH PARAMS FOR MODEL GROUP
             if configurable_clientside_auth_params is not None:

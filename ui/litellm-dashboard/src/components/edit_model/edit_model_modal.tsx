@@ -177,6 +177,22 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
             <InputNumber min={0} step={1} />
           </Form.Item>
 
+          <Form.Item
+            label="tpd"
+            name="tpd"
+            tooltip="int (optional) - Tokens limit for this deployment: in tokens per day (tpd). Find this information on your model/providers website"
+          >
+            <InputNumber min={0} step={1} />
+          </Form.Item>
+
+          <Form.Item
+            label="rpd"
+            name="rpd"
+            tooltip="int (optional) - Rate limit for this deployment: in requests per day (rpd). Find this information on your model/providers website"
+          >
+            <InputNumber min={0} step={1} />
+          </Form.Item>
+
           <Form.Item label="max_retries" name="max_retries">
             <InputNumber min={0} step={1} />
           </Form.Item>
