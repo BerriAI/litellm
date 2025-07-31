@@ -55,24 +55,59 @@ def _create_bedrock_file_handler(
     is_async: bool,
     client: Optional[Union[HTTPHandler, AsyncHTTPHandler]],
     timeout: Optional[Union[float, httpx.Timeout]],
-) -> OpenAIFileObject:
+) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
     """Helper function to handle Bedrock file creation"""
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
-    
+
     class BedrockFilesConfig(BaseFilesConfig):
         @property
         def custom_llm_provider(self) -> LlmProviders:
             return LlmProviders.BEDROCK
-        
+
         def get_supported_openai_params(self, model: str):
             return []
-        
-        def transform_create_file_request(self, model: str, create_file_data, litellm_params: dict, optional_params: dict):
-            return create_file_data
-        
-        def transform_create_file_response(self, model, raw_response, logging_obj, litellm_params):
+
+        def map_openai_params(
+            self,
+            non_default_params: dict,
+            optional_params: dict,
+            model: str,
+            drop_params: bool,
+        ) -> dict:
+            return {}
+
+        def validate_environment(
+            self,
+            headers: dict,
+            model: str,
+            messages: list,
+            optional_params: dict,
+            litellm_params: dict,
+            api_key: Optional[str] = None,
+            api_base: Optional[str] = None,
+        ) -> dict:
+            # Basic validation for AWS environment
+            return {}
+
+        def get_error_class(self, error_message: str, status_code: int, headers):
+            from litellm.llms.bedrock.common_utils import BedrockError
+            return BedrockError(message=error_message, status_code=status_code)
+
+        def transform_create_file_request(
+            self,
+            model: str,
+            create_file_data: CreateFileRequest,
+            optional_params: dict,
+            litellm_params: dict,
+        ) -> Union[bytes, str, dict]:
+            # CreateFileRequest is a TypedDict, convert to dict
+            return dict(create_file_data)
+
+        def transform_create_file_response(
+            self, model, raw_response, logging_obj, litellm_params
+        ):
             return raw_response
-    
+
     provider_config = BedrockFilesConfig()
     return base_llm_http_handler.create_file(
         provider_config=provider_config,
@@ -84,13 +119,10 @@ def _create_bedrock_file_handler(
         logging_obj=logging_obj,
         _is_async=is_async,
         client=client
-        if client is not None
-        and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+        if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
         else None,
         timeout=timeout,
     )
-
-
 
 
 @client
@@ -301,7 +333,10 @@ def create_file(
             )
         elif custom_llm_provider == "bedrock":
             from litellm.llms.bedrock.common_utils import prepare_bedrock_params
-            bedrock_litellm_params = prepare_bedrock_params(optional_params, litellm_params_dict)
+
+            bedrock_litellm_params = prepare_bedrock_params(
+                optional_params, litellm_params_dict
+            )
             response = _create_bedrock_file_handler(
                 bedrock_litellm_params=bedrock_litellm_params,
                 create_file_request=_create_file_request,
