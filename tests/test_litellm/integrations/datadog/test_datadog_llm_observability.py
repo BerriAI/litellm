@@ -281,7 +281,14 @@ async def test_dd_llms_obs_redaction(mock_env_vars):
     assert test_s3_logger.logged_standard_logging_payload["response"]["choices"][0]["message"]["content"] == "Hi there!"
     
     
-
+@pytest.fixture
+def mock_env_vars(self):
+    """Mock environment variables for DataDog"""
+    with patch.dict(os.environ, {
+        "DD_API_KEY": "test_api_key",
+        "DD_SITE": "us5.datadoghq.com"
+    }):
+        yield
 
 @pytest.mark.asyncio
 async def test_create_llm_obs_payload(mock_env_vars):
