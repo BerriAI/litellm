@@ -124,19 +124,23 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.separateHealthApp }}
+            - name: health
+              containerPort: {{ .Values.separateHealthPort | default 8081 }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health/liveliness
-              port: {{ if .Values.separateHealthApp }}{{ .Values.separateHealthPort | default "8081" }}{{ else }}http{{ end }}
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
           readinessProbe:
             httpGet:
               path: /health/readiness
-              port: {{ if .Values.separateHealthApp }}{{ .Values.separateHealthPort | default "8081" }}{{ else }}http{{ end }}
-          # Give the container time to start up.  Up to 5 minutes (10 * 30 seconds)
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
           startupProbe:
             httpGet:
               path: /health/readiness
-              port: {{ if .Values.separateHealthApp }}{{ .Values.separateHealthPort | default "8081" }}{{ else }}http{{ end }}
+              port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
             failureThreshold: 30
             periodSeconds: 10
           resources:
