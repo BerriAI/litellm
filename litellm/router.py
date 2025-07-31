@@ -2914,7 +2914,8 @@ class Router:
             )
 
             async def create_file_for_deployment(deployment: dict) -> OpenAIFileObject:
-                kwargs_copy = copy.deepcopy(kwargs)
+                from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+                kwargs_copy = safe_deep_copy(kwargs)
                 self._update_kwargs_with_deployment(
                     deployment=deployment,
                     kwargs=kwargs_copy,
