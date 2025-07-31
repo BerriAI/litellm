@@ -2409,7 +2409,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                custom_prompt_dict=custom_prompt_dict,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 timeout=timeout,  # type: ignore
