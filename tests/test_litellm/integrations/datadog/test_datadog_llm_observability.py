@@ -282,7 +282,7 @@ async def test_dd_llms_obs_redaction(mock_env_vars):
     
     
 @pytest.fixture
-def mock_env_vars(self):
+def mock_env_vars():
     """Mock environment variables for DataDog"""
     with patch.dict(os.environ, {
         "DD_API_KEY": "test_api_key",
