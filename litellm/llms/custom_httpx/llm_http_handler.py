@@ -2211,6 +2211,18 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
+        # Handle Bedrock-specific file creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return self._create_bedrock_file(
+                create_file_data=create_file_data,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                sync_httpx_client=sync_httpx_client,
+                timeout=timeout,
+            )
+
         if isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -2279,6 +2291,18 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
+
+        # Handle Bedrock-specific file creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return await self._async_create_bedrock_file(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=async_httpx_client,
+                timeout=timeout,
+            )
 
         if isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
@@ -2391,6 +2415,18 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
+        # Handle Bedrock-specific batch creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return self._create_bedrock_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                sync_httpx_client=sync_httpx_client,
+                timeout=timeout,
+            )
+
         try:
             batch_response = sync_httpx_client.post(
                 url=api_base,
@@ -2432,6 +2468,18 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        # Handle Bedrock-specific batch creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return await self._async_create_bedrock_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=async_httpx_client,
+                timeout=timeout,
+            )
+
         try:
             batch_response = await async_httpx_client.post(
                 url=api_base,
@@ -2452,6 +2500,336 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    def _create_bedrock_batch(
+        self,
+        transformed_request: Union[bytes, str, dict],
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        sync_httpx_client: HTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Batch:
+        """
+        Creates a Bedrock batch synchronously
+        """
+        import asyncio
+        return asyncio.run(
+            self._async_create_bedrock_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.BEDROCK
+                ),
+                timeout=timeout,
+            )
+        )
+
+    async def _async_create_bedrock_batch(
+        self,
+        transformed_request: Union[bytes, str, dict],
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        async_httpx_client: AsyncHTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Batch:
+        """
+        Creates a Bedrock batch asynchronously using AWS Batch API
+        """
+        import uuid
+        import time
+        from litellm import get_secret_str
+        
+        verbose_logger.debug("Creating Bedrock batch with data: %s", transformed_request)
+        
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock batch. Run 'pip install boto3'.")
+
+        # Get AWS credentials using BaseAWSLLM
+        base_aws = BaseAWSLLM()
+        aws_params = {
+            k: v for k, v in litellm_params.items() 
+            if k in ["aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_region_name"]
+        }
+        credentials = base_aws.get_credentials(**aws_params)
+        
+        # Get region 
+        region_name = litellm_params.get("aws_region_name") or get_secret_str("AWS_REGION") or "us-east-1"
+        
+        # Parse the transformed request
+        if isinstance(transformed_request, (str, bytes)):
+            import json
+            batch_data = json.loads(transformed_request) if isinstance(transformed_request, str) else json.loads(transformed_request.decode())
+        else:
+            batch_data = transformed_request
+            
+        # Extract batch information
+        input_file_id = batch_data.get("input_file_id")
+        completion_window = batch_data.get("completion_window", "24h")
+        
+        # Prepare Bedrock batch job request
+        job_name = f"litellm-batch-{str(uuid.uuid4())[:8]}"
+        
+        batch_request = {
+            "jobName": job_name,
+            "roleArn": get_secret_str("LITELLM_BEDROCK_BATCH_ROLE_ARN"),
+            "modelId": litellm_params.get("model", ""),
+            "inputDataConfig": {
+                "s3InputDataConfig": {
+                    "s3Uri": f"s3://{get_secret_str('LITELLM_BEDROCK_BATCH_BUCKET')}/batch/{input_file_id}"
+                }
+            },
+            "outputDataConfig": {
+                "s3OutputDataConfig": {
+                    "s3Uri": f"s3://{get_secret_str('LITELLM_BEDROCK_BATCH_BUCKET')}/batch-output/{job_name}"
+                }
+            }
+        }
+        
+        # Use Bedrock batch API endpoint
+        bedrock_url = f"https://bedrock.{region_name}.amazonaws.com/model-invocation-jobs"
+        
+        # Create signed AWS request
+        aws_request = AWSRequest(
+            method="POST",
+            url=bedrock_url,
+            data=json.dumps(batch_request).encode(),
+            headers={
+                "Content-Type": "application/x-amz-json-1.1",
+                "X-Amz-Target": "AmazonBedrockControlPlane.CreateModelInvocationJob"
+            }
+        )
+        SigV4Auth(credentials, "bedrock", region_name).add_auth(aws_request)
+        
+        try:
+            response = await async_httpx_client.post(
+                bedrock_url,
+                headers=dict(aws_request.headers.items()),
+                content=aws_request.body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            bedrock_response = response.json()
+            
+            # Convert to OpenAI Batch format
+            from openai.types import Batch
+            
+            return Batch(
+                id=f"batch_{bedrock_response.get('jobArn', job_name).split('/')[-1]}",
+                object="batch",
+                created_at=int(time.time()),
+                completion_window=completion_window,
+                endpoint="/v1/chat/completions",
+                input_file_id=input_file_id,
+                status="validating",  # Bedrock starts in validating state
+                output_file_id=None,  # Will be set when completed
+                error_file_id=None,
+                errors=None,
+                failed_at=None,
+                finalizing_at=None,
+                completed_at=None,
+                expired_at=None,
+                expires_at=int(time.time()) + (24 * 3600 if completion_window == "24h" else 0),
+                cancelled_at=None,
+                cancelling_at=None,
+                in_progress_at=None,
+                request_counts=None,
+                metadata={
+                    "bedrock_job_arn": bedrock_response.get("jobArn"),
+                    "bedrock_job_name": job_name,
+                    "aws_region": region_name
+                }
+            )
+            
+        except Exception as e:
+            verbose_logger.exception(f"Error creating Bedrock batch: {e}")
+            raise Exception(f"Bedrock batch creation failed: {str(e)}")
+
+    def _create_bedrock_file(
+        self,
+        create_file_data: CreateFileRequest,
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        sync_httpx_client: HTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> OpenAIFileObject:
+        """
+        Creates a Bedrock file synchronously by uploading to S3
+        """
+        import asyncio
+        return asyncio.run(
+            self._async_create_bedrock_file(
+                transformed_request=create_file_data,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.BEDROCK
+                ),
+                timeout=timeout,
+            )
+        )
+
+    async def _async_create_bedrock_file(
+        self,
+        transformed_request: Union[CreateFileRequest, bytes, str, dict],
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        async_httpx_client: AsyncHTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> OpenAIFileObject:
+        """
+        Creates a Bedrock file asynchronously by uploading to S3
+        """
+        import uuid
+        import hashlib
+        from litellm import get_secret_str
+        
+        # Extract file data from the request
+        if isinstance(transformed_request, dict) and "file" in transformed_request:
+            create_file_data = transformed_request
+        else:
+            # Handle cases where transformed_request is the file data directly
+            create_file_data = transformed_request
+            
+        verbose_logger.debug("Creating Bedrock file with data: %s", create_file_data)
+        
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        except ImportError:
+            raise ImportError("Missing boto3 to call bedrock file upload. Run 'pip install boto3'.")
+
+        # Get S3 configuration from environment variables
+        bucket_name = get_secret_str("LITELLM_BEDROCK_BATCH_BUCKET")
+        if not bucket_name:
+            raise ValueError(
+                "LITELLM_BEDROCK_BATCH_BUCKET environment variable is required for Bedrock file uploads"
+            )
+
+        region_name = litellm_params.get("aws_region_name") or get_secret_str("AWS_REGION") or "us-east-1"
+
+        # Get AWS credentials using BaseAWSLLM
+        base_aws = BaseAWSLLM()
+        aws_params = {
+            k: v for k, v in litellm_params.items() 
+            if k in ["aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_region_name"]
+        }
+        credentials = base_aws.get_credentials(**aws_params)
+
+        # Extract file information
+        file_obj = create_file_data["file"]
+        purpose = create_file_data.get("purpose", "batch")
+
+        # Handle different FileTypes formats
+        if isinstance(file_obj, tuple):
+            # Handle tuple formats: (filename, file), (filename, file, content_type), etc.
+            tuple_filename = file_obj[0] if file_obj[0] else f"file.{purpose}"
+            actual_file = file_obj[1]
+            
+            if hasattr(actual_file, "read"):
+                file_content = actual_file.read() 
+                filename = tuple_filename
+            else:
+                # Handle bytes directly
+                file_content = actual_file
+                filename = tuple_filename
+        else:
+            # Handle direct FileContent (IO[bytes], bytes, or PathLike)
+            if hasattr(file_obj, "read"):
+                file_content = file_obj.read()
+                filename = getattr(file_obj, "name", f"file.{purpose}")
+            else:
+                # Handle bytes directly
+                file_content = file_obj
+                filename = f"file.{purpose}"
+
+        # Generate S3 key
+        file_uuid = str(uuid.uuid4())
+        if "." in filename:
+            ext = filename.split(".")[-1]
+            s3_key = f"{purpose}/{file_uuid}.{ext}"
+        else:
+            s3_key = f"{purpose}/{file_uuid}"
+
+        # Prepare S3 URL
+        url = f"https://{bucket_name}.s3.{region_name}.amazonaws.com/{s3_key}"
+
+        # Calculate content hash
+        content_hash = hashlib.sha256(file_content).hexdigest()
+
+        # Prepare headers
+        upload_headers = {
+            "Content-Type": "application/octet-stream",
+            "x-amz-content-sha256": content_hash,
+            "Content-Length": str(len(file_content)),
+        }
+
+        # Create and sign AWS request
+        aws_request = AWSRequest(
+            method="PUT",
+            url=url,
+            data=file_content,
+            headers=upload_headers,
+        )
+        SigV4Auth(credentials, "s3", region_name).add_auth(aws_request)
+
+        try:
+            # Upload using httpx
+            response = await async_httpx_client.put(
+                url,
+                content=file_content,
+                headers=dict(aws_request.headers.items()),
+                timeout=timeout,
+            )
+            response.raise_for_status()
+
+            # Create OpenAI-compatible response
+            file_id = f"file-{str(uuid.uuid4())}"
+
+            file_response = OpenAIFileObject(
+                id=file_id,
+                bytes=len(file_content),
+                created_at=int(__import__("time").time()),
+                filename=filename,
+                object="file",
+                purpose=purpose,
+                status="processed",
+                status_details=None,
+            )
+
+            # Store S3 info in hidden params for batch operations
+            if not hasattr(file_response, "_hidden_params"):
+                file_response._hidden_params = {}
+            file_response._hidden_params.update({
+                "s3_uri": f"s3://{bucket_name}/{s3_key}",
+                "s3_key": s3_key,
+                "bucket_name": bucket_name,
+                "region_name": region_name,
+            })
+
+            verbose_logger.debug("Bedrock file created: %s", file_response)
+            return file_response
+            
+        except Exception as e:
+            verbose_logger.exception(f"Error uploading file to S3: {e}")
+            raise Exception(f"Bedrock file upload failed: {str(e)}")
 
     def list_files(self):
         """
