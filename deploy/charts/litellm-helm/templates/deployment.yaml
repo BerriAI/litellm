@@ -99,6 +99,12 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
+            {{- if .Values.separateHealthApp }}
+            - name: SEPARATE_HEALTH_APP
+              value: "1"
+            - name: SEPARATE_HEALTH_PORT
+              value: {{ .Values.separateHealthPort | default "8081" | quote }}
+            {{- end }}
             {{- with .Values.extraEnvVars }}
               {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -121,16 +127,16 @@ spec:
           livenessProbe:
             httpGet:
               path: /health/liveliness
-              port: http
+              port: {{ if .Values.separateHealthApp }}{{ .Values.separateHealthPort | default "8081" }}{{ else }}http{{ end }}
           readinessProbe:
             httpGet:
               path: /health/readiness
-              port: http
+              port: {{ if .Values.separateHealthApp }}{{ .Values.separateHealthPort | default "8081" }}{{ else }}http{{ end }}
           # Give the container time to start up.  Up to 5 minutes (10 * 30 seconds)
           startupProbe:
             httpGet:
               path: /health/readiness
-              port: http
+              port: {{ if .Values.separateHealthApp }}{{ .Values.separateHealthPort | default "8081" }}{{ else }}http{{ end }}
             failureThreshold: 30
             periodSeconds: 10
           resources:
