@@ -487,7 +487,7 @@ class ProxyLogging:
         Reuses existing LLM guardrail logic by converting MCP calls to message format.
         """
         from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPPreCallRequestObject, MCPPreCallResponseObject
+        from litellm.types.mcp import MCPPreCallRequestObject
 
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
@@ -590,9 +590,6 @@ class ProxyLogging:
         Convert LLM guardrail result back to MCP response format.
         """
         from litellm.types.mcp import MCPPreCallResponseObject
-        from fastapi import HTTPException
-        import json
-        import re
         
         # If result is an exception, it means the guardrail blocked the request
         if isinstance(llm_result, Exception):
@@ -657,7 +654,6 @@ class ProxyLogging:
         Extract modified/masked arguments from the guardrail response content.
         """
         import json
-        import re
         
         verbose_proxy_logger.debug(f"Extracting modified args from content: {masked_content}")
         
@@ -724,7 +720,6 @@ class ProxyLogging:
         Convert LLM guardrail result back to MCP during call response format.
         """
         from litellm.types.mcp import MCPDuringCallResponseObject
-        from fastapi import HTTPException
         
         # If result is an exception, it means the guardrail wants to stop execution
         if isinstance(llm_result, Exception):
@@ -806,7 +801,7 @@ class ProxyLogging:
         Reuses existing LLM guardrail logic by converting MCP calls to message format.
         """
         from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPDuringCallResponseObject, MCPDuringCallRequestObject
+        from litellm.types.mcp import MCPDuringCallRequestObject
         from litellm.proxy.guardrails.guardrail_hooks.base_guardrail import CustomGuardrail
 
         callbacks = self.get_combined_callback_list(

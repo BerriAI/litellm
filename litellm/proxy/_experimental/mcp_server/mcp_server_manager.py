@@ -601,10 +601,8 @@ class MCPServerManager:
                     start_time=start_time,
                     end_time=start_time,
                 )
-                print(f"pre_hook_result: {pre_hook_result}")
                 
-                if pre_hook_result:
-                
+                if pre_hook_result:                
                     # Apply any argument modifications
                     if pre_hook_result.get("modified_arguments"):
                         arguments = pre_hook_result["modified_arguments"]
@@ -643,29 +641,21 @@ class MCPServerManager:
             tasks = []
             # Start during hook if proxy_logging_obj is available
             if proxy_logging_obj:
-                try:
-                    during_hook_task = asyncio.create_task(
-                        proxy_logging_obj.async_during_mcp_tool_call_hook(
-                            kwargs={
-                                "name": name,
-                                "arguments": arguments,
-                                "server_name": server_name_from_prefix,
-                            },
-                            request_obj=None,  # Will be created in the hook
-                            start_time=start_time,
-                            end_time=start_time,
-                        )
+                during_hook_task = asyncio.create_task(
+                    proxy_logging_obj.async_during_mcp_tool_call_hook(
+                        kwargs={
+                            "name": name,
+                            "arguments": arguments,
+                            "server_name": server_name_from_prefix,
+                        },
+                        request_obj=None,  # Will be created in the hook
+                        start_time=start_time,
+                        end_time=start_time,
                     )
-                    tasks.append(during_hook_task)
-                except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
-                    # Re-raise guardrail exceptions to properly fail the MCP call
-                    verbose_logger.error(f"Guardrail blocked MCP tool call during execution: {str(e)}")
-                    raise e
-                except Exception as e:
-                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
+                )
+                tasks.append(during_hook_task)
             
-            call_tool_task = asyncio.create_task(client.call_tool(call_tool_params))
-            tasks.append(call_tool_task)
+            tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
             mcp_responses = await asyncio.gather(*tasks)
 
             result = mcp_responses[1]
