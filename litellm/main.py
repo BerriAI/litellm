@@ -40,7 +40,6 @@ from typing import (
 
 import dotenv
 import httpx
-from litellm.llms.oci.chat.handler import OCIChatCompletion
 import openai
 import tiktoken
 from pydantic import BaseModel
@@ -255,7 +254,6 @@ base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
 sagemaker_chat_completion = SagemakerChatHandler()
 bytez_transformation = BytezChatConfig()
 oci_transformation = OCIChatConfig()
-oci_chat_completions = OCIChatCompletion()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -2402,12 +2400,11 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream,
             )
         elif custom_llm_provider == "oci":
-            response = oci_chat_completions.completion(
+            response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
                 headers=headers,
                 model_response=model_response,
-                print_verbose=print_verbose,
                 api_key=api_key,
                 api_base=api_base,
                 acompletion=acompletion,

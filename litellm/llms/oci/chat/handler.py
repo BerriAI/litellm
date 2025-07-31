@@ -13,34 +13,19 @@ from typing import (
     Optional,
     Tuple,
     Union,
-    cast,
 )
 
 import httpx  # type: ignore
 
 import litellm
-import litellm.litellm_core_utils
-import litellm.types
-import litellm.types.utils
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.types.llms.anthropic import (
-    ContentBlockDelta,
-    ContentBlockStart,
-    ContentBlockStop,
-    MessageBlockDelta,
-    MessageStartBlock,
-    UsageDelta,
-)
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
-    ChatCompletionToolCallChunk,
 )
 from litellm.types.utils import (
     Delta,
@@ -56,8 +41,8 @@ from ...base import BaseLLM
 from ..common_utils import OCIError
 from .transformation import OCIChatConfig
 
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 
@@ -214,8 +199,6 @@ class OCIChatCompletion(BaseLLM):
         headers={},
         signed_json_body: Optional[bytes] = None,
     ):
-        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-
         completion_stream, headers = await make_call(
             client=client,
             api_base=api_base,
@@ -334,7 +317,6 @@ class OCIChatCompletion(BaseLLM):
         client=None,
         stream: Optional[bool] = False,
     ):
-        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.utils import ProviderConfigManager
 
         oci_region = optional_params.get(
