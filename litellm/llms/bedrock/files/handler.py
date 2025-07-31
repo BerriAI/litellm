@@ -114,14 +114,28 @@ class BedrockFilesHandler(BaseAWSLLM):
         file_obj = create_file_data["file"]
         purpose = create_file_data["purpose"]
 
-        # Read file content
-        if hasattr(file_obj, "read"):
-            file_content = file_obj.read()
-            filename = getattr(file_obj, "name", f"file.{purpose}")
+        # Handle different FileTypes formats
+        if isinstance(file_obj, tuple):
+            # Handle tuple formats: (filename, file), (filename, file, content_type), etc.
+            tuple_filename = file_obj[0] if file_obj[0] else f"file.{purpose}"
+            actual_file = file_obj[1]
+            
+            if hasattr(actual_file, "read"):
+                file_content = actual_file.read()
+                filename = tuple_filename
+            else:
+                # Handle bytes directly
+                file_content = actual_file
+                filename = tuple_filename
         else:
-            # Handle bytes directly
-            file_content = file_obj
-            filename = f"file.{purpose}"
+            # Handle direct FileContent (IO[bytes], bytes, or PathLike)
+            if hasattr(file_obj, "read"):
+                file_content = file_obj.read()
+                filename = getattr(file_obj, "name", f"file.{purpose}")
+            else:
+                # Handle bytes directly
+                file_content = file_obj
+                filename = f"file.{purpose}"
 
         # Generate S3 key
         s3_key = self._generate_s3_key(filename, purpose)
