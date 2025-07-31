@@ -22,10 +22,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
 
-@pytest.fixture(scope="session")
-def load_vertex_ai_credentials():
+def load_vertex_ai_credentials(model: str):
     """Fixture to load Vertex AI credentials for all tests"""
     # Define the path to the vertex_key.json file
+    if "vertex_ai" not in model:
+        return
     print("loading vertex ai credentials")
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/vertex_key.json"
@@ -156,6 +157,8 @@ class BaseGoogleGenAITest:
             ],
             role="user",
         )
+        load_vertex_ai_credentials(model=request_params["model"])
+            
         litellm._turn_on_debug()
 
         print(f"Testing {'async' if is_async else 'sync'} non-streaming with model config: {request_params}")
@@ -184,6 +187,7 @@ class BaseGoogleGenAITest:
     async def test_streaming_base(self, is_async: bool):
         """Base test for streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
+        load_vertex_ai_credentials(model=request_params["model"])
         contents = ContentDict(
             parts=[
                 PartDict(
@@ -231,6 +235,7 @@ class BaseGoogleGenAITest:
         litellm.callbacks = [test_custom_logger]
         
         request_params = self.model_config
+        load_vertex_ai_credentials(model=request_params["model"])
         contents = ContentDict(
             parts=[
                 PartDict(
@@ -272,6 +277,7 @@ class BaseGoogleGenAITest:
         litellm.callbacks = [test_custom_logger]
         
         request_params = self.model_config
+        load_vertex_ai_credentials(model=request_params["model"])
         contents = ContentDict(
             parts=[
                 PartDict(
