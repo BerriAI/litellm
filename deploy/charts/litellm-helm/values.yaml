@@ -143,6 +143,39 @@ tolerations: []
 
 affinity: {}
 
+# Extra Kubernetes resources to deploy alongside LiteLLM
+# This can be used to deploy external-secrets, custom secrets, etc.
+extraResources: []
+  # Example: External Secrets for AWS SSM Parameter Store
+  # - apiVersion: external-secrets.io/v1beta1
+  #   kind: SecretStore
+  #   metadata:
+  #     name: litellm-ssm-store
+  #   spec:
+  #     provider:
+  #       aws:
+  #         service: ParameterStore
+  #         region: us-east-1
+  #         auth:
+  #           serviceAccountRef:
+  #             name: litellm
+  # - apiVersion: external-secrets.io/v1beta1
+  #   kind: ExternalSecret
+  #   metadata:
+  #     name: litellm-master-key
+  #   spec:
+  #     refreshInterval: 1h
+  #     secretStoreRef:
+  #       name: litellm-ssm-store
+  #       kind: SecretStore
+  #     target:
+  #       name: litellm-master-key
+  #       creationPolicy: Owner
+  #     data:
+  #     - secretKey: masterkey
+  #       remoteRef:
+  #         key: /litellm/master-key
+
 db:
   # Use an existing postgres server/cluster
   useExisting: false
