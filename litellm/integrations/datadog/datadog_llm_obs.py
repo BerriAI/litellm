@@ -58,10 +58,32 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             self.log_queue: List[LLMObsPayload] = []
+            
+            #########################################################
+            # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params
+            #########################################################
+            dict_datadog_llm_obs_params = self._get_datadog_llm_obs_params()
+            kwargs.update(dict_datadog_llm_obs_params)
             CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
             raise e
+
+    def _get_datadog_llm_obs_params(self) -> Dict:
+        """
+        Get the datadog_llm_observability_params from litellm.datadog_llm_observability_params
+
+        These are params specific to initializing the DataDogLLMObsLogger e.g. turn_off_message_logging
+        """
+        dict_datadog_llm_obs_params: Dict = {}
+        if litellm.datadog_llm_observability_params is not None:
+            if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
+                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump()
+            elif isinstance(litellm.datadog_llm_observability_params, Dict):
+                # only allow params that are of DatadogLLMObsInitParams
+                dict_datadog_llm_obs_params = DatadogLLMObsInitParams(**litellm.datadog_llm_observability_params).model_dump()
+        return dict_datadog_llm_obs_params
+            
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -69,7 +91,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 f"DataDogLLMObs: Logging success event for model {kwargs.get('model', 'unknown')}"
             )
             payload = self.create_llm_obs_payload(
-                kwargs, response_obj, start_time, end_time
+                kwargs, start_time, end_time
             )
             verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
             self.log_queue.append(payload)
@@ -128,7 +150,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
 
     def create_llm_obs_payload(
-        self, kwargs: Dict, response_obj: Any, start_time: datetime, end_time: datetime
+        self, kwargs: Dict, start_time: datetime, end_time: datetime
     ) -> LLMObsPayload:
         standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
             "standard_logging_object"
@@ -138,6 +160,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         messages = standard_logging_payload["messages"]
         messages = self._ensure_string_content(messages=messages)
+        response_obj = standard_logging_payload.get("response")
 
         metadata = kwargs.get("litellm_params", {}).get("metadata", {})
 
@@ -146,7 +169,10 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 messages
             )
         )
-        output_meta = OutputMeta(messages=self._get_response_messages(response_obj))
+        output_meta = OutputMeta(messages=self._get_response_messages(
+            response_obj=response_obj,
+            call_type=standard_logging_payload.get("call_type")
+        ))
 
         meta = Meta(
             kind=self._get_datadog_span_kind(standard_logging_payload.get("call_type")),
@@ -198,14 +224,16 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             return 0.0
 
 
-    def _get_response_messages(self, response_obj: Any) -> List[Any]:
+    def _get_response_messages(
+        self, response_obj: Any, call_type: Optional[str]
+    ) -> List[Any]:
         """
         Get the messages from the response object
 
         for now this handles logging /chat/completions responses
         """
-        if isinstance(response_obj, litellm.ModelResponse):
-            return [response_obj["choices"][0]["message"].json()]
+        if call_type in [CallTypes.completion.value, CallTypes.acompletion.value]:
+            return [response_obj["choices"][0]["message"]]
         return []
 
     def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:

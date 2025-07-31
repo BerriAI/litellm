@@ -34,11 +34,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import (
+        MCPDuringCallRequestObject,
+        MCPDuringCallResponseObject,
         MCPPostCallResponseObject,
         MCPPreCallRequestObject,
         MCPPreCallResponseObject,
-        MCPDuringCallRequestObject,
-        MCPDuringCallResponseObject,
     )
     from litellm.types.router import PreRoutingHookResponse
 
@@ -57,8 +57,21 @@ else:
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self, message_logging: bool = True, **kwargs) -> None:
+    def __init__(
+        self, 
+        turn_off_message_logging: bool = False,
+
+        # deprecated param, use `turn_off_message_logging` instead
+        message_logging: bool = True,
+        **kwargs
+    ) -> None:
+        """
+        Args:
+            turn_off_message_logging: bool - if True, the message logging will be turned off. Message and response will be redacted from StandardLoggingPayload.
+            message_logging: bool - deprecated param, use `turn_off_message_logging` instead
+        """
         self.message_logging = message_logging
+        self.turn_off_message_logging = turn_off_message_logging
         pass
 
     def log_pre_api_call(self, model, messages, kwargs):
@@ -534,3 +547,49 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if LITELLM_METADATA_FIELD in request_kwargs:
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
+    
+    def redact_standard_logging_payload_from_model_call_details(
+        self, model_call_details: Dict
+    ) -> Dict:
+        """
+        Only redacts messages and responses when self.turn_off_message_logging is True
+        
+
+        By default, self.turn_off_message_logging is False and this does nothing.
+        
+        Return a redacted deepcopy of the provided logging payload.
+        
+        This is useful for logging payloads that contain sensitive information.
+        """
+        from copy import copy
+
+        from litellm import Choices, Message, ModelResponse
+        from litellm.types.utils import LiteLLMCommonStrings
+        turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)
+        
+        if turn_off_message_logging is False:
+            return model_call_details
+        
+        # Only make a shallow copy of the top-level dict to avoid deepcopy issues
+        # with complex objects like AuthenticationError that may be present
+        model_call_details_copy = copy(model_call_details)
+        redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        standard_logging_object = model_call_details.get("standard_logging_object")
+        if standard_logging_object is None:
+            return model_call_details_copy
+
+        # Make a copy of just the standard_logging_object to avoid modifying the original
+        standard_logging_object_copy = copy(standard_logging_object)
+
+        if standard_logging_object_copy.get("messages") is not None:
+            standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
+
+        if standard_logging_object_copy.get("response") is not None:
+            model_response = ModelResponse(
+                choices=[Choices(message=Message(content=redacted_str))]
+            )
+            model_response_dict = model_response.model_dump()
+            standard_logging_object_copy["response"] = model_response_dict
+
+        model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
+        return model_call_details_copy

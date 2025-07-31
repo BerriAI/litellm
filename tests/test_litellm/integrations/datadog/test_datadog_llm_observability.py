@@ -1,8 +1,9 @@
+import asyncio
 import json
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 from unittest.mock import MagicMock, Mock, patch
 
@@ -10,9 +11,14 @@ import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
-
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
-from litellm.types.integrations.datadog_llm_obs import LLMMetrics, LLMObsPayload
+from litellm.types.integrations.datadog_llm_obs import (
+    DatadogLLMObsInitParams,
+    LLMMetrics,
+    LLMObsPayload,
+)
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -212,3 +218,100 @@ class TestDataDogLLMObsLogger:
         assert logger._get_datadog_span_kind(None) == "llm"
 
 
+
+class TestDataDogLLMObsLogger(DataDogLLMObsLogger):
+    """Test suite for DataDog LLM Observability Logger"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_standard_logging_payload = kwargs.get("standard_logging_object")
+
+
+class TestS3Logger(CustomLogger):
+    """Test suite for S3 Logger"""
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_standard_logging_payload = kwargs.get("standard_logging_object")
+
+
+@pytest.mark.asyncio
+async def test_dd_llms_obs_redaction(mock_env_vars):
+    # init DD with turn_off_message_logging=True
+    litellm._turn_on_debug()
+    from litellm.types.utils import LiteLLMCommonStrings
+    litellm.datadog_llm_observability_params = DatadogLLMObsInitParams(turn_off_message_logging=True)
+    dd_llms_obs_logger = TestDataDogLLMObsLogger()
+    test_s3_logger = TestS3Logger()
+    litellm.callbacks = [
+        dd_llms_obs_logger,
+        test_s3_logger
+    ]
+
+    # call litellm
+    await litellm.acompletion(
+        model="gpt-4o",
+        mock_response="Hi there!",
+        messages=[{"role": "user", "content": "Hello, world!"}]
+    )
+
+    # sleep 1 second for logging to complete
+    await asyncio.sleep(1)
+
+    #################
+    # test validation 
+    # 1. both loggers logged a standard_logging_payload
+    # 2. DD LLM Obs standard_logging_payload has messages and response redacted
+    # 3. S3 standard_logging_payload does not have messages and response redacted
+
+    assert dd_llms_obs_logger.logged_standard_logging_payload is not None
+    assert test_s3_logger.logged_standard_logging_payload is not None
+
+    print("logged DD LLM Obs payload", json.dumps(dd_llms_obs_logger.logged_standard_logging_payload, indent=4, default=str))
+    print("\n\nlogged S3 payload", json.dumps(test_s3_logger.logged_standard_logging_payload, indent=4, default=str))
+
+    assert dd_llms_obs_logger.logged_standard_logging_payload["messages"][0]["content"] == LiteLLMCommonStrings.redacted_by_litellm.value
+    assert dd_llms_obs_logger.logged_standard_logging_payload["response"]["choices"][0]["message"]["content"] == LiteLLMCommonStrings.redacted_by_litellm.value
+
+    assert test_s3_logger.logged_standard_logging_payload["messages"] == [{"role": "user", "content": "Hello, world!"}]
+    assert test_s3_logger.logged_standard_logging_payload["response"]["choices"][0]["message"]["content"] == "Hi there!"
+    
+    
+@pytest.fixture
+def mock_env_vars():
+    """Mock environment variables for DataDog"""
+    with patch.dict(os.environ, {
+        "DD_API_KEY": "test_api_key",
+        "DD_SITE": "us5.datadoghq.com"
+    }):
+        yield
+
+@pytest.mark.asyncio
+async def test_create_llm_obs_payload(mock_env_vars):
+    datadog_llm_obs_logger = DataDogLLMObsLogger()
+    standard_logging_payload = create_standard_logging_payload_with_cache()
+    payload = datadog_llm_obs_logger.create_llm_obs_payload(
+        kwargs={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "standard_logging_object": standard_logging_payload,
+        },
+        start_time=datetime.now(),
+        end_time=datetime.now() + timedelta(seconds=1),
+    )
+
+    print("dd created payload", payload)
+
+    assert payload["name"] == "litellm_llm_call"
+    assert payload["meta"]["kind"] == "llm"
+    assert payload["meta"]["input"]["messages"] == [
+        {"role": "user", "content": "Hello, world!"}
+    ]
+    assert payload["meta"]["output"]["messages"][0]["content"] == "Hi there!"
+    assert payload["metrics"]["input_tokens"] == 10
+    assert payload["metrics"]["output_tokens"] == 20
+    assert payload["metrics"]["total_tokens"] == 30
