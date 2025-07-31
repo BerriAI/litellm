@@ -43,10 +43,8 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
-    is_pass_through_provider_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
-    should_run_auth_on_pass_through_provider_route,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
@@ -257,12 +255,16 @@ def get_api_key(
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
     """
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _safe_get_request_query_params,
+    )
     api_key = api_key
     passed_in_key: Optional[str] = None
     if isinstance(custom_litellm_key_header, str):
         passed_in_key = custom_litellm_key_header
         api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
-    elif isinstance(api_key, str):
+    elif isinstance(api_key, str) and len(api_key) > 0:
         passed_in_key = api_key
         api_key = _get_bearer_token(api_key=api_key)
     elif isinstance(azure_api_key_header, str):
@@ -277,14 +279,18 @@ def get_api_key(
     elif isinstance(azure_apim_header, str):
         passed_in_key = azure_apim_header
         api_key = azure_apim_header
+    elif RouteChecks.is_generate_content_route(route=route) and request is not None and _safe_get_request_query_params(request).get("key"):
+        google_auth_key: str = _safe_get_request_query_params(request).get("key") or ""
+        passed_in_key = google_auth_key
+        api_key = google_auth_key
     elif pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if endpoint.get("path", "") == route:
                 headers: Optional[dict] = endpoint.get("headers", None)
                 if headers is not None:
                     header_key: str = headers.get("litellm_user_api_key", "")
-                    if request.headers.get(key=header_key) is not None:
-                        api_key = request.headers.get(key=header_key)
+                    if request.headers.get(header_key) is not None:
+                        api_key = request.headers.get(header_key) or ""
                         passed_in_key = api_key
     return api_key, passed_in_key
 
@@ -440,11 +446,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ):
             # check if public endpoint
             return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
-        elif is_pass_through_provider_route(route=route):
-            if should_run_auth_on_pass_through_provider_route(route=route) is False:
-                return UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-                )
 
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 

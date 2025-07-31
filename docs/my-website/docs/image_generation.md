@@ -207,7 +207,26 @@ Use this for Stable Diffusion models hosted on Xinference
 
 See Xinference usage with LiteLLM [here](./providers/xinference.md#image-generation)
 
+## Recraft Image Generation Models
 
+Use this for AI-powered design and image generation with Recraft
+
+#### Usage
+
+```python showLineNumbers
+from litellm import image_generation
+import os
+
+os.environ['RECRAFT_API_KEY'] = "your-api-key"
+
+response = image_generation(
+    model="recraft/recraftv3",
+    prompt="A beautiful sunset over a calm ocean",
+)
+print(response)
+```
+
+See Recraft usage with LiteLLM [here](./providers/recraft.md#image-generation)
 
 ## OpenAI Compatible Image Generation Models
 Use this for calling `/image_generation` endpoints on OpenAI Compatible Servers, example https://github.com/xorbitsai/inference
@@ -259,3 +278,16 @@ response = litellm.image_generation(
 )
 print(f"response: {response}")
 ```
+
+## Supported Providers
+
+| Provider | Documentation Link |
+|----------|-------------------|
+| OpenAI | [OpenAI Image Generation →](./providers/openai) |
+| Azure OpenAI | [Azure OpenAI Image Generation →](./providers/azure/azure) |
+| Google AI Studio | [Google AI Studio Image Generation →](./providers/google_ai_studio/image_gen) |
+| Vertex AI | [Vertex AI Image Generation →](./providers/vertex_image) |
+| AWS Bedrock | [Bedrock Image Generation →](./providers/bedrock) |
+| Recraft | [Recraft Image Generation →](./providers/recraft#image-generation) |
+| Xinference | [Xinference Image Generation →](./providers/xinference#image-generation) |
+| Nscale | [Nscale Image Generation →](./providers/nscale#image-generation) | 

@@ -2358,10 +2358,7 @@ async def test_user_api_key_auth(prisma_client):
         pytest.fail(f"This should have failed!. IT's an invalid key")
     except ProxyException as exc:
         print(exc.message)
-        assert (
-            exc.message
-            == "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: "
-        )
+        assert "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in:" in exc.message
 
 
 @pytest.mark.asyncio

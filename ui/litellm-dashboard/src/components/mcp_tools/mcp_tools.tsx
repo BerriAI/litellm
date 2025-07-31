@@ -181,14 +181,14 @@ const MCPToolsViewer = ({
   return (
     <div className="w-full h-screen p-4 bg-white">
       <Card className="w-full rounded-xl shadow-md overflow-hidden">
-        <div className="flex h-[80vh] w-full gap-4">
+        <div className="flex h-auto w-full gap-4">
           {/* Left Sidebar with Controls */}
           <div className="w-1/4 p-4 bg-gray-50 flex flex-col">
             <Title className="text-xl font-semibold mb-6 mt-2">MCP Tools</Title>
             
-            <div className="flex flex-col flex-1 space-y-6">
+            <div className="flex flex-col flex-1">
               {/* Tool Selection */}
-              <div className="flex flex-col flex-1">
+              <div className="flex flex-col flex-1 min-h-0">
                 <Text className="font-medium block mb-3 text-gray-700 flex items-center">
                   <ToolOutlined className="mr-2" /> Available Tools
                   {toolsData.length > 0 && (
@@ -231,7 +231,14 @@ const MCPToolsViewer = ({
 
                 {/* Tools List */}
                 {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
-                  <div className="space-y-2 flex-1 overflow-y-auto">
+                  <div 
+                    className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable" 
+                    style={{ 
+                      maxHeight: '400px',
+                      scrollbarWidth: 'auto',
+                      scrollbarColor: '#cbd5e0 #f7fafc'
+                    }}
+                  >
                     {toolsData.map((tool: MCPTool) => (
                       <div
                         key={tool.name}
@@ -282,7 +289,7 @@ const MCPToolsViewer = ({
 
               {/* Authentication Section */}
               {mcpServerHasAuth(auth_type) && (
-                <div className="pt-4 border-t border-gray-200 flex-shrink-0">
+                <div className="pt-4 border-t border-gray-200 flex-shrink-0 mt-6">
                   <Text className="font-medium block mb-3 text-gray-700 flex items-center">
                     <SafetyOutlined className="mr-2" /> Authentication
                   </Text>

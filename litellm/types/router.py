@@ -209,6 +209,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
 
+
+    # auto-router params
+    auto_router_config_path: Optional[str] = None
+    auto_router_config: Optional[str] = None
+    auto_router_default_model: Optional[str] = None
+    auto_router_embedding_model: Optional[str] = None
+
     def __init__(
         self,
         custom_llm_provider: Optional[str] = None,
@@ -253,6 +260,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
         mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None,
+        # auto-router params
+        auto_router_config_path: Optional[str] = None,
+        auto_router_config: Optional[str] = None,
+        auto_router_default_model: Optional[str] = None,
+        auto_router_embedding_model: Optional[str] = None,
         **params,
     ):
         args = locals()
@@ -330,7 +342,8 @@ class LiteLLM_Params(GenericLiteLLMParams):
         args.pop("__class__", None)
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
-        super().__init__(max_retries=max_retries, **args, **params)
+        args["max_retries"] = max_retries
+        super().__init__(**{ **args, **params })
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -763,6 +776,16 @@ class MockRouterTestingParams:
             ),
         )
 
-
 class ModelGroupSettings(BaseModel):
     forward_client_headers_to_llm_api: Optional[List[str]] = None
+
+class PreRoutingHookResponse(BaseModel):
+    """
+    Response object from the pre-routing hook.
+
+    Allows the Pre-Routing Hook to return a modified model and messages.
+
+    Add fields that you expect to be modified by the pre-routing hook.
+    """
+    model: str
+    messages: Optional[List[Dict[str, str]]]
