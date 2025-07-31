@@ -49,9 +49,6 @@ from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoni
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
-# Bedrock Computer Use Tools (Anthropic Claude on Bedrock)
-BEDROCK_COMPUTER_USE_TOOLS = ["computer_", "bash_", "text_editor_", "web_search_"]
-
 
 class AmazonConverseConfig(BaseConfig):
     """
