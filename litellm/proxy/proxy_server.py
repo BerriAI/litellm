@@ -7978,7 +7978,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
 
         updated_settings = config_info.json(exclude_none=True)
         updated_settings = prisma_client.jsonify_object(updated_settings)
-
         for k, v in updated_settings.items():
             if k == "router_settings":
                 await prisma_client.db.litellm_config.upsert(
