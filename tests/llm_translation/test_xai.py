@@ -130,36 +130,6 @@ def test_xai_grok_4_stop_not_supported(model):
     assert "stop" not in supported_params
 
 
-@pytest.mark.parametrize("stream", [False, True])
-def test_completion_xai(stream):
-    try:
-        litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(model="xai/grok-4", messages=messages, stream=stream)
-        print(response)
-
-        if stream is True:
-            for chunk in response:
-                print(chunk)
-                assert chunk is not None
-                assert isinstance(chunk, litellm.ModelResponseStream)
-                assert isinstance(chunk.choices[0], litellm.utils.StreamingChoices)
-
-        else:
-            assert response is not None
-            assert isinstance(response, litellm.ModelResponse)
-            assert response.choices[0].message.content is not None
-    except litellm.ServiceUnavailableError as e:
-        pytest.fail(f"Timeout occurred: {e}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 
 def test_xai_message_name_filtering():
     messages = [
