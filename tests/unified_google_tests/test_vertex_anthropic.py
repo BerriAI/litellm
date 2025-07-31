@@ -5,6 +5,7 @@ import os
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
+import httpx
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -20,7 +21,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
 
-def vertex_anthropic_mock_response(*args, **kwargs):
+async def vertex_anthropic_mock_response(*args, **kwargs):
     """Mock response for vertex AI anthropic call"""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -46,7 +47,6 @@ def vertex_anthropic_mock_response(*args, **kwargs):
 @pytest.mark.asyncio
 async def test_vertex_anthropic_mocked():
     """Test agenerate_content with mocked HTTP calls to validate URL and request body"""
-    from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
     
     # Set up test data
     contents = ContentDict(
@@ -58,32 +58,28 @@ async def test_vertex_anthropic_mocked():
         role="user",
     )
     
-    # Create HTTP client and mock response
-    client = AsyncHTTPHandler()
-    httpx_response = AsyncMock()
-    httpx_response.side_effect = vertex_anthropic_mock_response
-    
     # Expected values for validation
     expected_url = "https://us-east5-aiplatform.googleapis.com/v1/projects/internal-litellm-local-dev/locations/us-east5/publishers/anthropic/models/claude-sonnet-4:rawPredict"
     expected_body_keys = {"messages", "anthropic_version", "max_tokens"}
     expected_message_content = "Hello, can you tell me a short joke?"
     
-    # Patch the HTTP client and make the call
-    with patch.object(client, "post", new=httpx_response) as mock_call:
+    # Patch the AsyncHTTPHandler.post method at the module level
+    with patch('litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = await vertex_anthropic_mock_response()
+        
         response = await agenerate_content(
             contents=contents,
             model="vertex_ai/claude-sonnet-4",
             vertex_location="us-east5",
             vertex_project="internal-litellm-local-dev",
             custom_llm_provider="vertex_ai",
-            client=client,
         )
         
         # Verify the call was made
-        assert mock_call.call_count == 1
+        assert mock_post.call_count == 1
         
         # Get the call arguments
-        call_args = mock_call.call_args
+        call_args = mock_post.call_args
         call_kwargs = call_args.kwargs if call_args else {}
         
         # Extract URL (could be in args[0] or kwargs['url'])
@@ -145,12 +141,13 @@ async def test_vertex_anthropic_mocked():
         print(f"Response: {response}")
 
 
-def vertex_anthropic_streaming_mock_response(*args, **kwargs):
-    """Mock streaming response for vertex AI anthropic call"""
+class MockAsyncStreamResponse:
+    """Mock async streaming response that mimics httpx streaming response"""
     
-    def create_streaming_response():
-        """Generator that simulates streaming chunks"""
-        chunks = [
+    def __init__(self):
+        self.status_code = 200
+        self.headers = {"Content-Type": "text/event-stream"}
+        self._chunks = [
             {
                 "type": "message_start",
                 "message": {
@@ -192,23 +189,26 @@ def vertex_anthropic_streaming_mock_response(*args, **kwargs):
                 "type": "message_stop"
             }
         ]
-        
-        for chunk in chunks:
-            # Convert to bytes as streaming responses typically return bytes
+    
+    async def aiter_bytes(self, chunk_size=1024):
+        """Async iterator for response bytes"""
+        for chunk in self._chunks:
             yield f"data: {json.dumps(chunk)}\n\n".encode()
     
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"Content-Type": "text/event-stream"}
-    mock_response.iter_bytes = lambda chunk_size=1024: create_streaming_response()
-    mock_response.aiter_bytes = lambda chunk_size=1024: create_streaming_response()
-    return mock_response
+    async def aiter_lines(self):
+        """Async iterator for response lines (required by anthropic handler)"""
+        for chunk in self._chunks:
+            yield f"data: {json.dumps(chunk)}\n\n"
+
+
+async def vertex_anthropic_streaming_mock_response(*args, **kwargs):
+    """Mock streaming response for vertex AI anthropic call"""
+    return MockAsyncStreamResponse()
 
 
 @pytest.mark.asyncio
 async def test_vertex_anthropic_streaming_mocked():
     """Test agenerate_content_stream with mocked HTTP calls to validate URL and request body"""
-    from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
     
     # Set up test data
     contents = ContentDict(
@@ -220,32 +220,28 @@ async def test_vertex_anthropic_streaming_mocked():
         role="user",
     )
     
-    # Create HTTP client and mock response
-    client = AsyncHTTPHandler()
-    httpx_response = AsyncMock()
-    httpx_response.side_effect = vertex_anthropic_streaming_mock_response
-    
     # Expected values for validation (same as non-streaming)
     expected_url = "https://us-east5-aiplatform.googleapis.com/v1/projects/internal-litellm-local-dev/locations/us-east5/publishers/anthropic/models/claude-sonnet-4:streamRawPredict"
     expected_body_keys = {"messages", "anthropic_version", "max_tokens"}
     expected_message_content = "Hello, can you tell me a short joke?"
     
-    # Patch the HTTP client and make the call
-    with patch.object(client, "post", new=httpx_response) as mock_call:
+    # Patch the AsyncHTTPHandler.post method at the module level
+    with patch('litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post', new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = await vertex_anthropic_streaming_mock_response()
+        
         response_stream = await agenerate_content_stream(
             contents=contents,
             model="vertex_ai/claude-sonnet-4",
             vertex_location="us-east5",
             vertex_project="internal-litellm-local-dev",
             custom_llm_provider="vertex_ai",
-            client=client,
         )
         
         # Verify the call was made
-        assert mock_call.call_count == 1
+        assert mock_post.call_count == 1
         
         # Get the call arguments
-        call_args = mock_call.call_args
+        call_args = mock_post.call_args
         call_kwargs = call_args.kwargs if call_args else {}
         
         # Extract URL (could be in args[0] or kwargs['url'])
