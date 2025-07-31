@@ -1,12 +1,6 @@
 model_list:
-  - model_name: openai/*
+  - model_name: vertex_ai/*
     litellm_params:
-      model: openai/*
+      model: vertex_ai/*
 
 
-litellm_settings:
-  callbacks: ["datadog_llm_observability"] # logs llm success logs on datadog
-
-  # Params to apply only for "datadog_llm_observability" callback
-  datadog_llm_observability_params:
-    turn_off_message_logging: true # turn off message logging just for this callback
