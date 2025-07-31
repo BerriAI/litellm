@@ -6,7 +6,43 @@ Use this to health check all LLMs defined in your config.yaml
 The proxy exposes: 
 * a /health endpoint which returns the health of the LLM APIs  
 * a /health/readiness endpoint for returning if the proxy is ready to accept requests 
-* a /health/liveliness endpoint for returning if the proxy is alive 
+* a /health/liveliness endpoint for returning if the proxy is alive
+
+## Understanding Liveness vs Readiness
+
+### When to Use Each Endpoint
+
+The `/health/liveliness` and `/health/readiness` endpoints serve different purposes in container orchestration and load balancing:
+
+**🔄 `/health/liveliness` - Container Restart Decision**
+- **Purpose**: Determines when to restart a container
+- **Use for**: Kubernetes liveness probes, AWS Fargate container health checks
+- **What it checks**: Basic application responsiveness (just returns "I'm alive!")
+- **Action on failure**: Container/pod restart
+- **Example scenario**: Application is deadlocked but still running
+
+**🚦 `/health/readiness` - Traffic Routing Decision**  
+- **Purpose**: Determines when the service is ready to accept traffic
+- **Use for**: Load balancer health checks (ALB, Kubernetes readiness probes)
+- **What it checks**: Database connectivity, cache status, callback services
+- **Action on failure**: Remove from load balancer rotation (no restart)
+- **Example scenario**: Database is down, but application is functional
+
+### Recommended Usage
+
+| Use Case | Endpoint | Rationale |
+|----------|----------|-----------|
+| **AWS ALB Health Check** | `/health/readiness` | Removes unhealthy instances from traffic without restarting |
+| **AWS Fargate Container Health Check** | `/health/liveliness` | Restarts containers that are unresponsive |
+| **Kubernetes Liveness Probe** | `/health/liveliness` | Restarts pods that are deadlocked |
+| **Kubernetes Readiness Probe** | `/health/readiness` | Controls traffic routing to healthy pods |
+
+### Key Differences
+
+- **Readiness** checks include database status and other dependencies
+- **Liveness** is a simple ping to verify the process is responsive  
+- Failed **readiness** → stop sending traffic (temporary)
+- Failed **liveness** → restart container (drastic action) 
 
 ## `/health`
 #### Request
@@ -280,7 +316,15 @@ model_list:
 
 ## `/health/readiness`
 
-Unprotected endpoint for checking if proxy is ready to accept requests
+Unprotected endpoint for checking if proxy is ready to accept requests.
+
+This endpoint verifies that all critical dependencies are operational:
+- Database connectivity (if configured)
+- Cache connectivity (Redis, if configured) 
+- Success callback services
+- Overall proxy health status
+
+**💡 Ideal for**: Load balancer health checks (ALB, NLB) and Kubernetes readiness probes.
 
 Example Request: 
 
@@ -314,8 +358,15 @@ connected"` instead of `"connected"` and the `"last_updated"` field will not be 
 
 ## `/health/liveliness`
 
-Unprotected endpoint for checking if proxy is alive
+Unprotected endpoint for checking if proxy is alive.
 
+This is a simple ping endpoint that only verifies the application process is responsive. It does not check database connectivity or other dependencies.
+
+**💡 Ideal for**: Container liveness probes (AWS Fargate, Kubernetes) that determine when to restart containers.
+
+:::info
+Both `/health/liveliness` and `/health/liveness` endpoints are supported. The `/health/liveness` endpoint follows the standard Kubernetes naming convention.
+:::
 
 Example Request: 
 
