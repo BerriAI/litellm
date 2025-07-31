@@ -335,11 +335,21 @@ class TestMCPServerManager:
         server2.server_id = "server2"
         server2.name = "server2"
         
-        # Mock registry
+        # Mock registry and config servers (to exclude built-ins)
         manager.registry = {
             "server1": server1,
             "server2": server2
         }
+        manager.config_mcp_servers = {}
+        
+        # Mock get_registry to return only our test servers (excluding built-ins)
+        def mock_get_registry():
+            return {
+                "server1": server1,
+                "server2": server2
+            }
+        
+        manager.get_registry = mock_get_registry
         
         # Mock get_mcp_server_by_id
         def mock_get_server_by_id(server_id):
