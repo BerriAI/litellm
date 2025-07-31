@@ -240,7 +240,7 @@ class TestS3Logger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_dd_llms_obs_redaction():
+async def test_dd_llms_obs_redaction(mock_env_vars):
     # init DD with turn_off_message_logging=True
     litellm._turn_on_debug()
     from litellm.types.utils import LiteLLMCommonStrings
@@ -284,7 +284,7 @@ async def test_dd_llms_obs_redaction():
 
 
 @pytest.mark.asyncio
-async def test_create_llm_obs_payload():
+async def test_create_llm_obs_payload(mock_env_vars):
     datadog_llm_obs_logger = DataDogLLMObsLogger()
     standard_logging_payload = create_standard_logging_payload_with_cache()
     payload = datadog_llm_obs_logger.create_llm_obs_payload(
