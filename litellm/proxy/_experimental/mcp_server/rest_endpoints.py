@@ -23,6 +23,7 @@ router = APIRouter(
 if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+        _convert_protocol_version_to_enum,
     )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
@@ -171,10 +172,10 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
-                    spec_version=request.spec_version,
+                    spec_version=_convert_protocol_version_to_enum(request.spec_version),
                     auth_type=request.auth_type,
                     mcp_info=request.mcp_info,
                 ),
@@ -200,10 +201,10 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
-                    spec_version=request.spec_version,
+                    spec_version=_convert_protocol_version_to_enum(request.spec_version),
                     auth_type=request.auth_type,
                     mcp_info=request.mcp_info,
                 ),
