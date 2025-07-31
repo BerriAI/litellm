@@ -93,11 +93,14 @@ Expected output on Datadog
 
 <Image img={require('../../img/dd_small1.png')} />
 
-### Redacting Messages, Response
+### Redacting Messages and Responses
 
-This section covers how to redact messages and response from the logged payload on Datadog LLM Observability.
+This section covers how to redact sensitive data from messages and responses in the logged payload on Datadog LLM Observability.
 
-When this is enabled, the messages and response will not be logged on Datadog LLM Observability.
+
+When redaction is enabled, the actual message content and response text will be excluded from Datadog logs while preserving metadata like token counts, latency, and model information.
+
+**Step 1**: Configure redaction in your `config.yaml`
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
@@ -109,12 +112,34 @@ litellm_settings:
 
   # Params to apply only for "datadog_llm_observability" callback
   datadog_llm_observability_params:
-    turn_off_message_logging: true # turn off message logging just for this callback
+    turn_off_message_logging: true # redacts input messages and output responses
 ```
 
+**Step 2**: Send a chat completion request
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+}'
+```
+
+**Step 3**: Verify redaction in Datadog LLM Observability
+
+On the Datadog LLM Observability page, you should see that both input messages and output responses are redacted, while metadata (token counts, timing, model info) remains visible.
+
+<Image img={require('../../img/dd_llm_obs.png')} />
 
 
-#### Datadog Tracing
+
+### Datadog Tracing
 
 Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
 
