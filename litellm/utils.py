@@ -2790,7 +2790,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.JinaAIEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params={}
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "voyage":
         supported_params = get_supported_openai_params(
@@ -6942,6 +6945,12 @@ class ProviderConfigManager:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
+        elif litellm.LlmProviders.JINA_AI == provider:
+            from litellm.llms.jina_ai.embedding.transformation import (
+                JinaAIEmbeddingConfig,
+            )
+
+            return JinaAIEmbeddingConfig()
         return None
 
     @staticmethod
