@@ -460,6 +460,34 @@ class BaseAWSLLM:
         import boto3
         from botocore.credentials import Credentials
 
+        # Check if we're in an EKS/IRSA environment
+        web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+        irsa_role_arn = os.getenv("AWS_ROLE_ARN")
+        
+        # If we have IRSA environment variables and no explicit credentials,
+        # we need to use the web identity token flow
+        if (web_identity_token_file and irsa_role_arn and 
+            aws_access_key_id is None and aws_secret_access_key is None):
+            # Read the web identity token
+            try:
+                with open(web_identity_token_file, 'r') as f:
+                    web_identity_token = f.read().strip()
+            except Exception as e:
+                verbose_logger.debug(f"Failed to read web identity token file: {e}")
+                # Fall through to regular flow
+            else:
+                # Get the region from environment or use default
+                aws_region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+                
+                # Use the web identity token authentication method
+                return self._auth_with_web_identity_token(
+                    aws_web_identity_token=web_identity_token,
+                    aws_role_name=aws_role_name,
+                    aws_session_name=aws_session_name,
+                    aws_region_name=aws_region,
+                    aws_sts_endpoint=None,
+                )
+        
         # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
         # This allows the web identity token to work automatically
         if aws_access_key_id is None and aws_secret_access_key is None:

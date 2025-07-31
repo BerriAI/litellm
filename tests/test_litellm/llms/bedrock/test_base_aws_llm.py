@@ -935,3 +935,52 @@ def test_multiple_role_assumptions_in_sequence():
         assert credentials2.access_key == "role2-access-key"
         assert credentials2.secret_key == "role2-secret-key"
         assert credentials2.token == "role2-session-token"
+
+
+def test_auth_with_aws_role_irsa_environment():
+    """Test that _auth_with_aws_role detects and uses IRSA environment variables"""
+    base_llm = BaseAWSLLM()
+    
+    # Create a temporary file to simulate the web identity token
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        f.write('test-web-identity-token')
+        token_file = f.name
+    
+    try:
+        # Set IRSA environment variables
+        with patch.dict(os.environ, {
+            'AWS_WEB_IDENTITY_TOKEN_FILE': token_file,
+            'AWS_ROLE_ARN': 'arn:aws:iam::111111111111:role/eks-service-account-role',
+            'AWS_REGION': 'us-east-1'
+        }):
+            # Mock the _auth_with_web_identity_token method
+            mock_creds = MagicMock()
+            mock_creds.access_key = 'irsa-access-key'
+            mock_creds.secret_key = 'irsa-secret-key'
+            mock_creds.token = 'irsa-session-token'
+            
+            with patch.object(base_llm, '_auth_with_web_identity_token', return_value=(mock_creds, 3600)) as mock_web_auth:
+                # Call _auth_with_aws_role without explicit credentials
+                creds, ttl = base_llm._auth_with_aws_role(
+                    aws_access_key_id=None,
+                    aws_secret_access_key=None,
+                    aws_role_name='arn:aws:iam::222222222222:role/target-role',
+                    aws_session_name='test-session'
+                )
+                
+                # Verify it used the web identity token flow
+                mock_web_auth.assert_called_once_with(
+                    aws_web_identity_token='test-web-identity-token',
+                    aws_role_name='arn:aws:iam::222222222222:role/target-role',
+                    aws_session_name='test-session',
+                    aws_region_name='us-east-1',
+                    aws_sts_endpoint=None
+                )
+                
+                # Verify the returned credentials
+                assert creds.access_key == 'irsa-access-key'
+                assert ttl == 3600
+    finally:
+        # Clean up the temporary file
+        os.unlink(token_file)
