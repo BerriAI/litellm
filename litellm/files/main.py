@@ -46,6 +46,53 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 #################################################
 
 
+def _create_bedrock_file_handler(
+    bedrock_litellm_params: dict,
+    create_file_request: CreateFileRequest,
+    extra_headers: Optional[Dict[str, str]],
+    optional_params: GenericLiteLLMParams,
+    logging_obj: LiteLLMLoggingObj,
+    is_async: bool,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]],
+    timeout: Optional[Union[float, httpx.Timeout]],
+) -> OpenAIFileObject:
+    """Helper function to handle Bedrock file creation"""
+    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+    
+    class BedrockFilesConfig(BaseFilesConfig):
+        @property
+        def custom_llm_provider(self) -> LlmProviders:
+            return LlmProviders.BEDROCK
+        
+        def get_supported_openai_params(self, model: str):
+            return []
+        
+        def transform_create_file_request(self, model: str, create_file_data, litellm_params: dict, optional_params: dict):
+            return create_file_data
+        
+        def transform_create_file_response(self, model, raw_response, logging_obj, litellm_params):
+            return raw_response
+    
+    provider_config = BedrockFilesConfig()
+    return base_llm_http_handler.create_file(
+        provider_config=provider_config,
+        litellm_params=bedrock_litellm_params,
+        create_file_data=create_file_request,
+        headers=extra_headers or {},
+        api_base=optional_params.api_base,
+        api_key=optional_params.api_key,
+        logging_obj=logging_obj,
+        _is_async=is_async,
+        client=client
+        if client is not None
+        and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+        else None,
+        timeout=timeout,
+    )
+
+
+
+
 @client
 async def acreate_file(
     file: FileTypes,
@@ -253,54 +300,16 @@ def create_file(
                 create_file_data=_create_file_request,
             )
         elif custom_llm_provider == "bedrock":
-            # Use llm_http_handler for Bedrock with AWS params in litellm_params
-            bedrock_litellm_params = litellm_params_dict.copy()
-            bedrock_litellm_params.update({
-                k: v for k, v in {
-                    "aws_access_key_id": optional_params.get("aws_access_key_id"),
-                    "aws_secret_access_key": optional_params.get("aws_secret_access_key"),
-                    "aws_session_token": optional_params.get("aws_session_token"),
-                    "aws_region_name": optional_params.get("aws_region_name"),
-                    "aws_role_name": optional_params.get("aws_role_name"),
-                    "aws_session_name": optional_params.get("aws_session_name"),
-                    "aws_profile_name": optional_params.get("aws_profile_name"),
-                    "aws_web_identity_token": optional_params.get("aws_web_identity_token"),
-                    "aws_sts_endpoint": optional_params.get("aws_sts_endpoint"),
-                }.items() if v is not None
-            })
-            
-            # Create a minimal Bedrock files config
-            from litellm.llms.base_llm.files.transformation import BaseFilesConfig
-            from litellm.types.utils import LlmProviders
-            
-            class BedrockFilesConfig(BaseFilesConfig):
-                @property
-                def custom_llm_provider(self) -> LlmProviders:
-                    return LlmProviders.BEDROCK
-                
-                def get_supported_openai_params(self, model: str):
-                    return []
-                
-                def transform_create_file_request(self, model: str, create_file_data, litellm_params: dict, optional_params: dict):
-                    return create_file_data
-                
-                def transform_create_file_response(self, model, raw_response, logging_obj, litellm_params):
-                    return raw_response
-            
-            provider_config = BedrockFilesConfig()
-            response = base_llm_http_handler.create_file(
-                provider_config=provider_config,
-                litellm_params=bedrock_litellm_params,
-                create_file_data=_create_file_request,
-                headers=extra_headers or {},
-                api_base=optional_params.api_base,
-                api_key=optional_params.api_key,
+            from litellm.llms.bedrock.common_utils import prepare_bedrock_params
+            bedrock_litellm_params = prepare_bedrock_params(optional_params, litellm_params_dict)
+            response = _create_bedrock_file_handler(
+                bedrock_litellm_params=bedrock_litellm_params,
+                create_file_request=_create_file_request,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
                 logging_obj=logging_obj,
-                _is_async=_is_async,
-                client=client
-                if client is not None
-                and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
-                else None,
+                is_async=_is_async,
+                client=client,
                 timeout=timeout,
             )
         else:

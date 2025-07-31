@@ -524,3 +524,88 @@ class BedrockEventStreamDecoderBase:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
+
+
+# Helper functions for Bedrock file and batch operations
+def extract_bedrock_file_content(create_file_data: dict) -> tuple[bytes, str]:
+    """Extract file content and filename from create_file_data"""
+    import uuid
+    
+    file_obj = create_file_data["file"]
+    purpose = create_file_data.get("purpose", "batch")
+
+    # Handle different FileTypes formats
+    if isinstance(file_obj, tuple):
+        # Handle tuple formats: (filename, file), (filename, file, content_type), etc.
+        tuple_filename = file_obj[0] if file_obj[0] else f"file.{purpose}"
+        actual_file = file_obj[1]
+        
+        if hasattr(actual_file, "read"):
+            file_content = actual_file.read() 
+            filename = tuple_filename
+        else:
+            # Handle bytes directly
+            file_content = actual_file
+            filename = tuple_filename
+    else:
+        # Handle direct FileContent (IO[bytes], bytes, or PathLike)
+        if hasattr(file_obj, "read"):
+            file_content = file_obj.read()
+            filename = getattr(file_obj, "name", f"file.{purpose}")
+        else:
+            # Handle bytes directly
+            file_content = file_obj
+            filename = f"file.{purpose}"
+            
+    return file_content, filename
+
+
+def generate_bedrock_s3_key(filename: str, purpose: str) -> str:
+    """Generate S3 key for Bedrock file upload"""
+    import uuid
+    
+    file_uuid = str(uuid.uuid4())
+    if "." in filename:
+        ext = filename.split(".")[-1]
+        return f"{purpose}/{file_uuid}.{ext}"
+    else:
+        return f"{purpose}/{file_uuid}"
+
+
+def prepare_bedrock_s3_upload(file_content: bytes, s3_key: str, bucket_name: str, region_name: str) -> tuple[str, dict]:
+    """Prepare S3 upload URL and headers for Bedrock file"""
+    import hashlib
+    
+    # Prepare S3 URL
+    url = f"https://{bucket_name}.s3.{region_name}.amazonaws.com/{s3_key}"
+    
+    # Calculate content hash
+    content_hash = hashlib.sha256(file_content).hexdigest()
+    
+    # Prepare headers
+    upload_headers = {
+        "Content-Type": "application/octet-stream",
+        "x-amz-content-sha256": content_hash,
+        "Content-Length": str(len(file_content)),
+    }
+    
+    return url, upload_headers
+
+
+def prepare_bedrock_params(optional_params, litellm_params_dict: dict) -> dict:
+    """Helper function to prepare Bedrock-specific parameters"""
+    bedrock_litellm_params = litellm_params_dict.copy()
+    bedrock_litellm_params.update({
+        k: v for k, v in {
+            "aws_access_key_id": optional_params.get("aws_access_key_id"),
+            "aws_secret_access_key": optional_params.get("aws_secret_access_key"),
+            "aws_session_token": optional_params.get("aws_session_token"),
+            "aws_region_name": optional_params.get("aws_region_name"),
+            "aws_role_name": optional_params.get("aws_role_name"),
+            "aws_session_name": optional_params.get("aws_session_name"),
+            "aws_profile_name": optional_params.get("aws_profile_name"),
+            "aws_web_identity_token": optional_params.get("aws_web_identity_token"),
+            "aws_sts_endpoint": optional_params.get("aws_sts_endpoint"),
+        }.items() if v is not None
+    })
+    return bedrock_litellm_params

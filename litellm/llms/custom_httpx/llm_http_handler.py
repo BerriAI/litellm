@@ -2697,7 +2697,6 @@ class BaseLLMHTTPHandler:
         Creates a Bedrock file asynchronously by uploading to S3
         """
         import uuid
-        import hashlib
         from litellm import get_secret_str
         
         # Extract file data from the request
@@ -2733,53 +2732,17 @@ class BaseLLMHTTPHandler:
         }
         credentials = base_aws.get_credentials(**aws_params)
 
-        # Extract file information
-        file_obj = create_file_data["file"]
+        # Extract file content and filename using utility function
+        from litellm.llms.bedrock.common_utils import (
+            extract_bedrock_file_content,
+            generate_bedrock_s3_key,
+            prepare_bedrock_s3_upload,
+        )
+        
+        file_content, filename = extract_bedrock_file_content(create_file_data)
         purpose = create_file_data.get("purpose", "batch")
-
-        # Handle different FileTypes formats
-        if isinstance(file_obj, tuple):
-            # Handle tuple formats: (filename, file), (filename, file, content_type), etc.
-            tuple_filename = file_obj[0] if file_obj[0] else f"file.{purpose}"
-            actual_file = file_obj[1]
-            
-            if hasattr(actual_file, "read"):
-                file_content = actual_file.read() 
-                filename = tuple_filename
-            else:
-                # Handle bytes directly
-                file_content = actual_file
-                filename = tuple_filename
-        else:
-            # Handle direct FileContent (IO[bytes], bytes, or PathLike)
-            if hasattr(file_obj, "read"):
-                file_content = file_obj.read()
-                filename = getattr(file_obj, "name", f"file.{purpose}")
-            else:
-                # Handle bytes directly
-                file_content = file_obj
-                filename = f"file.{purpose}"
-
-        # Generate S3 key
-        file_uuid = str(uuid.uuid4())
-        if "." in filename:
-            ext = filename.split(".")[-1]
-            s3_key = f"{purpose}/{file_uuid}.{ext}"
-        else:
-            s3_key = f"{purpose}/{file_uuid}"
-
-        # Prepare S3 URL
-        url = f"https://{bucket_name}.s3.{region_name}.amazonaws.com/{s3_key}"
-
-        # Calculate content hash
-        content_hash = hashlib.sha256(file_content).hexdigest()
-
-        # Prepare headers
-        upload_headers = {
-            "Content-Type": "application/octet-stream",
-            "x-amz-content-sha256": content_hash,
-            "Content-Length": str(len(file_content)),
-        }
+        s3_key = generate_bedrock_s3_key(filename, purpose)
+        url, upload_headers = prepare_bedrock_s3_upload(file_content, s3_key, bucket_name, region_name)
 
         # Create and sign AWS request
         aws_request = AWSRequest(
