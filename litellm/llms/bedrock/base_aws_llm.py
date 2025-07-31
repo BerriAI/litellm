@@ -179,15 +179,23 @@ class BaseAWSLLM:
                 aws_sts_endpoint=aws_sts_endpoint,
             )
         elif aws_role_name is not None:
-            # If aws_session_name is not provided, generate a default one
-            if aws_session_name is None:
-                aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
-            credentials, _cache_ttl = self._auth_with_aws_role(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_role_name=aws_role_name,
-                aws_session_name=aws_session_name,
-            )
+            # Check if we're in IRSA and trying to assume the same role we already have
+            current_role_arn = os.getenv("AWS_ROLE_ARN")
+            if (current_role_arn and current_role_arn == aws_role_name and 
+                aws_access_key_id is None and aws_secret_access_key is None):
+                # We're already running as this role via IRSA, no need to assume it again
+                # Use the default boto3 credentials (which will use the IRSA credentials)
+                credentials, _cache_ttl = self._auth_with_env_vars()
+            else:
+                # If aws_session_name is not provided, generate a default one
+                if aws_session_name is None:
+                    aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
+                credentials, _cache_ttl = self._auth_with_aws_role(
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                    aws_role_name=aws_role_name,
+                    aws_session_name=aws_session_name,
+                )
 
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             credentials, _cache_ttl = self._auth_with_aws_profile(aws_profile_name)

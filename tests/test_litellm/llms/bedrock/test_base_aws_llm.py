@@ -984,3 +984,36 @@ def test_auth_with_aws_role_irsa_environment():
     finally:
         # Clean up the temporary file
         os.unlink(token_file)
+
+
+def test_auth_with_aws_role_same_role_irsa():
+    """Test that when IRSA role matches the requested role, we skip assumption"""
+    base_llm = BaseAWSLLM()
+    
+    # Set IRSA environment variables
+    with patch.dict(os.environ, {
+        'AWS_ROLE_ARN': 'arn:aws:iam::111111111111:role/LitellmRole',
+        'AWS_WEB_IDENTITY_TOKEN_FILE': '/var/run/secrets/eks.amazonaws.com/serviceaccount/token'
+    }):
+        # Mock the _auth_with_env_vars method
+        mock_creds = MagicMock()
+        mock_creds.access_key = 'irsa-access-key'
+        mock_creds.secret_key = 'irsa-secret-key'
+        mock_creds.token = 'irsa-session-token'
+        
+        with patch.object(base_llm, '_auth_with_env_vars', return_value=(mock_creds, None)) as mock_env_auth:
+            # Call get_credentials instead of _auth_with_aws_role directly
+            # This tests the full flow
+            creds = base_llm.get_credentials(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_role_name='arn:aws:iam::111111111111:role/LitellmRole',  # Same as AWS_ROLE_ARN
+                aws_session_name='test-session',
+                aws_region_name='us-east-1'
+            )
+            
+            # Verify it used the env vars auth (no role assumption)
+            mock_env_auth.assert_called_once()
+            
+            # Verify the returned credentials
+            assert creds.access_key == 'irsa-access-key'
