@@ -54,7 +54,7 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import OCIError
-from .transformation import OCIChatConfig, OCICustomStreamWrapper
+from .transformation import OCIChatConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -481,12 +481,13 @@ class OCIChatCompletion(BaseLLM):
                     json_mode=json_mode,
                     signed_json_body=signed_json_body,
                 )
-                return OCICustomStreamWrapper(
-                    completion_stream=completion_stream,
-                    model=model,
-                    custom_llm_provider="oci",
-                    logging_obj=logging_obj,
-                )
+                return completion_stream
+                # return OCICustomStreamWrapper(
+                #     completion_stream=completion_stream,
+                #     model=model,
+                #     custom_llm_provider="oci",
+                #     logging_obj=logging_obj,
+                # )
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
@@ -541,149 +542,35 @@ class ModelResponseIterator:
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: List[ContentBlockDelta] = []
-        self.tool_index = -1
-        self.json_mode = json_mode
-
-        # Track if we're currently streaming a response_format tool
-        self.is_response_format_tool: bool = False
-        # Track if we've converted any response_format tools (affects finish_reason)
-        self.converted_response_format_tool: bool = False
-
-    def check_empty_tool_call_args(self) -> bool:
-        """
-        Check if the tool call block so far has been an empty string
-        """
-        args = ""
-        # if text content block -> skip
-        if len(self.content_blocks) == 0:
-            return False
-
-        if (
-            self.content_blocks[0]["delta"]["type"] == "text_delta"
-            or self.content_blocks[0]["delta"]["type"] == "thinking_delta"
-        ):
-            return False
-
-        for block in self.content_blocks:
-            if block["delta"]["type"] == "input_json_delta":
-                args += block["delta"].get("partial_json", "")  # type: ignore
-
-        if len(args) == 0:
-            return True
-        return False
-
-    def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
-        # return OCIChatConfig().calculate_usage(
-        #     usage_object=cast(dict, anthropic_usage_chunk), reasoning_content=None
-        # )
-        return Usage()
-
-    def _content_block_delta_helper(
-        self, chunk: dict
-    ) -> Tuple[
-        str,
-        Optional[ChatCompletionToolCallChunk],
-        List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
-        Dict[str, Any],
-    ]:
-        """
-        Helper function to handle the content block delta
-        """
-        text = ""
-        tool_use: Optional[ChatCompletionToolCallChunk] = None
-        provider_specific_fields = {}
-        content_block = ContentBlockDelta(**chunk)  # type: ignore
-        thinking_blocks: List[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ] = []
-
-        self.content_blocks.append(content_block)
-        if "text" in content_block["delta"]:
-            text = content_block["delta"]["text"]
-        elif "partial_json" in content_block["delta"]:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": content_block["delta"]["partial_json"],
-                },
-                "index": self.tool_index,
-            }
-        elif "citation" in content_block["delta"]:
-            provider_specific_fields["citation"] = content_block["delta"]["citation"]
-        elif (
-            "thinking" in content_block["delta"]
-            or "signature" in content_block["delta"]
-        ):
-            thinking_blocks = [
-                ChatCompletionThinkingBlock(
-                    type="thinking",
-                    thinking=content_block["delta"].get("thinking") or "",
-                    signature=content_block["delta"].get("signature"),
-                )
-            ]
-            provider_specific_fields["thinking_blocks"] = thinking_blocks
-
-        return text, tool_use, thinking_blocks, provider_specific_fields
-
-    def _handle_reasoning_content(
-        self,
-        thinking_blocks: List[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ],
-    ) -> Optional[str]:
-        """
-        Handle the reasoning content
-        """
-        reasoning_content = None
-        for block in thinking_blocks:
-            thinking_content = cast(Optional[str], block.get("thinking"))
-            if reasoning_content is None:
-                reasoning_content = ""
-            if thinking_content is not None:
-                reasoning_content += thinking_content
-        return reasoning_content
-
-    def _handle_redacted_thinking_content(
-        self,
-        content_block_start: ContentBlockStart,
-        provider_specific_fields: Dict[str, Any],
-    ) -> Tuple[List[ChatCompletionRedactedThinkingBlock], Dict[str, Any]]:
-        """
-        Handle the redacted thinking content
-        """
-        thinking_blocks = [
-            ChatCompletionRedactedThinkingBlock(
-                type="redacted_thinking",
-                data=content_block_start["content_block"]["data"],  # type: ignore
-            )
-        ]
-        provider_specific_fields["thinking_blocks"] = thinking_blocks
-
-        return thinking_blocks, provider_specific_fields
-
-    def get_content_block_start(self, chunk: dict) -> ContentBlockStart:
-        from litellm.types.llms.anthropic import (
-            ContentBlockStartText,
-            ContentBlockStartToolUse,
-        )
-
-        if chunk.get("content_block", {}).get("type") == "tool_use":
-            content_block_start = ContentBlockStartToolUse(**chunk)  # type: ignore
-        else:
-            content_block_start = ContentBlockStartText(**chunk)  # type: ignore
-
-        return content_block_start
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            type_chunk = chunk.get("type", "") or ""
-
-            text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
-            finish_reason = ""
+            text: str = ""
+            tool_calls = []
+            message = chunk.get("message")
+            finish_reason = chunk.get("finishReason")
+            if finish_reason:
+                text = ""
+            else:
+                if not message:
+                    raise ValueError(
+                        "Chunk does not contain 'message' key: {}".format(chunk)
+                    )
+                content = message.get("content")
+                if content:
+                    text = content[0].get("text", "")
+                else:
+                    text = ""
+                tool_calls_received = message.get("toolCalls", [])
+                for tool in tool_calls_received:
+                    tool_calls.append({
+                        "id": tool.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": tool.get("name"),
+                            "arguments": tool.get("arguments", "{}"),
+                        },
+                    })
             usage: Optional[Usage] = None
             provider_specific_fields: Dict[str, Any] = {}
             reasoning_content: Optional[str] = None
@@ -696,115 +583,13 @@ class ModelResponseIterator:
             ] = None
 
             index = int(chunk.get("index", 0))
-            if type_chunk == "content_block_delta":
-                """
-                Anthropic content chunk
-                chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
-                """
-                (
-                    text,
-                    tool_use,
-                    thinking_blocks,
-                    provider_specific_fields,
-                ) = self._content_block_delta_helper(chunk=chunk)
-                if thinking_blocks:
-                    reasoning_content = self._handle_reasoning_content(
-                        thinking_blocks=thinking_blocks
-                    )
-            elif type_chunk == "content_block_start":
-                """
-                event: content_block_start
-                data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
-                """
-
-                content_block_start = self.get_content_block_start(chunk=chunk)
-                self.content_blocks = []  # reset content blocks when new block starts
-                if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
-                elif content_block_start["content_block"]["type"] == "tool_use":
-                    self.tool_index += 1
-                    tool_use = {
-                        "id": content_block_start["content_block"]["id"],
-                        "type": "function",
-                        "function": {
-                            "name": content_block_start["content_block"]["name"],
-                            "arguments": "",
-                        },
-                        "index": self.tool_index,
-                    }
-                elif (
-                    content_block_start["content_block"]["type"] == "redacted_thinking"
-                ):
-                    (
-                        thinking_blocks,
-                        provider_specific_fields,
-                    ) = self._handle_redacted_thinking_content(  # type: ignore
-                        content_block_start=content_block_start,
-                        provider_specific_fields=provider_specific_fields,
-                    )
-            elif type_chunk == "content_block_stop":
-                ContentBlockStop(**chunk)  # type: ignore
-                # check if tool call content block
-                is_empty = self.check_empty_tool_call_args()
-                if is_empty:
-                    tool_use = {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": "{}",
-                        },
-                        "index": self.tool_index,
-                    }
-                # Reset response_format tool tracking when block stops
-                self.is_response_format_tool = False
-            elif type_chunk == "message_delta":
-                finish_reason, usage = self._handle_message_delta(chunk)
-            elif type_chunk == "message_start":
-                """
-                Anthropic
-                chunk = {
-                    "type": "message_start",
-                    "message": {
-                        "id": "msg_vrtx_011PqREFEMzd3REdCoUFAmdG",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": "claude-3-sonnet-20240229",
-                        "content": [],
-                        "stop_reason": null,
-                        "stop_sequence": null,
-                        "usage": {
-                            "input_tokens": 270,
-                            "output_tokens": 1
-                        }
-                    }
-                }
-                """
-                message_start_block = MessageStartBlock(**chunk)  # type: ignore
-                if "usage" in message_start_block["message"]:
-                    usage = self._handle_usage(
-                        anthropic_usage_chunk=message_start_block["message"]["usage"]
-                    )
-            elif type_chunk == "error":
-                """
-                {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
-                """
-                _error_dict = chunk.get("error", {}) or {}
-                message = _error_dict.get("message", None) or str(chunk)
-                raise OCIError(
-                    message=message,
-                    status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
-                )
-
-            text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
-
             returned_chunk = ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         index=index,
                         delta=Delta(
                             content=text,
-                            tool_calls=[tool_use] if tool_use is not None else None,
+                            tool_calls=tool_calls if tool_calls else None,
                             provider_specific_fields=(
                                 provider_specific_fields
                                 if provider_specific_fields
@@ -825,76 +610,6 @@ class ModelResponseIterator:
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
-
-    def _handle_json_mode_chunk(
-        self, text: str, tool_use: Optional[ChatCompletionToolCallChunk]
-    ) -> Tuple[str, Optional[ChatCompletionToolCallChunk]]:
-        """
-        If JSON mode is enabled, convert the tool call to a message.
-
-        Anthropic returns the JSON schema as part of the tool call
-        OpenAI returns the JSON schema as part of the content, this handles placing it in the content
-
-        Tool streaming follows Anthropic's fine-grained streaming pattern:
-        - content_block_start: Contains complete tool info (id, name, empty arguments)
-        - content_block_delta: Contains argument deltas (partial_json)
-        - content_block_stop: Signals end of tool
-
-        Reference: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/fine-grained-tool-streaming
-
-        Args:
-            text: str
-            tool_use: Optional[ChatCompletionToolCallChunk]
-        Returns:
-            Tuple[str, Optional[ChatCompletionToolCallChunk]]
-
-            text: The text to use in the content
-            tool_use: The ChatCompletionToolCallChunk to use in the chunk response
-        """
-        if not self.json_mode or tool_use is None:
-            return text, tool_use
-
-        # Check if this is a new tool call (has id)
-        if tool_use.get("id") is not None:
-            # New tool call from content_block_start - tool name is always complete here
-            # (per Anthropic's fine-grained streaming pattern)
-            tool_name = tool_use.get("function", {}).get("name", "")
-            self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
-
-        # Convert tool to content if we're tracking a response_format tool
-        if self.is_response_format_tool:
-            # message = OCIChatConfig._convert_tool_response_to_message(
-            #     tool_calls=[tool_use]
-            # )
-            message = None
-            if message is not None:
-                text = message.content or ""
-                tool_use = None
-                # Track that we converted a response_format tool
-                self.converted_response_format_tool = True
-
-        return text, tool_use
-
-    def _handle_message_delta(self, chunk: dict) -> Tuple[str, Optional[Usage]]:
-        """
-        Handle message_delta event for finish_reason and usage.
-
-        Args:
-            chunk: The message_delta chunk
-
-        Returns:
-            Tuple of (finish_reason, usage)
-        """
-        message_delta = MessageBlockDelta(**chunk)  # type: ignore
-        finish_reason = map_finish_reason(
-            finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
-        )
-        # Override finish_reason to "stop" if we converted response_format tools
-        # (matches OpenAI behavior and non-streaming Anthropic implementation)
-        if self.converted_response_format_tool:
-            finish_reason = "stop"
-        usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
-        return finish_reason, usage
 
     # Sync iterator
     def __iter__(self):
@@ -920,14 +635,7 @@ class ModelResponseIterator:
                 data_json = json.loads(str_line[5:])
                 return self.chunk_parser(chunk=data_json)
             else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
+                return next(self)
         except StopIteration:
             raise StopIteration
         except ValueError as e:
@@ -970,25 +678,3 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
-
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
-        """
-        Convert a string chunk to a GenericStreamingChunk
-
-        Note: This is used for Anthropic pass through streaming logging
-
-        We can move __anext__, and __next__ to use this function since it's common logic.
-        Did not migrate them to minmize changes made in 1 PR.
-        """
-        str_line = chunk
-        if isinstance(chunk, bytes):  # Handle binary data
-            str_line = chunk.decode("utf-8")  # Convert bytes to string
-            index = str_line.find("data:")
-            if index != -1:
-                str_line = str_line[index:]
-
-        if str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
-            return self.chunk_parser(chunk=data_json)
-        else:
-            return ModelResponseStream()

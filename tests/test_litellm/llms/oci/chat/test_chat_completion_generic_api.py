@@ -47,7 +47,29 @@ response = completion(
         },
 
         # Novo input do usuário
-        {"role": "user", "content": "What about France?"}
+        {"role": "user", "content": "What about France?"},
+
+        # Modelo chama a ferramenta
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "tool_call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_capital",
+                        "arguments": '{"country": "France"}'
+                    }
+                }
+            ]
+        },
+
+        # Sua aplicação responde a tool_call
+        {
+            "role": "tool",
+            "tool_call_id": "tool_call_1",
+            "content": '{"capital": "Paris"}'
+        },
     ],
     oci_region=oci_region,
     oci_user=oci_user,
@@ -55,6 +77,7 @@ response = completion(
     oci_tenancy=oci_tenancy,
     oci_key=oci_key,
     oci_compartment_id=oci_compartment_id,
+    stream=True,
     tools=[{
         "type": "function",
         "function": {
@@ -74,4 +97,7 @@ response = completion(
     }]
 )
 
-print(response)
+for chunk in response:
+    print(chunk)
+
+# print(response)

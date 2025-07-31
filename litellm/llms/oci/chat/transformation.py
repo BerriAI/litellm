@@ -497,7 +497,7 @@ class OCIChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> "BytezCustomStreamWrapper":
+    ) -> "CustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
 
@@ -520,7 +520,7 @@ class OCIChatConfig(BaseConfig):
 
         completion_stream = response.iter_text()
 
-        streaming_response = BytezCustomStreamWrapper(
+        streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -541,7 +541,7 @@ class OCIChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> "BytezCustomStreamWrapper":
+    ) -> "CustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
 
@@ -564,7 +564,7 @@ class OCIChatConfig(BaseConfig):
 
         completion_stream = response.aiter_text()
 
-        streaming_response = BytezCustomStreamWrapper(
+        streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -576,38 +576,6 @@ class OCIChatConfig(BaseConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return OCIError(status_code=status_code, message=error_message)
-
-
-class BytezCustomStreamWrapper(CustomStreamWrapper):
-    def chunk_creator(self, chunk: Any):
-        try:
-            model_response = self.model_response_creator()
-            response_obj: Dict[str, Any] = {}
-
-            response_obj = {
-                "text": chunk,
-                "is_finished": False,
-                "finish_reason": "",
-            }
-
-            completion_obj: Dict[str, Any] = {"content": chunk}
-
-            return self.return_processed_chunk_logic(
-                completion_obj=completion_obj,
-                model_response=model_response,  # type: ignore
-                response_obj=response_obj,
-            )
-
-        except StopIteration:
-            raise StopIteration
-        except Exception as e:
-            traceback.format_exc()
-            setattr(e, "message", str(e))
-            raise exception_type(
-                model=self.model,
-                custom_llm_provider=self.custom_llm_provider,
-                original_exception=e,
-            )
 
 
 open_ai_to_generic_oci_role_map = {
