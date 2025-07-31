@@ -49,6 +49,14 @@ from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoni
 
 from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
+# Computer use tool prefixes supported by Bedrock
+BEDROCK_COMPUTER_USE_TOOLS = [
+    "computer_use_preview",
+    "computer_",
+    "bash_",
+    "text_editor_"
+]
+
 
 class AmazonConverseConfig(BaseConfig):
     """
@@ -225,10 +233,6 @@ class AmazonConverseConfig(BaseConfig):
         if tools is None:
             return False
         
-        # Computer use tools are only supported on Anthropic Claude models
-        if not self._is_anthropic_model(model):
-            return False
-            
         for tool in tools:
             if "type" in tool:
                 tool_type = tool["type"]
@@ -295,31 +299,24 @@ class AmazonConverseConfig(BaseConfig):
         computer_use_tools = []
         regular_tools = []
         
-        if self._is_anthropic_model(model):
-            for tool in tools:
-                if "type" in tool:
-                    tool_type = tool["type"]
-                    is_computer_use_tool = False
-                    for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
-                        if tool_type.startswith(computer_use_prefix):
-                            is_computer_use_tool = True
-                            break
-                    if is_computer_use_tool:
-                        computer_use_tools.append(tool)
-                    else:
-                        regular_tools.append(tool)
+        for tool in tools:
+            if "type" in tool:
+                tool_type = tool["type"]
+                is_computer_use_tool = False
+                for computer_use_prefix in BEDROCK_COMPUTER_USE_TOOLS:
+                    if tool_type.startswith(computer_use_prefix):
+                        is_computer_use_tool = True
+                        break
+                if is_computer_use_tool:
+                    computer_use_tools.append(tool)
                 else:
                     regular_tools.append(tool)
-        else:
-            # For non-Anthropic models, treat all tools as regular tools
-            regular_tools = tools
+            else:
+                regular_tools.append(tool)
             
         return computer_use_tools, regular_tools
 
-    def _is_anthropic_model(self, model: str) -> bool:
-        """Check if the model is an Anthropic Claude model that supports computer use."""
-        model_lower = BedrockModelInfo.get_base_model(model)
-        return "anthropic" in model_lower or "claude" in model_lower
+
 
     def _create_json_tool_call_for_response_format(
         self,
@@ -651,20 +648,28 @@ class AmazonConverseConfig(BaseConfig):
 
         original_tools = inference_params.pop("tools", [])
         
-        # Separate computer use tools from regular function tools
-        computer_use_tools, regular_tools = self._separate_computer_use_tools(
-            original_tools, model
-        )
+        # Initialize bedrock_tools
+        bedrock_tools: List[ToolBlock] = []
         
-        # Process regular function tools using existing logic
-        bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(regular_tools)
-        
-        # Add computer use tools and anthropic_beta if needed (only for Anthropic models)
-        if computer_use_tools and self._is_anthropic_model(model):
-            additional_request_params["anthropic_beta"] = ["computer-use-2024-10-22"]
-            # Transform computer use tools to proper Bedrock format
-            transformed_computer_tools = self._transform_computer_use_tools(computer_use_tools)
-            additional_request_params["tools"] = transformed_computer_tools
+        # Only separate tools if computer use tools are actually present
+        if original_tools and self.is_computer_use_tool_used(original_tools, model):
+            # Separate computer use tools from regular function tools
+            computer_use_tools, regular_tools = self._separate_computer_use_tools(
+                original_tools, model
+            )
+            
+            # Process regular function tools using existing logic
+            bedrock_tools = _bedrock_tools_pt(regular_tools)
+            
+            # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
+            if computer_use_tools:
+                additional_request_params["anthropic_beta"] = ["computer-use-2024-10-22"]
+                # Transform computer use tools to proper Bedrock format
+                transformed_computer_tools = self._transform_computer_use_tools(computer_use_tools)
+                additional_request_params["tools"] = transformed_computer_tools
+        else:
+            # No computer use tools, process all tools as regular tools
+            bedrock_tools = _bedrock_tools_pt(original_tools)
         
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
