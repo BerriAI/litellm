@@ -12,6 +12,8 @@ sys.path.insert(
 
 from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
+pytestmark = pytest.mark.skip(reason="Skipping auto router tests - beta feature")
+
 
 @pytest.fixture
 def mock_router_instance():

@@ -52,6 +52,11 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
+from litellm.types.mcp import (
+    MCPPreCallRequestObject,
+    MCPPreCallResponseObject,
+    MCPDuringCallResponseObject,
+)
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
@@ -467,6 +472,162 @@ class ProxyLogging:
             ttl=alerting_threshold,
             litellm_parent_otel_span=None,
         )
+
+    async def async_pre_mcp_tool_call_hook(
+            self,
+            kwargs: dict,
+            request_obj: Any,
+            start_time: datetime,
+            end_time: datetime,
+    ) -> Optional[Any]:
+        """
+        Pre MCP Tool Call Hook
+
+        Use this to validate and modify MCP tool calls before execution.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPPreCallRequestObject, MCPPreCallResponseObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
+            global_callbacks=litellm.success_callback,
+        )
+
+        # Create the request object if it's not already one
+        if not isinstance(request_obj, MCPPreCallRequestObject):
+            request_obj = MCPPreCallRequestObject(
+                tool_name=kwargs.get("name", ""),
+                arguments=kwargs.get("arguments", {}),
+                server_name=kwargs.get("server_name"),
+                user_api_key_auth=kwargs.get("user_api_key_auth"),
+                hidden_params=HiddenParams()
+            )
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    response: Optional[MCPPreCallResponseObject] = (
+                        await callback.async_pre_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            request_obj=request_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                    )
+                    ######################################################################
+                    # if any of the callbacks return a response, use the first one
+                    # this allows for validation failures or argument modifications
+                    ######################################################################
+                    if response is not None:
+                        return self._parse_pre_mcp_call_hook_response(
+                            response=response, original_request=request_obj
+                        )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return None
+
+    def get_combined_callback_list(
+        self, dynamic_success_callbacks: Optional[List], global_callbacks: List
+    ) -> List:
+        if dynamic_success_callbacks is None:
+            return global_callbacks
+        return list(set(dynamic_success_callbacks + global_callbacks))
+
+
+
+    def _parse_pre_mcp_call_hook_response(
+            self, response: MCPPreCallResponseObject, original_request: MCPPreCallRequestObject
+    ) -> Dict[str, Any]:
+        """
+        Parse the response from the pre_mcp_tool_call_hook
+
+        1. Check if the call should proceed
+        2. Apply any argument modifications
+        3. Handle validation errors
+        """
+        result = {
+            "should_proceed": response.should_proceed,
+            "modified_arguments": response.modified_arguments or original_request.arguments,
+            "error_message": response.error_message,
+            "hidden_params": response.hidden_params,
+        }
+        return result
+
+    async def async_during_mcp_tool_call_hook(
+            self,
+            kwargs: dict,
+            request_obj: Any,
+            start_time: datetime,
+            end_time: datetime,
+    ) -> Optional[Any]:
+        """
+        During MCP Tool Call Hook
+
+        Use this for concurrent monitoring and validation during tool execution.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPDuringCallResponseObject, MCPDuringCallRequestObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
+            global_callbacks=litellm.success_callback,
+        )
+
+        # Create the request object if it's not already one
+        if not isinstance(request_obj, MCPDuringCallRequestObject):
+            request_obj = MCPDuringCallRequestObject(
+                tool_name=kwargs.get("name", ""),
+                arguments=kwargs.get("arguments", {}),
+                server_name=kwargs.get("server_name"),
+                start_time=start_time.timestamp() if start_time else None,
+                hidden_params=HiddenParams()
+            )
+
+        for callback in callbacks:
+            try:
+                if isinstance(callback, CustomLogger):
+                    response: Optional[MCPDuringCallResponseObject] = (
+                        await callback.async_during_mcp_tool_call_hook(
+                            kwargs=kwargs,
+                            request_obj=request_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                    )
+                    ######################################################################
+                    # if any of the callbacks return a response, use the first one
+                    # this allows for execution control decisions
+                    ######################################################################
+                    if response is not None:
+                        return self._parse_during_mcp_call_hook_response(response=response)
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return None
+
+    def _parse_during_mcp_call_hook_response(
+            self, response: MCPDuringCallResponseObject
+    ) -> Dict[str, Any]:
+        """
+        Parse the response from the during_mcp_tool_call_hook
+
+        1. Check if execution should continue
+        2. Handle any error messages
+        3. Apply any hidden parameter updates
+        """
+        result = {
+            "should_continue": response.should_continue,
+            "error_message": response.error_message,
+            "hidden_params": response.hidden_params,
+        }
+        return result
 
     async def process_pre_call_hook_response(self, response, data, call_type):
         if isinstance(response, Exception):
@@ -1070,6 +1231,7 @@ class ProxyLogging:
             ModelResponse, EmbeddingResponse, ImageResponse, ModelResponseStream
         ],
         user_api_key_dict: UserAPIKeyAuth,
+        str_so_far: Optional[str] = None,
     ):
         """
         Allow user to modify outgoing streaming data -> per chunk
@@ -1077,6 +1239,8 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        from litellm.proxy.proxy_server import llm_router
+
         response_str: Optional[str] = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
@@ -1088,9 +1252,15 @@ class ProxyLogging:
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
 
+                        ## CHECK FOR MODEL-LEVEL GUARDRAILS
+                        modified_data = _check_and_merge_model_level_guardrails(
+                            data=data, llm_router=llm_router
+                        )
+
                         if (
                             callback.should_run_guardrail(
-                                data=data, event_type=GuardrailEventHooks.post_call
+                                data=modified_data,
+                                event_type=GuardrailEventHooks.post_call,
                             )
                             is not True
                         ):
@@ -1102,9 +1272,20 @@ class ProxyLogging:
                     else:
                         _callback = callback  # type: ignore
                     if _callback is not None and isinstance(_callback, CustomLogger):
-                        await _callback.async_post_call_streaming_hook(
-                            user_api_key_dict=user_api_key_dict, response=response_str
+                        if str_so_far is not None:
+                            complete_response = str_so_far + response_str
+                        else:
+                            complete_response = response_str
+                        potential_error_response = (
+                            await _callback.async_post_call_streaming_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=complete_response,
+                            )
                         )
+                        if isinstance(
+                            potential_error_response, str
+                        ) and potential_error_response.startswith("data: "):
+                            return potential_error_response
                 except Exception as e:
                     raise e
         return response
@@ -1142,27 +1323,6 @@ class ProxyLogging:
                         request_data=request_data,
                     )
         return response
-
-    async def post_call_streaming_hook(
-        self,
-        response: str,
-        user_api_key_dict: UserAPIKeyAuth,
-    ):
-        """
-        - Check outgoing streaming response uptil that point
-        - Run through moderation check
-        - Reject request if it fails moderation check
-        """
-        new_response = copy.deepcopy(response)
-        for callback in litellm.callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    await callback.async_post_call_streaming_hook(
-                        user_api_key_dict=user_api_key_dict, response=new_response
-                    )
-            except Exception as e:
-                raise e
-        return new_response
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
@@ -1220,8 +1380,11 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
-        except Exception:
-            raise Exception("Unable to find Prisma binaries.")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
+            verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
+            verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
+            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
@@ -3012,6 +3175,74 @@ def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
 
+def _check_and_merge_model_level_guardrails(
+    data: dict, llm_router: Optional[Router]
+) -> dict:
+    """
+    Check if the model has guardrails defined and merge them with existing guardrails in the request data.
+
+    Args:
+        data: The request data dict
+        llm_router: The LLM router instance to get deployment info from
+
+    Returns:
+        Modified data dict with merged guardrails (if any model-level guardrails exist)
+    """
+    if llm_router is None:
+        return data
+
+    # Get the model ID from the data
+    metadata = data.get("metadata") or {}
+    model_info = metadata.get("model_info") or {}
+    model_id = model_info.get("id", None)
+
+    if model_id is None:
+        return data
+
+    # Check if the model has guardrails
+    deployment = llm_router.get_deployment(model_id=model_id)
+    if deployment is None:
+        return data
+
+    model_level_guardrails = deployment.litellm_params.get("guardrails")
+
+    if model_level_guardrails is None:
+        return data
+
+    # Merge model-level guardrails with existing ones
+    return _merge_guardrails_with_existing(data, model_level_guardrails)
+
+
+def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> dict:
+    """
+    Merge model-level guardrails with any existing guardrails in the request data.
+
+    Args:
+        data: The request data dict
+        model_level_guardrails: Guardrails defined at the model level
+
+    Returns:
+        Modified data dict with merged guardrails in metadata
+    """
+    modified_data = data.copy()
+    metadata = modified_data.setdefault("metadata", {})
+    existing_guardrails = metadata.get("guardrails", [])
+
+    # Ensure existing_guardrails is a list
+    if not isinstance(existing_guardrails, list):
+        existing_guardrails = [existing_guardrails] if existing_guardrails else []
+
+    # Ensure model_level_guardrails is a list
+    if not isinstance(model_level_guardrails, list):
+        model_level_guardrails = (
+            [model_level_guardrails] if model_level_guardrails else []
+        )
+
+    # Combine existing and model-level guardrails
+    metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+    return modified_data
+
+
 def get_error_message_str(e: Exception) -> str:
     error_message = ""
     if isinstance(e, HTTPException):
@@ -3184,3 +3415,22 @@ def get_prisma_client_or_throw(message: str):
             detail={"error": message},
         )
     return prisma_client
+
+
+def is_valid_api_key(key: str) -> bool:
+    """
+    Validates API key format:
+    - sk- keys: must match ^sk-[A-Za-z0-9_-]+$
+    - hashed keys: must match ^[a-fA-F0-9]{64}$
+    - Length between 20 and 100 characters
+    """
+    import re
+
+    if not isinstance(key, str):
+        return False
+    if 3 <= len(key) <= 100:
+        if re.match(r"^sk-[A-Za-z0-9_-]+$", key):
+            return True
+        if re.match(r"^[a-fA-F0-9]{64}$", key):
+            return True
+    return False

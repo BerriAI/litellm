@@ -797,6 +797,7 @@ models_by_provider: dict = {
     "bedrock": bedrock_models + bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
+    "ollama_chat": ollama_models,
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,

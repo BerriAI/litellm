@@ -5279,9 +5279,10 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("FEATHERLESS_AI_API_KEY")
         elif custom_llm_provider == "gemini":
-            if "GEMINI_API_KEY" in os.environ:
+            if ("GOOGLE_API_KEY" in os.environ) or ("GEMINI_API_KEY" in os.environ):
                 keys_in_environment = True
             else:
+                missing_keys.append("GOOGLE_API_KEY")
                 missing_keys.append("GEMINI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
@@ -5640,21 +5641,22 @@ def _calculate_retry_after(
 ) -> Union[float, int]:
     retry_after = _get_retry_after_from_exception_header(response_headers)
 
+    # Add some jitter (default JITTER is 0.75 - so upto 0.75s)
+    jitter = JITTER * random.random()
+
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
     if retry_after is not None and 0 < retry_after <= 60:
-        return retry_after
+        return retry_after + jitter
 
-    initial_retry_delay = INITIAL_RETRY_DELAY
-    max_retry_delay = MAX_RETRY_DELAY
-    nb_retries = max_retries - remaining_retries
+    # Calculate exponential backoff
+    num_retries = max_retries - remaining_retries
+    sleep_seconds = INITIAL_RETRY_DELAY * pow(2.0, num_retries)
 
-    # Apply exponential backoff, but not more than the max.
-    sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
+    # Make sure sleep_seconds is boxed between min_timeout and MAX_RETRY_DELAY
+    sleep_seconds = max(sleep_seconds, min_timeout)
+    sleep_seconds = min(sleep_seconds, MAX_RETRY_DELAY)
 
-    # Apply some jitter, plus-or-minus half a second.
-    jitter = JITTER * random.random()
-    timeout = sleep_seconds * jitter
-    return timeout if timeout >= min_timeout else min_timeout
+    return sleep_seconds + jitter
 
 
 # custom prompt helper function
@@ -7187,6 +7189,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.image_generation import (
+                get_gemini_image_generation_config,
+            )
+
+            return get_gemini_image_generation_config(model)
         return None
 
     @staticmethod
