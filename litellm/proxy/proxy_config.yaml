@@ -3,5 +3,4 @@ model_list:
     litellm_params:
       model: vertex_ai/*
 
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
+
