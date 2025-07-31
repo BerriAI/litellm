@@ -17,6 +17,8 @@ from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from fastapi import HTTPException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -563,22 +565,24 @@ class MCPServerManager:
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
             }
-            pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
-                kwargs=pre_hook_kwargs,
-                request_obj=None,  # Will be created in the hook
-                start_time=start_time,
-                end_time=start_time,
-            )
-            
-            if pre_hook_result:
-                # Check if the call should proceed
-                if not pre_hook_result.get("should_proceed", True):
-                    error_message = pre_hook_result.get("error_message", "Tool call rejected by pre-hook")
-                    raise ValueError(error_message)
+            try:
+                pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
+                    kwargs=pre_hook_kwargs,
+                    request_obj=None,  # Will be created in the hook
+                    start_time=start_time,
+                    end_time=start_time,
+                )
+                print(f"pre_hook_result: {pre_hook_result}")
                 
-                # Apply any argument modifications
-                if pre_hook_result.get("modified_arguments"):
-                    arguments = pre_hook_result["modified_arguments"]
+                if pre_hook_result:
+                
+                    # Apply any argument modifications
+                    if pre_hook_result.get("modified_arguments"):
+                        arguments = pre_hook_result["modified_arguments"]
+            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                # Re-raise guardrail exceptions to properly fail the MCP call
+                verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
+                raise e
 
         # Get server-specific auth header if available
         server_auth_header = None
@@ -624,6 +628,10 @@ class MCPServerManager:
                         )
                     )
                     tasks.append(during_hook_task)
+                except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                    # Re-raise guardrail exceptions to properly fail the MCP call
+                    verbose_logger.error(f"Guardrail blocked MCP tool call during execution: {str(e)}")
+                    raise e
                 except Exception as e:
                     verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
             
@@ -641,6 +649,10 @@ class MCPServerManager:
                     if during_hook_result and not during_hook_result.get("should_continue", True):
                         error_message = during_hook_result.get("error_message", "Tool call cancelled by during-hook")
                         raise ValueError(error_message)
+                except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                    # Re-raise guardrail exceptions to properly fail the MCP call
+                    verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {str(e)}")
+                    raise e
                 except Exception as e:
                     verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
             

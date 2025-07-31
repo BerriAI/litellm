@@ -60,7 +60,7 @@ from litellm.types.mcp import (
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.exceptions import RejectedRequestError
+from litellm.exceptions import RejectedRequestError, BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -520,7 +520,7 @@ class ProxyLogging:
                     # Check if guardrail should be run for pre_call hook (reusing existing logic)
                     if (
                         _callback.should_run_guardrail(
-                            data=kwargs, event_type=GuardrailEventHooks.pre_call
+                            data=kwargs, event_type=GuardrailEventHooks.pre_mcp_call
                         )
                         is not True
                     ):
@@ -545,6 +545,9 @@ class ProxyLogging:
                                 response=mcp_response, original_request=request_obj
                             )
                             
+            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                # Re-raise guardrail exceptions so they can be properly handled
+                raise e
             except Exception as e:
                 verbose_proxy_logger.exception(
                     "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
@@ -837,7 +840,7 @@ class ProxyLogging:
                     # Check if guardrail should be run for during_call hook (reusing existing logic)
                     if (
                         _callback.should_run_guardrail(
-                            data=kwargs, event_type=GuardrailEventHooks.during_call
+                            data=kwargs, event_type=GuardrailEventHooks.during_mcp_call
                         )
                         is not True
                     ):
