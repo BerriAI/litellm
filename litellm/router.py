@@ -2915,6 +2915,7 @@ class Router:
 
             async def create_file_for_deployment(deployment: dict) -> OpenAIFileObject:
                 from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
                 kwargs_copy = safe_deep_copy(kwargs)
                 self._update_kwargs_with_deployment(
                     deployment=deployment,
@@ -3166,6 +3167,8 @@ class Router:
 
             async def try_retrieve_batch(model_name: DeploymentTypedDict):
                 try:
+                    from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
                     model = model_name["litellm_params"].get("model")
                     data = model_name["litellm_params"].copy()
                     custom_llm_provider = data.get("custom_llm_provider")
@@ -3179,7 +3182,7 @@ class Router:
                         _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
                             model=model
                         )
-                    new_kwargs = copy.deepcopy(kwargs)
+                    new_kwargs = safe_deep_copy(kwargs)
                     self._update_kwargs_with_deployment(
                         deployment=cast(dict, model_name),
                         kwargs=new_kwargs,
