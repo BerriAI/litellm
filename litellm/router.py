@@ -6012,6 +6012,7 @@ class Router:
             "context_window_fallbacks",
             "model_group_retry_policy",
             "retry_policy",
+            "model_group_alias",
         ]
 
         for var in vars_to_include:
