@@ -18,6 +18,7 @@ from litellm import get_secret_str
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.files.handler import AzureOpenAIFilesAPI
+from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
@@ -43,6 +44,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
+bedrock_files_instance = BedrockFilesHandler()
 #################################################
 
 
@@ -50,7 +52,7 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -94,7 +96,7 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None,
+    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -250,9 +252,25 @@ def create_file(
                 max_retries=optional_params.max_retries,
                 create_file_data=_create_file_request,
             )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_files_instance.create_file(
+                _is_async=_is_async,
+                create_file_data=_create_file_request,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                aws_access_key_id=optional_params.get("aws_access_key_id"),
+                aws_secret_access_key=optional_params.get("aws_secret_access_key"),
+                aws_session_token=optional_params.get("aws_session_token"),
+                aws_region_name=optional_params.get("aws_region_name"),
+                aws_role_name=optional_params.get("aws_role_name"),
+                aws_session_name=optional_params.get("aws_session_name"),
+                aws_profile_name=optional_params.get("aws_profile_name"),
+                aws_web_identity_token=optional_params.get("aws_web_identity_token"),
+                aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai'] are supported.".format(
+                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'bedrock'] are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
