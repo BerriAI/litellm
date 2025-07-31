@@ -87,6 +87,12 @@ class PrismaWrapper:
         self, new_db_url: str, http_client: Optional[Any] = None
     ):
         from prisma import Prisma  # type: ignore
+        try:
+            await self._original_prisma.disconnect()
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to disconnect Prisma client: {e}"
+            )
 
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)
