@@ -3047,6 +3047,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - google_generate_content_endpoint_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - llm_responses_api_testing:
           filters:
             branches:
