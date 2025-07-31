@@ -6042,6 +6042,7 @@ class Router:
             "fallbacks",
             "context_window_fallbacks",
             "model_group_retry_policy",
+            "model_group_alias",
         ]
 
         _int_settings = [
