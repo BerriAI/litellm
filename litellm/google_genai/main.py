@@ -325,6 +325,7 @@ def generate_content(
         response = base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
+            tools=tools,
             generate_content_provider_config=setup_result.generate_content_provider_config,
             generate_content_config_dict=setup_result.generate_content_config_dict,
             custom_llm_provider=setup_result.custom_llm_provider,
