@@ -210,7 +210,7 @@ export function KeyEditView({
 
       <Form.Item label="Vector Stores" name="vector_stores">
         <VectorStoreSelector
-          onChange={(values) => form.setFieldValue('vector_stores', values)}
+          onChange={(values: string[]) => form.setFieldValue('vector_stores', values)}
           value={form.getFieldValue('vector_stores')}
           accessToken={accessToken || ""}
           placeholder="Select vector stores"

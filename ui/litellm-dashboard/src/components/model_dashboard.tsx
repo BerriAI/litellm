@@ -135,7 +135,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   premiumUser,
   teams,
 }) => {
-  const [form] = Form.useForm();
+  const [addModelForm] = Form.useForm();
+  const [autoRouterForm] = Form.useForm();
   const [modelMap, setModelMap] = useState<any>(null);
   const [lastRefreshed, setLastRefreshed] = useState("");
 
@@ -411,10 +412,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             console.log(
               `Resetting vertex_credentials to JSON; jsonStr: ${jsonStr}`
             );
-            form.setFieldsValue({ vertex_credentials: jsonStr });
+            addModelForm.setFieldsValue({ vertex_credentials: jsonStr });
             console.log(
               "Form values right after setting:",
-              form.getFieldsValue()
+              addModelForm.getFieldsValue()
             );
           }
         };
@@ -425,7 +426,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     },
     onChange(info) {
       console.log("Upload onChange triggered with values:", info);
-      console.log("Current form values:", form.getFieldsValue());
+      console.log("Current form values:", addModelForm.getFieldsValue());
 
       if (info.file.status !== "uploading") {
         console.log(info.file, info.fileList);
@@ -976,13 +977,22 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   };
 
   const handleOk = () => {
-    form
+    console.log("🚀 handleOk called from model dashboard!");
+    console.log("Current form values:", addModelForm.getFieldsValue());
+    
+    addModelForm
       .validateFields()
-      .then((values) => {
-        handleAddModelSubmit(values, accessToken, form, handleRefreshClick);
+      .then((values: any) => {
+        console.log("✅ Validation passed, submitting:", values);
+        handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick);
       })
-      .catch((error) => {
-        console.error("Validation failed:", error);
+      .catch((error: any) => {
+        console.error("❌ Validation failed:", error);
+        console.error("Form errors:", error.errorFields);
+        const errorMessages = error.errorFields?.map((field: any) => {
+          return `${field.name.join('.')}: ${field.errors.join(', ')}`;
+        }).join(' | ') || 'Unknown validation error';
+        message.error(`Please fill in the following required fields: ${errorMessages}`);
       });
   };
 
@@ -1399,7 +1409,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
             </TabPanel>
             <TabPanel className="h-full">
               <AddModelTab
-                form={form}
+                form={addModelForm}
                 handleOk={handleOk}
                 selectedProvider={selectedProvider}
                 setSelectedProvider={setSelectedProvider}

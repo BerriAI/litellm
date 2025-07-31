@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     Delta,
     LlmProviders,
@@ -23,7 +24,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
 )
-from litellm.proxy.utils import is_valid_api_key
 
 # Adds the parent directory to the system path
 
@@ -558,6 +558,7 @@ def test_get_model_info_gemini():
             model.startswith("gemini/")
             and not "gemma" in model
             and not "learnlm" in model
+            and not "imagen" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -2158,6 +2159,7 @@ def test_image_response_utils():
 
 def test_is_valid_api_key():
     import hashlib
+
     # Valid sk- keys
     assert is_valid_api_key("sk-abc123")
     assert is_valid_api_key("sk-ABC_123-xyz")

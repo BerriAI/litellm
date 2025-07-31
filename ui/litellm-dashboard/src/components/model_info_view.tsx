@@ -24,8 +24,10 @@ import {
   modelInfoCall,
   modelInfoV1Call,
   modelPatchUpdateCall,
+  getGuardrailsList,
 } from "./networking";
-import { Button, Form, Input, InputNumber, message, Select, Modal } from "antd";
+import { Button, Form, Input, InputNumber, message, Select, Modal, Tooltip } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import EditModelModal from "./edit_model/edit_model_modal";
 import { handleEditModelSubmit } from "./edit_model/edit_model_modal";
 import { getProviderLogoAndName } from "./provider_info_helpers";
@@ -76,7 +78,7 @@ export default function ModelInfoView({
   const [showCacheControl, setShowCacheControl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
-
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const canEditModel =
     userRole === "Admin" || modelData?.model_info?.created_by === userID;
   const isAdmin = userRole === "Admin";
@@ -121,8 +123,23 @@ export default function ModelInfoView({
         setShowCacheControl(true);
       }
     };
+
+    const fetchGuardrails = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
     getExistingCredential();
     getModelInfo();
+    fetchGuardrails();
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
@@ -165,6 +182,9 @@ export default function ModelInfoView({
         input_cost_per_token: values.input_cost / 1_000_000,
         output_cost_per_token: values.output_cost / 1_000_000,
       };
+      if (values.guardrails) {
+        updatedLitellmParams.guardrails = values.guardrails;
+      }
 
       // Handle cache control settings
       if (
@@ -502,6 +522,11 @@ export default function ModelInfoView({
                     )
                       ? localModelData.model_info.access_groups
                       : [],
+                    guardrails: Array.isArray(
+                      localModelData.litellm_params?.guardrails
+                    )
+                      ? localModelData.litellm_params.guardrails
+                      : [],
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -756,6 +781,67 @@ export default function ModelInfoView({
                             )}
                           </div>
                         )}
+                      </div>
+
+                      <div>
+                        <Text className="font-medium">
+                          Guardrails{' '}
+                          <Tooltip title="Apply safety guardrails to this model to filter content or enforce policies">
+                            <a 
+                              href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </a>  
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="guardrails" className="mb-0">
+                            <Select
+                              mode="tags"
+                              showSearch
+                              placeholder="Select existing guardrails or type to create new ones"
+                              optionFilterProp="children"
+                              tokenSeparators={[","]}
+                              maxTagCount="responsive"
+                              allowClear
+                              style={{ width: "100%" }}
+                              options={guardrailsList.map((name) => ({
+                                value: name,
+                                label: name,
+                              }))}
+                            />
+                          </Form.Item>
+                                                 ) : (
+                           <div className="mt-1 p-2 bg-gray-50 rounded">
+                             {localModelData.litellm_params?.guardrails ? (
+                               Array.isArray(localModelData.litellm_params.guardrails) ? (
+                                 localModelData.litellm_params.guardrails.length > 0 ? (
+                                   <div className="flex flex-wrap gap-1">
+                                     {localModelData.litellm_params.guardrails.map(
+                                       (guardrail: string, index: number) => (
+                                         <span
+                                           key={index}
+                                           className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800"
+                                         >
+                                           {guardrail}
+                                         </span>
+                                       )
+                                     )}
+                                   </div>
+                                 ) : (
+                                   "No guardrails assigned"
+                                 )
+                               ) : (
+                                 localModelData.litellm_params.guardrails
+                               )
+                             ) : (
+                               "Not Set"
+                             )}
+                           </div>
+                         )}
                       </div>
 
                       {/* Cache Control Section */}

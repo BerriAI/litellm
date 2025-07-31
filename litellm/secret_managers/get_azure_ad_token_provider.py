@@ -64,11 +64,19 @@ def get_azure_ad_token_provider(
     elif cred == AzureCredentialType.ManagedIdentityCredential:
         credential = ManagedIdentityCredential(client_id=os.environ["AZURE_CLIENT_ID"])
     elif cred == AzureCredentialType.CertificateCredential:
-        credential = CertificateCredential(
-            client_id=os.environ["AZURE_CLIENT_ID"],
-            tenant_id=os.environ["AZURE_TENANT_ID"],
-            certificate_path=os.environ["AZURE_CERTIFICATE_PATH"],
-        )
+        if os.getenv("AZURE_CERTIFICATE_PASSWORD"):
+            credential = CertificateCredential(
+                client_id=os.environ["AZURE_CLIENT_ID"],
+                tenant_id=os.environ["AZURE_TENANT_ID"],
+                certificate_path=os.environ["AZURE_CERTIFICATE_PATH"],
+                password=os.environ["AZURE_CERTIFICATE_PASSWORD"],
+            )
+        else:
+            credential = CertificateCredential(
+                client_id=os.environ["AZURE_CLIENT_ID"],
+                tenant_id=os.environ["AZURE_TENANT_ID"],
+                certificate_path=os.environ["AZURE_CERTIFICATE_PATH"],
+            )
     elif cred == AzureCredentialType.DefaultAzureCredential:
         # DefaultAzureCredential doesn't require explicit environment variables
         # It automatically discovers credentials from the environment (managed identity, CLI, etc.)

@@ -401,6 +401,7 @@ async def get_sso_settings():
         generic_userinfo_endpoint=get_env_value("GENERIC_USERINFO_ENDPOINT"),
         proxy_base_url=get_env_value("PROXY_BASE_URL"),
         user_email=proxy_admin_email,  # Get from config instead of environment
+        ui_access_mode=general_settings.get("ui_access_mode", None),
     )
 
     # Get the schema for UI display
@@ -471,7 +472,6 @@ async def update_sso_settings(sso_config: SSOConfig):
 
     # Update environment variables in config and in memory
     sso_data = sso_config.model_dump(exclude_none=True)
-    mapped_env_vars = {}
     for field_name, value in sso_data.items():
 
         if field_name == "user_email" and value is not None:
@@ -480,18 +480,18 @@ async def update_sso_settings(sso_config: SSOConfig):
         elif field_name == "ui_access_mode" and value is not None:
 
             config["general_settings"]["ui_access_mode"] = value
-        elif field_name in env_var_mapping and value is not None and len(value) > 0:
+        elif field_name in env_var_mapping and value is not None:
             env_var_name = env_var_mapping[field_name]
             # Update in config
             config["environment_variables"][env_var_name] = value
-            mapped_env_vars[env_var_name] = value
             # Update in runtime environment
             os.environ[env_var_name] = value
 
     stored_config = config
-    if len(mapped_env_vars) > 0:
+    if len(config["environment_variables"]) > 0:
+
         stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
-            environment_variables=mapped_env_vars
+            environment_variables=config["environment_variables"]
         )
     # Save the updated config
     await proxy_config.save_config(new_config=stored_config)

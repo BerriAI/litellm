@@ -24,6 +24,7 @@ class MCPTransport(str, enum.Enum):
 class MCPSpecVersion(str, enum.Enum):
     nov_2024 = "2024-11-05"
     mar_2025 = "2025-03-26"
+    jun_2025 = "2025-06-18"
 
 class MCPAuth(str, enum.Enum):
     none = "none"
@@ -34,7 +35,7 @@ class MCPAuth(str, enum.Enum):
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
-MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025]
+MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
 MCPAuthType = Optional[
     Literal[MCPAuth.none, MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic]
 ]
@@ -68,6 +69,47 @@ class MCPStdioConfig(TypedDict, total=False):
     """
     Environment variables to set when running the command
     """
+
+
+class MCPPreCallRequestObject(BaseModel):
+    """
+    Pydantic object used for MCP pre_call_hook request validation and modification
+    """
+    tool_name: str
+    arguments: Dict[str, Any]
+    server_name: Optional[str] = None
+    user_api_key_auth: Optional[Dict[str, Any]] = None
+    hidden_params: HiddenParams = HiddenParams()
+
+
+class MCPPreCallResponseObject(BaseModel):
+    """
+    Pydantic object used for MCP pre_call_hook response
+    """
+    should_proceed: bool = True
+    modified_arguments: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+    hidden_params: HiddenParams = HiddenParams()
+
+
+class MCPDuringCallRequestObject(BaseModel):
+    """
+    Pydantic object used for MCP during_call_hook request
+    """
+    tool_name: str
+    arguments: Dict[str, Any]
+    server_name: Optional[str] = None
+    start_time: Optional[float] = None
+    hidden_params: HiddenParams = HiddenParams()
+
+
+class MCPDuringCallResponseObject(BaseModel):
+    """
+    Pydantic object used for MCP during_call_hook response
+    """
+    should_continue: bool = True
+    error_message: Optional[str] = None
+    hidden_params: HiddenParams = HiddenParams()
 
 
 class MCPPostCallResponseObject(BaseModel):
