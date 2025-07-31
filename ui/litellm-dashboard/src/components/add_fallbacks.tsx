@@ -40,15 +40,16 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
-  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
+  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
 
   useEffect(() => {
     const loadModels = async () => {
       try {
-        const available = await fetchAvailableModels(accessToken);
-        setModelGroups(available);
+        const uniqueModels = await fetchAvailableModels(accessToken);
+        console.log("Fetched models for fallbacks:", uniqueModels);
+        setModelInfo(uniqueModels);
       } catch (error) {
-        console.error("Failed to fetch models", error);
+        console.error("Error fetching model info for fallbacks:", error);
       }
     };
     loadModels();
@@ -132,7 +133,7 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                 help="required"
               >
                 <Select defaultValue={selectedModel}>
-                {(models ?? modelGroups.map(m => m.model_group)).map((model: string, index: number) => (
+                {Array.from(new Set(modelInfo.map(option => option.model_group))).map((model: string, index: number) => (
                     <SelectItem
                         key={index}
                         value={model}
@@ -151,8 +152,8 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                 rules={[{ required: true, message: 'Please select a model' }]}
                 help="required"
               >
-                <MultiSelect value={models ?? modelGroups.map(m => m.model_group)}>
-                    {(models ?? modelGroups.map(m => m.model_group))
+                <MultiSelect>
+                    {Array.from(new Set(modelInfo.map(option => option.model_group)))
                       .filter((data: string) => data != selectedModel)
                       .map((model: string) => (
                           <MultiSelectItem key={model} value={model}>
