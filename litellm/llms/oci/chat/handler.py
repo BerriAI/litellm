@@ -216,8 +216,6 @@ class OCIChatCompletion(BaseLLM):
     ):
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-        data["stream"] = True
-
         completion_stream, headers = await make_call(
             client=client,
             api_base=api_base,
@@ -413,7 +411,6 @@ class OCIChatCompletion(BaseLLM):
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 print_verbose("makes async anthropic streaming POST request")
-                data["stream"] = stream
                 return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
