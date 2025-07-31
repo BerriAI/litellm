@@ -2920,36 +2920,34 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
 
         if "httpx_response" in self.model_call_details:
-            httpx_response = self.model_call_details.get("httpx_response")
-            if httpx_response is not None:
-                result = litellm.AnthropicConfig().transform_response(
-                    raw_response=httpx_response,
-                    model_response=litellm.ModelResponse(),
-                    model=self.model,
-                    messages=[],
-                    logging_obj=self,
-                    optional_params={},
-                    api_key="",
-                    request_data={},
-                    encoding=litellm.encoding,
-                    json_mode=False,
-                    litellm_params={},
-                )
-            else:
-                from litellm.types.llms.anthropic import AnthropicResponse
+            result = litellm.AnthropicConfig().transform_response(
+                raw_response=self.model_call_details.get("httpx_response", None),
+                model_response=litellm.ModelResponse(),
+                model=self.model,
+                messages=[],
+                logging_obj=self,
+                optional_params={},
+                api_key="",
+                request_data={},
+                encoding=litellm.encoding,
+                json_mode=False,
+                litellm_params={},
+            )
+        else:
+            from litellm.types.llms.anthropic import AnthropicResponse
 
-                pydantic_result = AnthropicResponse.model_validate(result)
-                import httpx
+            pydantic_result = AnthropicResponse.model_validate(result)
+            import httpx
 
-                result = litellm.AnthropicConfig().transform_parsed_response(
-                    completion_response=pydantic_result.model_dump(),
-                    raw_response=httpx.Response(
-                        status_code=200,
-                        headers={},
-                    ),
-                    model_response=litellm.ModelResponse(),
-                    json_mode=None,
-                )
+            result = litellm.AnthropicConfig().transform_parsed_response(
+                completion_response=pydantic_result.model_dump(),
+                raw_response=httpx.Response(
+                    status_code=200,
+                    headers={},
+                ),
+                model_response=litellm.ModelResponse(),
+                json_mode=None,
+            )
         return result
 
     def _handle_non_streaming_google_genai_generate_content_response_logging(
