@@ -25,12 +25,14 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantMessage,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
@@ -405,6 +407,9 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionAssistantMessage,
+            ChatCompletionToolMessage,
+            ChatCompletionThinkingBlock,
         ],
         block_type: Literal["system"],
     ) -> Optional[SystemContentBlock]:
@@ -417,6 +422,9 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionAssistantMessage,
+            ChatCompletionToolMessage,
+            ChatCompletionThinkingBlock,
         ],
         block_type: Literal["content_block"],
     ) -> Optional[ContentBlock]:
@@ -428,6 +436,9 @@ class AmazonConverseConfig(BaseConfig):
             OpenAIMessageContentListBlock,
             ChatCompletionUserMessage,
             ChatCompletionSystemMessage,
+            ChatCompletionAssistantMessage,
+            ChatCompletionToolMessage,
+            ChatCompletionThinkingBlock,
         ],
         block_type: Literal["system", "content_block"],
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
