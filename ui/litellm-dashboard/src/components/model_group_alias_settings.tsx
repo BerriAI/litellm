@@ -354,7 +354,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                   Object.entries(aliasObject).map(([key, value]) => (
                     <span key={key}>
                       <br />
-                      &nbsp;&nbsp;&nbsp;&nbsp;"{key}": "{value}"
+                      &nbsp;&nbsp;&nbsp;&nbsp;&quot;{key}&quot;: &quot;{value}&quot;
                     </span>
                   ))
                 )}
