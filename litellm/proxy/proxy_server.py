@@ -1353,6 +1353,13 @@ async def _run_background_health_check():
         # make 1 deep copy of llm_model_list on every health check iteration
         _llm_model_list = copy.deepcopy(llm_model_list) or []
 
+        # filter out models that have disabled background health checks
+        _llm_model_list = [
+            m
+            for m in _llm_model_list
+            if not m.get("model_info", {}).get("disable_background_health_check", False)
+        ]
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )
