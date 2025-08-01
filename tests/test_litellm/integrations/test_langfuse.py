@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 import litellm
+from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 
@@ -20,9 +21,7 @@ def test_max_langfuse_clients_limit():
     Test that the max langfuse clients limit is respected when initializing multiple clients
     """
     # Set max clients to 2 for testing
-    with patch(
-        "litellm.integrations.langfuse.langfuse.MAX_LANGFUSE_INITIALIZED_CLIENTS", 2
-    ):
+    with patch.object(langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2):
         # Reset the counter
         litellm.initialized_langfuse_clients = 0
 
