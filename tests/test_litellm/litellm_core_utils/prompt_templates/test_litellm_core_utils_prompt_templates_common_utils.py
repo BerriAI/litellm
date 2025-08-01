@@ -125,3 +125,21 @@ def test_handle_any_messages_to_chat_completion_str_messages_conversion_complex(
     result = handle_any_messages_to_chat_completion_str_messages_conversion(message)
     assert len(result) == 1
     assert result[0]["input"] == json.dumps(message)
+
+
+def test_convert_prefix_message_to_non_prefix_messages():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_prefix_message_to_non_prefix_messages,
+    )
+
+    messages = [
+        {"role": "assistant", "content": "value", "prefix": True},
+    ]
+    result = convert_prefix_message_to_non_prefix_messages(messages)
+    assert result == [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: ",
+        },
+        {"role": "assistant", "content": "value"},
+    ]
