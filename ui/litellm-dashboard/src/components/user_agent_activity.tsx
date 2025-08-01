@@ -15,8 +15,6 @@ import {
   DonutChart,
   Metric,
   Subtitle,
-  Select,
-  SelectItem,
   Button,
   Tab,
   TabGroup,
@@ -24,6 +22,7 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react";
+import { Select } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
@@ -92,7 +91,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagsLoading, setTagsLoading] = useState(false);
-  const [tagSearchFilter, setTagSearchFilter] = useState<string>("");
   
   // Separate loading states for each endpoint
   const [dauLoading, setDauLoading] = useState(false);
@@ -251,15 +249,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     return userAgent;
   };
 
-  // Helper function to filter tags based on search
-  const filterTags = (tags: string[]) => {
-    if (!tagSearchFilter) return tags;
-    return tags.filter(tag => {
-      const userAgent = extractUserAgent(tag);
-      return userAgent.toLowerCase().includes(tagSearchFilter.toLowerCase()) ||
-             tag.toLowerCase().includes(tagSearchFilter.toLowerCase());
-    });
-  };
+
 
   // Get all user agents for each chart type based on their specific data
   const getAllTagsForData = (data: TagActiveUsersResponse[]) => {
@@ -415,91 +405,32 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
               <Subtitle>Performance metrics for different user agents</Subtitle>
             </div>
             
-            {/* User Agent Filter */}
-            <div className="w-80">
-              <div className="flex items-center justify-between mb-2">
-                <Text className="text-sm font-medium">Filter by User Agents</Text>
-                {selectedTags.length > 0 && (
-                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                    {selectedTags.length} selected
-                  </span>
-                )}
-              </div>
-                                            <div className="border border-gray-300 rounded-md bg-white">
-                 {/* Search input */}
-                 <div className="p-3 border-b border-gray-200">
-                   <input
-                     type="text"
-                     placeholder="Search user agents..."
-                     value={tagSearchFilter}
-                     onChange={(e) => setTagSearchFilter(e.target.value)}
-                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                   />
-                 </div>
-                 
-                 {/* Tag list */}
-                 <div className="p-3 max-h-56 overflow-y-auto">
-                   <div className="space-y-2">
-                     <div className="flex items-center space-x-2">
-                       <input
-                         type="checkbox"
-                         id="all-agents"
-                         checked={selectedTags.length === 0}
-                         onChange={() => setSelectedTags([])}
-                         className="rounded border-gray-300"
-                       />
-                       <label htmlFor="all-agents" className="text-sm font-medium text-gray-700">
-                         All User Agents
-                       </label>
-                     </div>
-                                     {tagsLoading ? (
-                     <div className="text-sm text-gray-500">Loading...</div>
-                   ) : (
-                     filterTags(availableTags).map((tag) => {
-                       const userAgent = extractUserAgent(tag);
-                       const displayName = userAgent.length > 35 ? `${userAgent.substring(0, 35)}...` : userAgent;
-                       const isSelected = selectedTags.includes(tag);
-                       
-                       return (
-                         <div key={tag} className="flex items-center space-x-2">
-                           <input
-                             type="checkbox"
-                             id={`tag-${tag}`}
-                             checked={isSelected}
-                             onChange={(e) => {
-                               if (e.target.checked) {
-                                 setSelectedTags([...selectedTags, tag]);
-                               } else {
-                                 setSelectedTags(selectedTags.filter(t => t !== tag));
-                               }
-                             }}
-                             className="rounded border-gray-300"
-                           />
-                           <label 
-                             htmlFor={`tag-${tag}`} 
-                             className="text-sm text-gray-600 cursor-pointer"
-                             title={userAgent}
-                           >
-                             {displayName}
-                           </label>
-                         </div>
-                       );
-                     })
-                   )}
-                                        {availableTags.length > 0 && (
-                       <div className="text-xs text-gray-500 pt-1">
-                         {tagSearchFilter ? (
-                           <>
-                             Showing {filterTags(availableTags).length} of {availableTags.length} user agents
-                           </>
-                         ) : (
-                           <>Showing {availableTags.length} user agent{availableTags.length !== 1 ? 's' : ''}</>
-                         )}
-                       </div>
-                     )}
-                   </div>
-                 </div>
-               </div>
+                        {/* User Agent Filter */}
+            <div className="w-96">
+              <Text className="text-sm font-medium block mb-2">Filter by User Agents</Text>
+              <Select
+                mode="multiple"
+                placeholder="All User Agents"
+                value={selectedTags}
+                onChange={setSelectedTags}
+                style={{ width: "100%" }}
+                showSearch={true}
+                allowClear={true}
+                loading={tagsLoading}
+                optionFilterProp="label"
+                className="rounded-md"
+                maxTagCount="responsive"
+              >
+                {availableTags.map((tag) => {
+                  const userAgent = extractUserAgent(tag);
+                  const displayName = userAgent.length > 50 ? `${userAgent.substring(0, 50)}...` : userAgent;
+                  return (
+                    <Select.Option key={tag} value={tag} label={displayName} title={userAgent}>
+                      {displayName}
+                    </Select.Option>
+                  );
+                })}
+              </Select>
             </div>
           </div>
           
