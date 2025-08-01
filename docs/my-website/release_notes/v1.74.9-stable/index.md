@@ -54,18 +54,16 @@ This is great for internal use cases where you don't want **users** to think abo
 
 ---
 
-Model-level Guardrails
+## Model-level Guardrails
 
 This release allows you to add model-level guardrails to your models. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
-
-[Read More](ADD DOCS LINK)
 
 
 ---
 ## MCP Header Propagation
 
 v1.74.9-stable allows you to propagate MCP server specific authentication headers via LiteLLM
-- Allowing users to specify which {header_name} is to be propagated to which {mcp_server} via headers
+- Allowing users to specify which `header_name` is to be propagated to which `mcp_server` via headers
 - Allows adding of different deployments of same MCP server type to use different authentication headers
 
 
