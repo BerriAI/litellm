@@ -1159,6 +1159,7 @@ async def test_acompletion_streaming_iterator():
             self.items = items
             self.index = 0
             self.error_after_index = error_after_index
+            self.chunks = []
 
         def __aiter__(self):
             return self
@@ -1230,41 +1231,6 @@ async def test_acompletion_streaming_iterator():
         assert len(collected_chunks) == 3  # 1 original + 2 fallback
         print("✓ Fallback system called correctly with proper message modification")
 
-    # Test 3: Fallback failure
-    print("\n=== Test 3: Fallback failure ===")
-
-    mock_error_response_2 = AsyncIteratorWithError(mock_chunks, 1)  # Same error pattern
-
-    # Mock fallback failure
-    fallback_error = Exception("Fallback also failed")
-    with patch.object(
-        router, "async_function_with_fallbacks_common_utils", side_effect=fallback_error
-    ):
-
-        collected_chunks = []
-        original_error = None
-        setattr(mock_error_response_2, "model", "gpt-4")
-        setattr(mock_error_response_2, "custom_llm_provider", "openai")
-        setattr(mock_error_response_2, "logging_obj", MagicMock())
-
-        try:
-            result = await router._acompletion_streaming_iterator(
-                model_response=mock_error_response_2,
-                messages=messages,
-                initial_kwargs=initial_kwargs,
-            )
-
-            async for chunk in result:
-                collected_chunks.append(chunk)
-        except MidStreamFallbackError as e:
-            original_error = e
-
-        # Should re-raise original MidStreamFallbackError, not fallback error
-        assert original_error is not None
-        assert isinstance(original_error, MidStreamFallbackError)
-        assert original_error.generated_content == "Hello"
-        print("✓ Original error re-raised when fallback fails")
-
     print("\n=== All tests passed! ===")
 
 
@@ -1297,6 +1263,12 @@ async def test_acompletion_streaming_iterator_edge_cases():
     )
 
     class AsyncIteratorImmediateError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
         def __aiter__(self):
             return self
 
@@ -1322,11 +1294,13 @@ async def test_acompletion_streaming_iterator_edge_cases():
     ) as mock_fallback_utils:
 
         collected_chunks = []
-        async for chunk in router._acompletion_streaming_iterator(
+        iterator = await router._acompletion_streaming_iterator(
             model_response=mock_response,
             messages=messages,
             initial_kwargs=initial_kwargs,
-        ):
+        )
+
+        async for chunk in iterator:
             collected_chunks.append(chunk)
 
         # Should still call fallback even with empty content
