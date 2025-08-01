@@ -926,11 +926,13 @@ class RedisCache(BaseCache):
 
     async def ping(self) -> bool:
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `ping`
+        import asyncio
         _redis_client: Any = self.init_async_client()
         start_time = time.time()
         print_verbose("Pinging Async Redis Cache")
         try:
-            response = await _redis_client.ping()
+            # Add timeout to ping operation
+            response = await asyncio.wait_for(_redis_client.ping(), timeout=30.0)
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
@@ -942,6 +944,9 @@ class RedisCache(BaseCache):
                 )
             )
             return response
+        except asyncio.TimeoutError:
+            verbose_logger.error("LiteLLM Redis Cache PING: - Timeout during ping operation")
+            raise
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             ## LOGGING ##

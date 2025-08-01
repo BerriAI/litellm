@@ -87,6 +87,8 @@ class HealthCheckCacheParams(BaseModel):
     redis_kwargs: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
     redis_version: Optional[Union[str, int, float]] = None
+    gcp_iam_enabled: Optional[bool] = None
+    gcp_iam_service_account: Optional[str] = None
 
 
 class CachedEmbedding(TypedDict):

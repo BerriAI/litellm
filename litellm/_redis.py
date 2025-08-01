@@ -37,6 +37,12 @@ def _get_redis_kwargs():
     include_args = ["url"]
 
     available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+    
+    # Add IAM-specific arguments
+    available_args.extend(["gcp_iam_enabled", "gcp_iam_service_account"])
+    
+    # Add SSL verification arguments
+    available_args.extend(["ssl_check_hostname", "ssl_verify_mode", "ssl_context"])
 
     return available_args
 
@@ -56,6 +62,9 @@ def _get_redis_url_kwargs(client=None):
     include_args = ["url"]
 
     available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+    
+    # Add IAM-specific arguments
+    available_args.extend(["gcp_iam_enabled", "gcp_iam_service_account"])
 
     return available_args
 
@@ -72,6 +81,12 @@ def _get_redis_cluster_kwargs(client=None):
     available_args.append("password")
     available_args.append("username")
     available_args.append("ssl")
+    
+    # Add IAM-specific arguments
+    available_args.extend(["gcp_iam_enabled", "gcp_iam_service_account"])
+    
+    # Add SSL verification arguments
+    available_args.extend(["ssl_check_hostname", "ssl_verify_mode", "ssl_context"])
 
     return available_args
 
@@ -156,6 +171,48 @@ def _get_redis_client_logic(**env_overrides):
     if _service_name is not None:
         redis_kwargs["service_name"] = _service_name
 
+    # Handle IAM authentication parameters
+    _gcp_iam_enabled = redis_kwargs.get("gcp_iam_enabled", None) or get_secret("REDIS_GCP_IAM_ENABLED")
+    _gcp_iam_service_account = redis_kwargs.get("gcp_iam_service_account", None) or get_secret("REDIS_GCP_IAM_SERVICE_ACCOUNT")
+
+    if _gcp_iam_enabled is not None:
+        if isinstance(_gcp_iam_enabled, str):
+            redis_kwargs["gcp_iam_enabled"] = _gcp_iam_enabled.lower() == "true"
+        else:
+            redis_kwargs["gcp_iam_enabled"] = _gcp_iam_enabled
+
+    if _gcp_iam_service_account is not None:
+        redis_kwargs["gcp_iam_service_account"] = _gcp_iam_service_account
+
+    # Handle SSL verification settings
+    _ssl_check_hostname = redis_kwargs.get("ssl_check_hostname", None) or get_secret("REDIS_SSL_CHECK_HOSTNAME")
+    _ssl_verify_mode = redis_kwargs.get("ssl_verify_mode", None) or get_secret("REDIS_SSL_VERIFY_MODE")
+    
+    # Create SSL context if SSL verification settings are provided
+    if _ssl_check_hostname is not None or _ssl_verify_mode is not None:
+        import ssl
+        ssl_context = ssl.create_default_context()
+        
+        if _ssl_check_hostname is not None:
+            if isinstance(_ssl_check_hostname, str):
+                ssl_context.check_hostname = _ssl_check_hostname.lower() == "true"
+            else:
+                ssl_context.check_hostname = _ssl_check_hostname
+        else:
+            ssl_context.check_hostname = False
+        
+        if _ssl_verify_mode is not None:
+            if _ssl_verify_mode == "none":
+                ssl_context.verify_mode = ssl.CERT_NONE
+            elif _ssl_verify_mode == "optional":
+                ssl_context.verify_mode = ssl.CERT_OPTIONAL
+            elif _ssl_verify_mode == "required":
+                ssl_context.verify_mode = ssl.CERT_REQUIRED
+        else:
+            ssl_context.verify_mode = ssl.CERT_NONE
+        
+        redis_kwargs["ssl_context"] = ssl_context
+
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         redis_kwargs.pop("host", None)
         redis_kwargs.pop("port", None)
@@ -192,6 +249,17 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     for arg in redis_kwargs:
         if arg in args:
             cluster_kwargs[arg] = redis_kwargs[arg]
+
+    # Handle IAM authentication for clusters
+    gcp_iam_enabled = cluster_kwargs.pop("gcp_iam_enabled", False)
+    gcp_iam_service_account = cluster_kwargs.pop("gcp_iam_service_account", None)
+    
+    if gcp_iam_enabled and gcp_iam_service_account:
+        try:
+            from litellm.caching.redis_iam_gcp import create_iam_redis_connect_func
+            cluster_kwargs["redis_connect_func"] = create_iam_redis_connect_func(gcp_iam_service_account)
+        except ImportError as e:
+            raise ImportError(f"Failed to import IAM authentication: {e}")
 
     new_startup_nodes: List[ClusterNode] = []
 
@@ -252,35 +320,77 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
 
 def get_redis_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
-    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+    
+    # Handle IAM authentication
+    gcp_iam_enabled = redis_kwargs.pop("gcp_iam_enabled", False)
+    gcp_iam_service_account = redis_kwargs.pop("gcp_iam_service_account", None)
+    
+    if gcp_iam_enabled and gcp_iam_service_account:
+        try:
+            from litellm.caching.redis_iam_gcp import create_iam_redis_connect_func
+            redis_kwargs["redis_connect_func"] = create_iam_redis_connect_func(gcp_iam_service_account)
+        except ImportError as e:
+            raise ImportError(f"Failed to import IAM authentication: {e}")
+    
+    # Filter out invalid Redis parameters
+    valid_redis_args = _get_redis_kwargs()
+    filtered_kwargs = {}
+    for key, value in redis_kwargs.items():
+        if key in valid_redis_args:
+            filtered_kwargs[key] = value
+        else:
+            verbose_logger.debug(f"Filtering out invalid Redis parameter: {key}")
+    
+    if "url" in filtered_kwargs and filtered_kwargs["url"] is not None:
         args = _get_redis_url_kwargs()
         url_kwargs = {}
-        for arg in redis_kwargs:
+        for arg in filtered_kwargs:
             if arg in args:
-                url_kwargs[arg] = redis_kwargs[arg]
+                url_kwargs[arg] = filtered_kwargs[arg]
 
         return redis.Redis.from_url(**url_kwargs)
 
-    if "startup_nodes" in redis_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
-        return init_redis_cluster(redis_kwargs)
+    if "startup_nodes" in filtered_kwargs or get_secret("REDIS_CLUSTER_NODES") is not None:  # type: ignore
+        return init_redis_cluster(filtered_kwargs)
 
     # Check for Redis Sentinel
-    if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
-        return _init_redis_sentinel(redis_kwargs)
+    if "sentinel_nodes" in filtered_kwargs and "service_name" in filtered_kwargs:
+        return _init_redis_sentinel(filtered_kwargs)
 
-    return redis.Redis(**redis_kwargs)
+    return redis.Redis(**filtered_kwargs)
 
 
 def get_redis_async_client(
     **env_overrides,
 ) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
-    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+    
+    # Handle IAM authentication
+    gcp_iam_enabled = redis_kwargs.pop("gcp_iam_enabled", False)
+    gcp_iam_service_account = redis_kwargs.pop("gcp_iam_service_account", None)
+    
+    if gcp_iam_enabled and gcp_iam_service_account:
+        try:
+            from litellm.caching.redis_iam_gcp import create_async_iam_redis_connect_func
+            redis_kwargs["redis_connect_func"] = create_async_iam_redis_connect_func(gcp_iam_service_account)
+        except ImportError as e:
+            raise ImportError(f"Failed to import IAM authentication: {e}")
+    
+    # Filter out invalid Redis parameters
+    valid_redis_args = _get_redis_kwargs()
+    filtered_kwargs = {}
+    for key, value in redis_kwargs.items():
+        if key in valid_redis_args:
+            filtered_kwargs[key] = value
+        else:
+            verbose_logger.debug(f"Filtering out invalid Redis parameter: {key}")
+    
+    if "url" in filtered_kwargs and filtered_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
         url_kwargs = {}
-        for arg in redis_kwargs:
+        for arg in filtered_kwargs:
             if arg in args:
-                url_kwargs[arg] = redis_kwargs[arg]
+                url_kwargs[arg] = filtered_kwargs[arg]
             else:
                 verbose_logger.debug(
                     "REDIS: ignoring argument: {}. Not an allowed async_redis.Redis.from_url arg.".format(
@@ -289,48 +399,69 @@ def get_redis_async_client(
                 )
         return async_redis.Redis.from_url(**url_kwargs)
 
-    if "startup_nodes" in redis_kwargs:
+    if "startup_nodes" in filtered_kwargs:
         from redis.cluster import ClusterNode
 
         args = _get_redis_cluster_kwargs()
         cluster_kwargs = {}
-        for arg in redis_kwargs:
+        for arg in filtered_kwargs:
             if arg in args:
-                cluster_kwargs[arg] = redis_kwargs[arg]
+                cluster_kwargs[arg] = filtered_kwargs[arg]
 
         new_startup_nodes: List[ClusterNode] = []
 
-        for item in redis_kwargs["startup_nodes"]:
+        for item in filtered_kwargs["startup_nodes"]:
             new_startup_nodes.append(ClusterNode(**item))
-        redis_kwargs.pop("startup_nodes")
+        filtered_kwargs.pop("startup_nodes")
         return async_redis.RedisCluster(
             startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
         )
 
     # Check for Redis Sentinel
-    if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
-        return _init_async_redis_sentinel(redis_kwargs)
-    _pretty_print_redis_config(redis_kwargs=redis_kwargs)
+    if "sentinel_nodes" in filtered_kwargs and "service_name" in filtered_kwargs:
+        return _init_async_redis_sentinel(filtered_kwargs)
+    _pretty_print_redis_config(redis_kwargs=filtered_kwargs)
     return async_redis.Redis(
-        **redis_kwargs,
+        **filtered_kwargs,
     )
 
 
 def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
-    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+    
+    # Handle IAM authentication
+    gcp_iam_enabled = redis_kwargs.pop("gcp_iam_enabled", False)
+    gcp_iam_service_account = redis_kwargs.pop("gcp_iam_service_account", None)
+    
+    if gcp_iam_enabled and gcp_iam_service_account:
+        try:
+            from litellm.caching.redis_iam_gcp import create_async_iam_redis_connect_func
+            redis_kwargs["redis_connect_func"] = create_async_iam_redis_connect_func(gcp_iam_service_account)
+        except ImportError as e:
+            raise ImportError(f"Failed to import IAM authentication: {e}")
+    
+    # Filter out invalid Redis parameters
+    valid_redis_args = _get_redis_kwargs()
+    filtered_kwargs = {}
+    for key, value in redis_kwargs.items():
+        if key in valid_redis_args:
+            filtered_kwargs[key] = value
+        else:
+            verbose_logger.debug(f"Filtering out invalid Redis parameter: {key}")
+    
+    if "url" in filtered_kwargs and filtered_kwargs["url"] is not None:
         return async_redis.BlockingConnectionPool.from_url(
-            timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=redis_kwargs["url"]
+            timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=filtered_kwargs["url"]
         )
     connection_class = async_redis.Connection
-    if "ssl" in redis_kwargs:
+    if "ssl" in filtered_kwargs:
         connection_class = async_redis.SSLConnection
-        redis_kwargs.pop("ssl", None)
-        redis_kwargs["connection_class"] = connection_class
-    redis_kwargs.pop("startup_nodes", None)
+        filtered_kwargs.pop("ssl", None)
+        filtered_kwargs["connection_class"] = connection_class
+    filtered_kwargs.pop("startup_nodes", None)
     return async_redis.BlockingConnectionPool(
-        timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
+        timeout=REDIS_CONNECTION_POOL_TIMEOUT, **filtered_kwargs
     )
 
 def _pretty_print_redis_config(redis_kwargs: dict) -> None:
