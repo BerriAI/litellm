@@ -21,7 +21,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 def test_dotprompt_manager_initialization():
     """Test basic DotpromptManager initialization."""
-    prompt_dir = "."  # Current directory when running from tests/test_litellm/prompts
+    prompt_dir = os.path.dirname(__file__)  # Directory containing this test file
     manager = DotpromptManager(prompt_dir)
 
     assert manager.integration_name == "dotprompt"
@@ -30,7 +30,7 @@ def test_dotprompt_manager_initialization():
 
 def test_should_run_prompt_management():
     """Test should_run_prompt_management method."""
-    prompt_dir = "."
+    prompt_dir = os.path.dirname(__file__)
     manager = DotpromptManager(prompt_dir)
 
     # Test with existing prompt
@@ -52,7 +52,7 @@ def test_should_run_prompt_management():
 
 def test_convert_to_messages_simple():
     """Test converting simple text to messages."""
-    prompt_dir = "."
+    prompt_dir = os.path.dirname(__file__)
     manager = DotpromptManager(prompt_dir)
 
     # Test simple text
@@ -64,7 +64,7 @@ def test_convert_to_messages_simple():
 
 def test_convert_to_messages_with_roles():
     """Test converting text with role prefixes to messages."""
-    prompt_dir = "."
+    prompt_dir = os.path.dirname(__file__)
     manager = DotpromptManager(prompt_dir)
 
     # Test text with role prefixes
@@ -84,7 +84,7 @@ User: What is the capital of France?"""
 
 def test_compile_prompt_helper():
     """Test the _compile_prompt_helper method."""
-    prompt_dir = "."
+    prompt_dir = os.path.dirname(__file__)
     manager = DotpromptManager(prompt_dir)
 
     # Test compiling a simple prompt
@@ -102,7 +102,7 @@ def test_compile_prompt_helper():
 
 def test_compile_prompt_helper_with_chat_format():
     """Test compiling a prompt that generates role-based messages."""
-    prompt_dir = "."
+    prompt_dir = os.path.dirname(__file__)
     manager = DotpromptManager(prompt_dir)
 
     # Test with chat_prompt that has system context
@@ -130,7 +130,7 @@ def test_compile_prompt_helper_with_chat_format():
 
 def test_extract_optional_params():
     """Test extracting optional parameters from template metadata."""
-    prompt_dir = "."
+    prompt_dir = os.path.dirname(__file__)
     manager = DotpromptManager(prompt_dir)
 
     # Get a template with optional params
@@ -145,7 +145,7 @@ def test_extract_optional_params():
 
 def test_error_handling():
     """Test error handling for invalid prompts."""
-    prompt_dir = "."
+    prompt_dir = os.path.dirname(__file__)
     manager = DotpromptManager(prompt_dir)
 
     # Test with non-existent prompt
