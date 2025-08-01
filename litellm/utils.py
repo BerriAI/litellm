@@ -681,7 +681,9 @@ def function_setup(  # noqa: PLR0915
 
         if add_breadcrumb:
             try:
-                details_to_log = copy.deepcopy(kwargs)
+                from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+                details_to_log = safe_deep_copy(kwargs)
             except Exception:
                 details_to_log = kwargs
 
