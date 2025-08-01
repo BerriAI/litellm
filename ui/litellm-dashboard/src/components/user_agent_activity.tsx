@@ -320,14 +320,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Date Range Picker */}
-      <Grid numItems={2} className="gap-2 w-full">
-        <Col>
-          <AdvancedDatePicker
-            value={dateValue}
-            onValueChange={handleDateChange}
-          />
-        </Col>
+      {/* User Agent Filter */}
+      <Grid numItems={1} className="gap-2 w-full">
         <Col>
           <Select
             value={userAgentFilter}
@@ -345,60 +339,74 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         </Col>
       </Grid>
 
-      {/* Top 4 User Agents Cards */}
-      {summaryLoading ? (
-        <Card>
-          <ChartLoader isDateChanging={isDateChanging} />
-        </Card>
-      ) : (
-        <Grid numItems={4} className="gap-4">
-          {(summaryData.results || []).slice(0, 4).map((tag, index) => {
-            const userAgent = extractUserAgent(tag.tag);
-            const displayName = truncateUserAgent(userAgent);
-            return (
-              <Card key={index}>
-                <Title className="truncate" title={userAgent}>
-                  {displayName}
-                </Title>
-                <div className="mt-4 space-y-3">
-                  <div>
-                    <Text className="text-sm text-gray-600">Success Requests</Text>
-                    <Metric className="text-lg">{formatAbbreviatedNumber(tag.successful_requests)}</Metric>
+      {/* Summary Section Card */}
+      <Card>
+        <div className="space-y-6">
+          <div>
+            <Title>Summary by User Agent</Title>
+            <Subtitle>Performance metrics for different user agents</Subtitle>
+          </div>
+          
+          {/* Date Range Picker within Summary */}
+          <AdvancedDatePicker
+            value={dateValue}
+            onValueChange={handleDateChange}
+          />
+
+          {/* Top 4 User Agents Cards */}
+          {summaryLoading ? (
+            <ChartLoader isDateChanging={isDateChanging} />
+          ) : (
+            <Grid numItems={4} className="gap-4">
+              {(summaryData.results || []).slice(0, 4).map((tag, index) => {
+                const userAgent = extractUserAgent(tag.tag);
+                const displayName = truncateUserAgent(userAgent);
+                return (
+                  <Card key={index}>
+                    <Title className="truncate" title={userAgent}>
+                      {displayName}
+                    </Title>
+                    <div className="mt-4 space-y-3">
+                      <div>
+                        <Text className="text-sm text-gray-600">Success Requests</Text>
+                        <Metric className="text-lg">{formatAbbreviatedNumber(tag.successful_requests)}</Metric>
+                      </div>
+                      <div>
+                        <Text className="text-sm text-gray-600">Total Tokens</Text>
+                        <Metric className="text-lg">{formatAbbreviatedNumber(tag.total_tokens)}</Metric>
+                      </div>
+                      <div>
+                        <Text className="text-sm text-gray-600">Total Cost</Text>
+                        <Metric className="text-lg">${formatAbbreviatedNumber(tag.total_spend, 4)}</Metric>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+              {/* Fill remaining slots if less than 4 agents */}
+              {Array.from({ length: Math.max(0, 4 - (summaryData.results || []).length) }).map((_, index) => (
+                <Card key={`empty-${index}`}>
+                  <Title>No Data</Title>
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <Text className="text-sm text-gray-600">Success Requests</Text>
+                      <Metric className="text-lg">-</Metric>
+                    </div>
+                    <div>
+                      <Text className="text-sm text-gray-600">Total Tokens</Text>
+                      <Metric className="text-lg">-</Metric>
+                    </div>
+                    <div>
+                      <Text className="text-sm text-gray-600">Total Cost</Text>
+                      <Metric className="text-lg">-</Metric>
+                    </div>
                   </div>
-                  <div>
-                    <Text className="text-sm text-gray-600">Total Tokens</Text>
-                    <Metric className="text-lg">{formatAbbreviatedNumber(tag.total_tokens)}</Metric>
-                  </div>
-                  <div>
-                    <Text className="text-sm text-gray-600">Total Cost</Text>
-                    <Metric className="text-lg">${formatAbbreviatedNumber(tag.total_spend, 4)}</Metric>
-                  </div>
-                </div>
-              </Card>
-            );
-          })}
-          {/* Fill remaining slots if less than 4 agents */}
-          {Array.from({ length: Math.max(0, 4 - (summaryData.results || []).length) }).map((_, index) => (
-            <Card key={`empty-${index}`}>
-              <Title>No Data</Title>
-              <div className="mt-4 space-y-3">
-                <div>
-                  <Text className="text-sm text-gray-600">Success Requests</Text>
-                  <Metric className="text-lg">-</Metric>
-                </div>
-                <div>
-                  <Text className="text-sm text-gray-600">Total Tokens</Text>
-                  <Metric className="text-lg">-</Metric>
-                </div>
-                <div>
-                  <Text className="text-sm text-gray-600">Total Cost</Text>
-                  <Metric className="text-lg">-</Metric>
-                </div>
-              </div>
-          </Card>
-          ))}
-        </Grid>
-      )}
+                </Card>
+              ))}
+            </Grid>
+          )}
+        </div>
+      </Card>
 
       {/* Main TabGroup for DAU/WAU/MAU vs Per User Usage */}
       <Card>
