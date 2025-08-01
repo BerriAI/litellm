@@ -201,7 +201,7 @@ async def get_weekly_active_users(
                 dts.date,
                 vt.user_id,
                 -- Calculate week number (0 = most recent week)
-                FLOOR((DATE '$2' - dts.date::date) / 7) as week_offset
+                FLOOR((DATE '{end_date}' - dts.date::date) / 7) as week_offset
             FROM "LiteLLM_DailyTagSpend" dts
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
             {where_clause}
@@ -210,9 +210,9 @@ async def get_weekly_active_users(
             tag,
             COUNT(DISTINCT user_id) as active_users,
             -- Calculate week end date for each week
-            (DATE '$2' - (week_offset * 7 || ' days')::interval)::text as date,
-            (DATE '$2' - (week_offset * 7 || ' days')::interval - '6 days'::interval)::text as period_start,
-            (DATE '$2' - (week_offset * 7 || ' days')::interval)::text as period_end
+            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval)::text as date,
+            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval)::text as period_start,
+            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval)::text as period_end
         FROM weekly_data
         WHERE week_offset < 7
         GROUP BY tag, week_offset
@@ -306,7 +306,7 @@ async def get_monthly_active_users(
                 dts.date,
                 vt.user_id,
                 -- Calculate month number (0 = most recent month)
-                FLOOR((DATE '$2' - dts.date::date) / 30) as month_offset
+                FLOOR((DATE '{end_date}' - dts.date::date) / 30) as month_offset
             FROM "LiteLLM_DailyTagSpend" dts
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
             {where_clause}
@@ -315,9 +315,9 @@ async def get_monthly_active_users(
             tag,
             COUNT(DISTINCT user_id) as active_users,
             -- Calculate month end date for each month
-            (DATE '$2' - (month_offset * 30 || ' days')::interval)::text as date,
-            (DATE '$2' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
-            (DATE '$2' - (month_offset * 30 || ' days')::interval)::text as period_end
+            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as date,
+            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
+            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end
         FROM monthly_data
         WHERE month_offset < 7
         GROUP BY tag, month_offset
