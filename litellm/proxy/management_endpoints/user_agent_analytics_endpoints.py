@@ -12,7 +12,7 @@ user metrics from tag activity data and return time series for dashboard visuali
 """
 
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -587,4 +587,168 @@ async def get_tag_summary(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch tag summary analytics: {str(e)}",
+        )
+
+
+@router.get(
+    "/tag/user-agent/per-user-analytics",
+    response_model=PerUserAnalyticsResponse,
+    tags=["tag management", "user agent analytics"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_per_user_analytics(
+    tag_filter: Optional[str] = Query(
+        default=None,
+        description="Filter by specific tag (optional)",
+    ),
+    tag_filters: Optional[List[str]] = Query(
+        default=None,
+        description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
+    ),
+    page: int = Query(default=1, description="Page number for pagination", ge=1),
+    page_size: int = Query(
+        default=50, description="Items per page", ge=1, le=1000
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get per-user analytics including successful requests, tokens, and spend by individual users.
+    
+    This endpoint provides usage metrics broken down by individual users based on their
+    tag activity during the last 30 days ending on UTC today + 1 day.
+    
+    Args:
+        tag_filter: Optional filter to specific tag (legacy)
+        tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
+        page: Page number for pagination
+        page_size: Number of items per page
+        
+    Returns:
+        PerUserAnalyticsResponse: Analytics data broken down by individual users for the last 30 days
+    """
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    
+    try:
+        # Calculate end_date as UTC today + 1 day
+        from datetime import timezone
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_date = end_dt.strftime("%Y-%m-%d")
+        
+        # Calculate date range (last 30 days)
+        start_dt = end_dt - timedelta(days=30)
+        start_date = start_dt.strftime("%Y-%m-%d")
+        
+        # Build where clause with date range
+        where_clause: Dict[str, Any] = {
+            "date": {"gte": start_date, "lte": end_date}
+        }
+        
+        # Add tag filtering if provided
+        if tag_filters and len(tag_filters) > 0:
+            where_clause["tag"] = {"in": tag_filters}
+        elif tag_filter:
+            where_clause["tag"] = {"contains": tag_filter}
+        
+        # Get all tag records in the date range with optional tag filtering
+        tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
+            where=where_clause
+        )
+        
+        # Get unique api_keys
+        api_keys = set(record.api_key for record in tag_records if record.api_key)
+        
+        if not api_keys:
+            return PerUserAnalyticsResponse(
+                results=[],
+                total_count=0,
+                page=page,
+                page_size=page_size,
+                total_pages=0,
+            )
+        
+        # Lookup user_id for each api_key
+        api_key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"token": {"in": list(api_keys)}}
+        )
+        
+        # Create mapping from api_key to user_id
+        api_key_to_user_id = {
+            record.token: record.user_id 
+            for record in api_key_records 
+            if record.user_id
+        }
+        
+        # Get user emails for the user_ids
+        user_ids = list(set(api_key_to_user_id.values()))
+        user_records = await prisma_client.db.litellm_usertable.find_many(
+            where={"user_id": {"in": user_ids}}
+        )
+        
+        # Create mapping from user_id to user_email
+        user_id_to_email = {
+            record.user_id: record.user_email 
+            for record in user_records
+        }
+        
+        # Aggregate metrics by user
+        user_metrics: Dict[str, PerUserMetrics] = {}
+
+        for record in tag_records:
+            if record.api_key in api_key_to_user_id:
+                user_id = api_key_to_user_id[record.api_key]
+                tag = record.tag  # Use the full tag as user_agent
+                
+                if user_id not in user_metrics:
+                    user_metrics[user_id] = PerUserMetrics(
+                        user_id=user_id,
+                        user_email=user_id_to_email.get(user_id),
+                        user_agent=tag
+                    )
+                else:
+                    # If tag is different, keep the first one or prioritize certain ones
+                    if tag and not user_metrics[user_id].user_agent:
+                        user_metrics[user_id].user_agent = tag
+                
+                # Aggregate metrics
+                user_metrics[user_id].successful_requests += record.successful_requests or 0
+                user_metrics[user_id].failed_requests += record.failed_requests or 0
+                user_metrics[user_id].total_requests += record.api_requests or 0
+                # Calculate total_tokens from prompt_tokens + completion_tokens
+                prompt_tokens = record.prompt_tokens or 0
+                completion_tokens = record.completion_tokens or 0
+                user_metrics[user_id].total_tokens += int(prompt_tokens + completion_tokens)
+                user_metrics[user_id].spend += record.spend or 0.0
+        
+        # Convert to list and sort by successful requests (descending)
+        results = sorted(
+            list(user_metrics.values()),
+            key=lambda x: x.successful_requests,
+            reverse=True
+        )
+        
+        # Apply pagination
+        total_count = len(results)
+        total_pages = (total_count + page_size - 1) // page_size
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_results = results[start_idx:end_idx]
+        
+        return PerUserAnalyticsResponse(
+            results=paginated_results,
+            total_count=total_count,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch per-user analytics: {str(e)}",
         )

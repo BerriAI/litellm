@@ -500,7 +500,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         <TabGroup>
           <TabList className="mb-6">
             <Tab>DAU/WAU/MAU</Tab>
-            <Tab>Per User Usage</Tab>
+            <Tab>Per User Usage (Last 30 Days)</Tab>
           </TabList>
           
           <TabPanels>
