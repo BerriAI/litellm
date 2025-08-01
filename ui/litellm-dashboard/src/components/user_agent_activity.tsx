@@ -583,7 +583,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
             <TabPanel>
               <PerUserUsage
                 accessToken={accessToken}
-                dateValue={dateValue}
+                selectedTags={selectedTags}
                 formatAbbreviatedNumber={formatAbbreviatedNumber}
               />
             </TabPanel>

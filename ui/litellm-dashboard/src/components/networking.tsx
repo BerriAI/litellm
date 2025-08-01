@@ -6781,13 +6781,12 @@ export const userAgentSummaryCall = async (
 
 export const perUserAnalyticsCall = async (
   accessToken: string,
-  startTime: Date,
-  endTime: Date,
   page: number = 1,
-  pageSize: number = 50
+  pageSize: number = 50,
+  tagFilters?: string[]
 ) => {
   /**
-   * Get per-user analytics data
+   * Get per-user analytics data for the last 30 days
    */
   try {
     let url = proxyBaseUrl
@@ -6796,18 +6795,15 @@ export const perUserAnalyticsCall = async (
     
     const queryParams = new URLSearchParams();
     
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
-    
-    queryParams.append("start_date", formatDate(startTime));
-    queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page", page.toString());
     queryParams.append("page_size", pageSize.toString());
+    
+    // Handle multiple tag filters
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    }
     
     const queryString = queryParams.toString();
     if (queryString) {
