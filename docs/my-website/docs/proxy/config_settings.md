@@ -59,6 +59,13 @@ litellm_settings:
     service_name: "mymaster"
     sentinel_nodes: [["localhost", 26379]]
 
+    # Optional - GCP IAM Authentication for Redis
+    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"  # GCP service account for IAM authentication
+    gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate file for GCP Memorystore Redis
+    ssl: true  # Enable SSL for secure connections
+    ssl_cert_reqs: null  # Set to null for self-signed certificates
+    ssl_check_hostname: false  # Set to false for self-signed certificates
+
     # Optional - Qdrant Semantic Cache Settings
     qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
     qdrant_collection_name: test_collection
