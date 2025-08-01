@@ -6498,6 +6498,175 @@ export const userAgentAnalyticsCall = async (
   }
 };
 
+// New endpoint functions for DAU, WAU, MAU
+export const tagDauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string
+) => {
+  /**
+   * Get Daily Active Users (DAU) for last 7 days ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/dau`
+      : `/tag/dau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch DAU:", error);
+    throw error;
+  }
+};
+
+export const tagWauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string
+) => {
+  /**
+   * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/wau`
+      : `/tag/wau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch WAU:", error);
+    throw error;
+  }
+};
+
+export const tagMauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string
+) => {
+  /**
+   * Get Monthly Active Users (MAU) for last 7 months ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/mau`
+      : `/tag/mau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MAU:", error);
+    throw error;
+  }
+};
+
 export const userAgentSummaryCall = async (
   accessToken: string,
   startTime: Date,
@@ -6508,8 +6677,8 @@ export const userAgentSummaryCall = async (
    */
   try {
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/user-agent/summary`
-      : `/tag/user-agent/summary`;
+      ? `${proxyBaseUrl}/tag/summary`
+      : `/tag/summary`;
     
     const queryParams = new URLSearchParams();
     

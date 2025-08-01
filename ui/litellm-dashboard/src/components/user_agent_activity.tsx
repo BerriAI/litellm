@@ -25,54 +25,37 @@ import {
   TabPanels,
 } from "@tremor/react";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { userAgentAnalyticsCall, userAgentSummaryCall } from "./networking";
+import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall } from "./networking";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
 import { ChartLoader } from "./shared/chart_loader";
 
-interface UserAgentMetrics {
-  dau: number;
-  wau: number;
-  mau: number;
+// New interfaces for the updated API response
+interface TagActiveUsersResponse {
+  tag: string;
+  active_users: number;
+  date: string;
+  period_start?: string;
+  period_end?: string;
+}
+
+interface ActiveUsersAnalyticsResponse {
+  results: TagActiveUsersResponse[];
+}
+
+interface TagSummaryMetrics {
+  tag: string;
+  unique_users: number;
+  total_requests: number;
   successful_requests: number;
   failed_requests: number;
-  total_requests: number;
-  completed_tokens: number;
-  total_tokens: number;
-  spend: number;
-}
-
-interface UserAgentActivityData {
-  date: string;
-  tag: string;
-  user_agent: string;
-  metrics: UserAgentMetrics;
-}
-
-interface UserAgentAnalyticsResponse {
-  results: UserAgentActivityData[];
-  total_count: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-}
-
-interface UserAgentSummaryData {
-  total_tags: number;
-  total_requests: number;
-  total_successful_requests: number;
-  total_failed_requests: number;
   total_tokens: number;
   total_spend: number;
-  top_tags: Array<{
-    tag: string;
-    requests: number;
-    successful_requests: number;
-    failed_requests: number;
-    tokens: number;
-    spend: number;
-  }>;
+}
+
+interface TagSummaryResponse {
+  results: TagSummaryMetrics[];
 }
 
 interface UserAgentActivityProps {
@@ -84,23 +67,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   accessToken,
   userRole,
 }) => {
-  const [analyticsData, setAnalyticsData] = useState<UserAgentAnalyticsResponse>({
-    results: [],
-    total_count: 0,
-    page: 1,
-    page_size: 50,
-    total_pages: 0,
-  });
-  
-  const [summaryData, setSummaryData] = useState<UserAgentSummaryData>({
-    total_tags: 0,
-    total_requests: 0,
-    total_successful_requests: 0,
-    total_failed_requests: 0,
-    total_tokens: 0,
-    total_spend: 0,
-    top_tags: [],
-  });
+  // Separate state for each endpoint
+  const [dauData, setDauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
+  const [wauData, setWauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
+  const [mauData, setMauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
+  const [summaryData, setSummaryData] = useState<TagSummaryResponse>({ results: [] });
 
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
@@ -108,31 +79,69 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   });
 
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
-  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  
+  // Separate loading states for each endpoint
+  const [dauLoading, setDauLoading] = useState(false);
+  const [wauLoading, setWauLoading] = useState(false);
+  const [mauLoading, setMauLoading] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  
   const [isDateChanging, setIsDateChanging] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
 
-  const fetchAnalyticsData = async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
+  // Use today's date as the end date for all API calls
+  const today = new Date();
 
-    setAnalyticsLoading(true);
+  const fetchDauData = async () => {
+    if (!accessToken) return;
+
+    setDauLoading(true);
     try {
-      const analytics = await userAgentAnalyticsCall(
+      const data = await tagDauCall(
         accessToken,
-        dateValue.from,
-        dateValue.to,
-        currentPage,
-        50,
+        today,
         userAgentFilter || undefined
       );
-
-      setAnalyticsData(analytics);
+      setDauData(data);
     } catch (error) {
-      console.error("Failed to fetch user agent analytics data:", error);
+      console.error("Failed to fetch DAU data:", error);
     } finally {
-      setAnalyticsLoading(false);
-      setIsDateChanging(false);
+      setDauLoading(false);
+    }
+  };
+
+  const fetchWauData = async () => {
+    if (!accessToken) return;
+
+    setWauLoading(true);
+    try {
+      const data = await tagWauCall(
+        accessToken,
+        today,
+        userAgentFilter || undefined
+      );
+      setWauData(data);
+    } catch (error) {
+      console.error("Failed to fetch WAU data:", error);
+    } finally {
+      setWauLoading(false);
+    }
+  };
+
+  const fetchMauData = async () => {
+    if (!accessToken) return;
+
+    setMauLoading(true);
+    try {
+      const data = await tagMauCall(
+        accessToken,
+        today,
+        userAgentFilter || undefined
+      );
+      setMauData(data);
+    } catch (error) {
+      console.error("Failed to fetch MAU data:", error);
+    } finally {
+      setMauLoading(false);
     }
   };
 
@@ -155,69 +164,35 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const handleDateChange = (newValue: DateRangePickerValue) => {
     // Instant visual feedback
     setIsDateChanging(true);
-    setAnalyticsLoading(true);
     setSummaryLoading(true);
 
     // Update date immediately for UI responsiveness
     setDateValue(newValue);
-    setCurrentPage(1); // Reset to first page when date changes
   };
 
-  // Debounced effect for data fetching
+  // Effect for DAU/WAU/MAU data (independent of date picker)
   useEffect(() => {
-    if (!dateValue.from || !dateValue.to) return;
+    if (!accessToken) return;
 
     const timeoutId = setTimeout(() => {
-      // Call both fetch functions independently
-      fetchAnalyticsData();
-      fetchSummaryData();
-    }, 50); // Very short debounce
-
-    return () => clearTimeout(timeoutId);
-  }, [accessToken, dateValue, userAgentFilter]);
-
-  // Separate effect for pagination that only affects analytics
-  useEffect(() => {
-    if (!dateValue.from || !dateValue.to) return;
-
-    const timeoutId = setTimeout(() => {
-      fetchAnalyticsData();
+      fetchDauData();
+      fetchWauData();
+      fetchMauData();
     }, 50);
 
     return () => clearTimeout(timeoutId);
-  }, [currentPage]);
+  }, [accessToken, userAgentFilter]);
 
-  // Aggregate data by user agent for charts
-  const aggregatedByUserAgent = analyticsData.results.reduce((acc, item) => {
-    const ua = item.user_agent || "Unknown";
-    if (!acc[ua]) {
-      acc[ua] = {
-        user_agent: ua,
-        total_requests: 0,
-        successful_requests: 0,
-        failed_requests: 0,
-        total_tokens: 0,
-        spend: 0,
-        dau: 0,
-        wau: 0,
-        mau: 0,
-      };
-    }
-    acc[ua].total_requests += item.metrics.total_requests;
-    acc[ua].successful_requests += item.metrics.successful_requests;
-    acc[ua].failed_requests += item.metrics.failed_requests;
-    acc[ua].total_tokens += item.metrics.total_tokens;
-    acc[ua].spend += item.metrics.spend;
-    // For user counts, take the maximum to avoid double counting
-    acc[ua].dau = Math.max(acc[ua].dau, item.metrics.dau);
-    acc[ua].wau = Math.max(acc[ua].wau, item.metrics.wau);
-    acc[ua].mau = Math.max(acc[ua].mau, item.metrics.mau);
-    return acc;
-  }, {} as Record<string, any>);
+  // Effect for summary data (depends on date picker)
+  useEffect(() => {
+    if (!dateValue.from || !dateValue.to) return;
 
-  const chartData = Object.values(aggregatedByUserAgent).sort(
-    (a: any, b: any) => b.total_requests - a.total_requests
-  );
+    const timeoutId = setTimeout(() => {
+      fetchSummaryData();
+    }, 50);
+
+    return () => clearTimeout(timeoutId);
+  }, [accessToken, dateValue]);
 
   // Helper function to extract user agent from tag
   const extractUserAgent = (tag: string): string => {
@@ -235,59 +210,73 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     return userAgent;
   };
 
-  const successRateData = (summaryData.top_tags || []).map((tag) => ({
-    user_agent: extractUserAgent(tag.tag),
-    success_rate: tag.successful_requests / (tag.requests || 1) * 100,
-    total_requests: tag.requests,
-  }));
+  // Get unique user agents for charts
+  const getAllUniqueTags = () => {
+    const allTags = new Set<string>();
+    dauData.results.forEach(item => allTags.add(item.tag));
+    wauData.results.forEach(item => allTags.add(item.tag));
+    mauData.results.forEach(item => allTags.add(item.tag));
+    return Array.from(allTags).slice(0, 3); // Top 3 tags
+  };
 
-  // Get unique user agents for chart
-  const uniqueUserAgents = Array.from(
-    new Set(analyticsData.results.map(item => item.user_agent || "Unknown"))
-  ).slice(0, 3); // Top 3 user agents
+  const uniqueTags = getAllUniqueTags();
 
   // Prepare daily chart data (DAU)
-  const dailyChartData = analyticsData.results.reduce((acc, item) => {
+  const dailyChartData = dauData.results.reduce((acc, item) => {
     const existingDate = acc.find(d => d.date === item.date);
+    const userAgent = extractUserAgent(item.tag);
+    
     if (existingDate) {
-      existingDate[item.user_agent || "Unknown"] = item.metrics.dau;
+      existingDate[userAgent] = item.active_users;
     } else {
       const newDateEntry: any = { 
         date: item.date,
-        [item.user_agent || "Unknown"]: item.metrics.dau
+        [userAgent]: item.active_users
       };
       acc.push(newDateEntry);
     }
     return acc;
   }, [] as any[]);
 
+  // Sort daily data by date
+  dailyChartData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
   // Prepare weekly chart data (WAU)
-  const weeklyChartData = analyticsData.results.reduce((acc, item) => {
-    const existingDate = acc.find(d => d.week === item.date);
-    if (existingDate) {
-      existingDate[item.user_agent || "Unknown"] = item.metrics.wau;
+  const weeklyChartData = wauData.results.reduce((acc, item) => {
+    const userAgent = extractUserAgent(item.tag);
+    const weekLabel = item.period_start && item.period_end 
+      ? `${item.period_start} to ${item.period_end}` 
+      : item.date;
+    
+    const existingWeek = acc.find(d => d.week === weekLabel);
+    if (existingWeek) {
+      existingWeek[userAgent] = item.active_users;
     } else {
-      const newDateEntry: any = { 
-        week: `Week ${acc.length + 1}`,
-        [item.user_agent || "Unknown"]: item.metrics.wau
+      const newWeekEntry: any = { 
+        week: weekLabel,
+        [userAgent]: item.active_users
       };
-      acc.push(newDateEntry);
+      acc.push(newWeekEntry);
     }
     return acc;
   }, [] as any[]);
 
   // Prepare monthly chart data (MAU)
-  const monthlyChartData = analyticsData.results.reduce((acc, item) => {
-    const existingDate = acc.find(d => d.month === item.date);
-    if (existingDate) {
-      existingDate[item.user_agent || "Unknown"] = item.metrics.mau;
+  const monthlyChartData = mauData.results.reduce((acc, item) => {
+    const userAgent = extractUserAgent(item.tag);
+    const monthLabel = item.period_start && item.period_end 
+      ? `${item.period_start} to ${item.period_end}` 
+      : item.date;
+    
+    const existingMonth = acc.find(d => d.month === monthLabel);
+    if (existingMonth) {
+      existingMonth[userAgent] = item.active_users;
     } else {
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"];
-      const newDateEntry: any = { 
-        month: monthNames[acc.length % 7] || `Month ${acc.length + 1}`,
-        [item.user_agent || "Unknown"]: item.metrics.mau
+      const newMonthEntry: any = { 
+        month: monthLabel,
+        [userAgent]: item.active_users
       };
-      acc.push(newDateEntry);
+      acc.push(newMonthEntry);
     }
     return acc;
   }, [] as any[]);
@@ -343,7 +332,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         </Card>
       ) : (
         <Grid numItems={4} className="gap-4">
-          {(summaryData.top_tags || []).slice(0, 4).map((tag, index) => {
+          {(summaryData.results || []).slice(0, 4).map((tag, index) => {
             const userAgent = extractUserAgent(tag.tag);
             const displayName = truncateUserAgent(userAgent);
             return (
@@ -358,18 +347,18 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                   </div>
                   <div>
                     <Text className="text-sm text-gray-600">Total Tokens</Text>
-                    <Metric className="text-lg">{formatAbbreviatedNumber(tag.tokens)}</Metric>
+                    <Metric className="text-lg">{formatAbbreviatedNumber(tag.total_tokens)}</Metric>
                   </div>
                   <div>
                     <Text className="text-sm text-gray-600">Total Cost</Text>
-                    <Metric className="text-lg">${formatAbbreviatedNumber(tag.spend, 4)}</Metric>
+                    <Metric className="text-lg">${formatAbbreviatedNumber(tag.total_spend, 4)}</Metric>
                   </div>
                 </div>
               </Card>
             );
           })}
           {/* Fill remaining slots if less than 4 agents */}
-          {Array.from({ length: Math.max(0, 4 - (summaryData.top_tags || []).length) }).map((_, index) => (
+          {Array.from({ length: Math.max(0, 4 - (summaryData.results || []).length) }).map((_, index) => (
             <Card key={`empty-${index}`}>
               <Title>No Data</Title>
               <div className="mt-4 space-y-3">
@@ -419,13 +408,13 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                     <div className="mb-4">
                       <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
                     </div>
-                    {analyticsLoading ? (
-                      <ChartLoader isDateChanging={isDateChanging} />
+                    {dauLoading ? (
+                      <ChartLoader isDateChanging={false} />
                     ) : (
                       <BarChart
                         data={dailyChartData}
                         index="date"
-                        categories={uniqueUserAgents.slice(0, 3)}
+                        categories={uniqueTags.map(extractUserAgent).slice(0, 3)}
                         colors={["blue", "green", "orange"]}
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
@@ -436,15 +425,15 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                   
                   <TabPanel>
                     <div className="mb-4">
-                      <Title className="text-lg">Weekly Active Users - Last 4 Weeks</Title>
+                      <Title className="text-lg">Weekly Active Users - Last 7 Weeks</Title>
                     </div>
-                    {analyticsLoading ? (
-                      <ChartLoader isDateChanging={isDateChanging} />
+                    {wauLoading ? (
+                      <ChartLoader isDateChanging={false} />
                     ) : (
                       <BarChart
                         data={weeklyChartData}
                         index="week"
-                        categories={uniqueUserAgents.slice(0, 3)}
+                        categories={uniqueTags.map(extractUserAgent).slice(0, 3)}
                         colors={["blue", "green", "orange"]}
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
@@ -457,13 +446,13 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                     <div className="mb-4">
                       <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
                     </div>
-                    {analyticsLoading ? (
-                      <ChartLoader isDateChanging={isDateChanging} />
+                    {mauLoading ? (
+                      <ChartLoader isDateChanging={false} />
                     ) : (
                       <BarChart
                         data={monthlyChartData}
                         index="month"
-                        categories={uniqueUserAgents.slice(0, 3)}
+                        categories={uniqueTags.map(extractUserAgent).slice(0, 3)}
                         colors={["blue", "green", "orange"]}
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
