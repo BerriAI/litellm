@@ -2,10 +2,9 @@
 Based on Google's GenAI Kit dotprompt implementation: https://google.github.io/dotprompt/reference/frontmatter/
 """
 
-import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 from jinja2 import DictLoader, Environment, select_autoescape
@@ -80,9 +79,9 @@ class PromptManager:
                 template = self._load_prompt_file(prompt_file, prompt_id)
                 self.prompts[prompt_id] = template
                 # Optional: print(f"Loaded prompt: {prompt_id}")
-            except Exception as e:
-                # Optional: print(f"Error loading prompt file {prompt_file}: {e}")
-                continue
+            except Exception:
+                # Optional: print(f"Error loading prompt file {prompt_file}")
+                pass
 
     def _load_prompt_file(self, file_path: Path, prompt_id: str) -> PromptTemplate:
         """Load and parse a single .prompt file."""
@@ -168,12 +167,12 @@ class PromptManager:
                 if not isinstance(value, expected_type):
                     raise ValueError(
                         f"Invalid type for field '{field_name}': "
-                        f"expected {expected_type.__name__}, got {type(value).__name__}"
+                        f"expected {getattr(expected_type, '__name__', str(expected_type))}, got {type(value).__name__}"
                     )
 
-    def _get_python_type(self, schema_type: str) -> type:
+    def _get_python_type(self, schema_type: str) -> Union[type, tuple]:
         """Convert schema type string to Python type."""
-        type_mapping = {
+        type_mapping: Dict[str, Union[type, tuple]] = {
             "string": str,
             "str": str,
             "number": (int, float),
@@ -188,7 +187,7 @@ class PromptManager:
             "dict": dict,
         }
 
-        return type_mapping.get(schema_type.lower(), str)
+        return type_mapping.get(schema_type.lower(), str)  # type: ignore
 
     def get_prompt(self, prompt_id: str) -> Optional[PromptTemplate]:
         """Get a prompt template by ID."""
