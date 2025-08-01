@@ -79,12 +79,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.mcp import (
-    MCPPostCallResponseObject,
-    MCPPreCallRequestObject,
-    MCPPreCallResponseObject,
-    MCPDuringCallResponseObject,
-)
+from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
@@ -125,6 +120,7 @@ from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
@@ -172,11 +168,10 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
-
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
         Type[EnterpriseStandardLoggingPayloadSetup]
@@ -604,9 +599,7 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model, 
-                tools=tools,
-                non_default_params=non_default_params
+                model=model, tools=tools, non_default_params=non_default_params
             )
         )
 
@@ -678,16 +671,16 @@ class Logging(LiteLLMLoggingBaseClass):
         # Vector Store / Knowledge Base hooks
         #########################################################
         if litellm.vector_store_registry is not None:
-                
-                vector_store_custom_logger = _init_custom_logger_compatible_class(
-                    logging_integration="vector_store_pre_call_hook",
-                    internal_usage_cache=None,
-                    llm_router=None,
-                )
-                self.model_call_details["prompt_integration"] = (
-                    vector_store_custom_logger.__class__.__name__
-                )
-                return vector_store_custom_logger
+
+            vector_store_custom_logger = _init_custom_logger_compatible_class(
+                logging_integration="vector_store_pre_call_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            self.model_call_details["prompt_integration"] = (
+                vector_store_custom_logger.__class__.__name__
+            )
+            return vector_store_custom_logger
 
         return None
 
@@ -950,7 +943,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"
-            curl_command += additional_args.get("request_str", None)
+            request_str = additional_args.get("request_str", "")
+            curl_command += request_str
         elif api_base == "":
             curl_command = str(self.model_call_details)
         return curl_command
@@ -1113,153 +1107,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                 )
         return response_obj
-
-    async def async_pre_mcp_tool_call_hook(
-        self,
-        kwargs: dict,
-        request_obj: Any,
-        start_time: datetime.datetime,
-        end_time: datetime.datetime,
-    ) -> Optional[Any]:
-        """
-        Pre MCP Tool Call Hook
-
-        Use this to validate and modify MCP tool calls before execution.
-        """
-        from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPPreCallRequestObject, MCPPreCallResponseObject
-
-        callbacks = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_success_callbacks,
-            global_callbacks=litellm.success_callback,
-        )
-        
-        # Create the request object if it's not already one
-        if not isinstance(request_obj, MCPPreCallRequestObject):
-            request_obj = MCPPreCallRequestObject(
-                tool_name=kwargs.get("name", ""),
-                arguments=kwargs.get("arguments", {}),
-                server_name=kwargs.get("server_name"),
-                user_api_key_auth=kwargs.get("user_api_key_auth"),
-                hidden_params=HiddenParams()
-            )
-
-        for callback in callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    response: Optional[MCPPreCallResponseObject] = (
-                        await callback.async_pre_mcp_tool_call_hook(
-                            kwargs=kwargs,
-                            request_obj=request_obj,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                    )
-                    ######################################################################
-                    # if any of the callbacks return a response, use the first one
-                    # this allows for validation failures or argument modifications
-                    ######################################################################
-                    if response is not None:
-                        return self._parse_pre_mcp_call_hook_response(
-                            response=response, original_request=request_obj
-                        )
-            except Exception as e:
-                verbose_logger.exception(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
-                        str(e)
-                    )
-                )
-        return None
-
-    def _parse_pre_mcp_call_hook_response(
-        self, response: MCPPreCallResponseObject, original_request: MCPPreCallRequestObject
-    ) -> Dict[str, Any]:
-        """
-        Parse the response from the pre_mcp_tool_call_hook
-
-        1. Check if the call should proceed
-        2. Apply any argument modifications
-        3. Handle validation errors
-        """
-        result = {
-            "should_proceed": response.should_proceed,
-            "modified_arguments": response.modified_arguments or original_request.arguments,
-            "error_message": response.error_message,
-            "hidden_params": response.hidden_params,
-        }
-        return result
-
-    async def async_during_mcp_tool_call_hook(
-        self,
-        kwargs: dict,
-        request_obj: Any,
-        start_time: datetime.datetime,
-        end_time: datetime.datetime,
-    ) -> Optional[Any]:
-        """
-        During MCP Tool Call Hook
-
-        Use this for concurrent monitoring and validation during tool execution.
-        """
-        from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPDuringCallResponseObject, MCPDuringCallRequestObject
-
-        callbacks = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_success_callbacks,
-            global_callbacks=litellm.success_callback,
-        )
-        
-        # Create the request object if it's not already one
-        if not isinstance(request_obj, MCPDuringCallRequestObject):
-            request_obj = MCPDuringCallRequestObject(
-                tool_name=kwargs.get("name", ""),
-                arguments=kwargs.get("arguments", {}),
-                server_name=kwargs.get("server_name"),
-                start_time=start_time.timestamp() if start_time else None,
-                hidden_params=HiddenParams()
-            )
-
-        for callback in callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    response: Optional[MCPDuringCallResponseObject] = (
-                        await callback.async_during_mcp_tool_call_hook(
-                            kwargs=kwargs,
-                            request_obj=request_obj,
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                    )
-                    ######################################################################
-                    # if any of the callbacks return a response, use the first one
-                    # this allows for execution control decisions
-                    ######################################################################
-                    if response is not None:
-                        return self._parse_during_mcp_call_hook_response(response=response)
-            except Exception as e:
-                verbose_logger.exception(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
-                        str(e)
-                    )
-                )
-        return None
-
-    def _parse_during_mcp_call_hook_response(
-        self, response: MCPDuringCallResponseObject
-    ) -> Dict[str, Any]:
-        """
-        Parse the response from the during_mcp_tool_call_hook
-
-        1. Check if execution should continue
-        2. Handle any error messages
-        3. Apply any hidden parameter updates
-        """
-        result = {
-            "should_continue": response.should_continue,
-            "error_message": response.error_message,
-            "hidden_params": response.hidden_params,
-        }
-        return result
 
     def _parse_post_mcp_call_hook_response(
         self, response: Optional[MCPPostCallResponseObject]
@@ -1466,9 +1313,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if (
             EnterpriseCallbackControls is not None
             and EnterpriseCallbackControls.is_callback_disabled_dynamically(
-                callback=callback, 
+                callback=callback,
                 litellm_params=litellm_params,
-                standard_callback_dynamic_params = self.standard_callback_dynamic_params
+                standard_callback_dynamic_params=self.standard_callback_dynamic_params,
             )
         ):
             verbose_logger.debug(
@@ -2417,15 +2264,20 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                         )
+
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    model_call_details: Dict = self.model_call_details
+                    ##################################
+                    # call redaction hook for custom logger
+                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                        model_call_details=model_call_details
+                    )
+                    ##################################
                     if self.stream is True:
-                        if (
-                            "async_complete_streaming_response"
-                            in self.model_call_details
-                        ):
+                        if "async_complete_streaming_response" in model_call_details:
                             await callback.async_log_success_event(
-                                kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
+                                kwargs=model_call_details,
+                                response_obj=model_call_details[
                                     "async_complete_streaming_response"
                                 ],
                                 start_time=start_time,
@@ -2433,14 +2285,14 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
-                                kwargs=self.model_call_details,
+                                kwargs=model_call_details,
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
                         await callback.async_log_success_event(
-                            kwargs=self.model_call_details,
+                            kwargs=model_call_details,
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -3360,14 +3212,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _literalai_logger = LiteralAILogger()
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
-        elif logging_integration == "prometheus":
+        elif logging_integration == "prometheus" and PrometheusLogger is not None:
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback  # type: ignore
 
-            _prometheus_logger = PrometheusLogger()
-            _in_memory_loggers.append(_prometheus_logger)
-            return _prometheus_logger  # type: ignore
+                _prometheus_logger = PrometheusLogger()
+                _in_memory_loggers.append(_prometheus_logger)
+                return _prometheus_logger  # type: ignore
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
@@ -3635,7 +3487,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
             )
-            
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, VectorStorePreCallHook):
                     return callback
@@ -3678,11 +3530,21 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             humanloop_logger = HumanloopLogger()
             _in_memory_loggers.append(humanloop_logger)
             return humanloop_logger  # type: ignore
+        elif logging_integration == "dotprompt":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DotpromptManager):
+                    return callback
+
+            dotprompt_logger = DotpromptManager()
+            _in_memory_loggers.append(dotprompt_logger)
+            return dotprompt_logger  # type: ignore
+        return None
     except Exception as e:
         verbose_logger.exception(
             f"[Non-Blocking Error] Error initializing custom logger: {e}"
         )
         return None
+    return None
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
@@ -3723,7 +3585,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, LiteralAILogger):
                     return callback
-        elif logging_integration == "prometheus":
+        elif logging_integration == "prometheus" and PrometheusLogger is not None:
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback
@@ -3826,7 +3688,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
             )
-            
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, VectorStorePreCallHook):
                     return callback
