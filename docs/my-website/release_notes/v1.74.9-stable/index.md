@@ -75,6 +75,23 @@ This is great for internal use cases where you don't want **users** to think abo
 
 This release brings model-level guardrails support to your config.yaml + UI. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
 
+```yaml
+model_list:
+  - model_name: claude-sonnet-4
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+      api_base: https://api.anthropic.com/v1
+      guardrails: ["azure-text-moderation"] # 👈 KEY CHANGE
+
+guardrails:
+  - guardrail_name: azure-text-moderation
+    litellm_params:
+      guardrail: azure/text_moderations
+      mode: "post_call" 
+      api_key: os.environ/AZURE_GUARDRAIL_API_KEY
+      api_base: os.environ/AZURE_GUARDRAIL_API_BASE 
+```
 
 
 [Read More](../../docs/proxy/guardrails/quick_start#model-level-guardrails)
