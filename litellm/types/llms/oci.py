@@ -2,77 +2,86 @@ from __future__ import annotations
 
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from enum import Enum
 
 OCIRoles = Literal["SYSTEM", "USER", "ASSISTANT", "TOOL"]
+
 
 class OCIVendors(Enum):
     """
     A class to hold the vendor names for OCI models.
     This is used to map model names to their respective vendors.
     """
+
     COHERE = "COHERE"
     GENERIC = "GENERIC"
 
+
 # --- Base Models and Content Parts ---
 
+
 class OCIContentPart(BaseModel):
-    """Modelo base para partes de conteúdo em uma mensagem OCI."""
+    """Base model for content parts in an OCI message."""
+
     type: str
 
+
 class OCITextContentPart(OCIContentPart):
-    """Parte de conteúdo de texto para a API OCI."""
+    """Text content part for the OCI API."""
+
     type: Literal["TEXT"] = "TEXT"
     text: str
 
+
 class OCIImageContentPart(OCIContentPart):
-    """Parte de conteúdo de imagem para a API OCI."""
+    """Image content part for the OCI API."""
+
     type: Literal["IMAGE"] = "IMAGE"
     imageUrl: str
 
+
 OCIContentPartUnion = Union[OCITextContentPart, OCIImageContentPart]
 
-# --- Modelos para Tools e Tool Calls ---
+# --- Models for Tools and Tool Calls ---
 
-# class OCIFunction(BaseModel):
-#     """Define uma função que o modelo pode chamar."""
-#     name: str
-#     arguments: str # Argumentos devem ser um JSON serializado em string
-
-# class OCIToolCall(BaseModel):
-#     """Representa uma chamada de ferramenta feita pelo modelo."""
-#     id: str
-#     type: Literal["FUNCTION"] = "FUNCTION"
-#     function: OCIFunction
 
 class OCIToolCall(BaseModel):
-    """Representa uma chamada de ferramenta feita pelo modelo."""
+    """Represents a tool call made by the model."""
+
     id: str
     type: Literal["FUNCTION"] = "FUNCTION"
     name: str
-    arguments: str  # Argumentos devem ser um JSON serializado em string
+    arguments: str  # Arguments should be a JSON-serialized string
+
 
 class OCIToolDefinition(BaseModel):
-    """Define uma ferramenta que pode ser usada pelo modelo."""
+    """Defines a tool that can be used by the model."""
+
     type: Literal["FUNCTION"] = "FUNCTION"
     name: str | None = None
     description: str | None = None
     parameters: dict | None = None
 
-# --- Modelos de Mensagem (Request e Response) ---
+
+# --- Message Models (Request and Response) ---
+
 
 class OCIMessage(BaseModel):
-    """Modelo para uma única mensagem no payload de request/response."""
+    """Model for a single message in the request/response payload."""
+
     role: OCIRoles
     content: list[OCIContentPartUnion] | None = None
     toolCalls: list[OCIToolCall] | None = None
     toolCallId: str | None = None
 
-# --- Modelos para o Payload de Request ---
+
+# --- Request Payload Models ---
+
 
 class OCIChatRequestPayload(BaseModel):
-    """Payload interno do 'chatRequest' para a API OCI."""
+    """Internal 'chatRequest' payload for the OCI API."""
+
     apiFormat: str
     messages: list[OCIMessage]
     tools: list[OCIToolDefinition] | None = None
@@ -86,80 +95,89 @@ class OCIChatRequestPayload(BaseModel):
     frequencyPenalty: float | None = None
     presencePenalty: float | None = None
 
+
 class OCIServingMode(BaseModel):
-    """Define o modo de serviço e o modelo a ser usado."""
+    """Defines the serving mode and the model to be used."""
+
     servingType: str
     modelId: str
 
+
 class OCICompletionPayload(BaseModel):
-    """Modelo de Pydantic para o corpo completo da requisição de chat da OCI."""
+    """Pydantic model for the complete OCI chat request body."""
+
     compartmentId: str
     servingMode: OCIServingMode
     chatRequest: OCIChatRequestPayload
 
-# --- Modelos para a Resposta da API (Non-streaming) ---
+
+# --- API Response Models (Non-streaming) ---
+
 
 class OCICompletionTokenDetails(BaseModel):
-    """Detalhes dos tokens de conclusão na resposta da OCI."""
+    """Completion token details in the OCI response."""
+
     acceptedPredictionTokens: int
     reasoningTokens: int
 
+
 class OCIPropmtTokensDetails(BaseModel):
-    """Detalhes dos tokens de prompt na resposta da OCI."""
+    """Prompt token details in the OCI response."""
+
     cachedTokens: int
 
+
 class OCIResponseUsage(BaseModel):
-    """Uso de tokens na resposta da OCI."""
+    """Token usage in the OCI response."""
+
     promptTokens: int
     completionTokens: int
     totalTokens: int
     completionTokensDetails: OCICompletionTokenDetails
     promptTokensDetails: OCIPropmtTokensDetails
 
+
 class OCIResponseChoice(BaseModel):
-    """Uma escolha de conclusão na resposta da OCI."""
+    """A completion choice in the OCI response."""
+
     index: int
     message: OCIMessage
     finishReason: str | None
     logprobs: dict[str, Any] | None = None
 
+
 class OCIChatResponse(BaseModel):
-    """O objeto 'chatResponse' na resposta da OCI."""
+    """The 'chatResponse' object in the OCI response."""
+
     apiFormat: str
     timeCreated: str
     choices: list[OCIResponseChoice]
     usage: OCIResponseUsage
 
+
 class OCICompletionResponse(BaseModel):
-    """Modelo para o corpo completo da resposta non-streaming da OCI."""
+    """Model for the complete non-streaming OCI response body."""
+
     modelId: str
     modelVersion: str
     chatResponse: OCIChatResponse
 
-# --- Modelos para a Resposta da API (Streaming) ---
+
+# --- API Response Models (Streaming) ---
+
 
 class OCIStreamDelta(BaseModel):
-    """O delta de conteúdo em um chunk de streaming."""
+    """The content delta in a streaming chunk."""
+
     content: list[OCIContentPartUnion] | None = None
     role: str | None = None
     toolCalls: list[OCIToolCall] | None = None
 
-# class OCIStreamChoice(BaseModel):
-#     """Uma escolha em um chunk de streaming."""
-#     index: int
-#     delta: OCIStreamDelta
-#     finishReason: str | None
-
-# class OCIStreamChatResponse(BaseModel):
-#     """O objeto 'chatResponse' em um chunk de streaming."""
-#     choices: list[OCIStreamChoice]
 
 class OCIStreamChunk(BaseModel):
-    """Modelo para um único chunk de evento SSE da OCI."""
+    """Model for a single SSE event chunk from OCI."""
+
     finishReason: str | None = None
     message: OCIStreamDelta | None = None
     pad: str | None = None
     index: int | None = None
-
-    # chatResponse: OCIStreamChatResponse
-    # modelId: str | None

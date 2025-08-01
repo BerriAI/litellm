@@ -4,6 +4,7 @@ import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
+
 class OCIError(BaseLLMException):
     def __init__(
         self,

@@ -1,14 +1,12 @@
 import base64
 import datetime
 import hashlib
-import time
 from urllib.parse import urlparse
 import litellm
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from enum import Enum
 
 import httpx
 
@@ -21,19 +19,34 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     version,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage, ChatCompletionTextObject
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
-from litellm.utils import ChatCompletionMessageToolCall, CustomStreamWrapper, ModelResponse, Usage
-from litellm.types.llms.oci import OCIChatRequestPayload, OCICompletionPayload, OCICompletionResponse, OCIImageContentPart, OCIMessage, OCIRoles, OCIServingMode, OCIStreamChunk, OCITextContentPart, OCIToolCall, OCIToolDefinition, OCIVendors
+from litellm.utils import (
+    ChatCompletionMessageToolCall,
+    CustomStreamWrapper,
+    ModelResponse,
+    Usage,
+)
+from litellm.types.llms.oci import (
+    OCIChatRequestPayload,
+    OCICompletionPayload,
+    OCICompletionResponse,
+    OCIContentPartUnion,
+    OCIImageContentPart,
+    OCIMessage,
+    OCIRoles,
+    OCIServingMode,
+    OCIStreamChunk,
+    OCITextContentPart,
+    OCIToolCall,
+    OCIToolDefinition,
+    OCIVendors,
+)
 from litellm.llms.oci.common_utils import OCIError
 from litellm.types.utils import (
     Delta,
-    GenericStreamingChunk,
-    LlmProviders,
-    ModelResponse,
     ModelResponseStream,
     StreamingChoices,
-    Usage,
 )
 
 if TYPE_CHECKING:
@@ -66,8 +79,11 @@ def load_private_key_from_str(key_str: str):
         password=None,
     )
     if not isinstance(key, rsa.RSAPrivateKey):
-        raise TypeError("The provided private key is not an RSA key, which is required for OCI signing.")
+        raise TypeError(
+            "The provided private key is not an RSA key, which is required for OCI signing."
+        )
     return key
+
 
 def get_vendor_from_model(model: str) -> OCIVendors:
     """
@@ -83,8 +99,10 @@ def get_vendor_from_model(model: str) -> OCIVendors:
     else:
         return OCIVendors.GENERIC
 
+
 # 5 minute timeout (models may need to load)
 STREAMING_TIMEOUT = 60 * 5
+
 
 class OCIChatConfig(BaseConfig):
     """
@@ -163,7 +181,6 @@ class OCIChatConfig(BaseConfig):
         all_params = {**non_default_params, **optional_params}
 
         for key, value in all_params.items():
-
             alias = open_ai_to_oci_param_map.get(key)
 
             if alias is False:
@@ -238,8 +255,17 @@ class OCIChatConfig(BaseConfig):
             "x-content-sha256": x_content_sha256,
         }
 
-        signed_headers = ["date", "(request-target)", "host", "content-length", "content-type", "x-content-sha256"]
-        signing_string = build_signature_string(method, path, headers_to_sign, signed_headers)
+        signed_headers = [
+            "date",
+            "(request-target)",
+            "host",
+            "content-length",
+            "content-type",
+            "x-content-sha256",
+        ]
+        signing_string = build_signature_string(
+            method, path, headers_to_sign, signed_headers
+        )
 
         private_key = load_private_key_from_str(oci_key)
         signature = private_key.sign(
@@ -259,14 +285,16 @@ class OCIChatConfig(BaseConfig):
             f'signature="{signature_b64}"'
         )
 
-        headers.update({
-            "authorization": authorization,
-            "date": date,
-            "host": host,
-            "content-type": content_type,
-            "content-length": content_length,
-            "x-content-sha256": x_content_sha256,
-        })
+        headers.update(
+            {
+                "authorization": authorization,
+                "date": date,
+                "host": host,
+                "content-type": content_type,
+                "content-length": content_length,
+                "x-content-sha256": x_content_sha256,
+            }
+        )
 
         return headers, None
 
@@ -280,15 +308,33 @@ class OCIChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-
-        oci_region = optional_params.get(
-            "oci_region", "us-ashburn-1"
-        )
+        oci_region = optional_params.get("oci_region", "us-ashburn-1")
         api_base = (
             api_base
             or litellm.api_base
             or f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com"
         )
+        oci_user = optional_params.get("oci_user")
+        oci_fingerprint = optional_params.get("oci_fingerprint")
+        oci_tenancy = optional_params.get("oci_tenancy")
+        oci_key = optional_params.get("oci_key")
+        oci_compartment_id = optional_params.get("oci_compartment_id")
+
+        if (
+            not oci_user
+            or not oci_fingerprint
+            or not oci_tenancy
+            or not oci_key
+            or not oci_compartment_id
+        ):
+            raise Exception(
+                "Missing one of the following parameters: oci_user, oci_fingerprint, oci_tenancy, oci_key, oci_compartment_id"
+            )
+
+        if not api_base:
+            raise Exception(
+                "Either `api_base` must be provided or `litellm.api_base` must be set. Alternatively, you can set the `oci_region` optional parameter to use the default OCI region."
+            )
 
         headers.update(
             {
@@ -313,14 +359,10 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        oci_region = optional_params.get(
-            "oci_region", "us-ashburn-1"
-        )
+        oci_region = optional_params.get("oci_region", "us-ashburn-1")
         return f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com/20231130/actions/chat"
 
-    def _get_optional_params(
-        self, vendor: OCIVendors, optional_params: dict
-    ) -> Dict:
+    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
         selected_params = {}
         if vendor == OCIVendors.COHERE:
             raise ValueError(
@@ -333,7 +375,9 @@ class OCIChatConfig(BaseConfig):
             if value in optional_params:
                 selected_params[value] = optional_params[value]
         if "tools" in selected_params:
-            selected_params["tools"] = adapt_tool_definition_to_oci_standard(selected_params["tools"], vendor)
+            selected_params["tools"] = adapt_tool_definition_to_oci_standard(
+                selected_params["tools"], vendor
+            )
         return selected_params
 
     def transform_request(
@@ -346,9 +390,7 @@ class OCIChatConfig(BaseConfig):
     ) -> dict:
         oci_compartment_id = optional_params.get("oci_compartment_id", None)
         if not oci_compartment_id:
-            raise Exception(
-                "kwarg `oci_compartment_id` is required for OCI requests"
-            )
+            raise Exception("kwarg `oci_compartment_id` is required for OCI requests")
 
         vendor = get_vendor_from_model(model)
 
@@ -363,10 +405,10 @@ class OCIChatConfig(BaseConfig):
                     servingType="ON_DEMAND",
                     modelId=model,
                 ),
-                chatRequest= OCIChatRequestPayload(
+                chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
                     messages=adapt_messages_to_generic_oci_standard(messages),
-                    **self._get_optional_params(vendor, optional_params)
+                    **self._get_optional_params(vendor, optional_params),
                 ),
             )
 
@@ -386,7 +428,6 @@ class OCIChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         json = raw_response.json()  # noqa: F811
 
         error = json.get("error")
@@ -396,7 +437,7 @@ class OCIChatConfig(BaseConfig):
                 message=str(json["error"]),
                 status_code=raw_response.status_code,
             )
-        
+
         if not isinstance(json, dict):
             raise OCIError(
                 message="Invalid response format from OCI",
@@ -433,14 +474,16 @@ class OCIChatConfig(BaseConfig):
             if response_message.content and response_message.content[0].type == "TEXT":
                 message.content = response_message.content[0].text
             if response_message.toolCalls:
-                message.tool_calls = adapt_tools_to_openai_standard(response_message.toolCalls)
+                message.tool_calls = adapt_tools_to_openai_standard(
+                    response_message.toolCalls
+                )
 
         usage = Usage(
             prompt_tokens=completion_response.chatResponse.usage.promptTokens,
             completion_tokens=completion_response.chatResponse.usage.completionTokens,
             total_tokens=completion_response.chatResponse.usage.totalTokens,
         )
-        model_response.usage = usage # type: ignore
+        model_response.usage = usage  # type: ignore
 
         model_response._hidden_params["additional_headers"] = raw_response.headers
 
@@ -475,9 +518,7 @@ class OCIChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise OCIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise OCIError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise OCIError(status_code=response.status_code, message=response.text)
@@ -522,9 +563,7 @@ class OCIChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise OCIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise OCIError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise OCIError(status_code=response.status_code, message=response.text)
@@ -552,8 +591,11 @@ open_ai_to_generic_oci_role_map: Dict[str, OCIRoles] = {
     "tool": "TOOL",
 }
 
-def adapt_messages_to_generic_oci_standard_content_message(role: str, content: str | list) -> OCIMessage:
-    new_content = []
+
+def adapt_messages_to_generic_oci_standard_content_message(
+    role: str, content: str | list
+) -> OCIMessage:
+    new_content: list[OCIContentPartUnion] = []
     if isinstance(content, str):
         return OCIMessage(
             role=open_ai_to_generic_oci_role_map[role],
@@ -583,13 +625,13 @@ def adapt_messages_to_generic_oci_standard_content_message(role: str, content: s
             if not isinstance(text, str):
                 raise Exception("Prop `text` is not a string")
             new_content.append(OCITextContentPart(text=text))
-        
+
         elif type == "image_url":
             image_url = content_item.get("image_url")
             if not isinstance(image_url, str):
                 raise Exception("Prop `image_url` is not a string")
             new_content.append(OCIImageContentPart(imageUrl=image_url))
-    
+
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
         content=new_content,
@@ -597,7 +639,10 @@ def adapt_messages_to_generic_oci_standard_content_message(role: str, content: s
         toolCallId=None,
     )
 
-def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list) -> OCIMessage:
+
+def adapt_messages_to_generic_oci_standard_tool_call(
+    role: str, tool_calls: list
+) -> OCIMessage:
     tool_calls_formated = []
     for tool_call in tool_calls:
         if not isinstance(tool_call, dict):
@@ -609,11 +654,11 @@ def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list
         tool_call_id = tool_call.get("id")
         if not isinstance(tool_call_id, str):
             raise Exception("Prop `id` is not a string")
-        
+
         tool_function = tool_call.get("function")
         if not isinstance(tool_function, dict):
             raise Exception("Prop `function` is not a dictionary")
-        
+
         function_name = tool_function.get("name")
         if not isinstance(function_name, str):
             raise Exception("Prop `name` is not a string")
@@ -630,13 +675,15 @@ def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list
         #         arguments=arguments
         #     )
         # ))
-    
-        tool_calls_formated.append(OCIToolCall(
-            id=tool_call_id,
-            type="FUNCTION",
-            name=function_name,
-            arguments=arguments
-        ))
+
+        tool_calls_formated.append(
+            OCIToolCall(
+                id=tool_call_id,
+                type="FUNCTION",
+                name=function_name,
+                arguments=arguments,
+            )
+        )
 
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
@@ -645,7 +692,10 @@ def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: list
         toolCallId=None,
     )
 
-def adapt_messages_to_generic_oci_standard_tool_response(role: str, tool_call_id: str, content: str) -> OCIMessage:
+
+def adapt_messages_to_generic_oci_standard_tool_response(
+    role: str, tool_call_id: str, content: str
+) -> OCIMessage:
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
         content=[OCITextContentPart(text=content)],
@@ -653,7 +703,10 @@ def adapt_messages_to_generic_oci_standard_tool_response(role: str, tool_call_id
         toolCallId=tool_call_id,
     )
 
-def adapt_messages_to_generic_oci_standard(messages: List[AllMessageValues]) -> List[OCIMessage]:
+
+def adapt_messages_to_generic_oci_standard(
+    messages: List[AllMessageValues],
+) -> List[OCIMessage]:
     new_messages = []
     for message in messages:
         role = message["role"]
@@ -663,22 +716,33 @@ def adapt_messages_to_generic_oci_standard(messages: List[AllMessageValues]) -> 
 
         if role in ["system", "user", "assistant"] and content is not None:
             if not isinstance(content, (str, list)):
-                raise Exception("Prop `content` must be a string or a list of content items")
-            new_messages.append(adapt_messages_to_generic_oci_standard_content_message(role, content))
+                raise Exception(
+                    "Prop `content` must be a string or a list of content items"
+                )
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_content_message(role, content)
+            )
 
         elif role == "assistant" and tool_calls is not None:
             if not isinstance(tool_calls, list):
                 raise Exception("Prop `tool_calls` must be a list of tool calls")
-            new_messages.append(adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls))
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
+            )
 
         elif role == "tool":
             if not isinstance(tool_call_id, str):
                 raise Exception("Prop `tool_call_id` is required and must be a string")
             if not isinstance(content, str):
                 raise Exception("Prop `content` is not a string")
-            new_messages.append(adapt_messages_to_generic_oci_standard_tool_response(role, tool_call_id, content))
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_tool_response(
+                    role, tool_call_id, content
+                )
+            )
 
     return new_messages
+
 
 def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors):
     new_tools = []
@@ -690,22 +754,25 @@ def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors)
         for tool in tools:
             if tool["type"] != "function":
                 raise Exception("OCI only supports function tools")
-            
+
             tool_function = tool.get("function")
             if not isinstance(tool_function, dict):
                 raise Exception("Prop `function` is not a dictionary")
-            
+
             new_tool = OCIToolDefinition(
                 type="FUNCTION",
                 name=tool_function.get("name"),
                 description=tool_function.get("description", ""),
-                parameters=tool_function.get("parameters", {})
+                parameters=tool_function.get("parameters", {}),
             )
             new_tools.append(new_tool)
-    
+
     return new_tools
 
-def adapt_tools_to_openai_standard(tools: list[OCIToolCall]) -> list[ChatCompletionMessageToolCall]:
+
+def adapt_tools_to_openai_standard(
+    tools: list[OCIToolCall],
+) -> list[ChatCompletionMessageToolCall]:
     new_tools = []
     for tool in tools:
         new_tool = ChatCompletionMessageToolCall(
@@ -714,7 +781,7 @@ def adapt_tools_to_openai_standard(tools: list[OCIToolCall]) -> list[ChatComplet
             function={
                 "name": tool.name,
                 "arguments": tool.arguments,
-            }
+            },
         )
         new_tools.append(new_tool)
     return new_tools
@@ -745,7 +812,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
         if typed_chunk.index is None:
             typed_chunk.index = 0
-        
+
         text = ""
         if typed_chunk.message and typed_chunk.message.content:
             for item in typed_chunk.message.content:
@@ -759,7 +826,7 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     raise ValueError(
                         f"Unsupported content type in OCI response: {item.type}"
                     )
-        
+
         tool_calls = None
         if typed_chunk.message and typed_chunk.message.toolCalls:
             tool_calls = adapt_tools_to_openai_standard(typed_chunk.message.toolCalls)
@@ -770,7 +837,9 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     index=typed_chunk.index if typed_chunk.index else 0,
                     delta=Delta(
                         content=text,
-                        tool_calls=[tool.model_dump() for tool in tool_calls] if tool_calls else None,
+                        tool_calls=[tool.model_dump() for tool in tool_calls]
+                        if tool_calls
+                        else None,
                         provider_specific_fields=None,  # OCI does not have provider specific fields in the response
                         thinking_blocks=None,  # OCI does not have thinking blocks in the response
                         reasoning_content=None,  # OCI does not have reasoning content in the response
