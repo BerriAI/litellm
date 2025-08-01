@@ -89,9 +89,17 @@ def transform_vercel_ai_gateway_data(data):
             "max_tokens": row["context_window"],
             "input_cost_per_token": float(row["pricing"]["input"]),
             "output_cost_per_token": float(row["pricing"]["output"]),
+            'max_output_tokens': row['max_tokens'],
+            'max_input_tokens': row["context_window"],
         }
-        
-        obj['max_input_tokens'] = row["context_window"]
+
+        # Handle cache pricing if available
+        if "pricing" in row:
+            if "input_cache_read" in row["pricing"] and row["pricing"]["input_cache_read"] is not None:
+                obj['cache_read_input_token_cost'] = float(f"{float(row['pricing']['input_cache_read']):e}")
+            
+            if "input_cache_write" in row["pricing"] and row["pricing"]["input_cache_write"] is not None:
+                obj['cache_creation_input_token_cost'] = float(f"{float(row['pricing']['input_cache_write']):e}")
 
         obj.update({
             "litellm_provider": "vercel_ai_gateway",
