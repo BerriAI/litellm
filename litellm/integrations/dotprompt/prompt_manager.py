@@ -4,7 +4,7 @@ Based on Google's GenAI Kit dotprompt implementation: https://google.github.io/d
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import yaml
 from jinja2 import DictLoader, Environment, select_autoescape
@@ -99,7 +99,7 @@ class PromptManager:
             template_id=prompt_id,
         )
 
-    def _parse_frontmatter(self, content: str) -> tuple[Dict[str, Any], str]:
+    def _parse_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
         """Parse YAML frontmatter from prompt content."""
         # Match YAML frontmatter between --- delimiters
         frontmatter_pattern = r"^---\s*\n(.*?)\n---\s*\n(.*)$"
