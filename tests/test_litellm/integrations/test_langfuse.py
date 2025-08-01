@@ -14,7 +14,6 @@ import pytest
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
-import litellm.constants
 
 
 def test_max_langfuse_clients_limit():
