@@ -51,6 +51,7 @@ azure-identity = {version = "^1.15.0", optional = true}
 azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 azure-storage-blob = {version="^12.25.1", optional=true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
+google-cloud-iam = {version = "^2.21.1", optional = true}
 resend = {version = "^0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
 websockets = {version = "^13.1.0", optional = true}
@@ -97,6 +98,7 @@ extra_proxy = [
     "azure-identity",
     "azure-keyvault-secrets",
     "google-cloud-kms",
+    "google-cloud-iam",
     "resend",
     "redisvl"
 ]
