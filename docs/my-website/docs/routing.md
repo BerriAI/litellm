@@ -1171,6 +1171,123 @@ router = Router(model_list: Optional[list] = None,
 				 cache_responses=True)
 ```
 
+## Fallbacks
+
+If a call fails after retries, fallback to another model group. This ensures reliability by automatically switching to backup models when the primary model fails.
+
+:::info
+
+For detailed fallbacks documentation, see [Proxy Reliability](./proxy/reliability.md)
+
+:::
+
+### Quick Start
+
+Key change: 
+
+```python
+fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}]
+```
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import Router 
+
+router = Router(
+	model_list=[
+		{
+			"model_name": "gpt-3.5-turbo",
+			"litellm_params": {
+				"model": "azure/<your-deployment-name>",
+				"api_base": "<your-azure-endpoint>",
+				"api_key": "<your-azure-api-key>",
+			}
+		},
+		{
+			"model_name": "gpt-4",
+			"litellm_params": {
+				"model": "azure/gpt-4-ca",
+				"api_base": "https://my-endpoint-canada-berri992.openai.azure.com/",
+				"api_key": "<your-azure-api-key>",
+			}
+		}
+	],
+	fallbacks=[{"gpt-3.5-turbo": ["gpt-4"]}] # 👈 KEY CHANGE
+)
+
+response = router.completion(
+	model="gpt-3.5-turbo",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-endpoint>
+      api_key: <your-azure-api-key>
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+
+router_settings:
+  fallbacks: [{"gpt-3.5-turbo": ["gpt-4"]}]
+```
+
+</TabItem>
+</Tabs>
+
+### Types of Fallbacks
+
+There are 3 types of fallbacks:
+
+- **`fallbacks`**: For all errors (e.g., RateLimitError, API errors)
+- **`context_window_fallbacks`**: For ContextWindowExceededError - automatically switch to models with larger context windows
+- **`content_policy_fallbacks`**: For ContentPolicyViolationError - switch to models with different content policies
+
+### Context Window Fallbacks
+
+Automatically fallback to models with larger context windows when the current model's context is exceeded:
+
+```python
+router = Router(
+	model_list=model_list,
+	context_window_fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-16k", "gpt-4-32k"]}]
+)
+```
+
+### Content Policy Fallbacks
+
+Switch to alternative models when content policy violations occur:
+
+```python
+router = Router(
+	model_list=model_list,
+	content_policy_fallbacks=[{"claude-2": ["gpt-3.5-turbo"]}]
+)
+```
+
+### Testing Fallbacks
+
+Use `mock_testing_fallbacks=True` to test your fallback configuration:
+
+```python
+response = router.completion(
+	model="bad-model",
+	messages=[{"role": "user", "content": "Hey, how's it going?"}],
+	mock_testing_fallbacks=True, # 👈 Trigger fallbacks
+)
+```
+
 ## Pre-Call Checks (Context Window, EU-Regions)
 
 Enable pre-call checks to filter out:
