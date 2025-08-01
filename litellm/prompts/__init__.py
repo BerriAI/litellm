@@ -10,16 +10,6 @@ default_prompt_manager: Optional["PromptManager"] = None
 global_dotprompt_manager: Optional["DotpromptManager"] = None
 
 
-def load_default_prompt_manager(default_prompt_directory: str) -> "PromptManager":
-    """
-    Loads the default prompt manager from the specified directory.
-    """
-    from .prompt_manager import PromptManager
-
-    _prompt_manager = PromptManager(default_prompt_directory)
-    return _prompt_manager
-
-
 def get_dotprompt_manager(prompt_directory: Optional[str] = None) -> "DotpromptManager":
     """
     Get or create the global dotprompt manager instance.
@@ -46,7 +36,7 @@ def get_dotprompt_manager(prompt_directory: Optional[str] = None) -> "DotpromptM
     return global_dotprompt_manager
 
 
-def set_prompt_directory(directory: str) -> None:
+def set_global_prompt_directory(directory: str) -> None:
     """
     Set the global prompt directory for dotprompt files.
 
@@ -67,9 +57,8 @@ __all__ = [
     "PromptManager",
     "DotpromptManager",
     "PromptTemplate",
-    "load_default_prompt_manager",
     "get_dotprompt_manager",
-    "set_prompt_directory",
+    "set_global_prompt_directory",
     "default_prompt_directory",
     "default_prompt_manager",
     "global_dotprompt_manager",

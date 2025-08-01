@@ -63,7 +63,7 @@ from litellm.constants import (
 from litellm.prompts import (
     default_prompt_manager,
     default_prompt_directory,
-    load_default_prompt_manager,
+    set_global_prompt_directory,
 )
 from litellm.types.guardrails import GuardrailItem
 from litellm.types.secret_managers.main import (
@@ -87,8 +87,6 @@ if litellm_mode == "DEV":
 
 # Register async client cleanup to prevent resource leaks
 register_async_client_cleanup()
-if default_prompt_directory:
-    default_prompt_manager = load_default_prompt_manager(default_prompt_directory)
 ####################################################
 if set_verbose == True:
     _turn_on_debug()

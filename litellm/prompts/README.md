@@ -39,7 +39,7 @@ input:
 ```python
 import litellm
 
-litellm.prompt_directory = "path/to/your/prompts"
+litellm.set_global_prompt_directory("path/to/your/prompts")
 
 # Use with completion - the model prefix 'dotprompt/' tells LiteLLM to use prompt management
 response = litellm.completion(
@@ -147,65 +147,6 @@ Becomes:
 ]
 ```
 
-## Advanced Usage
-
-### Direct PromptManager Usage
-
-For standalone prompt management without LiteLLM integration:
-
-```python
-from litellm.prompts import PromptManager
-
-# Initialize manager
-manager = PromptManager("path/to/prompts")
-
-# List available prompts
-print(manager.list_prompts())
-
-# Render a prompt
-rendered = manager.render("my_prompt", {"variable": "value"})
-print(rendered)
-
-# Get prompt metadata
-metadata = manager.get_prompt_metadata("my_prompt")
-print(f"Model: {metadata['model']}")
-```
-
-### DotpromptManager Integration
-
-For custom integrations with the LiteLLM prompt management system:
-
-```python
-from litellm.prompts import DotpromptManager
-from litellm.types.utils import StandardCallbackDynamicParams
-
-# Initialize
-manager = DotpromptManager("path/to/prompts")
-
-# Check if prompt exists
-exists = manager.should_run_prompt_management("my_prompt", StandardCallbackDynamicParams())
-
-# Compile prompt for LiteLLM
-result = manager._compile_prompt_helper(
-    prompt_id="my_prompt",
-    prompt_variables={"key": "value"},
-    dynamic_callback_params=StandardCallbackDynamicParams()
-)
-```
-
-### Environment Integration
-
-Set prompt directory via environment variable:
-
-```bash
-export LITELLM_PROMPT_DIRECTORY="/path/to/prompts"
-```
-
-Or in your code:
-```python
-import litellm
-litellm.prompt_directory = "/path/to/prompts"
-```
 
 ## Example Prompts
 
