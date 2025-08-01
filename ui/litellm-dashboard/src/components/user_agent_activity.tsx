@@ -26,9 +26,10 @@ import {
 } from "@tremor/react";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { userAgentAnalyticsCall, userAgentSummaryCall } from "./networking";
-import UsageDatePicker from "./shared/usage_date_picker";
+import AdvancedDatePicker from "./shared/advanced_date_picker";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
+import { ChartLoader } from "./shared/chart_loader";
 
 interface UserAgentMetrics {
   dau: number;
@@ -108,6 +109,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [isDateChanging, setIsDateChanging] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchData = async () => {
@@ -133,24 +135,31 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       console.error("Failed to fetch user agent data:", error);
     } finally {
       setLoading(false);
+      setIsDateChanging(false);
     }
   };
 
+  // Super responsive date change handler
+  const handleDateChange = (newValue: DateRangePickerValue) => {
+    // Instant visual feedback
+    setIsDateChanging(true);
+    setLoading(true);
+
+    // Update date immediately for UI responsiveness
+    setDateValue(newValue);
+    setCurrentPage(1); // Reset to first page when date changes
+  };
+
+  // Debounced effect for data fetching
   useEffect(() => {
-    fetchData();
+    if (!dateValue.from || !dateValue.to) return;
+
+    const timeoutId = setTimeout(() => {
+      fetchData();
+    }, 50); // Very short debounce
+
+    return () => clearTimeout(timeoutId);
   }, [accessToken, dateValue, userAgentFilter, currentPage]);
-
-  const handleNextPage = () => {
-    if (currentPage < analyticsData.total_pages) {
-      setCurrentPage(currentPage + 1);
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (currentPage > 1) {
-      setCurrentPage(currentPage - 1);
-    }
-  };
 
   // Aggregate data by user agent for charts
   const aggregatedByUserAgent = analyticsData.results.reduce((acc, item) => {
@@ -279,12 +288,9 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       {/* Date Range Picker */}
       <Grid numItems={2} className="gap-2 w-full">
         <Col>
-          <UsageDatePicker
+          <AdvancedDatePicker
             value={dateValue}
-            onValueChange={(value) => {
-              setDateValue(value);
-              setCurrentPage(1); // Reset to first page when date changes
-            }}
+            onValueChange={handleDateChange}
           />
         </Col>
         <Col>
@@ -381,45 +387,57 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                     <div className="mb-4">
                       <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
                     </div>
-                    <BarChart
-                      data={dailyChartData}
-                      index="date"
-                      categories={uniqueUserAgents.slice(0, 3)}
-                      colors={["blue", "green", "orange"]}
-                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                      yAxisWidth={60}
-                      showLegend={true}
-                    />
+                    {loading ? (
+                      <ChartLoader isDateChanging={isDateChanging} />
+                    ) : (
+                      <BarChart
+                        data={dailyChartData}
+                        index="date"
+                        categories={uniqueUserAgents.slice(0, 3)}
+                        colors={["blue", "green", "orange"]}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                      />
+                    )}
                   </TabPanel>
                   
                   <TabPanel>
                     <div className="mb-4">
                       <Title className="text-lg">Weekly Active Users - Last 4 Weeks</Title>
                     </div>
-                    <BarChart
-                      data={weeklyChartData}
-                      index="week"
-                      categories={uniqueUserAgents.slice(0, 3)}
-                      colors={["blue", "green", "orange"]}
-                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                      yAxisWidth={60}
-                      showLegend={true}
-                    />
+                    {loading ? (
+                      <ChartLoader isDateChanging={isDateChanging} />
+                    ) : (
+                      <BarChart
+                        data={weeklyChartData}
+                        index="week"
+                        categories={uniqueUserAgents.slice(0, 3)}
+                        colors={["blue", "green", "orange"]}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                      />
+                    )}
                   </TabPanel>
                   
                   <TabPanel>
                     <div className="mb-4">
                       <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
                     </div>
-                    <BarChart
-                      data={monthlyChartData}
-                      index="month"
-                      categories={uniqueUserAgents.slice(0, 3)}
-                      colors={["blue", "green", "orange"]}
-                      valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                      yAxisWidth={60}
-                      showLegend={true}
-                    />
+                    {loading ? (
+                      <ChartLoader isDateChanging={isDateChanging} />
+                    ) : (
+                      <BarChart
+                        data={monthlyChartData}
+                        index="month"
+                        categories={uniqueUserAgents.slice(0, 3)}
+                        colors={["blue", "green", "orange"]}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                      />
+                    )}
                   </TabPanel>
                 </TabPanels>
               </TabGroup>
