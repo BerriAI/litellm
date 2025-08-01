@@ -43,6 +43,15 @@ pip install litellm==1.74.9.post1
 
 ---
 
+## Key Highlights
+
+- **Auto-Router** - Automatically route requests to specific models based on request content.
+- **Model-level Guardrails** - Only run guardrails when specific models are used.
+- **MCP Header Propagation** - Propagate headers from client to backend MCP.
+- **New LLM Providers** - Added Bedrock inpainting support and Recraft API image generation  / image edits support.
+
+---
+
 ## Auto-Router
 
 <Image img={require('../../img/release_notes/auto_router.png')} />
