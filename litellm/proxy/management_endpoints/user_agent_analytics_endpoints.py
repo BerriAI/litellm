@@ -65,9 +65,6 @@ class TagSummaryResponse(BaseModel):
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_daily_active_users(
-    end_date: str = Query(
-        description=f"End date in YYYY-MM-DD format (will show DAU for last {MAX_DAYS} days ending on this date)"
-    ),
     tag_filter: Optional[str] = Query(
         default=None,
         description="Filter by specific tag (optional)",
@@ -75,13 +72,12 @@ async def get_daily_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on the specified date.
+    Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on UTC today + 1 day.
     
     This endpoint efficiently calculates unique users per tag for each of the last {MAX_DAYS} days
     using a single optimized SQL query, perfect for dashboard time series visualization.
     
     Args:
-        end_date: End date for DAU calculation (YYYY-MM-DD) - will show {MAX_DAYS} days ending on this date
         tag_filter: Optional filter to specific tag
         
     Returns:
@@ -96,9 +92,13 @@ async def get_daily_active_users(
         )
     
     try:
-        # Validate and calculate date range (last MAX_DAYS days)
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-        start_dt = end_dt - timedelta(days=MAX_DAYS - 1)
+        # Calculate end_date as UTC today + 1 day
+        from datetime import timezone
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_date = end_dt.strftime("%Y-%m-%d")
+        
+        # Calculate date range (last MAX_DAYS days)
+        start_dt = end_dt - timedelta(days=MAX_DAYS)
         start_date = start_dt.strftime("%Y-%m-%d")
         
         # Build SQL query with optional tag filter
@@ -134,11 +134,6 @@ async def get_daily_active_users(
         
         return ActiveUsersAnalyticsResponse(results=results)
         
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
-        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -153,9 +148,6 @@ async def get_daily_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_weekly_active_users(
-    end_date: str = Query(
-        description=f"End date in YYYY-MM-DD format (will show WAU for last {MAX_WEEKS} weeks ending on this date)"
-    ),
     tag_filter: Optional[str] = Query(
         default=None,
         description="Filter by specific tag (optional)",
@@ -163,16 +155,15 @@ async def get_weekly_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on the specified date.
+    Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on UTC today + 1 day.
     
     Shows week-by-week breakdown:
-    - Week 1 (Jan 15): Most recent week ending on end_date
+    - Week 1 (Jan 15): Most recent week ending on UTC today + 1 day
     - Week 2 (Jan 8): Previous week (7 days before Week 1)
     - Week 3 (Jan 1): Previous week (7 days before Week 2)
     - ... and so on for {MAX_WEEKS} weeks total
     
     Args:
-        end_date: End date for WAU calculation (YYYY-MM-DD) - will show {MAX_WEEKS} weeks ending on this date
         tag_filter: Optional filter to specific tag
         
     Returns:
@@ -187,8 +178,10 @@ async def get_weekly_active_users(
         )
     
     try:
-        # Validate date format
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        # Calculate end_date as UTC today + 1 day
+        from datetime import timezone
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_date = end_dt.strftime("%Y-%m-%d")
         
         # Calculate date range for all weeks (49 days total)
         # Start from 48 days before end_date to cover exactly MAX_WEEKS complete weeks
@@ -247,11 +240,6 @@ async def get_weekly_active_users(
         
         return ActiveUsersAnalyticsResponse(results=results)
         
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
-        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -266,9 +254,6 @@ async def get_weekly_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_monthly_active_users(
-    end_date: str = Query(
-        description=f"End date in YYYY-MM-DD format (will show MAU for last {MAX_MONTHS} months ending on this date)"
-    ),
     tag_filter: Optional[str] = Query(
         default=None,
         description="Filter by specific tag (optional)",
@@ -276,16 +261,15 @@ async def get_monthly_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on the specified date.
+    Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on UTC today + 1 day.
     
     Shows month-by-month breakdown:
-    - Month 1 (Jan): Most recent month ending on end_date (30-day period)
+    - Month 1 (Jan): Most recent month ending on UTC today + 1 day (30-day period)
     - Month 2 (Dec): Previous month (30 days before Month 1)
     - Month 3 (Nov): Previous month (30 days before Month 2)
     - ... and so on for {MAX_MONTHS} months total
     
     Args:
-        end_date: End date for MAU calculation (YYYY-MM-DD) - will show {MAX_MONTHS} months ending on this date
         tag_filter: Optional filter to specific tag
         
     Returns:
@@ -300,8 +284,10 @@ async def get_monthly_active_users(
         )
     
     try:
-        # Validate date format
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        # Calculate end_date as UTC today + 1 day
+        from datetime import timezone
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_date = end_dt.strftime("%Y-%m-%d")
         
         # Calculate date range for all months (210 days total)
         # Start from 209 days before end_date to cover exactly MAX_MONTHS complete months
@@ -360,11 +346,6 @@ async def get_monthly_active_users(
         
         return ActiveUsersAnalyticsResponse(results=results)
         
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
-        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
