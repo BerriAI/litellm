@@ -2,9 +2,9 @@
 User Agent Analytics Endpoints
 
 This module provides optimized endpoints for tracking user agent activity metrics including:
-- Daily Active Users (DAU) by tags for last 7 days
-- Weekly Active Users (WAU) by tags for last 7 weeks  
-- Monthly Active Users (MAU) by tags for last 7 months
+- Daily Active Users (DAU) by tags for configurable number of days
+- Weekly Active Users (WAU) by tags for configurable number of weeks  
+- Monthly Active Users (MAU) by tags for configurable number of months
 - Summary analytics by tags
 
 These endpoints use optimized single SQL queries with joins to efficiently calculate
@@ -19,6 +19,11 @@ from pydantic import BaseModel
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+# Constants for analytics periods
+MAX_DAYS = 7  # Number of days to show in DAU analytics
+MAX_WEEKS = 7  # Number of weeks to show in WAU analytics
+MAX_MONTHS = 7  # Number of months to show in MAU analytics
 
 router = APIRouter()
 
@@ -61,7 +66,7 @@ class TagSummaryResponse(BaseModel):
 )
 async def get_daily_active_users(
     end_date: str = Query(
-        description="End date in YYYY-MM-DD format (will show DAU for last 7 days ending on this date)"
+        description=f"End date in YYYY-MM-DD format (will show DAU for last {MAX_DAYS} days ending on this date)"
     ),
     tag_filter: Optional[str] = Query(
         default=None,
@@ -70,17 +75,17 @@ async def get_daily_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Daily Active Users (DAU) by tags for the last 7 days ending on the specified date.
+    Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on the specified date.
     
-    This endpoint efficiently calculates unique users per tag for each of the last 7 days
+    This endpoint efficiently calculates unique users per tag for each of the last {MAX_DAYS} days
     using a single optimized SQL query, perfect for dashboard time series visualization.
     
     Args:
-        end_date: End date for DAU calculation (YYYY-MM-DD) - will show 7 days ending on this date
+        end_date: End date for DAU calculation (YYYY-MM-DD) - will show {MAX_DAYS} days ending on this date
         tag_filter: Optional filter to specific tag
         
     Returns:
-        ActiveUsersAnalyticsResponse: DAU data by tag for each of the last 7 days
+        ActiveUsersAnalyticsResponse: DAU data by tag for each of the last {MAX_DAYS} days
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -91,9 +96,9 @@ async def get_daily_active_users(
         )
     
     try:
-        # Validate and calculate date range (last 7 days)
+        # Validate and calculate date range (last MAX_DAYS days)
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-        start_dt = end_dt - timedelta(days=6)
+        start_dt = end_dt - timedelta(days=MAX_DAYS - 1)
         start_date = start_dt.strftime("%Y-%m-%d")
         
         # Build SQL query with optional tag filter
@@ -149,7 +154,7 @@ async def get_daily_active_users(
 )
 async def get_weekly_active_users(
     end_date: str = Query(
-        description="End date in YYYY-MM-DD format (will show WAU for last 7 weeks ending on this date)"
+        description=f"End date in YYYY-MM-DD format (will show WAU for last {MAX_WEEKS} weeks ending on this date)"
     ),
     tag_filter: Optional[str] = Query(
         default=None,
@@ -158,16 +163,20 @@ async def get_weekly_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Weekly Active Users (WAU) by tags for the last 7 weeks ending on the specified date.
+    Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on the specified date.
     
-    Each week is a 7-day period ending on the same weekday as the end_date.
+    Shows week-by-week breakdown:
+    - Week 1: Most recent week ending on end_date
+    - Week 2: Previous week (7 days before Week 1)
+    - Week 3: Previous week (7 days before Week 2)
+    - ... and so on for {MAX_WEEKS} weeks total
     
     Args:
-        end_date: End date for WAU calculation (YYYY-MM-DD) - will show 7 weeks ending on this date
+        end_date: End date for WAU calculation (YYYY-MM-DD) - will show {MAX_WEEKS} weeks ending on this date
         tag_filter: Optional filter to specific tag
         
     Returns:
-        ActiveUsersAnalyticsResponse: WAU data by tag for each of the last 7 weeks
+        ActiveUsersAnalyticsResponse: WAU data by tag for each of the last {MAX_WEEKS} weeks with clear week groupings
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -181,8 +190,9 @@ async def get_weekly_active_users(
         # Validate date format
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
         
-        # Calculate date range for all 7 weeks (49 days total)
-        start_dt = end_dt - timedelta(days=48)  # 7 weeks * 7 days - 1
+        # Calculate date range for all weeks (49 days total)
+        # Start from 48 days before end_date to cover exactly MAX_WEEKS complete weeks
+        start_dt = end_dt - timedelta(days=(MAX_WEEKS * 7 - 1))  # MAX_WEEKS weeks * 7 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
         
         # Build SQL query with optional tag filter
@@ -193,14 +203,14 @@ async def get_weekly_active_users(
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
         
-        # Use window function to group by weeks
+        # Use window function to group by weeks with clear week numbering
         sql_query = f"""
         WITH weekly_data AS (
             SELECT 
                 dts.tag,
                 dts.date,
                 vt.user_id,
-                -- Calculate week number (0 = most recent week)
+                -- Calculate week number (0 = Week 1 most recent, 1 = Week 2, etc.)
                 FLOOR((DATE '{end_date}' - dts.date::date) / 7) as week_offset
             FROM "LiteLLM_DailyTagSpend" dts
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
@@ -209,12 +219,14 @@ async def get_weekly_active_users(
         SELECT 
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Calculate week end date for each week
-            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval)::text as date,
+            -- Week identifier for clear grouping (Week 1, Week 2, etc.)
+            'Week ' || (week_offset + 1)::text as date,
+            -- Calculate week start and end dates for each week
             (DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval)::text as period_start,
-            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval)::text as period_end
+            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval)::text as period_end,
+            week_offset
         FROM weekly_data
-        WHERE week_offset < 7
+        WHERE week_offset < {MAX_WEEKS}
         GROUP BY tag, week_offset
         ORDER BY week_offset ASC, active_users DESC
         """
@@ -225,7 +237,7 @@ async def get_weekly_active_users(
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
-                date=row["date"],
+                date=row["date"],  # This will be "Week 1", "Week 2", etc.
                 period_start=row["period_start"],
                 period_end=row["period_end"]
             )
@@ -254,7 +266,7 @@ async def get_weekly_active_users(
 )
 async def get_monthly_active_users(
     end_date: str = Query(
-        description="End date in YYYY-MM-DD format (will show MAU for last 7 months ending on this date)"
+        description=f"End date in YYYY-MM-DD format (will show MAU for last {MAX_MONTHS} months ending on this date)"
     ),
     tag_filter: Optional[str] = Query(
         default=None,
@@ -263,16 +275,20 @@ async def get_monthly_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Monthly Active Users (MAU) by tags for the last 7 months ending on the specified date.
+    Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on the specified date.
     
-    Each month is a 30-day period ending on the same day of month as the end_date.
+    Shows month-by-month breakdown:
+    - Month 1: Most recent month ending on end_date (30-day period)
+    - Month 2: Previous month (30 days before Month 1)
+    - Month 3: Previous month (30 days before Month 2)
+    - ... and so on for {MAX_MONTHS} months total
     
     Args:
-        end_date: End date for MAU calculation (YYYY-MM-DD) - will show 7 months ending on this date
+        end_date: End date for MAU calculation (YYYY-MM-DD) - will show {MAX_MONTHS} months ending on this date
         tag_filter: Optional filter to specific tag
         
     Returns:
-        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last 7 months
+        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last {MAX_MONTHS} months with clear month groupings
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -286,8 +302,9 @@ async def get_monthly_active_users(
         # Validate date format
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
         
-        # Calculate date range for all 7 months (210 days total)
-        start_dt = end_dt - timedelta(days=209)  # 7 months * 30 days - 1
+        # Calculate date range for all months (210 days total)
+        # Start from 209 days before end_date to cover exactly MAX_MONTHS complete months
+        start_dt = end_dt - timedelta(days=(MAX_MONTHS * 30 - 1))  # MAX_MONTHS months * 30 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
         
         # Build SQL query with optional tag filter
@@ -298,14 +315,14 @@ async def get_monthly_active_users(
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
         
-        # Use window function to group by months (30-day periods)
+        # Use window function to group by months (30-day periods) with clear month numbering
         sql_query = f"""
         WITH monthly_data AS (
             SELECT 
                 dts.tag,
                 dts.date,
                 vt.user_id,
-                -- Calculate month number (0 = most recent month)
+                -- Calculate month number (0 = Month 1 most recent, 1 = Month 2, etc.)
                 FLOOR((DATE '{end_date}' - dts.date::date) / 30) as month_offset
             FROM "LiteLLM_DailyTagSpend" dts
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
@@ -314,12 +331,14 @@ async def get_monthly_active_users(
         SELECT 
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Calculate month end date for each month
-            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as date,
+            -- Month identifier for clear grouping (Month 1, Month 2, etc.)
+            'Month ' || (month_offset + 1)::text as date,
+            -- Calculate month start and end dates for each month
             (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
-            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end
+            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end,
+            month_offset
         FROM monthly_data
-        WHERE month_offset < 7
+        WHERE month_offset < {MAX_MONTHS}
         GROUP BY tag, month_offset
         ORDER BY month_offset ASC, active_users DESC
         """
@@ -330,7 +349,7 @@ async def get_monthly_active_users(
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
-                date=row["date"],
+                date=row["date"],  # This will be "Month 1", "Month 2", etc.
                 period_start=row["period_start"],
                 period_end=row["period_end"]
             )
