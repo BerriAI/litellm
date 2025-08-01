@@ -1539,6 +1539,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## [Datadog](../observability/datadog)
 
+👉 Go here for using [Datadog LLM Observability](../observability/datadog) with LiteLLM Proxy
+
+
 ## Lunary
 #### Step1: Install dependencies and set your environment variables 
 Install the dependencies

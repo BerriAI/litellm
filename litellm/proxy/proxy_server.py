@@ -272,9 +272,6 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
-from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
-    router as user_agent_analytics_router,
-)
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
@@ -287,6 +284,9 @@ from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
+from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
+    router as user_agent_analytics_router,
+)
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -1353,6 +1353,13 @@ async def _run_background_health_check():
         # make 1 deep copy of llm_model_list on every health check iteration
         _llm_model_list = copy.deepcopy(llm_model_list) or []
 
+        # filter out models that have disabled background health checks
+        _llm_model_list = [
+            m
+            for m in _llm_model_list
+            if not m.get("model_info", {}).get("disable_background_health_check", False)
+        ]
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )
@@ -1815,6 +1822,15 @@ class ProxyConfig:
                     )
 
                     litellm.guardrail_name_config_map = guardrail_name_config_map
+                elif key == "global_prompt_directory":
+                    from litellm.integrations.dotprompt import (
+                        set_global_prompt_directory,
+                    )
+
+                    set_global_prompt_directory(value)
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code}Set Global Prompt Directory on LiteLLM Proxy{reset_color_code}"
+                    )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -2213,7 +2229,9 @@ class ProxyConfig:
             litellm_settings = config.get("litellm_settings", {})
             mcp_aliases = litellm_settings.get("mcp_aliases", None)
 
-            global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
+            global_mcp_server_manager.load_servers_from_config(
+                mcp_servers_config, mcp_aliases
+            )
 
         ## VECTOR STORES
         vector_store_registry_config = config.get("vector_store_registry", None)
@@ -3246,7 +3264,6 @@ async def async_data_generator(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
             )
 
-
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -3254,7 +3271,6 @@ async def async_data_generator(
                 data=request_data,
                 str_so_far=str_so_far,
             )
-
 
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
