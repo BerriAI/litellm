@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE] v1.74.9-stable"
+title: "v1.74.9-stable"
 slug: "v1-74-9"
 date: 2025-07-27T10:00:00
 authors:
@@ -28,7 +28,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.9.rc.1
+ghcr.io/berriai/litellm:v1.74.9-stable
 ```
 </TabItem>
 
@@ -42,6 +42,7 @@ pip install litellm==1.74.9.post1
 </Tabs>
 
 ---
+
 
 ## New Models / Updated Models
 
