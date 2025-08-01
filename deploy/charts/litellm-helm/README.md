@@ -110,6 +110,22 @@ data:
 
 Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472732157221e04c6b15e3b3f094)
 
+### Migration Job Settings
+
+The migration job supports both ArgoCD and Helm hooks to ensure database migrations run at the appropriate time during deployments.
+
+| Name                                                       | Description                                                                                                                                                                           | Value |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `migrationJob.enabled`                                     | Enable or disable the schema migration Job                                                                                                                                           | `true`  |
+| `migrationJob.backoffLimit`                                | Backoff limit for Job restarts                                                                                                                                                       | `4`  |
+| `migrationJob.ttlSecondsAfterFinished`                     | TTL for completed migration jobs                                                                                                                                                      | `120`  |
+| `migrationJob.annotations`                                 | Additional annotations for the migration job pod                                                                                                                                      | `{}`  |
+| `migrationJob.extraContainers`                             | Additional containers to run alongside the migration job                                                                                                                              | `[]`  |
+| `migrationJob.hooks.argocd.enabled`                       | Enable ArgoCD hooks for the migration job (uses PreSync hook with BeforeHookCreation delete policy)                                                                                  | `true`  |
+| `migrationJob.hooks.helm.enabled`                         | Enable Helm hooks for the migration job (uses pre-install,pre-upgrade hooks with before-hook-creation delete policy)                                                                 | `false`  |
+| `migrationJob.hooks.helm.weight`                          | Helm hook execution order (lower weights executed first). Optional - defaults to "1" if not specified.                                                                               | N/A  |
+
+
 ## Accessing the Admin UI
 When browsing to the URL published per the settings in `ingress.*`, you will
 be prompted for **Admin Configuration**.  The **Proxy Endpoint** is the internal

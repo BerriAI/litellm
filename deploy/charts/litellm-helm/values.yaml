@@ -201,6 +201,13 @@ migrationJob:
   annotations: {}
   ttlSecondsAfterFinished: 120
   extraContainers: []
+  
+  # Hook configuration
+  hooks:
+    argocd:
+      enabled: true
+    helm:
+      enabled: false
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {
