@@ -9,6 +9,7 @@ Users can define
 import copy
 from typing import Dict, List, Optional, Tuple, Union, cast
 
+from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.types.integrations.anthropic_cache_control_hook import (
@@ -80,11 +81,21 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         # Case 1: Target by specific index
         if targetted_index is not None:
+            original_index = targetted_index
+            # Handle negative indices (convert to positive)
+            if targetted_index < 0:
+                targetted_index += len(messages)
+
             if 0 <= targetted_index < len(messages):
                 messages[targetted_index] = (
                     AnthropicCacheControlHook._safe_insert_cache_control_in_message(
                         messages[targetted_index], control
                     )
+                )
+            else:
+                verbose_logger.warning(
+                    f"AnthropicCacheControlHook: Provided index {original_index} is out of bounds for message list of length {len(messages)}. "
+                    f"Targeted index was {targetted_index}. Skipping cache control injection for this point."
                 )
         # Case 2: Target by role
         elif targetted_role is not None:

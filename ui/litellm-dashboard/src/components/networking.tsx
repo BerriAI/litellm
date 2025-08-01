@@ -6436,3 +6436,175 @@ export const vectorStoreSearchCall = async (
   }
 };
 
+export const userAgentAnalyticsCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  pageSize: number = 50,
+  userAgentFilter?: string
+) => {
+  /**
+   * Get user agent analytics data including DAU, WAU, MAU, successful requests, and completed tokens
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/user-agent/analytics`
+      : `/tag/user-agent/analytics`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", pageSize.toString());
+    
+    if (userAgentFilter) {
+      queryParams.append("user_agent_filter", userAgentFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user agent analytics:", error);
+    throw error;
+  }
+};
+
+export const userAgentSummaryCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date
+) => {
+  /**
+   * Get user agent summary statistics
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/user-agent/summary`
+      : `/tag/user-agent/summary`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user agent summary:", error);
+    throw error;
+  }
+};
+
+export const perUserAnalyticsCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  pageSize: number = 50
+) => {
+  /**
+   * Get per-user analytics data
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics`
+      : `/tag/user-agent/per-user-analytics`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", pageSize.toString());
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch per-user analytics:", error);
+    throw error;
+  }
+};
+

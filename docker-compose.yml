@@ -1,15 +1,10 @@
-# version: "3.11"
 services:
   litellm:
     build:
-      ## To Build Docker 
       context: .
-      dockerfile: docker/Dockerfile.non_root
-    ## To Use public image
-    # image: ghcr.io/berriai/litellm:main-stable
-      # args:
-      #   target: runtime
-
+      args:
+        target: runtime
+    image: ghcr.io/berriai/litellm:main-stable
     #########################################
     ## Uncomment these lines to start proxy with a config.yaml file ##
     # volumes:
@@ -21,8 +16,9 @@ services:
       - "4000:4000" # Map the container port to the host, change the host port if necessary
     environment:
       DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
-      LITELLM_MASTER_KEY: "sk-1234567890abcdef1234567890abcdef"
       STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+    env_file:
+      - .env # Load local .env file
     depends_on:
       - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
     healthcheck:  # Defines the health check configuration for the container
@@ -68,4 +64,3 @@ volumes:
     driver: local
   postgres_data:
     name: litellm_postgres_data # Named volume for Postgres data persistence
-
