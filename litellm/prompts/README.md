@@ -38,10 +38,8 @@ input:
 
 ```python
 import litellm
-from litellm.prompts import set_prompt_directory
 
-# Set your prompt directory
-set_prompt_directory("path/to/your/prompts")
+litellm.prompt_directory = "path/to/your/prompts"
 
 # Use with completion - the model prefix 'dotprompt/' tells LiteLLM to use prompt management
 response = litellm.completion(
@@ -75,13 +73,6 @@ input:
     name: string
     age: integer
     preferences?: array
-
-# Output schema (optional)  
-output:
-  format: json
-  schema:
-    greeting: string
-    recommendations: array
 ---
 
 # Template content using Handlebars syntax
@@ -101,11 +92,18 @@ Here are some age-appropriate suggestions:
 ### Supported Frontmatter Fields
 
 - **`model`**: The LLM model to use (e.g., `gpt-4`, `claude-3-sonnet`)
-- **`temperature`**: Model temperature (0.0 to 1.0)
-- **`max_tokens`**: Maximum tokens to generate
 - **`input.schema`**: Define expected input variables and their types
 - **`output.format`**: Expected output format (`json`, `text`, etc.)
 - **`output.schema`**: Structure of expected output
+
+### Additional Parameters
+
+- **`temperature`**: Model temperature (0.0 to 1.0)
+- **`max_tokens`**: Maximum tokens to generate
+- **`top_p`**: Nucleus sampling parameter (0.0 to 1.0)
+- **`frequency_penalty`**: Frequency penalty (0.0 to 1.0)
+- **`presence_penalty`**: Presence penalty (0.0 to 1.0)
+- any other parameters that are not model or schema-related will be treated as optional parameters to the model. 
 
 ### Input Schema Types
 
