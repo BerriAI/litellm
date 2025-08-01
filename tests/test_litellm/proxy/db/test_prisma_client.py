@@ -50,7 +50,7 @@ async def test_recreate_prisma_client_successful_disconnect():
     # Configure disconnect to succeed
     mock_prisma.disconnect.return_value = None
     
-    # Mock the Prisma class constructor
+    # Mock the Prisma class constructor and the import
     with patch("prisma.Prisma") as mock_prisma_class:
         mock_new_prisma = AsyncMock()
         mock_prisma_class.return_value = mock_new_prisma
