@@ -108,33 +108,45 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   });
 
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
-  const [loading, setLoading] = useState(false);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [isDateChanging, setIsDateChanging] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
-  const fetchData = async () => {
+  const fetchAnalyticsData = async () => {
     if (!accessToken || !dateValue.from || !dateValue.to) return;
 
-    setLoading(true);
+    setAnalyticsLoading(true);
     try {
-      const [analytics, summary] = await Promise.all([
-        userAgentAnalyticsCall(
-          accessToken,
-          dateValue.from,
-          dateValue.to,
-          currentPage,
-          50,
-          userAgentFilter || undefined
-        ),
-        userAgentSummaryCall(accessToken, dateValue.from, dateValue.to),
-      ]);
+      const analytics = await userAgentAnalyticsCall(
+        accessToken,
+        dateValue.from,
+        dateValue.to,
+        currentPage,
+        50,
+        userAgentFilter || undefined
+      );
 
       setAnalyticsData(analytics);
+    } catch (error) {
+      console.error("Failed to fetch user agent analytics data:", error);
+    } finally {
+      setAnalyticsLoading(false);
+      setIsDateChanging(false);
+    }
+  };
+
+  const fetchSummaryData = async () => {
+    if (!accessToken || !dateValue.from || !dateValue.to) return;
+
+    setSummaryLoading(true);
+    try {
+      const summary = await userAgentSummaryCall(accessToken, dateValue.from, dateValue.to);
       setSummaryData(summary);
     } catch (error) {
-      console.error("Failed to fetch user agent data:", error);
+      console.error("Failed to fetch user agent summary data:", error);
     } finally {
-      setLoading(false);
+      setSummaryLoading(false);
       setIsDateChanging(false);
     }
   };
@@ -143,7 +155,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const handleDateChange = (newValue: DateRangePickerValue) => {
     // Instant visual feedback
     setIsDateChanging(true);
-    setLoading(true);
+    setAnalyticsLoading(true);
+    setSummaryLoading(true);
 
     // Update date immediately for UI responsiveness
     setDateValue(newValue);
@@ -155,11 +168,24 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     if (!dateValue.from || !dateValue.to) return;
 
     const timeoutId = setTimeout(() => {
-      fetchData();
+      // Call both fetch functions independently
+      fetchAnalyticsData();
+      fetchSummaryData();
     }, 50); // Very short debounce
 
     return () => clearTimeout(timeoutId);
-  }, [accessToken, dateValue, userAgentFilter, currentPage]);
+  }, [accessToken, dateValue, userAgentFilter]);
+
+  // Separate effect for pagination that only affects analytics
+  useEffect(() => {
+    if (!dateValue.from || !dateValue.to) return;
+
+    const timeoutId = setTimeout(() => {
+      fetchAnalyticsData();
+    }, 50);
+
+    return () => clearTimeout(timeoutId);
+  }, [currentPage]);
 
   // Aggregate data by user agent for charts
   const aggregatedByUserAgent = analyticsData.results.reduce((acc, item) => {
@@ -311,7 +337,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       </Grid>
 
       {/* Top 4 User Agents Cards */}
-      {loading ? (
+      {summaryLoading ? (
         <Card>
           <ChartLoader isDateChanging={isDateChanging} />
         </Card>
@@ -393,7 +419,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                     <div className="mb-4">
                       <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
                     </div>
-                    {loading ? (
+                    {analyticsLoading ? (
                       <ChartLoader isDateChanging={isDateChanging} />
                     ) : (
                       <BarChart
@@ -412,7 +438,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                     <div className="mb-4">
                       <Title className="text-lg">Weekly Active Users - Last 4 Weeks</Title>
                     </div>
-                    {loading ? (
+                    {analyticsLoading ? (
                       <ChartLoader isDateChanging={isDateChanging} />
                     ) : (
                       <BarChart
@@ -431,7 +457,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                     <div className="mb-4">
                       <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
                     </div>
-                    {loading ? (
+                    {analyticsLoading ? (
                       <ChartLoader isDateChanging={isDateChanging} />
                     ) : (
                       <BarChart
