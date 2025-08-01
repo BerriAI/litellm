@@ -486,10 +486,20 @@ class BaseAWSLLM:
             
             try:
                 # boto3 will automatically use the web identity token file
+                # Get region from environment
+                region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
                 with tracer.trace("boto3.client(sts) with IRSA"):
-                    sts_client = boto3.client("sts", region_name=os.getenv("AWS_REGION", "us-east-1"))
+                    sts_client = boto3.client("sts", region_name=region)
+                
+                # Get current caller identity for debugging
+                try:
+                    caller_identity = sts_client.get_caller_identity()
+                    verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
+                except Exception as e:
+                    verbose_logger.debug(f"Failed to get caller identity: {e}")
                 
                 # Now assume the target role
+                verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
                 sts_response = sts_client.assume_role(
                     RoleArn=aws_role_name, RoleSessionName=aws_session_name
                 )
@@ -509,7 +519,15 @@ class BaseAWSLLM:
                 return credentials, ttl
             except Exception as e:
                 verbose_logger.debug(f"Failed to assume role via IRSA: {e}")
-                # Fall through to regular flow
+                if "AccessDenied" in str(e) and "is not authorized to perform: sts:AssumeRole" in str(e):
+                    # Provide a more helpful error message for trust policy issues
+                    verbose_logger.error(
+                        f"Access denied when trying to assume role {aws_role_name}. "
+                        f"Please ensure the trust policy of {aws_role_name} allows "
+                        f"the current role to assume it. Current identity: check logs with verbose mode."
+                    )
+                # Re-raise the exception instead of falling through
+                raise
         
         # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
         # This allows the web identity token to work automatically
