@@ -327,6 +327,7 @@ router_settings:
 | ATHINA_BASE_URL | Base URL for Athina service (defaults to `https://log.athina.ai`)
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | ANTHROPIC_API_KEY | API key for Anthropic service
+| ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_PROFILE_NAME | AWS CLI profile name to be used
 | AWS_REGION_NAME | Default AWS region for service interactions
@@ -372,6 +373,7 @@ router_settings:
 | CONFIDENT_API_KEY | API key for DeepEval integration
 | CUSTOM_TIKTOKEN_CACHE_DIR | Custom directory for Tiktoken cache
 | CONFIDENT_API_KEY | API key for Confident AI (Deepeval) Logging service
+| COHERE_API_BASE | Base URL for Cohere API. Default is https://api.cohere.com
 | DATABASE_HOST | Hostname for the database server
 | DATABASE_NAME | Name of the database
 | DATABASE_PASSWORD | Password for the database user
@@ -482,6 +484,7 @@ router_settings:
 | GENERIC_USER_PROVIDER_ATTRIBUTE | Attribute specifying the user's provider
 | GENERIC_USER_ROLE_ATTRIBUTE | Attribute specifying the user's role
 | GENERIC_USERINFO_ENDPOINT | Endpoint to fetch user information in generic OAuth
+| GEMINI_API_BASE | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com
 | GALILEO_BASE_URL | Base URL for Galileo platform
 | GALILEO_PASSWORD | Password for Galileo authentication
 | GALILEO_PROJECT_ID | Project ID for Galileo usage
@@ -581,7 +584,7 @@ router_settings:
 | MAX_LANGFUSE_INITIALIZED_CLIENTS | Maximum number of Langfuse clients to initialize on proxy. Default is 20. This is set since langfuse initializes 1 thread everytime a client is initialized. We've had an incident in the past where we reached 100% cpu utilization because Langfuse was initialized several times.
 | MIN_NON_ZERO_TEMPERATURE | Minimum non-zero temperature value. Default is 0.0001
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
-| MISTRAL_API_BASE | Base URL for Mistral API
+| MISTRAL_API_BASE | Base URL for Mistral API. Default is https://api.mistral.ai
 | MISTRAL_API_KEY | API key for Mistral API
 | MICROSOFT_CLIENT_ID | Client ID for Microsoft services
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
@@ -593,7 +596,7 @@ router_settings:
 | NON_LLM_CONNECTION_TIMEOUT | Timeout in seconds for non-LLM service connections. Default is 15
 | OAUTH_TOKEN_INFO_ENDPOINT | Endpoint for OAuth token info retrieval
 | OPENAI_BASE_URL | Base URL for OpenAI API
-| OPENAI_API_BASE | Base URL for OpenAI API
+| OPENAI_API_BASE | Base URL for OpenAI API. Default is https://api.openai.com/
 | OPENAI_API_KEY | API key for OpenAI services
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI

@@ -2320,6 +2320,7 @@ class LlmProviders(str, Enum):
     RECRAFT = "recraft"
     HEROKU = "heroku"
     AUTO_ROUTER = "auto_router"
+    DOTPROMPT = "dotprompt"
 
 
 # Create a set of all provider values for quick lookup

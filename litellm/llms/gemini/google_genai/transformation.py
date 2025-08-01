@@ -18,11 +18,14 @@ if TYPE_CHECKING:
         GenerateContentConfigDict,
         GenerateContentContentListUnionDict,
         GenerateContentResponse,
+        ToolConfigDict,
     )
 else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
+    ToolConfigDict = Any
+    
 from ..common_utils import get_api_key_from_env
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
@@ -258,6 +261,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         model: str,
         contents: GenerateContentContentListUnionDict,
+        tools: Optional[ToolConfigDict],
         generate_content_config_dict: Dict,
     ) -> dict:
         from litellm.types.google_genai.main import (
@@ -267,6 +271,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,
             contents=contents,
+            tools=tools,
             generationConfig=GenerateContentConfigDict(**generate_content_config_dict),
         )
 

@@ -73,6 +73,7 @@ import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
 import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
 import PassThroughSettings from "./pass_through_settings";
+import ModelGroupAliasSettings from "./model_group_alias_settings";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from "@tanstack/react-table";
 
@@ -196,6 +197,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [allEndUsers, setAllEndUsers] = useState<any[]>([]);
 
   const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
+
+  // Model Group Alias state
+  const [modelGroupAlias, setModelGroupAlias] = useState<{[key: string]: string}>({});
 
   // Add state for advanced settings visibility
   const [showAdvancedSettings, setShowAdvancedSettings] =
@@ -479,6 +483,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     }
   };
 
+
+
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID) {
       return;
@@ -646,6 +652,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         setModelGroupRetryPolicy(model_group_retry_policy);
         setGlobalRetryPolicy(router_settings.retry_policy);
         setDefaultRetry(default_retries);
+        
+        // Set model group alias
+        const model_group_alias = router_settings.model_group_alias || {};
+        setModelGroupAlias(model_group_alias);
       } catch (error) {
         console.error("There was an error fetching the model data", error);
       }
@@ -1094,6 +1104,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   )}
                   {all_admin_roles.includes(userRole) && (
                     <Tab>Model Retry Settings</Tab>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <Tab>Model Group Alias</Tab>
                   )}
                 </div>
 
@@ -1858,6 +1871,13 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   >
                     Save
                   </Button>
+                </TabPanel>
+                <TabPanel>
+                  <ModelGroupAliasSettings
+                    accessToken={accessToken}
+                    initialModelGroupAlias={modelGroupAlias}
+                    onAliasUpdate={setModelGroupAlias}
+                  />
                 </TabPanel>
               </TabPanels>
             </TabGroup>

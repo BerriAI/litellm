@@ -2,7 +2,7 @@ import copy
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +13,7 @@ sys.path.insert(
 
 
 import litellm
+from litellm.router_utils.fallback_event_handlers import run_async_fallback
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -1064,3 +1065,295 @@ def test_router_get_model_access_groups_team_only_models():
         model_name="gpt-3.5-turbo", team_id="team_1"
     )
     assert list(access_groups.keys()) == ["default-models"]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator():
+    """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import ModelResponseStream
+
+    # Helper class for creating async iterators
+    class AsyncIterator:
+        def __init__(self, items, error_after=None):
+            self.items = items
+            self.index = 0
+            self.error_after = error_after
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.error_after is not None and self.index >= self.error_after:
+                raise self.error_after
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    # Set up router with fallback configuration
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key-2"},
+            },
+        ],
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+        set_verbose=True,
+    )
+
+    # Test data
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True, "temperature": 0.7}
+
+    # Test 1: Successful streaming (no errors)
+    print("\n=== Test 1: Successful streaming ===")
+
+    # Mock successful streaming response
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content=" there"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="!"))]),
+    ]
+
+    mock_response = AsyncIterator(mock_chunks)
+
+    setattr(mock_response, "model", "gpt-4")
+    setattr(mock_response, "custom_llm_provider", "openai")
+    setattr(mock_response, "logging_obj", MagicMock())
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_response, messages=messages, initial_kwargs=initial_kwargs
+    )
+
+    # Collect streamed chunks
+    collected_chunks = []
+    async for chunk in result:
+        collected_chunks.append(chunk)
+
+    assert len(collected_chunks) == 3
+    assert all(chunk in mock_chunks for chunk in collected_chunks)
+    print("✓ Successfully streamed all chunks")
+
+    # Test 2: MidStreamFallbackError with fallback
+    print("\n=== Test 2: MidStreamFallbackError with fallback ===")
+
+    # Create error that should trigger after first chunk
+    error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Hello",
+    )
+
+    class AsyncIteratorWithError:
+        def __init__(self, items, error_after_index):
+            self.items = items
+            self.index = 0
+            self.error_after_index = error_after_index
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            if self.index == self.error_after_index:
+                raise error
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    mock_error_response = AsyncIteratorWithError(
+        mock_chunks, 1
+    )  # Error after first chunk
+
+    setattr(mock_error_response, "model", "gpt-4")
+    setattr(mock_error_response, "custom_llm_provider", "openai")
+    setattr(mock_error_response, "logging_obj", MagicMock())
+
+    # Mock the fallback response
+    fallback_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content=" world"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="!"))]),
+    ]
+
+    mock_fallback_response = AsyncIterator(fallback_chunks)
+
+    # Mock the fallback function
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=mock_fallback_response,
+    ) as mock_fallback_utils:
+
+        collected_chunks = []
+        result = await router._acompletion_streaming_iterator(
+            model_response=mock_error_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        async for chunk in result:
+            collected_chunks.append(chunk)
+
+        # Verify fallback was called
+        assert mock_fallback_utils.called
+        call_args = mock_fallback_utils.call_args
+
+        # Check that generated content was added to messages
+        fallback_kwargs = call_args.kwargs["kwargs"]
+        modified_messages = fallback_kwargs["messages"]
+
+        # Should have original message + system message + assistant message with prefix
+        assert len(modified_messages) == 3
+        assert modified_messages[0] == {"role": "user", "content": "Hello"}
+        assert modified_messages[1]["role"] == "system"
+        assert "continuation" in modified_messages[1]["content"]
+        assert modified_messages[2]["role"] == "assistant"
+        assert modified_messages[2]["content"] == "Hello"
+        assert modified_messages[2]["prefix"] == True
+
+        # Verify fallback parameters
+        assert call_args.kwargs["disable_fallbacks"] == False
+        assert call_args.kwargs["model_group"] == "gpt-4"
+
+        # Should get original chunk + fallback chunks
+        assert len(collected_chunks) == 3  # 1 original + 2 fallback
+        print("✓ Fallback system called correctly with proper message modification")
+
+    print("\n=== All tests passed! ===")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_edge_cases():
+    """Test edge cases for _acompletion_streaming_iterator."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+        set_verbose=True,
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    # Test: Empty generated content
+    empty_error = MidStreamFallbackError(
+        message="Error",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",  # Empty content
+    )
+
+    class AsyncIteratorImmediateError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise empty_error
+
+    mock_response = AsyncIteratorImmediateError()
+
+    # Mock empty fallback response using AsyncIterator
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    mock_fallback_response = EmptyAsyncIterator()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=mock_fallback_response,
+    ) as mock_fallback_utils:
+
+        collected_chunks = []
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        async for chunk in iterator:
+            collected_chunks.append(chunk)
+
+        # Should still call fallback even with empty content
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+        modified_messages = fallback_kwargs["messages"]
+
+        # Should have assistant message with empty content
+        assert modified_messages[2]["content"] == ""
+        print("✓ Handles empty generated content correctly")
+
+    print("✓ Edge case tests passed!")
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_common_utils():
+    """Test the async_function_with_fallbacks_common_utils method"""
+    # Create a basic router for testing
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            }
+        ],
+        max_fallbacks=5,
+    )
+
+    # Test case 1: disable_fallbacks=True should raise original exception
+    test_exception = Exception("Test error")
+    with pytest.raises(Exception, match="Test error"):
+        await router.async_function_with_fallbacks_common_utils(
+            e=test_exception,
+            disable_fallbacks=True,
+            fallbacks=None,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="gpt-3.5-turbo",
+            args=(),
+            kwargs=MagicMock(),
+        )
+
+    # Test case 2: original_model_group=None should raise original exception
+    with pytest.raises(Exception, match="Test error"):
+        await router.async_function_with_fallbacks_common_utils(
+            e=test_exception,
+            disable_fallbacks=False,
+            fallbacks=None,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="gpt-3.5-turbo",
+            args=(),
+            kwargs={},  # No model key
+        )

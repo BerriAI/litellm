@@ -169,23 +169,6 @@ async def _calculate_dau_wau_mau(
     return result
 
 
-def _extract_user_agent_from_tag(tag: str) -> Optional[str]:
-    """
-    Extract user agent name from tag.
-    Tags are in format "User-Agent: <agent_name>" or "User-Agent: <agent_name>/<version>"
-    """
-    if not tag.startswith("User-Agent: "):
-        return None
-    
-    user_agent = tag[12:]  # Remove "User-Agent: " prefix
-    
-    # If it contains a version, extract just the name part
-    if "/" in user_agent:
-        return user_agent.split("/")[0]
-    
-    return user_agent
-
-
 @router.get(
     "/tag/user-agent/analytics",
     response_model=UserAgentAnalyticsResponse,
@@ -203,7 +186,7 @@ async def get_user_agent_analytics(
     ),
     user_agent_filter: Optional[str] = Query(
         default=None,
-        description="Filter by specific user agent (e.g., 'curl', 'litellm')",
+        description="Filter by specific user agent tag",
     ),
     page: int = Query(default=1, description="Page number for pagination", ge=1),
     page_size: int = Query(
@@ -212,20 +195,20 @@ async def get_user_agent_analytics(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get user agent analytics including DAU, WAU, MAU, successful requests, and completed tokens by user agent tags.
+    Get user agent analytics including DAU, WAU, MAU, successful requests, and completed tokens by tags.
     
-    This endpoint analyzes the user-agent tags that are automatically tracked by the system
-    and provides analytics broken down by user agent.
+    This endpoint analyzes all tags that are tracked by the system and provides analytics 
+    broken down by individual tags.
     
     Args:
         start_date: Start date for the analytics period (YYYY-MM-DD)
         end_date: End date for the analytics period (YYYY-MM-DD)
-        user_agent_filter: Filter results to specific user agent name
+        user_agent_filter: Filter results to specific tag
         page: Page number for pagination
         page_size: Number of items per page
         
     Returns:
-        UserAgentAnalyticsResponse: Analytics data broken down by user agent and date
+        UserAgentAnalyticsResponse: Analytics data broken down by tag and date
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -242,25 +225,19 @@ async def get_user_agent_analytics(
         )
     
     try:
-        # Get all user-agent tags from the database
-        user_agent_tags_records = await prisma_client.db.litellm_dailytagspend.find_many(
-            where={
-                "tag": {"startswith": "User-Agent: "},
-                "date": {"gte": start_date, "lte": end_date},
-            },
+        # Get all tags from the database
+        where_clause = {"date": {"gte": start_date, "lte": end_date}}
+        if user_agent_filter:
+            where_clause["tag"] = {"contains": user_agent_filter}
+            
+        tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
+            where=where_clause,
             distinct=["tag"],
         )
         
-        user_agent_tags = [record.tag for record in user_agent_tags_records]
+        tags = [record.tag for record in tag_records]
         
-        # Filter by user agent if specified
-        if user_agent_filter:
-            user_agent_tags = [
-                tag for tag in user_agent_tags
-                if user_agent_filter.lower() in tag.lower()
-            ]
-        
-        if not user_agent_tags:
+        if not tags:
             return UserAgentAnalyticsResponse(
                 results=[],
                 total_count=0,
@@ -269,12 +246,12 @@ async def get_user_agent_analytics(
                 total_pages=0,
             )
         
-        # Get daily activity data for user-agent tags
+        # Get daily activity data for tags
         daily_activity_response = await get_daily_activity(
             prisma_client=prisma_client,
             table_name="litellm_dailytagspend",
             entity_id_field="tag",
-            entity_id=user_agent_tags,
+            entity_id=tags,
             entity_metadata_field=None,
             start_date=start_date,
             end_date=end_date,
@@ -284,7 +261,7 @@ async def get_user_agent_analytics(
             page_size=10000,  # Large page size to get all data
         )
         
-        # Process the results to calculate DAU/WAU/MAU and organize by user agent
+        # Process the results to calculate DAU/WAU/MAU and organize by tag
         results = []
         daily_data_by_tag_and_date: Dict[str, Dict[str, DailySpendData]] = {}
         
@@ -294,19 +271,16 @@ async def get_user_agent_analytics(
             
             # Get tag from breakdown data
             for tag, tag_metrics in daily_data.breakdown.entities.items():
-                if tag.startswith("User-Agent: "):
-                    if tag not in daily_data_by_tag_and_date:
-                        daily_data_by_tag_and_date[tag] = {}
-                    daily_data_by_tag_and_date[tag][date_str] = daily_data
+                if tag not in daily_data_by_tag_and_date:
+                    daily_data_by_tag_and_date[tag] = {}
+                daily_data_by_tag_and_date[tag][date_str] = daily_data
         
         # Calculate DAU/WAU/MAU for each date and tag combination
         unique_dates: set[str] = set()
         for tag_data in daily_data_by_tag_and_date.values():
             unique_dates.update(tag_data.keys())
         
-        for tag in user_agent_tags:
-            user_agent = _extract_user_agent_from_tag(tag)
-            
+        for tag in tags:
             for date_str in sorted(unique_dates):
                 if tag in daily_data_by_tag_and_date and date_str in daily_data_by_tag_and_date[tag]:
                     daily_data = daily_data_by_tag_and_date[tag][date_str]
@@ -334,13 +308,13 @@ async def get_user_agent_analytics(
                             UserAgentActivityData(
                                 date=date_str,
                                 tag=tag,
-                                user_agent=user_agent,
+                                user_agent=tag,  # Use the full tag as user_agent
                                 metrics=metrics,
                             )
                         )
         
-        # Sort results by date (most recent first) and then by user agent
-        results.sort(key=lambda x: (x.date, x.user_agent or ""), reverse=True)
+        # Sort results by date (most recent first) and then by tag
+        results.sort(key=lambda x: (x.date, x.tag), reverse=True)
         
         # Apply pagination
         total_count = len(results)
@@ -381,9 +355,9 @@ async def get_user_agent_summary(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get summary statistics for user agent activity.
+    Get summary statistics for tag activity.
     
-    Returns aggregated metrics across all user agents for the specified time period.
+    Returns aggregated metrics across all tags for the specified time period.
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -400,26 +374,25 @@ async def get_user_agent_summary(
         )
     
     try:
-        # Get all user-agent tags
-        user_agent_tags_records = await prisma_client.db.litellm_dailytagspend.find_many(
+        # Get all tags
+        tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
             where={
-                "tag": {"startswith": "User-Agent: "},
                 "date": {"gte": start_date, "lte": end_date},
             },
             distinct=["tag"],
         )
         
-        user_agent_tags = [record.tag for record in user_agent_tags_records]
+        tags = [record.tag for record in tag_records]
         
-        if not user_agent_tags:
+        if not tags:
             return {
-                "total_user_agents": 0,
+                "total_tags": 0,
                 "total_requests": 0,
                 "total_successful_requests": 0,
                 "total_failed_requests": 0,
                 "total_tokens": 0,
                 "total_spend": 0.0,
-                "top_user_agents": [],
+                "top_tags": [],
             }
         
         # Get aggregated data
@@ -427,7 +400,7 @@ async def get_user_agent_summary(
             prisma_client=prisma_client,
             table_name="litellm_dailytagspend",
             entity_id_field="tag",
-            entity_id=user_agent_tags,
+            entity_id=tags,
             entity_metadata_field=None,
             start_date=start_date,
             end_date=end_date,
@@ -437,57 +410,54 @@ async def get_user_agent_summary(
             page_size=10000,
         )
         
-        # Aggregate metrics by user agent
-        user_agent_totals: Dict[str, UserAgentMetrics] = {}
+        # Aggregate metrics by tag
+        tag_totals: Dict[str, UserAgentMetrics] = {}
         
         for daily_data in daily_activity_response.results:
             for tag, tag_metrics in daily_data.breakdown.entities.items():
-                if tag.startswith("User-Agent: "):
-                    user_agent = _extract_user_agent_from_tag(tag)
-                    if user_agent is not None and user_agent not in user_agent_totals:
-                        user_agent_totals[user_agent] = UserAgentMetrics()
-                    
-                    if user_agent is not None:
-                        totals = user_agent_totals[user_agent]
-                        totals.successful_requests += tag_metrics.metrics.successful_requests
-                        totals.failed_requests += tag_metrics.metrics.failed_requests
-                        totals.total_requests += tag_metrics.metrics.api_requests
-                        totals.completed_tokens += tag_metrics.metrics.completion_tokens
-                        totals.total_tokens += tag_metrics.metrics.total_tokens
-                        totals.spend += tag_metrics.metrics.spend
+                if tag not in tag_totals:
+                    tag_totals[tag] = UserAgentMetrics()
+                
+                totals = tag_totals[tag]
+                totals.successful_requests += tag_metrics.metrics.successful_requests
+                totals.failed_requests += tag_metrics.metrics.failed_requests
+                totals.total_requests += tag_metrics.metrics.api_requests
+                totals.completed_tokens += tag_metrics.metrics.completion_tokens
+                totals.total_tokens += tag_metrics.metrics.total_tokens
+                totals.spend += tag_metrics.metrics.spend
         
         # Calculate summary statistics
-        total_requests = sum(ua.total_requests for ua in user_agent_totals.values())
-        total_successful_requests = sum(ua.successful_requests for ua in user_agent_totals.values())
-        total_failed_requests = sum(ua.failed_requests for ua in user_agent_totals.values())
-        total_tokens = sum(ua.total_tokens for ua in user_agent_totals.values())
-        total_spend = sum(ua.spend for ua in user_agent_totals.values())
+        total_requests = sum(tag.total_requests for tag in tag_totals.values())
+        total_successful_requests = sum(tag.successful_requests for tag in tag_totals.values())
+        total_failed_requests = sum(tag.failed_requests for tag in tag_totals.values())
+        total_tokens = sum(tag.total_tokens for tag in tag_totals.values())
+        total_spend = sum(tag.spend for tag in tag_totals.values())
         
-        # Get top user agents by request count
-        top_user_agents = sorted(
+        # Get top tags by request count
+        top_tags = sorted(
             [
                 {
-                    "user_agent": ua,
+                    "tag": tag,
                     "requests": metrics.total_requests,
                     "successful_requests": metrics.successful_requests,
                     "failed_requests": metrics.failed_requests,
                     "tokens": metrics.total_tokens,
                     "spend": metrics.spend,
                 }
-                for ua, metrics in user_agent_totals.items()
+                for tag, metrics in tag_totals.items()
             ],
             key=lambda x: cast(int, x["requests"]),
             reverse=True,
         )[:10]  # Top 10
         
         return {
-            "total_user_agents": len(user_agent_totals),
+            "total_tags": len(tag_totals),
             "total_requests": total_requests,
             "total_successful_requests": total_successful_requests,
             "total_failed_requests": total_failed_requests,
             "total_tokens": total_tokens,
             "total_spend": total_spend,
-            "top_user_agents": top_user_agents,
+            "top_tags": top_tags,
         }
         
     except Exception as e:
@@ -522,7 +492,7 @@ async def get_per_user_analytics(
     Get per-user analytics including successful requests, tokens, and spend by individual users.
     
     This endpoint provides usage metrics broken down by individual users based on their
-    user-agent activity during the specified time period.
+    tag activity during the specified time period.
     
     Args:
         start_date: Start date for the analytics period (YYYY-MM-DD)
@@ -548,30 +518,9 @@ async def get_per_user_analytics(
         )
     
     try:
-        # Get all user-agent tags from the database
-        user_agent_tags_records = await prisma_client.db.litellm_dailytagspend.find_many(
-            where={
-                "tag": {"startswith": "User-Agent: "},
-                "date": {"gte": start_date, "lte": end_date},
-            },
-            distinct=["tag"],
-        )
-        
-        user_agent_tags = [record.tag for record in user_agent_tags_records]
-        
-        if not user_agent_tags:
-            return PerUserAnalyticsResponse(
-                results=[],
-                total_count=0,
-                page=page,
-                page_size=page_size,
-                total_pages=0,
-            )
-        
-        # Get all records for user-agent tags in the date range
+        # Get all tag records in the date range
         tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
             where={
-                "tag": {"in": user_agent_tags},
                 "date": {"gte": start_date, "lte": end_date}
             }
         )
@@ -618,18 +567,18 @@ async def get_per_user_analytics(
         for record in tag_records:
             if record.api_key in api_key_to_user_id:
                 user_id = api_key_to_user_id[record.api_key]
-                user_agent = _extract_user_agent_from_tag(record.tag)
+                tag = record.tag  # Use the full tag as user_agent
                 
                 if user_id not in user_metrics:
                     user_metrics[user_id] = PerUserMetrics(
                         user_id=user_id,
                         user_email=user_id_to_email.get(user_id),
-                        user_agent=user_agent
+                        user_agent=tag
                     )
                 else:
-                    # If user agent is different, keep the first one or prioritize certain ones
-                    if user_agent and not user_metrics[user_id].user_agent:
-                        user_metrics[user_id].user_agent = user_agent
+                    # If tag is different, keep the first one or prioritize certain ones
+                    if tag and not user_metrics[user_id].user_agent:
+                        user_metrics[user_id].user_agent = tag
                 
                 # Aggregate metrics
                 user_metrics[user_id].successful_requests += record.successful_requests or 0
