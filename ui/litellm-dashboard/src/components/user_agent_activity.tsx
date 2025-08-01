@@ -319,7 +319,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 mt-6">
       {/* Summary Section Card */}
       <Card>
         <div className="space-y-6">
