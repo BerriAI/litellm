@@ -69,6 +69,28 @@ class DistinctTagsResponse(BaseModel):
     results: List[DistinctTagResponse]
 
 
+
+class PerUserMetrics(BaseModel):
+    """Metrics for individual user"""
+    user_id: str
+    user_email: Optional[str] = None
+    user_agent: Optional[str] = None
+    successful_requests: int = 0
+    failed_requests: int = 0
+    total_requests: int = 0
+    total_tokens: int = 0
+    spend: float = 0.0
+
+
+class PerUserAnalyticsResponse(BaseModel):
+    """Response for per-user analytics"""
+    results: List[PerUserMetrics]
+    total_count: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 @router.get(
     "/tag/distinct",
     response_model=DistinctTagsResponse,
