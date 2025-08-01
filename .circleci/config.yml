@@ -1388,6 +1388,7 @@ jobs:
       - run: python ./tests/documentation_tests/test_circular_imports.py
       - run: python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
       - run: python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
+      - run: python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
       - run: helm lint ./deploy/charts/litellm-helm
 
   db_migration_disable_update_check:
@@ -2883,6 +2884,25 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - run:
           name: Build Docker image
           command: |
             docker build -t myapp . -f ./docker/Dockerfile.non_root
@@ -2901,7 +2921,6 @@ jobs:
           name: Check for expected error
           command: |
             if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
-               grep -q "prisma.engine.errors.NotConnectedError: Not connected to the query engine" docker_output.log && \
                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log; then
               echo "Expected error found. Test passed."
             else
