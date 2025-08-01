@@ -454,6 +454,92 @@ class BaseAWSLLM:
         iam_creds = session.get_credentials()
         return iam_creds, self._get_default_ttl_for_boto3_credentials()
 
+    def _handle_irsa_cross_account(self, irsa_role_arn: str, aws_role_name: str, 
+                                   aws_session_name: str, region: str, web_identity_token_file: str) -> dict:
+        """Handle cross-account role assumption for IRSA."""
+        import boto3
+        
+        verbose_logger.debug("Cross-account role assumption detected")
+        
+        # Read the web identity token
+        with open(web_identity_token_file, 'r') as f:
+            web_identity_token = f.read().strip()
+        
+        # Create an STS client without credentials
+        with tracer.trace("boto3.client(sts) for manual IRSA"):
+            sts_client = boto3.client('sts', region_name=region)
+        
+        # Manually assume the IRSA role with the session name
+        verbose_logger.debug(f"Manually assuming IRSA role {irsa_role_arn} with session {aws_session_name}")
+        irsa_response = sts_client.assume_role_with_web_identity(
+            RoleArn=irsa_role_arn,
+            RoleSessionName=aws_session_name,
+            WebIdentityToken=web_identity_token
+        )
+        
+        # Extract the credentials from the IRSA assumption
+        irsa_creds = irsa_response["Credentials"]
+        
+        # Create a new STS client with the IRSA credentials
+        with tracer.trace("boto3.client(sts) with manual IRSA credentials"):
+            sts_client_with_creds = boto3.client(
+                'sts',
+                region_name=region,
+                aws_access_key_id=irsa_creds["AccessKeyId"],
+                aws_secret_access_key=irsa_creds["SecretAccessKey"],
+                aws_session_token=irsa_creds["SessionToken"]
+            )
+        
+        # Get current caller identity for debugging
+        try:
+            caller_identity = sts_client_with_creds.get_caller_identity()
+            verbose_logger.debug(f"Current identity after manual IRSA assumption: {caller_identity.get('Arn', 'unknown')}")
+        except Exception as e:
+            verbose_logger.debug(f"Failed to get caller identity: {e}")
+        
+        # Now assume the target role
+        verbose_logger.debug(f"Attempting to assume target role: {aws_role_name} with session: {aws_session_name}")
+        return sts_client_with_creds.assume_role(
+            RoleArn=aws_role_name, RoleSessionName=aws_session_name
+        )
+
+    def _handle_irsa_same_account(self, aws_role_name: str, aws_session_name: str, region: str) -> dict:
+        """Handle same-account role assumption for IRSA."""
+        import boto3
+        
+        verbose_logger.debug("Same account role assumption, using automatic IRSA")
+        with tracer.trace("boto3.client(sts) with automatic IRSA"):
+            sts_client = boto3.client("sts", region_name=region)
+        
+        # Get current caller identity for debugging
+        try:
+            caller_identity = sts_client.get_caller_identity()
+            verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
+        except Exception as e:
+            verbose_logger.debug(f"Failed to get caller identity: {e}")
+        
+        # Assume the role
+        verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
+        return sts_client.assume_role(
+            RoleArn=aws_role_name, RoleSessionName=aws_session_name
+        )
+
+    def _extract_credentials_and_ttl(self, sts_response: dict) -> Tuple[Credentials, Optional[int]]:
+        """Extract credentials and TTL from STS response."""
+        from botocore.credentials import Credentials
+        
+        sts_credentials = sts_response["Credentials"]
+        credentials = Credentials(
+            access_key=sts_credentials["AccessKeyId"],
+            secret_key=sts_credentials["SecretAccessKey"],
+            token=sts_credentials["SessionToken"],
+        )
+        
+        expiration_time = sts_credentials["Expiration"]
+        ttl = int((expiration_time - datetime.now(expiration_time.tzinfo)).total_seconds())
+        
+        return credentials, ttl
+
     @tracer.wrap()
     def _auth_with_aws_role(
         self,
@@ -480,92 +566,22 @@ class BaseAWSLLM:
             # we need to manually assume the IRSA role first with the correct session name
             verbose_logger.debug(f"IRSA detected: using web identity token from {web_identity_token_file}")
             
-            import boto3
-            from botocore.credentials import Credentials
-            
             try:
                 # Get region from environment
                 region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
                 
                 # Check if we need to do cross-account role assumption
                 if aws_role_name != irsa_role_arn:
-                    # For cross-account role assumption, we need to manually assume the IRSA role
-                    # with the correct session name first
-                    verbose_logger.debug(f"Cross-account role assumption detected")
-                    
-                    # Read the web identity token
-                    with open(web_identity_token_file, 'r') as f:
-                        web_identity_token = f.read().strip()
-                    
-                    # Create an STS client without credentials
-                    with tracer.trace("boto3.client(sts) for manual IRSA"):
-                        sts_client = boto3.client('sts', region_name=region)
-                    
-                    # Manually assume the IRSA role with the session name
-                    verbose_logger.debug(f"Manually assuming IRSA role {irsa_role_arn} with session {aws_session_name}")
-                    irsa_response = sts_client.assume_role_with_web_identity(
-                        RoleArn=irsa_role_arn,
-                        RoleSessionName=aws_session_name,
-                        WebIdentityToken=web_identity_token
-                    )
-                    
-                    # Extract the credentials from the IRSA assumption
-                    irsa_creds = irsa_response["Credentials"]
-                    
-                    # Create a new STS client with the IRSA credentials
-                    with tracer.trace("boto3.client(sts) with manual IRSA credentials"):
-                        sts_client_with_creds = boto3.client(
-                            'sts',
-                            region_name=region,
-                            aws_access_key_id=irsa_creds["AccessKeyId"],
-                            aws_secret_access_key=irsa_creds["SecretAccessKey"],
-                            aws_session_token=irsa_creds["SessionToken"]
-                        )
-                    
-                    # Get current caller identity for debugging
-                    try:
-                        caller_identity = sts_client_with_creds.get_caller_identity()
-                        verbose_logger.debug(f"Current identity after manual IRSA assumption: {caller_identity.get('Arn', 'unknown')}")
-                    except Exception as e:
-                        verbose_logger.debug(f"Failed to get caller identity: {e}")
-                    
-                    # Now assume the target role
-                    verbose_logger.debug(f"Attempting to assume target role: {aws_role_name} with session: {aws_session_name}")
-                    sts_response = sts_client_with_creds.assume_role(
-                        RoleArn=aws_role_name, RoleSessionName=aws_session_name
+                    sts_response = self._handle_irsa_cross_account(
+                        irsa_role_arn, aws_role_name, aws_session_name, region, web_identity_token_file
                     )
                 else:
-                    # Same account, use boto3's automatic IRSA support
-                    verbose_logger.debug(f"Same account role assumption, using automatic IRSA")
-                    with tracer.trace("boto3.client(sts) with automatic IRSA"):
-                        sts_client = boto3.client("sts", region_name=region)
-                    
-                    # Get current caller identity for debugging
-                    try:
-                        caller_identity = sts_client.get_caller_identity()
-                        verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
-                    except Exception as e:
-                        verbose_logger.debug(f"Failed to get caller identity: {e}")
-                    
-                    # Assume the role
-                    verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
-                    sts_response = sts_client.assume_role(
-                        RoleArn=aws_role_name, RoleSessionName=aws_session_name
+                    sts_response = self._handle_irsa_same_account(
+                        aws_role_name, aws_session_name, region
                     )
                 
-                # Extract the credentials from the response
-                sts_credentials = sts_response["Credentials"]
-                credentials = Credentials(
-                    access_key=sts_credentials["AccessKeyId"],
-                    secret_key=sts_credentials["SecretAccessKey"],
-                    token=sts_credentials["SessionToken"],
-                )
+                return self._extract_credentials_and_ttl(sts_response)
                 
-                # Calculate TTL based on expiration time
-                expiration_time = sts_credentials["Expiration"]
-                ttl = int((expiration_time - datetime.now(expiration_time.tzinfo)).total_seconds())
-                
-                return credentials, ttl
             except Exception as e:
                 verbose_logger.debug(f"Failed to assume role via IRSA: {e}")
                 if "AccessDenied" in str(e) and "is not authorized to perform: sts:AssumeRole" in str(e):
