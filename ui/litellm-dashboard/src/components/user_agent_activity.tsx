@@ -25,7 +25,7 @@ import {
   TabPanels,
 } from "@tremor/react";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall } from "./networking";
+import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
@@ -58,6 +58,14 @@ interface TagSummaryResponse {
   results: TagSummaryMetrics[];
 }
 
+interface DistinctTagResponse {
+  tag: string;
+}
+
+interface DistinctTagsResponse {
+  results: DistinctTagResponse[];
+}
+
 interface UserAgentActivityProps {
   accessToken: string | null;
   userRole: string | null;
@@ -80,6 +88,12 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
   const [userAgentFilter, setUserAgentFilter] = useState<string>("");
   
+  // Tag filtering state
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagsLoading, setTagsLoading] = useState(false);
+  const [tagSearchFilter, setTagSearchFilter] = useState<string>("");
+  
   // Separate loading states for each endpoint
   const [dauLoading, setDauLoading] = useState(false);
   const [wauLoading, setWauLoading] = useState(false);
@@ -91,6 +105,20 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   // Use today's date as the end date for all API calls
   const today = new Date();
 
+  const fetchAvailableTags = async () => {
+    if (!accessToken) return;
+
+    setTagsLoading(true);
+    try {
+      const data = await tagDistinctCall(accessToken);
+      setAvailableTags(data.results.map((item: DistinctTagResponse) => item.tag));
+    } catch (error) {
+      console.error("Failed to fetch available tags:", error);
+    } finally {
+      setTagsLoading(false);
+    }
+  };
+
   const fetchDauData = async () => {
     if (!accessToken) return;
 
@@ -99,7 +127,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       const data = await tagDauCall(
         accessToken,
         today,
-        userAgentFilter || undefined
+        userAgentFilter || undefined,
+        selectedTags.length > 0 ? selectedTags : undefined
       );
       setDauData(data);
     } catch (error) {
@@ -117,7 +146,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       const data = await tagWauCall(
         accessToken,
         today,
-        userAgentFilter || undefined
+        userAgentFilter || undefined,
+        selectedTags.length > 0 ? selectedTags : undefined
       );
       setWauData(data);
     } catch (error) {
@@ -135,7 +165,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       const data = await tagMauCall(
         accessToken,
         today,
-        userAgentFilter || undefined
+        userAgentFilter || undefined,
+        selectedTags.length > 0 ? selectedTags : undefined
       );
       setMauData(data);
     } catch (error) {
@@ -150,7 +181,12 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
     setSummaryLoading(true);
     try {
-      const summary = await userAgentSummaryCall(accessToken, dateValue.from, dateValue.to);
+      const summary = await userAgentSummaryCall(
+        accessToken, 
+        dateValue.from, 
+        dateValue.to,
+        selectedTags.length > 0 ? selectedTags : undefined
+      );
       setSummaryData(summary);
     } catch (error) {
       console.error("Failed to fetch user agent summary data:", error);
@@ -170,6 +206,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     setDateValue(newValue);
   };
 
+  // Effect to fetch available tags on mount
+  useEffect(() => {
+    fetchAvailableTags();
+  }, [accessToken]);
+
   // Effect for DAU/WAU/MAU data (independent of date picker)
   useEffect(() => {
     if (!accessToken) return;
@@ -181,7 +222,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     }, 50);
 
     return () => clearTimeout(timeoutId);
-  }, [accessToken, userAgentFilter]);
+  }, [accessToken, userAgentFilter, selectedTags]);
 
   // Effect for summary data (depends on date picker)
   useEffect(() => {
@@ -192,7 +233,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     }, 50);
 
     return () => clearTimeout(timeoutId);
-  }, [accessToken, dateValue]);
+  }, [accessToken, dateValue, selectedTags]);
 
   // Helper function to extract user agent from tag
   const extractUserAgent = (tag: string): string => {
@@ -208,6 +249,16 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       return userAgent.substring(0, 10) + "...";
     }
     return userAgent;
+  };
+
+  // Helper function to filter tags based on search
+  const filterTags = (tags: string[]) => {
+    if (!tagSearchFilter) return tags;
+    return tags.filter(tag => {
+      const userAgent = extractUserAgent(tag);
+      return userAgent.toLowerCase().includes(tagSearchFilter.toLowerCase()) ||
+             tag.toLowerCase().includes(tagSearchFilter.toLowerCase());
+    });
   };
 
   // Get all user agents for each chart type based on their specific data
@@ -358,9 +409,98 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       {/* Summary Section Card */}
       <Card>
         <div className="space-y-6">
-          <div>
-            <Title>Summary by User Agent</Title>
-            <Subtitle>Performance metrics for different user agents</Subtitle>
+          <div className="flex justify-between items-start">
+            <div>
+              <Title>Summary by User Agent</Title>
+              <Subtitle>Performance metrics for different user agents</Subtitle>
+            </div>
+            
+            {/* User Agent Filter */}
+            <div className="w-80">
+              <div className="flex items-center justify-between mb-2">
+                <Text className="text-sm font-medium">Filter by User Agents</Text>
+                {selectedTags.length > 0 && (
+                  <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                    {selectedTags.length} selected
+                  </span>
+                )}
+              </div>
+                                            <div className="border border-gray-300 rounded-md bg-white">
+                 {/* Search input */}
+                 <div className="p-3 border-b border-gray-200">
+                   <input
+                     type="text"
+                     placeholder="Search user agents..."
+                     value={tagSearchFilter}
+                     onChange={(e) => setTagSearchFilter(e.target.value)}
+                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                   />
+                 </div>
+                 
+                 {/* Tag list */}
+                 <div className="p-3 max-h-56 overflow-y-auto">
+                   <div className="space-y-2">
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="all-agents"
+                         checked={selectedTags.length === 0}
+                         onChange={() => setSelectedTags([])}
+                         className="rounded border-gray-300"
+                       />
+                       <label htmlFor="all-agents" className="text-sm font-medium text-gray-700">
+                         All User Agents
+                       </label>
+                     </div>
+                                     {tagsLoading ? (
+                     <div className="text-sm text-gray-500">Loading...</div>
+                   ) : (
+                     filterTags(availableTags).map((tag) => {
+                       const userAgent = extractUserAgent(tag);
+                       const displayName = userAgent.length > 35 ? `${userAgent.substring(0, 35)}...` : userAgent;
+                       const isSelected = selectedTags.includes(tag);
+                       
+                       return (
+                         <div key={tag} className="flex items-center space-x-2">
+                           <input
+                             type="checkbox"
+                             id={`tag-${tag}`}
+                             checked={isSelected}
+                             onChange={(e) => {
+                               if (e.target.checked) {
+                                 setSelectedTags([...selectedTags, tag]);
+                               } else {
+                                 setSelectedTags(selectedTags.filter(t => t !== tag));
+                               }
+                             }}
+                             className="rounded border-gray-300"
+                           />
+                           <label 
+                             htmlFor={`tag-${tag}`} 
+                             className="text-sm text-gray-600 cursor-pointer"
+                             title={userAgent}
+                           >
+                             {displayName}
+                           </label>
+                         </div>
+                       );
+                     })
+                   )}
+                                        {availableTags.length > 0 && (
+                       <div className="text-xs text-gray-500 pt-1">
+                         {tagSearchFilter ? (
+                           <>
+                             Showing {filterTags(availableTags).length} of {availableTags.length} user agents
+                           </>
+                         ) : (
+                           <>Showing {availableTags.length} user agent{availableTags.length !== 1 ? 's' : ''}</>
+                         )}
+                       </div>
+                     )}
+                   </div>
+                 </div>
+               </div>
+            </div>
           </div>
           
           {/* Date Range Picker within Summary */}

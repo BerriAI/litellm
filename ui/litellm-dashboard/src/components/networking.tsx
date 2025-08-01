@@ -6502,7 +6502,8 @@ export const userAgentAnalyticsCall = async (
 export const tagDauCall = async (
   accessToken: string,
   endDate: Date,
-  tagFilter?: string
+  tagFilter?: string,
+  tagFilters?: string[]
 ) => {
   /**
    * Get Daily Active Users (DAU) for last 7 days ending on endDate
@@ -6524,7 +6525,12 @@ export const tagDauCall = async (
     
     queryParams.append("end_date", formatDate(endDate));
     
-    if (tagFilter) {
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
     
@@ -6558,7 +6564,8 @@ export const tagDauCall = async (
 export const tagWauCall = async (
   accessToken: string,
   endDate: Date,
-  tagFilter?: string
+  tagFilter?: string,
+  tagFilters?: string[]
 ) => {
   /**
    * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
@@ -6580,7 +6587,12 @@ export const tagWauCall = async (
     
     queryParams.append("end_date", formatDate(endDate));
     
-    if (tagFilter) {
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
     
@@ -6614,7 +6626,8 @@ export const tagWauCall = async (
 export const tagMauCall = async (
   accessToken: string,
   endDate: Date,
-  tagFilter?: string
+  tagFilter?: string,
+  tagFilters?: string[]
 ) => {
   /**
    * Get Monthly Active Users (MAU) for last 7 months ending on endDate
@@ -6636,7 +6649,12 @@ export const tagMauCall = async (
     
     queryParams.append("end_date", formatDate(endDate));
     
-    if (tagFilter) {
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
       queryParams.append("tag_filter", tagFilter);
     }
     
@@ -6667,10 +6685,44 @@ export const tagMauCall = async (
   }
 };
 
+export const tagDistinctCall = async (
+  accessToken: string
+) => {
+  /**
+   * Get all distinct user agent tags (up to 250)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/distinct`
+      : `/tag/distinct`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch distinct tags:", error);
+    throw error;
+  }
+};
+
 export const userAgentSummaryCall = async (
   accessToken: string,
   startTime: Date,
-  endTime: Date
+  endTime: Date,
+  tagFilters?: string[]
 ) => {
   /**
    * Get user agent summary statistics
@@ -6692,6 +6744,13 @@ export const userAgentSummaryCall = async (
     
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
+    
+    // Handle multiple tag filters
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    }
     
     const queryString = queryParams.toString();
     if (queryString) {
