@@ -19,19 +19,20 @@ import {
   message,
 } from "antd";
 import { keyCreateCall, slackBudgetAlertsHealthCheck, modelAvailableCall } from "./networking";
+import { fetchAvailableModels, ModelGroup } from "./chat_ui/llm_calls/fetch_models";
 import { list } from "postcss";
 
 const { Option } = Select2;
 
 interface AddFallbacksProps {
-  models: string[] | undefined; 
+  models?: string[];
   accessToken: string;
   routerSettings: { [key: string]: any; }
   setRouterSettings: React.Dispatch<React.SetStateAction<{ [key: string]: any }>>;
 }
 
 const AddFallbacks: React.FC<AddFallbacksProps> = ({
-    models, 
+    models,
     accessToken,
     routerSettings,
     setRouterSettings
@@ -39,6 +40,20 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
+  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const uniqueModels = await fetchAvailableModels(accessToken);
+        console.log("Fetched models for fallbacks:", uniqueModels);
+        setModelInfo(uniqueModels);
+      } catch (error) {
+        console.error("Error fetching model info for fallbacks:", error);
+      }
+    };
+    loadModels();
+  }, [accessToken]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -118,7 +133,7 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                 help="required"
               >
                 <Select defaultValue={selectedModel}>
-                {models && models.map((model: string, index) => (
+                {Array.from(new Set(modelInfo.map(option => option.model_group))).map((model: string, index: number) => (
                     <SelectItem
                         key={index}
                         value={model}
@@ -137,14 +152,13 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                 rules={[{ required: true, message: 'Please select a model' }]}
                 help="required"
               >
-                <MultiSelect value={models}>
-                    {models &&
-                      models.filter(data => data != selectedModel).map((model: string) => (
-                        (
+                <MultiSelect>
+                    {Array.from(new Set(modelInfo.map(option => option.model_group)))
+                      .filter((data: string) => data != selectedModel)
+                      .map((model: string) => (
                           <MultiSelectItem key={model} value={model}>
                             {model}
                           </MultiSelectItem>
-                        )
                       ))}
 
                 </MultiSelect>
