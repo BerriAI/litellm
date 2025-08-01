@@ -419,6 +419,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
                         showLegend={true}
+                        stack={true}
                       />
                     )}
                   </TabPanel>
@@ -438,6 +439,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
                         showLegend={true}
+                        stack={true}
                       />
                     )}
                   </TabPanel>
@@ -457,6 +459,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
                         showLegend={true}
+                        stack={true}
                       />
                     )}
                   </TabPanel>
