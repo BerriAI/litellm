@@ -224,7 +224,7 @@ def _get_redis_client_logic(**env_overrides):
     _gcp_ssl_ca_certs = redis_kwargs.get("gcp_ssl_ca_certs") or get_secret_str("REDIS_GCP_SSL_CA_CERTS")
     
     if _gcp_service_account is not None:
-        verbose_logger.debug(f"Setting up GCP IAM authentication for Redis with service account: {_gcp_service_account}")
+        verbose_logger.debug("Setting up GCP IAM authentication for Redis with service account.")
         redis_kwargs["redis_connect_func"] = create_gcp_iam_redis_connect_func(
             service_account=_gcp_service_account,
             ssl_ca_certs=_gcp_ssl_ca_certs
