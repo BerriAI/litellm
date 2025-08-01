@@ -54,7 +54,3 @@ def test_max_langfuse_clients_limit():
 
         # Counter should still be 2 (third client failed to initialize)
         assert litellm.initialized_langfuse_clients == 2
-    
-    finally:
-        # Restore original value
-        langfuse_module.MAX_LANGFUSE_INITIALIZED_CLIENTS = original_max_clients
