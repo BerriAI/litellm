@@ -170,7 +170,7 @@ async def test_get_response():
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_get_router_response():
-    model = "claude-3-sonnet@20240229"
+    model = "claude-3-5-sonnet@20240620"
     vertex_ai_project = "pathrise-convert-1606954137718"
     vertex_ai_location = "asia-southeast1"
     json_obj = get_vertex_ai_creds_json()
@@ -183,7 +183,7 @@ async def test_get_router_response():
                 {
                     "model_name": "sonnet",
                     "litellm_params": {
-                        "model": "vertex_ai/claude-3-sonnet@20240229",
+                        "model": "vertex_ai/claude-3-5-sonnet@20240620",
                         "vertex_ai_project": vertex_ai_project,
                         "vertex_ai_location": vertex_ai_location,
                         "vertex_credentials": vertex_credentials,
@@ -223,7 +223,7 @@ def test_vertex_ai_anthropic_streaming():
 
         # litellm.set_verbose = True
 
-        model = "claude-3-sonnet@20240229"
+        model = "claude-3-5-sonnet@20240620"
 
         vertex_ai_project = "pathrise-convert-1606954137718"
         vertex_ai_location = "asia-southeast1"
@@ -262,7 +262,7 @@ async def test_aavertex_ai_anthropic_async():
     # load_vertex_ai_credentials()
     try:
 
-        model = "claude-3-sonnet@20240229"
+        model = "claude-3-5-sonnet@20240620"
 
         vertex_ai_project = "pathrise-convert-1606954137718"
         vertex_ai_location = "asia-southeast1"
@@ -296,7 +296,7 @@ async def test_aaavertex_ai_anthropic_async_streaming():
     # load_vertex_ai_credentials()
     try:
         litellm.set_verbose = True
-        model = "claude-3-sonnet@20240229"
+        model = "claude-3-5-sonnet@20240620"
 
         vertex_ai_project = "pathrise-convert-1606954137718"
         vertex_ai_location = "asia-southeast1"
@@ -880,7 +880,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize(
-    "model", ["vertex_ai_beta/gemini-1.5-pro", "vertex_ai/claude-3-sonnet@20240229"]
+    "model", ["vertex_ai_beta/gemini-1.5-pro", "vertex_ai/claude-3-5-sonnet@20240620"]
 )  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
@@ -1725,7 +1725,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
 
 @pytest.mark.parametrize(
-    "model", ["gemini-1.5-flash", "claude-3-sonnet@20240229"]
+    "model", ["gemini-1.5-flash", "claude-3-5-sonnet@20240620"]
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_gemini_pro_httpx_custom_api_base(model):
