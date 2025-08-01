@@ -368,23 +368,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     return () => clearTimeout(timeoutId)
   }, [fetchUserSpendData])
 
-  // Enhanced loading component with better visual feedback
-  const ChartLoader = () => (
-    <div className="flex items-center justify-center h-40">
-      <div className="flex items-center justify-center gap-3">
-        <UiLoadingSpinner className="size-5" />
-        <div className="flex flex-col">
-          <span className="text-gray-600 text-sm font-medium">
-            {isDateChanging ? "Processing date selection..." : "Loading chart data..."}
-          </span>
-          <span className="text-gray-400 text-xs mt-1">
-            {isDateChanging ? "This will only take a moment" : "Fetching your data"}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-
   const modelMetrics = processActivityData(userSpendData, "models")
   const keyMetrics = processActivityData(userSpendData, "api_keys")
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers")
