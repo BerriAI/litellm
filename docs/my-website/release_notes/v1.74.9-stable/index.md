@@ -1,5 +1,5 @@
 ---
-title: "v1.74.9-stable"
+title: "v1.74.9-stable - Auto-Router"
 slug: "v1-74-9"
 date: 2025-07-27T10:00:00
 authors:
@@ -43,7 +43,58 @@ pip install litellm==1.74.9.post1
 
 ---
 
+## Key Highlights
 
+- **Auto-Router** - Automatically route requests to specific models based on request content.
+- **Model-level Guardrails** - Only run guardrails when specific models are used.
+- **MCP Header Propagation** - Propagate headers from client to backend MCP.
+- **New LLM Providers** - Added Bedrock inpainting support and Recraft API image generation  / image edits support.
+
+---
+
+## Auto-Router
+
+<Image img={require('../../img/release_notes/auto_router.png')} />
+
+<br/>
+
+This release introduces auto-routing to models based on request content. This means **Proxy Admins** can define a set of keywords that always routes to specific models when **users** opt in to using the auto-router.
+
+This is great for internal use cases where you don't want **users** to think about which model to use - for example, use Claude models for coding vs GPT models for generating ad copy.
+
+
+[Read More](../../docs/proxy/auto_routing)
+
+---
+
+## Model-level Guardrails
+
+<Image img={require('../../img/release_notes/model_level_guardrails.jpg')} />
+
+<br/>
+
+This release brings model-level guardrails support to your config.yaml + UI. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
+
+
+
+[Read More](../../docs/proxy/guardrails/quick_start#model-level-guardrails)
+
+---
+## MCP Header Propagation
+
+<Image img={require('../../img/release_notes/mcp_header_propogation.png')} />
+
+<br/>
+
+v1.74.9-stable allows you to propagate MCP server specific authentication headers via LiteLLM
+
+- Allowing users to specify which `header_name` is to be propagated to which `mcp_server` via headers
+- Allows adding of different deployments of same MCP server type to use different authentication headers
+
+
+[Read More](https://docs.litellm.ai/docs/mcp#new-server-specific-auth-headers-recommended)
+
+---
 ## New Models / Updated Models
 
 #### Pricing / Context Window Updates
