@@ -24,6 +24,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 MAX_DAYS = 7  # Number of days to show in DAU analytics
 MAX_WEEKS = 7  # Number of weeks to show in WAU analytics
 MAX_MONTHS = 7  # Number of months to show in MAU analytics
+MAX_TAGS = 250  # Maximum number of distinct tags to return
 
 router = APIRouter()
 
@@ -58,6 +59,70 @@ class TagSummaryResponse(BaseModel):
     results: List[TagSummaryMetrics]
 
 
+class DistinctTagResponse(BaseModel):
+    """Response for distinct user agent tags"""
+    tag: str
+
+
+class DistinctTagsResponse(BaseModel):
+    """Response for all distinct user agent tags"""
+    results: List[DistinctTagResponse]
+
+
+@router.get(
+    "/tag/distinct",
+    response_model=DistinctTagsResponse,
+    tags=["tag management", "user agent analytics"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_distinct_user_agent_tags(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get all distinct user agent tags up to a maximum of {MAX_TAGS} tags.
+    
+    This endpoint returns all unique user agent tags found in the database,
+    sorted by frequency of usage.
+    
+    Returns:
+        DistinctTagsResponse: List of distinct user agent tags
+    """
+    from litellm.proxy.proxy_server import prisma_client
+    
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    
+    try:
+        sql_query = f"""
+        SELECT 
+            dts.tag,
+            COUNT(*) as usage_count
+        FROM "LiteLLM_DailyTagSpend" dts
+        WHERE dts.tag LIKE 'User-Agent:%' OR dts.tag NOT LIKE '%:%'
+        GROUP BY dts.tag
+        ORDER BY usage_count DESC
+        LIMIT {MAX_TAGS}
+        """
+        
+        db_response = await prisma_client.db.query_raw(sql_query)
+        
+        results = [
+            DistinctTagResponse(tag=row["tag"])
+            for row in db_response
+        ]
+        
+        return DistinctTagsResponse(results=results)
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch distinct user agent tags: {str(e)}",
+        )
+
+
 @router.get(
     "/tag/dau",
     response_model=ActiveUsersAnalyticsResponse,
@@ -69,6 +134,10 @@ async def get_daily_active_users(
         default=None,
         description="Filter by specific tag (optional)",
     ),
+    tag_filters: Optional[List[str]] = Query(
+        default=None,
+        description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -78,7 +147,8 @@ async def get_daily_active_users(
     using a single optimized SQL query, perfect for dashboard time series visualization.
     
     Args:
-        tag_filter: Optional filter to specific tag
+        tag_filter: Optional filter to specific tag (legacy)
+        tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
         
     Returns:
         ActiveUsersAnalyticsResponse: DAU data by tag for each of the last {MAX_DAYS} days
@@ -101,11 +171,19 @@ async def get_daily_active_users(
         start_dt = end_dt - timedelta(days=MAX_DAYS)
         start_date = start_dt.strftime("%Y-%m-%d")
         
-        # Build SQL query with optional tag filter
+        # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
         
-        if tag_filter:
+        # Handle multiple tag filters (takes precedence over single tag filter)
+        if tag_filters and len(tag_filters) > 0:
+            tag_conditions = []
+            for i, tag in enumerate(tag_filters):
+                param_index = len(params) + 1
+                tag_conditions.append(f"dts.tag = ${param_index}")
+                params.append(tag)
+            where_clause += f" AND ({' OR '.join(tag_conditions)})"
+        elif tag_filter:
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
         
@@ -152,6 +230,10 @@ async def get_weekly_active_users(
         default=None,
         description="Filter by specific tag (optional)",
     ),
+    tag_filters: Optional[List[str]] = Query(
+        default=None,
+        description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -165,7 +247,8 @@ async def get_weekly_active_users(
     - Week 7: Most recent week ending on UTC today + 1 day
     
     Args:
-        tag_filter: Optional filter to specific tag
+        tag_filter: Optional filter to specific tag (legacy)
+        tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
         
     Returns:
         ActiveUsersAnalyticsResponse: WAU data by tag for each of the last {MAX_WEEKS} weeks with descriptive week labels (e.g., "Week 1 (Jan 1)")
@@ -189,11 +272,19 @@ async def get_weekly_active_users(
         start_dt = end_dt - timedelta(days=(MAX_WEEKS * 7 - 1))  # MAX_WEEKS weeks * 7 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
         
-        # Build SQL query with optional tag filter
+        # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
         
-        if tag_filter:
+        # Handle multiple tag filters (takes precedence over single tag filter)
+        if tag_filters and len(tag_filters) > 0:
+            tag_conditions = []
+            for i, tag in enumerate(tag_filters):
+                param_index = len(params) + 1
+                tag_conditions.append(f"dts.tag = ${param_index}")
+                params.append(tag)
+            where_clause += f" AND ({' OR '.join(tag_conditions)})"
+        elif tag_filter:
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
         
@@ -259,6 +350,10 @@ async def get_monthly_active_users(
         default=None,
         description="Filter by specific tag (optional)",
     ),
+    tag_filters: Optional[List[str]] = Query(
+        default=None,
+        description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -272,7 +367,8 @@ async def get_monthly_active_users(
     - Month 7: Most recent month ending on UTC today + 1 day
     
     Args:
-        tag_filter: Optional filter to specific tag
+        tag_filter: Optional filter to specific tag (legacy)
+        tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
         
     Returns:
         ActiveUsersAnalyticsResponse: MAU data by tag for each of the last {MAX_MONTHS} months with descriptive month labels (e.g., "Month 1 (Nov)")
@@ -296,11 +392,19 @@ async def get_monthly_active_users(
         start_dt = end_dt - timedelta(days=(MAX_MONTHS * 30 - 1))  # MAX_MONTHS months * 30 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
         
-        # Build SQL query with optional tag filter
+        # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
         
-        if tag_filter:
+        # Handle multiple tag filters (takes precedence over single tag filter)
+        if tag_filters and len(tag_filters) > 0:
+            tag_conditions = []
+            for i, tag in enumerate(tag_filters):
+                param_index = len(params) + 1
+                tag_conditions.append(f"dts.tag = ${param_index}")
+                params.append(tag)
+            where_clause += f" AND ({' OR '.join(tag_conditions)})"
+        elif tag_filter:
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
         
@@ -372,6 +476,10 @@ async def get_tag_summary(
         default=None,
         description="Filter by specific tag (optional)",
     ),
+    tag_filters: Optional[List[str]] = Query(
+        default=None,
+        description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -380,7 +488,8 @@ async def get_tag_summary(
     Args:
         start_date: Start date for the analytics period (YYYY-MM-DD)
         end_date: End date for the analytics period (YYYY-MM-DD)
-        tag_filter: Optional filter to specific tag
+        tag_filter: Optional filter to specific tag (legacy)
+        tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
         
     Returns:
         TagSummaryResponse: Summary analytics data by tag
@@ -398,11 +507,19 @@ async def get_tag_summary(
         datetime.strptime(start_date, "%Y-%m-%d")
         datetime.strptime(end_date, "%Y-%m-%d")
         
-        # Build SQL query with optional tag filter
+        # Build SQL query with optional tag filter(s)
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2"
         params = [start_date, end_date]
         
-        if tag_filter:
+        # Handle multiple tag filters (takes precedence over single tag filter)
+        if tag_filters and len(tag_filters) > 0:
+            tag_conditions = []
+            for i, tag in enumerate(tag_filters):
+                param_index = len(params) + 1
+                tag_conditions.append(f"dts.tag = ${param_index}")
+                params.append(tag)
+            where_clause += f" AND ({' OR '.join(tag_conditions)})"
+        elif tag_filter:
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
         
