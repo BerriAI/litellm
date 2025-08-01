@@ -87,42 +87,31 @@ def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
 
     from typing import List
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_azure_openai_messages,
+    )
     from litellm.types.llms.openai import AllMessageValues
-    from litellm.litellm_core_utils.prompt_templates.factory  import  convert_to_azure_openai_messages
 
     input: List[AllMessageValues] = [
         {
             "role": "user",
             "content": [
-                            {
-                                "type": "text",
-                                "text": "What is in this image?"
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": "www.mock.com"
-                            }
-                        ]
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image_url", "image_url": "www.mock.com"},
+            ],
         }
     ]
 
     expected_content = [
-        {
-            "type": "text",
-            "text": "What is in this image?"  
-        },
-        {
-            "type": "image_url",
-            "image_url": {"url": "www.mock.com"}  
-        }
+        {"type": "text", "text": "What is in this image?"},
+        {"type": "image_url", "image_url": {"url": "www.mock.com"}},
     ]
 
     output = convert_to_azure_openai_messages(input)
 
-    content = output[0].get('content')
+    content = output[0].get("content")
     assert content == expected_content
-
-
 
 
 def test_bedrock_validate_format_image_or_video():
@@ -405,12 +394,44 @@ def test_unpack_defs_resolves_nested_ref_inside_anyof_items():
     unpack_defs(schema, schema["$defs"])
 
     # Extract the items schema after unpacking
-    items_schema = (
-        schema["properties"]["vatAmounts"]["anyOf"][0]["items"]
-    )
+    items_schema = schema["properties"]["vatAmounts"]["anyOf"][0]["items"]
 
     # Assertions: items_schema should now be the resolved object, not an empty dict
-    assert isinstance(items_schema, dict), "Items schema should be a dict after unpacking"
+    assert isinstance(
+        items_schema, dict
+    ), "Items schema should be a dict after unpacking"
     assert items_schema.get("type") == "object"
     # Ensure essential properties are present
     assert set(items_schema.get("properties", {}).keys()) == {"vatRate", "vatAmount"}
+
+
+def test_convert_gemini_messages():
+    """
+    Handle 'content' not being present in the message - https://github.com/BerriAI/litellm/issues/13169
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_result,
+    )
+    from litellm.types.llms.openai import ChatCompletionToolMessage
+
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_d5b2e3fe-d2c0-451d-b034-cf4fbb22e66c",
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_d5b2e3fe-d2c0-451d-b034-cf4fbb22e66c",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "tool_MAX_Data__get_issues", "arguments": "{}"},
+            }
+        ],
+    }
+
+    convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
