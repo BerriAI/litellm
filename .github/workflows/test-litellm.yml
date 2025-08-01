@@ -36,6 +36,9 @@ jobs:
         cd enterprise
         python -m pip install -e .
         cd ..
+    - name: Generate Prisma client
+      run: |
+        poetry run prisma generate
     - name: Run tests
       run: |
         poetry run pytest tests/test_litellm -x -vv -n 4 
