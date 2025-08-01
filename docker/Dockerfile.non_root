@@ -33,7 +33,7 @@ WORKDIR /app
 # Install runtime dependencies
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache bash
+    apk add --no-cache bash libstdc++ ca-certificates openssl
 
 # Copy only necessary artifacts from builder stage for runtime
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/

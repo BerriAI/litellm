@@ -61,7 +61,7 @@ import { EntityList } from "./entity_usage"
 import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { valueFormatterSpend } from "./usage/utils/value_formatters"
 import CloudZeroExportModal from "./cloudzero_export_modal"
-import { UiLoadingSpinner } from "./ui/ui-loading-spinner"
+import { ChartLoader } from "./shared/chart_loader"
 
 interface NewUsagePageProps {
   accessToken: string | null
@@ -368,23 +368,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     return () => clearTimeout(timeoutId)
   }, [fetchUserSpendData])
 
-  // Enhanced loading component with better visual feedback
-  const ChartLoader = () => (
-    <div className="flex items-center justify-center h-40">
-      <div className="flex items-center justify-center gap-3">
-        <UiLoadingSpinner className="size-5" />
-        <div className="flex flex-col">
-          <span className="text-gray-600 text-sm font-medium">
-            {isDateChanging ? "Processing date selection..." : "Loading chart data..."}
-          </span>
-          <span className="text-gray-400 text-xs mt-1">
-            {isDateChanging ? "This will only take a moment" : "Fetching your data"}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-
   const modelMetrics = processActivityData(userSpendData, "models")
   const keyMetrics = processActivityData(userSpendData, "api_keys")
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers")
@@ -530,7 +513,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                       <Card>
                         <Title>Daily Spend</Title>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
                             data={[...userSpendData.results].sort(
@@ -606,7 +589,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                           </div>
                         </div>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
                             className="mt-4 h-40"
@@ -646,7 +629,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                           <Title>Spend by Provider</Title>
                         </div>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <Grid numItems={2}>
                             <Col numColSpan={1}>

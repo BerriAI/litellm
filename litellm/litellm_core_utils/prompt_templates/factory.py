@@ -1121,13 +1121,14 @@ def convert_to_gemini_tool_call_result(
     }
     """
     content_str: str = ""
-    if isinstance(message["content"], str):
-        content_str = message["content"]
-    elif isinstance(message["content"], List):
-        content_list = message["content"]
-        for content in content_list:
-            if content["type"] == "text":
-                content_str += content["text"]
+    if "content" in message:
+        if isinstance(message["content"], str):
+            content_str = message["content"]
+        elif isinstance(message["content"], List):
+            content_list = message["content"]
+            for content in content_list:
+                if content["type"] == "text":
+                    content_str += content["text"]
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
