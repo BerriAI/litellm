@@ -4701,8 +4701,6 @@ class Router:
                         model_id: _model_info,
                     }
                 )
-            
-
 
             ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
             _model_name = deployment.litellm_params.model
@@ -4741,7 +4739,7 @@ class Router:
                 return None
             else:
                 raise e
-    
+
     def _is_auto_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
         Check if the deployment is an auto-router deployment.
@@ -4751,7 +4749,7 @@ class Router:
         if litellm_params.model.startswith("auto_router/"):
             return True
         return False
-    
+
     def init_auto_router_deployment(self, deployment: Deployment):
         """
         Initialize the auto-router deployment.
@@ -4759,18 +4757,31 @@ class Router:
         This will initialize the auto-router and add it to the auto-routers dictionary.
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
-        auto_router_config_path: Optional[str] = deployment.litellm_params.auto_router_config_path
+
+        auto_router_config_path: Optional[str] = (
+            deployment.litellm_params.auto_router_config_path
+        )
         auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
         if auto_router_config_path is None and auto_router_config is None:
-            raise ValueError("auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params")
-        
-        default_model: Optional[str] = deployment.litellm_params.auto_router_default_model
+            raise ValueError(
+                "auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params"
+            )
+
+        default_model: Optional[str] = (
+            deployment.litellm_params.auto_router_default_model
+        )
         if default_model is None:
-            raise ValueError("auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params")
-        
-        embedding_model: Optional[str] = deployment.litellm_params.auto_router_embedding_model
+            raise ValueError(
+                "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
+            )
+
+        embedding_model: Optional[str] = (
+            deployment.litellm_params.auto_router_embedding_model
+        )
         if embedding_model is None:
-            raise ValueError("auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params")
+            raise ValueError(
+                "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
+            )
 
         autor_router: AutoRouter = AutoRouter(
             model_name=deployment.model_name,
@@ -4781,7 +4792,9 @@ class Router:
             litellm_router_instance=self,
         )
         if deployment.model_name in self.auto_routers:
-            raise ValueError(f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name.")
+            raise ValueError(
+                f"Auto-router deployment {deployment.model_name} already exists. Please use a different model name."
+            )
         self.auto_routers[deployment.model_name] = autor_router
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
@@ -5777,6 +5790,8 @@ class Router:
         Return all deployments of a model name
 
         Used for accurate 'get_model_list'.
+
+        if team_id specified, only return team-specific models
         """
         returned_models: List[DeploymentTypedDict] = []
         for model in self.model_list:
@@ -5917,7 +5932,10 @@ class Router:
         return None
 
     def get_model_access_groups(
-        self, model_name: Optional[str] = None, model_access_group: Optional[str] = None
+        self,
+        model_name: Optional[str] = None,
+        model_access_group: Optional[str] = None,
+        team_id: Optional[str] = None,
     ) -> Dict[str, List[str]]:
         """
         If model_name is provided, only return access groups for that model.
@@ -5925,12 +5943,13 @@ class Router:
         Parameters:
         - model_name: Optional[str] - the received model name from the user (can be a wildcard route). If set, will only return access groups for that model.
         - model_access_group: Optional[str] - the received model access group from the user. If set, will only return models for that access group.
+        - team_id: Optional[str] - the team id, to resolve team-specific models
         """
         from collections import defaultdict
 
         access_groups = defaultdict(list)
 
-        model_list = self.get_model_list(model_name=model_name)
+        model_list = self.get_model_list(model_name=model_name, team_id=team_id)
         if model_list:
             for m in model_list:
                 _model_info = m.get("model_info")
@@ -6518,7 +6537,7 @@ class Router:
             )
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(request_kwargs)
-            
+
             #########################################################
             # Execute Pre-Routing Hooks
             # this hook can modify the model, messages before the routing decision is made
@@ -6535,8 +6554,6 @@ class Router:
                 messages = pre_routing_hook_response.messages
             #########################################################
 
-            
-            
             healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
                 request_kwargs=request_kwargs,
@@ -6671,11 +6688,8 @@ class Router:
                 input=input,
                 specific_deployment=specific_deployment,
             )
-        
+
         return None
-
-
-
 
     def get_available_deployment(
         self,

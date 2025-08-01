@@ -119,11 +119,16 @@ Example litellm config.yaml:
 
 ```yaml
 model_list:
-  - model_name: thinking-anthropic-claude-3-7-sonnet
+  - model_name: thinking-anthropic-claude-3-7-sonnet # Bedrock Anthropic
     litellm_params:
       model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
       thinking: {"type": "enabled", "budget_tokens": 1024}
       max_tokens: 1080
+      merge_reasoning_content_in_choices: true
+  - model_name: vertex_ai/gemini-2.5-pro # Vertex AI Gemini
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      thinking: {"type": "enabled", "budget_tokens": 1024}
       merge_reasoning_content_in_choices: true
 ```
 

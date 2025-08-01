@@ -190,7 +190,7 @@ async def gemini_proxy_route(
     )
     if gemini_api_key is None:
         raise Exception(
-            "Required 'GEMINI_API_KEY' in environment to make pass-through calls to Google AI Studio."
+            "Required 'GEMINI_API_KEY'/'GOOGLE_API_KEY' in environment to make pass-through calls to Google AI Studio."
         )
     # Merge query parameters, giving precedence to those in updated_url
     merged_params = dict(request.query_params)

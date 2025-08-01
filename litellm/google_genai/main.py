@@ -24,11 +24,14 @@ if TYPE_CHECKING:
         GenerateContentConfigDict,
         GenerateContentContentListUnionDict,
         GenerateContentResponse,
+        ToolConfigDict,
     )
 else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
+    ToolConfigDict = Any
+
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -83,6 +86,7 @@ class GenerateContentHelper:
         config: Optional[GenerateContentConfigDict] = None,
         custom_llm_provider: Optional[str] = None,
         stream: bool = False,
+        tools: Optional[ToolConfigDict] = None,
         **kwargs,
     ) -> GenerateContentSetupResult:
         """
@@ -166,6 +170,7 @@ class GenerateContentHelper:
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
                 contents=contents,
+                tools=tools,
                 generate_content_config_dict=generate_content_config_dict,
             )
         )
@@ -200,6 +205,7 @@ async def agenerate_content(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -235,6 +241,7 @@ async def agenerate_content(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
+            tools=tools,
             **kwargs,
         )
 
@@ -263,6 +270,7 @@ def generate_content(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -296,6 +304,7 @@ def generate_content(
             config=config,
             custom_llm_provider=custom_llm_provider,
             stream=False,
+            tools=tools,
             **kwargs,
         )
 
@@ -316,6 +325,7 @@ def generate_content(
         response = base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
+            tools=tools,
             generate_content_provider_config=setup_result.generate_content_provider_config,
             generate_content_config_dict=setup_result.generate_content_config_dict,
             custom_llm_provider=setup_result.custom_llm_provider,
@@ -346,6 +356,7 @@ async def agenerate_content_stream(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -377,6 +388,7 @@ async def agenerate_content_stream(
                 "config": config,
                 "custom_llm_provider": custom_llm_provider,
                 "stream": True,
+                "tools": tools,
                 **kwargs,
             }
         )
@@ -402,6 +414,7 @@ async def agenerate_content_stream(
             contents=contents,
             generate_content_provider_config=setup_result.generate_content_provider_config,
             generate_content_config_dict=setup_result.generate_content_config_dict,
+            tools=tools,
             custom_llm_provider=setup_result.custom_llm_provider,
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
@@ -429,6 +442,7 @@ def generate_content_stream(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -454,6 +468,7 @@ def generate_content_stream(
             config=config,
             custom_llm_provider=custom_llm_provider,
             stream=True,
+            tools=tools,
             **kwargs,
         )
 
@@ -476,6 +491,7 @@ def generate_content_stream(
             contents=contents,
             generate_content_provider_config=setup_result.generate_content_provider_config,
             generate_content_config_dict=setup_result.generate_content_config_dict,
+            tools=tools,
             custom_llm_provider=setup_result.custom_llm_provider,
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,

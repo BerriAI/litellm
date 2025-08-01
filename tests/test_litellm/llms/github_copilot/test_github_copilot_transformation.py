@@ -177,3 +177,188 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
         litellm.disable_copilot_system_to_assistant = original_flag
 
 
+def test_x_initiator_header_user_request():
+    """Test that user-only messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "user", "content": "Hello!"},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_agent_request_with_assistant():
+    """Test that messages with assistant role result in X-Initiator: agent header"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "assistant", "content": "I can help you."},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4", 
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "agent"
+
+
+def test_x_initiator_header_agent_request_with_tool():
+    """Test that messages with tool role result in X-Initiator: agent header"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "tool", "content": "Tool response.", "tool_call_id": "123"},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4", 
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "agent"
+
+
+def test_x_initiator_header_mixed_messages_with_agent_roles():
+    """Test that mixed messages with agent roles (assistant/tool) result in X-Initiator: agent header"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator  
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Previous response."},
+        {"role": "user", "content": "Follow up question."},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages, 
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "agent"
+
+
+def test_x_initiator_header_user_only_messages():
+    """Test that user + system only messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator  
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+        {"role": "user", "content": "Hello"},
+        {"role": "user", "content": "Follow up question."},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages, 
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_empty_messages():
+    """Test that empty messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = []
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "user"
+
+
+def test_x_initiator_header_system_only_messages():
+    """Test that system-only messages result in X-Initiator: user header"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "system", "content": "You are an assistant."},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["X-Initiator"] == "user"

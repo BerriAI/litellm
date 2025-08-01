@@ -81,3 +81,89 @@ def test_transform_tool_calls_index():
         tool_call_hunk_dict = tool_call_hunk.model_dump()
         for tool_call in tool_call_hunk_dict["choices"][0]["delta"]["tool_calls"]:
             assert tool_call["index"] == 1
+
+
+def test_transform_tool_calls_index_with_optional_arg_func():
+    chunks = [
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": "To"},
+            "p": "abcdefghijklmnopqrstuv",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": " get the current time, I"},
+            "p": "abcdefghijklmnopqrstuvwxyzABCD",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": ' can use the "get_time"'},
+            "p": "abcdefghijkl",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": " function. Since the user"},
+            "p": "abcdefghijkl",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": " didn't specify whether"},
+            "p": "abcdefghijklmnopqrstuvw",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": " they want UTC time or local time,"},
+            "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": " I'll assume they"},
+            "p": "abcdefghijkl",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": " want the local time. Here's"},
+            "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": " how I"},
+            "p": "abcdefghijklmnopqrstuvw",
+        },
+        {
+            "contentBlockIndex": 0,
+            "delta": {"text": "'ll make the function call:"},
+            "p": "abcdefghijklmnopqrstuvwxyzAB",
+        },
+        {
+            "contentBlockIndex": 0,
+            "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        },
+        {
+            "contentBlockIndex": 1,
+            "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO",
+            "start": {
+                "toolUse": {
+                    "name": "get_time",
+                    "toolUseId": "tooluse_htgmgeJATsKTl4s_LW77sQ",
+                }
+            },
+        },
+        {
+            "contentBlockIndex": 1,
+            "delta": {"toolUse": {"input": ""}},
+            "p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV",
+        },
+        {"contentBlockIndex": 1, "p": "abcdefghijklmnopqrstuvw"},
+        {"p": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJK", "stopReason": "tool_use"},
+    ]
+    decoder = AWSEventStreamDecoder(model="test")
+    parsed_chunks = []
+    for chunk in chunks:
+        parsed_chunk = decoder._chunk_parser(chunk)
+        parsed_chunks.append(parsed_chunk)
+    tool_call_chunks = parsed_chunks[11:14]
+    for tool_call_hunk in tool_call_chunks:
+        tool_call_hunk_dict = tool_call_hunk.model_dump()
+        for tool_call in tool_call_hunk_dict["choices"][0]["delta"]["tool_calls"]:
+            assert tool_call["index"] == 0

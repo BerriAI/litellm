@@ -843,7 +843,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
-    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    spec_version: MCPSpecVersionType = MCPSpecVersion.jun_2025
     auth_type: Optional[MCPAuthType] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
@@ -875,7 +875,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     alias: Optional[str] = None
     description: Optional[str] = None
     transport: MCPTransportType = MCPTransport.sse
-    spec_version: MCPSpecVersionType = MCPSpecVersion.mar_2025
+    spec_version: MCPSpecVersionType = MCPSpecVersion.jun_2025
     auth_type: Optional[MCPAuthType] = None
     url: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
@@ -919,6 +919,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
+    # Health check status
+    status: Optional[str] = Field(default="unknown", description="Health status: 'healthy', 'unhealthy', 'unknown'")
+    last_health_check: Optional[datetime] = None
+    health_check_error: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1849,7 +1853,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
