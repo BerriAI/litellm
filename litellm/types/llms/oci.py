@@ -140,21 +140,26 @@ class OCICompletionResponse(BaseModel):
 
 class OCIStreamDelta(BaseModel):
     """O delta de conteúdo em um chunk de streaming."""
-    content: str | None = None
+    content: list[OCIContentPartUnion] | None = None
     role: str | None = None
-    toolCalls: list[OCIToolCall] | None
+    toolCalls: list[OCIToolCall] | None = None
 
-class OCIStreamChoice(BaseModel):
-    """Uma escolha em um chunk de streaming."""
-    index: int
-    delta: OCIStreamDelta
-    finishReason: str | None
+# class OCIStreamChoice(BaseModel):
+#     """Uma escolha em um chunk de streaming."""
+#     index: int
+#     delta: OCIStreamDelta
+#     finishReason: str | None
 
-class OCIStreamChatResponse(BaseModel):
-    """O objeto 'chatResponse' em um chunk de streaming."""
-    choices: list[OCIStreamChoice]
+# class OCIStreamChatResponse(BaseModel):
+#     """O objeto 'chatResponse' em um chunk de streaming."""
+#     choices: list[OCIStreamChoice]
 
 class OCIStreamChunk(BaseModel):
     """Modelo para um único chunk de evento SSE da OCI."""
-    chatResponse: OCIStreamChatResponse
-    modelId: str | None
+    finishReason: str | None = None
+    message: OCIStreamDelta | None = None
+    pad: str | None = None
+    index: int | None = None
+
+    # chatResponse: OCIStreamChatResponse
+    # modelId: str | None

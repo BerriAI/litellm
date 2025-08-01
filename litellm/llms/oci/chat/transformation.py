@@ -24,8 +24,17 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage, ChatCompletionTextObject
 from litellm.types.utils import LlmProviders
 from litellm.utils import ChatCompletionMessageToolCall, CustomStreamWrapper, ModelResponse, Usage
-from litellm.types.llms.oci import OCIChatRequestPayload, OCICompletionPayload, OCICompletionResponse, OCIImageContentPart, OCIMessage, OCIRoles, OCIServingMode, OCITextContentPart, OCIToolCall, OCIToolDefinition, OCIVendors
+from litellm.types.llms.oci import OCIChatRequestPayload, OCICompletionPayload, OCICompletionResponse, OCIImageContentPart, OCIMessage, OCIRoles, OCIServingMode, OCIStreamChunk, OCITextContentPart, OCIToolCall, OCIToolDefinition, OCIVendors
 from litellm.llms.oci.common_utils import OCIError
+from litellm.types.utils import (
+    Delta,
+    GenericStreamingChunk,
+    LlmProviders,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    Usage,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -450,7 +459,7 @@ class OCIChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> "CustomStreamWrapper":
+    ) -> "OCIStreamWrapper":
         if "stream" in data:
             del data["stream"]
         if client is None or isinstance(client, AsyncHTTPHandler):
@@ -475,7 +484,7 @@ class OCIChatConfig(BaseConfig):
 
         completion_stream = response.iter_text()
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response = OCIStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -496,7 +505,7 @@ class OCIChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> "CustomStreamWrapper":
+    ) -> "OCIStreamWrapper":
         if "stream" in data:
             del data["stream"]
 
@@ -522,7 +531,7 @@ class OCIChatConfig(BaseConfig):
 
         completion_stream = response.aiter_text()
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response = OCIStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -709,3 +718,64 @@ def adapt_tools_to_openai_standard(tools: list[OCIToolCall]) -> list[ChatComplet
         )
         new_tools.append(new_tool)
     return new_tools
+
+
+class OCIStreamWrapper(CustomStreamWrapper):
+    """
+    Custom stream wrapper for OCI responses.
+    This class is used to handle streaming responses from OCI's API.
+    """
+
+    def __init__(
+        self,
+        **kwargs: Any,
+    ):
+        super().__init__(**kwargs)
+
+    def chunk_creator(self, chunk: Any):
+        if not isinstance(chunk, str):
+            raise ValueError(f"Chunk is not a string: {chunk}")
+        if not chunk.startswith("data:"):
+            raise ValueError(f"Chunk does not start with 'data:': {chunk}")
+        dict_chunk = json.loads(chunk[5:])  # Remove 'data: ' prefix and parse JSON
+        try:
+            typed_chunk = OCIStreamChunk(**dict_chunk)
+        except TypeError as e:
+            raise ValueError(f"Chunk cannot be casted to OCIStreamChunk: {str(e)}")
+
+        if typed_chunk.index is None:
+            typed_chunk.index = 0
+        
+        text = ""
+        if typed_chunk.message and typed_chunk.message.content:
+            for item in typed_chunk.message.content:
+                if isinstance(item, OCITextContentPart):
+                    text += item.text
+                elif isinstance(item, OCIImageContentPart):
+                    raise ValueError(
+                        "OCI does not support image content in streaming responses"
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported content type in OCI response: {item.type}"
+                    )
+        
+        tool_calls = None
+        if typed_chunk.message and typed_chunk.message.toolCalls:
+            tool_calls = adapt_tools_to_openai_standard(typed_chunk.message.toolCalls)
+
+        return ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=typed_chunk.index if typed_chunk.index else 0,
+                    delta=Delta(
+                        content=text,
+                        tool_calls=[tool.model_dump() for tool in tool_calls] if tool_calls else None,
+                        provider_specific_fields=None,  # OCI does not have provider specific fields in the response
+                        thinking_blocks=None,  # OCI does not have thinking blocks in the response
+                        reasoning_content=None,  # OCI does not have reasoning content in the response
+                    ),
+                    finish_reason=typed_chunk.finishReason,
+                )
+            ]
+        )
