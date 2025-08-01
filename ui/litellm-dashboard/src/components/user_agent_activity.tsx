@@ -311,53 +311,59 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       </Grid>
 
       {/* Top 4 User Agents Cards */}
-      <Grid numItems={4} className="gap-4">
-        {(summaryData.top_tags || []).slice(0, 4).map((tag, index) => {
-          const userAgent = extractUserAgent(tag.tag);
-          const displayName = truncateUserAgent(userAgent);
-          return (
-            <Card key={index}>
-              <Title className="truncate" title={userAgent}>
-                {displayName}
-              </Title>
+      {loading ? (
+        <Card>
+          <ChartLoader isDateChanging={isDateChanging} />
+        </Card>
+      ) : (
+        <Grid numItems={4} className="gap-4">
+          {(summaryData.top_tags || []).slice(0, 4).map((tag, index) => {
+            const userAgent = extractUserAgent(tag.tag);
+            const displayName = truncateUserAgent(userAgent);
+            return (
+              <Card key={index}>
+                <Title className="truncate" title={userAgent}>
+                  {displayName}
+                </Title>
+                <div className="mt-4 space-y-3">
+                  <div>
+                    <Text className="text-sm text-gray-600">Success Requests</Text>
+                    <Metric className="text-lg">{formatAbbreviatedNumber(tag.successful_requests)}</Metric>
+                  </div>
+                  <div>
+                    <Text className="text-sm text-gray-600">Total Tokens</Text>
+                    <Metric className="text-lg">{formatAbbreviatedNumber(tag.tokens)}</Metric>
+                  </div>
+                  <div>
+                    <Text className="text-sm text-gray-600">Total Cost</Text>
+                    <Metric className="text-lg">${formatAbbreviatedNumber(tag.spend, 4)}</Metric>
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+          {/* Fill remaining slots if less than 4 agents */}
+          {Array.from({ length: Math.max(0, 4 - (summaryData.top_tags || []).length) }).map((_, index) => (
+            <Card key={`empty-${index}`}>
+              <Title>No Data</Title>
               <div className="mt-4 space-y-3">
                 <div>
                   <Text className="text-sm text-gray-600">Success Requests</Text>
-                  <Metric className="text-lg">{formatAbbreviatedNumber(tag.successful_requests)}</Metric>
+                  <Metric className="text-lg">-</Metric>
                 </div>
                 <div>
                   <Text className="text-sm text-gray-600">Total Tokens</Text>
-                  <Metric className="text-lg">{formatAbbreviatedNumber(tag.tokens)}</Metric>
+                  <Metric className="text-lg">-</Metric>
                 </div>
                 <div>
                   <Text className="text-sm text-gray-600">Total Cost</Text>
-                  <Metric className="text-lg">${formatAbbreviatedNumber(tag.spend, 4)}</Metric>
+                  <Metric className="text-lg">-</Metric>
                 </div>
               </div>
-            </Card>
-          );
-        })}
-        {/* Fill remaining slots if less than 4 agents */}
-        {Array.from({ length: Math.max(0, 4 - (summaryData.top_tags || []).length) }).map((_, index) => (
-          <Card key={`empty-${index}`}>
-            <Title>No Data</Title>
-            <div className="mt-4 space-y-3">
-              <div>
-                <Text className="text-sm text-gray-600">Success Requests</Text>
-                <Metric className="text-lg">-</Metric>
-              </div>
-              <div>
-                <Text className="text-sm text-gray-600">Total Tokens</Text>
-                <Metric className="text-lg">-</Metric>
-              </div>
-              <div>
-                <Text className="text-sm text-gray-600">Total Cost</Text>
-                <Metric className="text-lg">-</Metric>
-              </div>
-            </div>
-        </Card>
-        ))}
-      </Grid>
+          </Card>
+          ))}
+        </Grid>
+      )}
 
       {/* Main TabGroup for DAU/WAU/MAU vs Per User Usage */}
       <Card>
