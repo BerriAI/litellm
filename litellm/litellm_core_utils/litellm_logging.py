@@ -3212,14 +3212,16 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _literalai_logger = LiteralAILogger()
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
-        elif logging_integration == "prometheus" and PrometheusLogger is not None:
+        elif logging_integration == "prometheus":
+            if PrometheusLogger is None:
+                raise ValueError("PrometheusLogger is not initialized")
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback  # type: ignore
 
-                _prometheus_logger = PrometheusLogger()
-                _in_memory_loggers.append(_prometheus_logger)
-                return _prometheus_logger  # type: ignore
+            _prometheus_logger = PrometheusLogger()
+            _in_memory_loggers.append(_prometheus_logger)
+            return _prometheus_logger  # type: ignore
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
