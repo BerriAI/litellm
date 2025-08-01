@@ -43,6 +43,14 @@ pip install litellm==1.74.9.post1
 
 ---
 
+Model-level Guardrails
+
+This release allows you to add model-level guardrails to your models. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
+
+[Read More](ADD DOCS LINK)
+
+
+---
 ## MCP Header Propagation
 
 v1.74.9-stable allows you to propagate MCP server specific authentication headers via LiteLLM
