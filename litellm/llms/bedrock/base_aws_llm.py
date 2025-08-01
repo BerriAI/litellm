@@ -476,33 +476,82 @@ class BaseAWSLLM:
         # we need to use the web identity token flow
         if (web_identity_token_file and irsa_role_arn and 
             aws_access_key_id is None and aws_secret_access_key is None):
-            # For IRSA, we need to use boto3's built-in support for web identity tokens
-            # boto3 will automatically read the token file and assume the role
+            # For cross-account role assumption with specific session names,
+            # we need to manually assume the IRSA role first with the correct session name
             verbose_logger.debug(f"IRSA detected: using web identity token from {web_identity_token_file}")
             
-            # Create an STS client that will use the web identity token automatically
             import boto3
             from botocore.credentials import Credentials
             
             try:
-                # boto3 will automatically use the web identity token file
                 # Get region from environment
                 region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
-                with tracer.trace("boto3.client(sts) with IRSA"):
-                    sts_client = boto3.client("sts", region_name=region)
                 
-                # Get current caller identity for debugging
-                try:
-                    caller_identity = sts_client.get_caller_identity()
-                    verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
-                except Exception as e:
-                    verbose_logger.debug(f"Failed to get caller identity: {e}")
-                
-                # Now assume the target role
-                verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
-                sts_response = sts_client.assume_role(
-                    RoleArn=aws_role_name, RoleSessionName=aws_session_name
-                )
+                # Check if we need to do cross-account role assumption
+                if aws_role_name != irsa_role_arn:
+                    # For cross-account role assumption, we need to manually assume the IRSA role
+                    # with the correct session name first
+                    verbose_logger.debug(f"Cross-account role assumption detected")
+                    
+                    # Read the web identity token
+                    with open(web_identity_token_file, 'r') as f:
+                        web_identity_token = f.read().strip()
+                    
+                    # Create an STS client without credentials
+                    with tracer.trace("boto3.client(sts) for manual IRSA"):
+                        sts_client = boto3.client('sts', region_name=region)
+                    
+                    # Manually assume the IRSA role with the session name
+                    verbose_logger.debug(f"Manually assuming IRSA role {irsa_role_arn} with session {aws_session_name}")
+                    irsa_response = sts_client.assume_role_with_web_identity(
+                        RoleArn=irsa_role_arn,
+                        RoleSessionName=aws_session_name,
+                        WebIdentityToken=web_identity_token
+                    )
+                    
+                    # Extract the credentials from the IRSA assumption
+                    irsa_creds = irsa_response["Credentials"]
+                    
+                    # Create a new STS client with the IRSA credentials
+                    with tracer.trace("boto3.client(sts) with manual IRSA credentials"):
+                        sts_client_with_creds = boto3.client(
+                            'sts',
+                            region_name=region,
+                            aws_access_key_id=irsa_creds["AccessKeyId"],
+                            aws_secret_access_key=irsa_creds["SecretAccessKey"],
+                            aws_session_token=irsa_creds["SessionToken"]
+                        )
+                    
+                    # Get current caller identity for debugging
+                    try:
+                        caller_identity = sts_client_with_creds.get_caller_identity()
+                        verbose_logger.debug(f"Current identity after manual IRSA assumption: {caller_identity.get('Arn', 'unknown')}")
+                    except Exception as e:
+                        verbose_logger.debug(f"Failed to get caller identity: {e}")
+                    
+                    # Now assume the target role
+                    verbose_logger.debug(f"Attempting to assume target role: {aws_role_name} with session: {aws_session_name}")
+                    sts_response = sts_client_with_creds.assume_role(
+                        RoleArn=aws_role_name, RoleSessionName=aws_session_name
+                    )
+                else:
+                    # Same account, use boto3's automatic IRSA support
+                    verbose_logger.debug(f"Same account role assumption, using automatic IRSA")
+                    with tracer.trace("boto3.client(sts) with automatic IRSA"):
+                        sts_client = boto3.client("sts", region_name=region)
+                    
+                    # Get current caller identity for debugging
+                    try:
+                        caller_identity = sts_client.get_caller_identity()
+                        verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
+                    except Exception as e:
+                        verbose_logger.debug(f"Failed to get caller identity: {e}")
+                    
+                    # Assume the role
+                    verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
+                    sts_response = sts_client.assume_role(
+                        RoleArn=aws_role_name, RoleSessionName=aws_session_name
+                    )
                 
                 # Extract the credentials from the response
                 sts_credentials = sts_response["Credentials"]

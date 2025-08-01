@@ -956,6 +956,14 @@ def test_auth_with_aws_role_irsa_environment():
         }):
             # Mock the boto3 STS client
             mock_sts_client = MagicMock()
+            mock_assume_web_identity_response = {
+                'Credentials': {
+                    'AccessKeyId': 'irsa-temp-access-key',
+                    'SecretAccessKey': 'irsa-temp-secret-key',
+                    'SessionToken': 'irsa-temp-session-token',
+                    'Expiration': datetime.now() + timedelta(hours=1)
+                }
+            }
             mock_assume_role_response = {
                 'Credentials': {
                     'AccessKeyId': 'irsa-access-key',
@@ -964,6 +972,7 @@ def test_auth_with_aws_role_irsa_environment():
                     'Expiration': datetime.now() + timedelta(hours=1)
                 }
             }
+            mock_sts_client.assume_role_with_web_identity.return_value = mock_assume_web_identity_response
             mock_sts_client.assume_role.return_value = mock_assume_role_response
             
             with patch('boto3.client', return_value=mock_sts_client) as mock_boto3_client:
@@ -975,8 +984,16 @@ def test_auth_with_aws_role_irsa_environment():
                     aws_session_name='test-session'
                 )
                 
-                # Verify boto3.client was called with sts and region
-                mock_boto3_client.assert_called_with('sts', region_name='us-east-1')
+                # Verify boto3.client was called multiple times
+                # First for manual IRSA, then with IRSA credentials
+                assert mock_boto3_client.call_count >= 2
+                
+                # Verify assume_role_with_web_identity was called
+                mock_sts_client.assume_role_with_web_identity.assert_called_once_with(
+                    RoleArn='arn:aws:iam::111111111111:role/eks-service-account-role',
+                    RoleSessionName='test-session',
+                    WebIdentityToken='test-web-identity-token'
+                )
                 
                 # Verify assume_role was called with correct parameters
                 mock_sts_client.assume_role.assert_called_once_with(
