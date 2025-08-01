@@ -1,5 +1,4 @@
 import uuid
-from copy import deepcopy
 from typing import Optional
 
 import litellm
