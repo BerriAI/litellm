@@ -1,5 +1,5 @@
 ---
-title: "v1.74.9-stable"
+title: "v1.74.9-stable - Auto-Router"
 slug: "v1-74-9"
 date: 2025-07-27T10:00:00
 authors:
@@ -43,7 +43,16 @@ pip install litellm==1.74.9.post1
 
 ---
 
+## MCP Header Propagation
 
+v1.74.9-stable allows you to propagate MCP server specific authentication headers via LiteLLM
+- Allowing users to specify which {header_name} is to be propagated to which {mcp_server} via headers
+- Allows adding of different deployments of same MCP server type to use different authentication headers
+
+
+[Read More](https://docs.litellm.ai/docs/mcp#new-server-specific-auth-headers-recommended)
+
+---
 ## New Models / Updated Models
 
 #### Pricing / Context Window Updates
