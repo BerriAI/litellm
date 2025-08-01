@@ -6,7 +6,7 @@ Calls done in OpenAI/openai.py as Vercel AI Gateway is openai-compatible.
 Docs: https://vercel.com/docs/ai-gateway
 """
 
-from typing import Any, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import httpx
 

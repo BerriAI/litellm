@@ -1,13 +1,6 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: vertex_ai/*
     litellm_params:
-      model: anthropic/*
-  - model_name: openai/*
-    litellm_params:
-      model: openai/*
+      model: vertex_ai/*
 
-
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
-  cache: true
 

@@ -33,7 +33,13 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.mcp import MCPPostCallResponseObject
+    from litellm.types.mcp import (
+        MCPDuringCallRequestObject,
+        MCPDuringCallResponseObject,
+        MCPPostCallResponseObject,
+        MCPPreCallRequestObject,
+        MCPPreCallResponseObject,
+    )
     from litellm.types.router import PreRoutingHookResponse
 
     Span = Union[_Span, Any]
@@ -42,13 +48,30 @@ else:
     LiteLLMLoggingObj = Any
     UserAPIKeyAuth = Any
     MCPPostCallResponseObject = Any
+    MCPPreCallRequestObject = Any
+    MCPPreCallResponseObject = Any
+    MCPDuringCallRequestObject = Any
+    MCPDuringCallResponseObject = Any
     PreRoutingHookResponse = Any
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
-    def __init__(self, message_logging: bool = True, **kwargs) -> None:
+    def __init__(
+        self, 
+        turn_off_message_logging: bool = False,
+
+        # deprecated param, use `turn_off_message_logging` instead
+        message_logging: bool = True,
+        **kwargs
+    ) -> None:
+        """
+        Args:
+            turn_off_message_logging: bool - if True, the message logging will be turned off. Message and response will be redacted from StandardLoggingPayload.
+            message_logging: bool - deprecated param, use `turn_off_message_logging` instead
+        """
         self.message_logging = message_logging
+        self.turn_off_message_logging = turn_off_message_logging
         pass
 
     def log_pre_api_call(self, model, messages, kwargs):
@@ -387,6 +410,60 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     #########################################################
     # MCP TOOL CALL HOOKS
     #########################################################
+    async def async_pre_mcp_tool_call_hook(
+        self, 
+        kwargs, 
+        request_obj: MCPPreCallRequestObject, 
+        start_time, 
+        end_time
+    ) -> Optional[MCPPreCallResponseObject]:
+        """
+        This hook gets called before the MCP tool call is made.
+
+        Useful for:
+        - Validating tool calls before execution
+        - Modifying arguments before they are sent to the MCP server
+        - Implementing access control and rate limiting
+        - Adding custom metadata or tracking information
+
+        Args:
+            kwargs: The logging kwargs containing model call details
+            request_obj: MCPPreCallRequestObject containing tool name, arguments, and metadata
+            start_time: Start time of the request
+            end_time: End time of the request
+
+        Returns:
+            MCPPreCallResponseObject with validation results and any modifications
+        """
+        return None
+
+    async def async_during_mcp_tool_call_hook(
+        self, 
+        kwargs, 
+        request_obj: MCPDuringCallRequestObject, 
+        start_time, 
+        end_time
+    ) -> Optional[MCPDuringCallResponseObject]:
+        """
+        This hook gets called during the MCP tool call execution.
+
+        Useful for:
+        - Concurrent monitoring and validation during tool execution
+        - Implementing timeouts and cancellation logic
+        - Real-time cost tracking and billing
+        - Performance monitoring and metrics collection
+
+        Args:
+            kwargs: The logging kwargs containing model call details
+            request_obj: MCPDuringCallRequestObject containing tool execution context
+            start_time: Start time of the request
+            end_time: End time of the request
+
+        Returns:
+            MCPDuringCallResponseObject with execution control decisions
+        """
+        return None
+
     async def async_post_mcp_tool_call_hook(
         self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
     ) -> Optional[MCPPostCallResponseObject]:
@@ -470,3 +547,49 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if LITELLM_METADATA_FIELD in request_kwargs:
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
+    
+    def redact_standard_logging_payload_from_model_call_details(
+        self, model_call_details: Dict
+    ) -> Dict:
+        """
+        Only redacts messages and responses when self.turn_off_message_logging is True
+        
+
+        By default, self.turn_off_message_logging is False and this does nothing.
+        
+        Return a redacted deepcopy of the provided logging payload.
+        
+        This is useful for logging payloads that contain sensitive information.
+        """
+        from copy import copy
+
+        from litellm import Choices, Message, ModelResponse
+        from litellm.types.utils import LiteLLMCommonStrings
+        turn_off_message_logging: bool = getattr(self, "turn_off_message_logging", False)
+        
+        if turn_off_message_logging is False:
+            return model_call_details
+        
+        # Only make a shallow copy of the top-level dict to avoid deepcopy issues
+        # with complex objects like AuthenticationError that may be present
+        model_call_details_copy = copy(model_call_details)
+        redacted_str = LiteLLMCommonStrings.redacted_by_litellm.value
+        standard_logging_object = model_call_details.get("standard_logging_object")
+        if standard_logging_object is None:
+            return model_call_details_copy
+
+        # Make a copy of just the standard_logging_object to avoid modifying the original
+        standard_logging_object_copy = copy(standard_logging_object)
+
+        if standard_logging_object_copy.get("messages") is not None:
+            standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
+
+        if standard_logging_object_copy.get("response") is not None:
+            model_response = ModelResponse(
+                choices=[Choices(message=Message(content=redacted_str))]
+            )
+            model_response_dict = model_response.model_dump()
+            standard_logging_object_copy["response"] = model_response_dict
+
+        model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
+        return model_call_details_copy

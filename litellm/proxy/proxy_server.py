@@ -272,6 +272,9 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
+from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
+    router as user_agent_analytics_router,
+)
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
@@ -1349,6 +1352,13 @@ async def _run_background_health_check():
     while True:
         # make 1 deep copy of llm_model_list on every health check iteration
         _llm_model_list = copy.deepcopy(llm_model_list) or []
+
+        # filter out models that have disabled background health checks
+        _llm_model_list = [
+            m
+            for m in _llm_model_list
+            if not m.get("model_info", {}).get("disable_background_health_check", False)
+        ]
 
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
@@ -2767,13 +2777,13 @@ class ProxyConfig:
 
             return current_config
 
-        # For dictionary values, update only non-empty values
+        # For dictionary values, update only non-none values
         if isinstance(current_config[param_name], dict):
             # Only keep non None values from db_param_value
-            non_empty_values = {k: v for k, v in db_param_value.items() if v}
+            non_none_values = {k: v for k, v in db_param_value.items() if v is not None}
 
-            # Update the config with non-empty values
-            current_config[param_name].update(non_empty_values)
+            # Update the config with non-none values
+            current_config[param_name].update(non_none_values)
         else:
             current_config[param_name] = db_param_value
 
@@ -8865,6 +8875,7 @@ app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
+app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 ########################################################

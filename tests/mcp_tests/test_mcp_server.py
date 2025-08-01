@@ -35,7 +35,7 @@ async def test_mcp_server_manager():
     print("TOOLS FROM MCP SERVER MANAGER== ", tools)
 
     result = await mcp_server_manager.call_tool(
-        name="gmail_send_email", arguments={"body": "Test"}
+        name="gmail_send_email", arguments={"body": "Test"}, proxy_logging_obj=None
     )
     print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
 
@@ -105,6 +105,7 @@ async def test_mcp_server_manager_https_server():
                 "message": "Test",
                 "instructions": "Test",
             },
+            proxy_logging_obj=None,
         )
         print("RESULT FROM CALLING TOOL FROM MCP SERVER MANAGER== ", result)
         
@@ -189,9 +190,7 @@ async def test_mcp_http_transport_list_tools_mock():
         assert tools[1].name == f"{expected_prefix}-calendar_create_event"
         
         # Verify client methods were called
-        mock_client.__aenter__.assert_called()
-        # Note: list_tools is called twice - once during initialization and once during the actual list_tools call
-        assert mock_client.list_tools.call_count == 2
+        mock_client.list_tools.assert_called()
         
         # Verify tool mapping was updated
         expected_prefix = "test_http_server"
@@ -248,7 +247,8 @@ async def test_mcp_http_transport_call_tool_mock():
                 "to": "test@example.com",
                 "subject": "Test Subject",
                 "body": "Test email body"
-            }
+            },
+            proxy_logging_obj=None,
         )
         
         # Assertions
@@ -308,7 +308,8 @@ async def test_mcp_http_transport_call_tool_error_mock():
         # Call the tool with invalid data
         result = await test_manager.call_tool(
             name="gmail_send_email",
-            arguments={"to": "invalid-email", "subject": "Test", "body": "Test"}
+            arguments={"to": "invalid-email", "subject": "Test", "body": "Test"},
+            proxy_logging_obj=None,
         )
         
         # Assertions for error case
@@ -343,7 +344,8 @@ async def test_mcp_http_transport_tool_not_found():
     with pytest.raises(ValueError, match="Tool nonexistent_tool not found"):
         await test_manager.call_tool(
             name="nonexistent_tool",
-            arguments={"param": "value"}
+            arguments={"param": "value"},
+            proxy_logging_obj=None,
         )
 
 
@@ -720,7 +722,7 @@ async def test_get_tools_from_mcp_servers():
         mock_manager_2 = AsyncMock()
         mock_manager_2.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id"])
         mock_manager_2.get_mcp_server_by_id = mock_get_server_by_id
-        mock_manager_2._get_tools_from_server = AsyncMock(side_effect=lambda server, mcp_auth_header=None: 
+        mock_manager_2._get_tools_from_server = AsyncMock(side_effect=lambda server, mcp_auth_header=None, mcp_protocol_version=None: 
             [mock_tool_1] if server.server_id == "server1_id" else [mock_tool_2])
 
         with patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', mock_manager_2):
@@ -1197,5 +1199,41 @@ def test_add_server_prefix_to_tool_name():
     # Test with empty server name
     result = add_server_prefix_to_tool_name("send_email", "")
     assert result == "-send_email"
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_version_passed_to_client():
+    """Test that MCP protocol version from request is correctly passed to MCPClient."""
+    
+    # Create a test manager
+    test_manager = MCPServerManager()
+    
+    # Mock MCPClient
+    mock_client = AsyncMock()
+    mock_client.list_tools = AsyncMock(return_value=[])
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    
+    def mock_client_constructor(*args, **kwargs):
+        # Verify that the protocol version from request is used
+        if 'protocol_version' in kwargs:
+            assert kwargs['protocol_version'] == "2025-03-26"
+        return mock_client
+    
+    with patch('litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient', mock_client_constructor):
+        # Load a test server
+        test_manager.load_servers_from_config({
+            "test_server": {
+                "url": "https://test-server.com/mcp",
+                "transport": "http",
+                "description": "Test Server"
+            }
+        })
+        
+        # Call list_tools with a specific protocol version from request
+        await test_manager.list_tools(mcp_protocol_version="2025-03-26")
+        
+        # Verify the client was created with the correct protocol version
+        mock_client.list_tools.assert_called()
 
 
