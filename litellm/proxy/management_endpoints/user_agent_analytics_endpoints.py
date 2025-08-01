@@ -166,9 +166,9 @@ async def get_weekly_active_users(
     Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on the specified date.
     
     Shows week-by-week breakdown:
-    - Week 1: Most recent week ending on end_date
-    - Week 2: Previous week (7 days before Week 1)
-    - Week 3: Previous week (7 days before Week 2)
+    - Week 1 (Jan 15): Most recent week ending on end_date
+    - Week 2 (Jan 8): Previous week (7 days before Week 1)
+    - Week 3 (Jan 1): Previous week (7 days before Week 2)
     - ... and so on for {MAX_WEEKS} weeks total
     
     Args:
@@ -176,7 +176,7 @@ async def get_weekly_active_users(
         tag_filter: Optional filter to specific tag
         
     Returns:
-        ActiveUsersAnalyticsResponse: WAU data by tag for each of the last {MAX_WEEKS} weeks with clear week groupings
+        ActiveUsersAnalyticsResponse: WAU data by tag for each of the last {MAX_WEEKS} weeks with descriptive week labels (e.g., "Week 1 (Jan 15)")
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -219,8 +219,9 @@ async def get_weekly_active_users(
         SELECT 
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Week identifier for clear grouping (Week 1, Week 2, etc.)
-            'Week ' || (week_offset + 1)::text as date,
+            -- Week identifier with month and day (Week 1 (Jan 15), Week 2 (Jan 8), etc.)
+            'Week ' || (week_offset + 1)::text || ' (' || 
+            TO_CHAR(DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval, 'Mon DD') || ')' as date,
             -- Calculate week start and end dates for each week
             (DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval)::text as period_start,
             (DATE '{end_date}' - (week_offset * 7 || ' days')::interval)::text as period_end,
@@ -237,7 +238,7 @@ async def get_weekly_active_users(
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
-                date=row["date"],  # This will be "Week 1", "Week 2", etc.
+                date=row["date"],  # This will be "Week 1 (Jan 15)", "Week 2 (Jan 8)", etc.
                 period_start=row["period_start"],
                 period_end=row["period_end"]
             )
@@ -278,9 +279,9 @@ async def get_monthly_active_users(
     Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on the specified date.
     
     Shows month-by-month breakdown:
-    - Month 1: Most recent month ending on end_date (30-day period)
-    - Month 2: Previous month (30 days before Month 1)
-    - Month 3: Previous month (30 days before Month 2)
+    - Month 1 (Jan): Most recent month ending on end_date (30-day period)
+    - Month 2 (Dec): Previous month (30 days before Month 1)
+    - Month 3 (Nov): Previous month (30 days before Month 2)
     - ... and so on for {MAX_MONTHS} months total
     
     Args:
@@ -288,7 +289,7 @@ async def get_monthly_active_users(
         tag_filter: Optional filter to specific tag
         
     Returns:
-        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last {MAX_MONTHS} months with clear month groupings
+        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last {MAX_MONTHS} months with descriptive month labels (e.g., "Month 1 (Jan)")
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -331,8 +332,9 @@ async def get_monthly_active_users(
         SELECT 
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Month identifier for clear grouping (Month 1, Month 2, etc.)
-            'Month ' || (month_offset + 1)::text as date,
+            -- Month identifier with month name (Month 1 (Jan), Month 2 (Dec), etc.)
+            'Month ' || (month_offset + 1)::text || ' (' || 
+            TO_CHAR(DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval, 'Mon') || ')' as date,
             -- Calculate month start and end dates for each month
             (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
             (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end,
@@ -349,7 +351,7 @@ async def get_monthly_active_users(
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
-                date=row["date"],  # This will be "Month 1", "Month 2", etc.
+                date=row["date"],  # This will be "Month 1 (Jan)", "Month 2 (Dec)", etc.
                 period_start=row["period_start"],
                 period_end=row["period_end"]
             )
