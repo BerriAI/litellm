@@ -15,7 +15,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.prompts.dotprompt_manager import DotpromptManager
+from litellm.integrations.dotprompt import DotpromptManager
 from litellm.types.utils import StandardCallbackDynamicParams
 
 

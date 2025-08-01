@@ -5,6 +5,7 @@ Builds on top of PromptManagementBase to provide .prompt file support.
 
 from typing import List, Optional
 
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prompt_management_base import (
     PromptManagementBase,
     PromptManagementClient,
@@ -15,7 +16,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 from .prompt_manager import PromptManager, PromptTemplate
 
 
-class DotpromptManager(PromptManagementBase):
+class DotpromptManager(PromptManagementBase, CustomLogger):
     """
     Dotprompt manager that integrates with LiteLLM's prompt management system.
 
@@ -36,7 +37,10 @@ class DotpromptManager(PromptManagementBase):
     """
 
     def __init__(self, prompt_directory: Optional[str] = None):
-        self.prompt_directory = prompt_directory
+        import litellm
+
+        self.prompt_directory = prompt_directory or litellm.global_prompt_directory
+
         self._prompt_manager: Optional[PromptManager] = None
 
     @property
@@ -51,7 +55,7 @@ class DotpromptManager(PromptManagementBase):
             if self.prompt_directory is None:
                 raise ValueError(
                     "prompt_directory must be set before using dotprompt manager. "
-                    "Set litellm.prompt_directory or initialize with prompt_directory parameter."
+                    "Set litellm.global_prompt_directory or initialize with prompt_directory parameter."
                 )
             self._prompt_manager = PromptManager(self.prompt_directory)
         return self._prompt_manager

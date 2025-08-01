@@ -60,9 +60,9 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.prompts import (
-    default_prompt_manager,
-    default_prompt_directory,
+from litellm.integrations.dotprompt import (
+    global_prompt_manager,
+    global_prompt_directory,
     set_global_prompt_directory,
 )
 from litellm.types.guardrails import GuardrailItem
@@ -133,6 +133,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "s3_v2",
     "aws_sqs",
     "vector_store_pre_call_hook",
+    "dotprompt",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(

@@ -15,7 +15,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.prompts.prompt_manager import PromptManager, PromptTemplate
+from litellm.integrations.dotprompt import PromptManager, PromptTemplate
 
 
 def test_prompt_manager_initialization():

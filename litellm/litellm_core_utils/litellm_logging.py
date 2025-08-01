@@ -79,9 +79,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
 )
-from litellm.types.mcp import (
-    MCPPostCallResponseObject,
-)
+from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.rerank import RerankResponse
 from litellm.types.router import CustomPricingLiteLLMParams
 from litellm.types.utils import (
@@ -122,6 +120,7 @@ from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+from ..integrations.dotprompt import DotpromptManager
 from ..integrations.dynamodb import DyanmoDBLogger
 from ..integrations.galileo import GalileoObserve
 from ..integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
@@ -169,11 +168,10 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
-
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
         Type[EnterpriseStandardLoggingPayloadSetup]
@@ -601,9 +599,7 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model, 
-                tools=tools,
-                non_default_params=non_default_params
+                model=model, tools=tools, non_default_params=non_default_params
             )
         )
 
@@ -675,16 +671,16 @@ class Logging(LiteLLMLoggingBaseClass):
         # Vector Store / Knowledge Base hooks
         #########################################################
         if litellm.vector_store_registry is not None:
-                
-                vector_store_custom_logger = _init_custom_logger_compatible_class(
-                    logging_integration="vector_store_pre_call_hook",
-                    internal_usage_cache=None,
-                    llm_router=None,
-                )
-                self.model_call_details["prompt_integration"] = (
-                    vector_store_custom_logger.__class__.__name__
-                )
-                return vector_store_custom_logger
+
+            vector_store_custom_logger = _init_custom_logger_compatible_class(
+                logging_integration="vector_store_pre_call_hook",
+                internal_usage_cache=None,
+                llm_router=None,
+            )
+            self.model_call_details["prompt_integration"] = (
+                vector_store_custom_logger.__class__.__name__
+            )
+            return vector_store_custom_logger
 
         return None
 
@@ -1316,9 +1312,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if (
             EnterpriseCallbackControls is not None
             and EnterpriseCallbackControls.is_callback_disabled_dynamically(
-                callback=callback, 
+                callback=callback,
                 litellm_params=litellm_params,
-                standard_callback_dynamic_params = self.standard_callback_dynamic_params
+                standard_callback_dynamic_params=self.standard_callback_dynamic_params,
             )
         ):
             verbose_logger.debug(
@@ -3210,7 +3206,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _literalai_logger = LiteralAILogger()
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
-        elif logging_integration == "prometheus":
+        elif logging_integration == "prometheus" and PrometheusLogger is not None:
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback  # type: ignore
@@ -3485,7 +3481,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
             )
-            
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, VectorStorePreCallHook):
                     return callback
@@ -3528,6 +3524,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             humanloop_logger = HumanloopLogger()
             _in_memory_loggers.append(humanloop_logger)
             return humanloop_logger  # type: ignore
+        elif logging_integration == "dotprompt":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, DotpromptManager):
+                    return callback
+
+            dotprompt_logger = DotpromptManager()
+            _in_memory_loggers.append(dotprompt_logger)
+            return dotprompt_logger  # type: ignore
     except Exception as e:
         verbose_logger.exception(
             f"[Non-Blocking Error] Error initializing custom logger: {e}"
@@ -3573,7 +3577,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             for callback in _in_memory_loggers:
                 if isinstance(callback, LiteralAILogger):
                     return callback
-        elif logging_integration == "prometheus":
+        elif logging_integration == "prometheus" and PrometheusLogger is not None:
             for callback in _in_memory_loggers:
                 if isinstance(callback, PrometheusLogger):
                     return callback
@@ -3676,7 +3680,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
             )
-            
+
             for callback in _in_memory_loggers:
                 if isinstance(callback, VectorStorePreCallHook):
                     return callback
