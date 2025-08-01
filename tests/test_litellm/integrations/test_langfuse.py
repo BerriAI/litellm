@@ -25,8 +25,6 @@ def test_max_langfuse_clients_limit():
     with patch("litellm.integrations.langfuse.langfuse.MAX_LANGFUSE_INITIALIZED_CLIENTS", 2):
         # Reset the counter
         litellm.initialized_langfuse_clients = 0
-        print(f"Initial counter: {litellm.initialized_langfuse_clients}")
-        print(f"MAX_LANGFUSE_INITIALIZED_CLIENTS: {litellm.constants.MAX_LANGFUSE_INITIALIZED_CLIENTS}")
 
         # First client should succeed
         logger1 = LangFuseLogger(
@@ -34,7 +32,6 @@ def test_max_langfuse_clients_limit():
             langfuse_secret="test_secret_1",
             langfuse_host="https://test1.langfuse.com",
         )
-        print(f"After first client: {litellm.initialized_langfuse_clients}")
         assert litellm.initialized_langfuse_clients == 1
 
         # Second client should succeed
@@ -43,7 +40,6 @@ def test_max_langfuse_clients_limit():
             langfuse_secret="test_secret_2",
             langfuse_host="https://test2.langfuse.com",
         )
-        print(f"After second client: {litellm.initialized_langfuse_clients}")
         assert litellm.initialized_langfuse_clients == 2
 
         # Third client should fail with exception
@@ -58,5 +54,4 @@ def test_max_langfuse_clients_limit():
         assert "Max langfuse clients reached" in str(exc_info.value)
 
         # Counter should still be 2 (third client failed to initialize)
-        print(f"After third client (should be 2): {litellm.initialized_langfuse_clients}")
         assert litellm.initialized_langfuse_clients == 2
