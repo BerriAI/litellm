@@ -45,6 +45,10 @@ pip install litellm==1.74.9.post1
 
 ## Auto-Router
 
+<Image img={require('../../img/release_notes/auto_router.png')} />
+
+<br/>
+
 This release introduces auto-routing to models based on request content. This means **Proxy Admins** can define a set of keywords that always routes to specific models when **users** opt in to using the auto-router.
 
 This is great for internal use cases where you don't want **users** to think about which model to use - for example, use Claude models for coding vs GPT models for generating ad copy.
@@ -56,13 +60,25 @@ This is great for internal use cases where you don't want **users** to think abo
 
 ## Model-level Guardrails
 
-This release allows you to add model-level guardrails to your models. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
+<Image img={require('../../img/release_notes/model_level_guardrails.jpg')} />
 
+<br/>
+
+This release brings model-level guardrails support to your config.yaml + UI. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
+
+
+
+[Read More](../../docs/proxy/guardrails/quick_start#model-level-guardrails)
 
 ---
 ## MCP Header Propagation
 
+<Image img={require('../../img/release_notes/mcp_header_propogation.png')} />
+
+<br/>
+
 v1.74.9-stable allows you to propagate MCP server specific authentication headers via LiteLLM
+
 - Allowing users to specify which `header_name` is to be propagated to which `mcp_server` via headers
 - Allows adding of different deployments of same MCP server type to use different authentication headers
 
