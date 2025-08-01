@@ -1145,7 +1145,11 @@ async def clear_cache():
         return
 
     try:
-        llm_router.model_list.clear()
+        # only clear DB models
+        llm_router.model_list = [
+            model for model in llm_router.model_list
+            if not model.get("model_info", {}).get("db_model", False)
+        ]
         llm_router.auto_routers.clear()
 
         await proxy_config.add_deployment(
