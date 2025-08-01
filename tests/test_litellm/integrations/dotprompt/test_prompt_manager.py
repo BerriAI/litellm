@@ -15,7 +15,7 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.integrations.dotprompt import PromptManager, PromptTemplate
+from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptTemplate
 
 
 def test_prompt_manager_initialization():
@@ -46,7 +46,7 @@ def test_prompt_template_creation():
 
     assert template.content == "Hello {{name}}!"
     assert template.model == "gpt-4"
-    assert template.temperature == 0.7
+    assert template.optional_params["temperature"] == 0.7
     assert template.input_schema == {"text": "string"}
     assert template.output_format == "json"
 
@@ -227,7 +227,7 @@ Write about {{topic}}."""
         # Check frontmatter was parsed correctly
         with_meta = manager.get_prompt("with_frontmatter")
         assert with_meta.model == "gpt-4"
-        assert with_meta.temperature == 0.8
+        assert with_meta.optional_params["temperature"] == 0.8
 
         # Check template without frontmatter still works
         without_meta = manager.get_prompt("without_frontmatter")
