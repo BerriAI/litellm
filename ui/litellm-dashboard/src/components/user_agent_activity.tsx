@@ -228,77 +228,113 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   const allWauTags = getAllTagsForData(wauData.results);
   const allMauTags = getAllTagsForData(mauData.results);
 
-  // Prepare daily chart data (DAU)
-  const dailyChartData = dauData.results.reduce((acc, item) => {
-    const existingDate = acc.find(d => d.date === item.date);
-    const userAgent = extractUserAgent(item.tag);
+  // Prepare daily chart data (DAU) - always show last 7 days
+  const generateDailyChartData = () => {
+    const chartData: any[] = [];
+    const endDate = new Date();
     
-    if (existingDate) {
-      existingDate[userAgent] = item.active_users;
-    } else {
-      const newDateEntry: any = { 
-        date: item.date,
-        [userAgent]: item.active_users
-      };
-      acc.push(newDateEntry);
+    // Generate all 7 days
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(endDate);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      const dayEntry: any = { date: dateStr };
+      
+      // Initialize all user agents to 0
+      allDauTags.forEach(tag => {
+        const userAgent = extractUserAgent(tag);
+        dayEntry[userAgent] = 0;
+      });
+      
+      chartData.push(dayEntry);
     }
-    return acc;
-  }, [] as any[]);
-
-  // Sort daily data by date
-  dailyChartData.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-  // Prepare weekly chart data (WAU)
-  const weeklyChartData = wauData.results.reduce((acc, item) => {
-    const userAgent = extractUserAgent(item.tag);
-    // Use the clean week label from backend (Week 1, Week 2, etc.)
-    const weekLabel = item.date;
     
-    const existingWeek = acc.find(d => d.week === weekLabel);
-    if (existingWeek) {
-      existingWeek[userAgent] = item.active_users;
-    } else {
-      const newWeekEntry: any = { 
-        week: weekLabel,
-        [userAgent]: item.active_users
-      };
-      acc.push(newWeekEntry);
-    }
-    return acc;
-  }, [] as any[]);
-
-  // Sort weekly data by week number (Week 1, Week 2, etc.)
-  weeklyChartData.sort((a, b) => {
-    const weekA = parseInt(a.week.replace('Week ', ''));
-    const weekB = parseInt(b.week.replace('Week ', ''));
-    return weekA - weekB;
-  });
-
-  // Prepare monthly chart data (MAU)
-  const monthlyChartData = mauData.results.reduce((acc, item) => {
-    const userAgent = extractUserAgent(item.tag);
-    // Use the clean month label from backend (Month 1, Month 2, etc.)
-    const monthLabel = item.date;
+    // Fill in actual data
+    dauData.results.forEach(item => {
+      const userAgent = extractUserAgent(item.tag);
+      const dayEntry = chartData.find(d => d.date === item.date);
+      if (dayEntry) {
+        dayEntry[userAgent] = item.active_users;
+      }
+    });
     
-    const existingMonth = acc.find(d => d.month === monthLabel);
-    if (existingMonth) {
-      existingMonth[userAgent] = item.active_users;
-    } else {
-      const newMonthEntry: any = { 
-        month: monthLabel,
-        [userAgent]: item.active_users
-      };
-      acc.push(newMonthEntry);
-    }
-    return acc;
-  }, [] as any[]);
+    return chartData;
+  };
+  
+  const dailyChartData = generateDailyChartData();
 
-  // Sort monthly data by month number (Month 1, Month 2, etc.)
-  monthlyChartData.sort((a, b) => {
-    const monthA = parseInt(a.month.replace('Month ', ''));
-    const monthB = parseInt(b.month.replace('Month ', ''));
-    return monthA - monthB;
-  });
+  // Prepare weekly chart data (WAU) - always show all 7 weeks
+  const generateWeeklyChartData = () => {
+    const chartData: any[] = [];
+    
+    // Generate all 7 weeks (Week 1 through Week 7)
+    for (let weekNum = 1; weekNum <= 7; weekNum++) {
+      const weekEntry: any = { week: `Week ${weekNum}` };
+      
+      // Initialize all user agents to 0
+      allWauTags.forEach(tag => {
+        const userAgent = extractUserAgent(tag);
+        weekEntry[userAgent] = 0;
+      });
+      
+      chartData.push(weekEntry);
+    }
+    
+    // Fill in actual data
+    wauData.results.forEach(item => {
+      const userAgent = extractUserAgent(item.tag);
+      // Extract week number from the date field (e.g., "Week 1 (Jul 27)" -> "Week 1")
+      const weekMatch = item.date.match(/Week (\d+)/);
+      if (weekMatch) {
+        const weekLabel = `Week ${weekMatch[1]}`;
+        const weekEntry = chartData.find(d => d.week === weekLabel);
+        if (weekEntry) {
+          weekEntry[userAgent] = item.active_users;
+        }
+      }
+    });
+    
+    return chartData;
+  };
+  
+  const weeklyChartData = generateWeeklyChartData();
+
+  // Prepare monthly chart data (MAU) - always show all 7 months
+  const generateMonthlyChartData = () => {
+    const chartData: any[] = [];
+    
+    // Generate all 7 months (Month 1 through Month 7)
+    for (let monthNum = 1; monthNum <= 7; monthNum++) {
+      const monthEntry: any = { month: `Month ${monthNum}` };
+      
+      // Initialize all user agents to 0
+      allMauTags.forEach(tag => {
+        const userAgent = extractUserAgent(tag);
+        monthEntry[userAgent] = 0;
+      });
+      
+      chartData.push(monthEntry);
+    }
+    
+    // Fill in actual data
+    mauData.results.forEach(item => {
+      const userAgent = extractUserAgent(item.tag);
+      // Extract month number from the date field (e.g., "Month 1 (Jul)" -> "Month 1")
+      const monthMatch = item.date.match(/Month (\d+)/);
+      if (monthMatch) {
+        const monthLabel = `Month ${monthMatch[1]}`;
+        const monthEntry = chartData.find(d => d.month === monthLabel);
+        if (monthEntry) {
+          monthEntry[userAgent] = item.active_users;
+        }
+      }
+    });
+    
+    return chartData;
+  };
+  
+  const monthlyChartData = generateMonthlyChartData();
 
   // Format numbers with K, M abbreviations
   const formatAbbreviatedNumber = (value: number, decimalPlaces: number = 0): string => {
