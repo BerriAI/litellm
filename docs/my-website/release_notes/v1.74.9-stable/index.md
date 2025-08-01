@@ -43,6 +43,17 @@ pip install litellm==1.74.9.post1
 
 ---
 
+## Auto-Router
+
+This release introduces auto-routing to models based on request content. This means **Proxy Admins** can define a set of keywords that always routes to specific models when **users** opt in to using the auto-router.
+
+This is great for internal use cases where you don't want **users** to think about which model to use - for example, use Claude models for coding vs GPT models for generating ad copy.
+
+
+[Read More](../../docs/proxy/auto_routing)
+
+---
+
 Model-level Guardrails
 
 This release allows you to add model-level guardrails to your models. This is great for cases when you have an on-prem and hosted model, and just want to run prevent sending PII to the hosted model.
