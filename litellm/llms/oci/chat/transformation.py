@@ -1,24 +1,15 @@
 import base64
 import datetime
 import hashlib
-import time
 from urllib.parse import urlparse
 import litellm
 import json
-import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
-import base64
-import hashlib
-import datetime
-from urllib.parse import urlparse
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from enum import Enum
 
 import httpx
 
-from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -28,11 +19,35 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     version,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage, ChatCompletionTextObject
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
-
-from ..common_utils import API_BASE, OCIError
+from litellm.utils import (
+    ChatCompletionMessageToolCall,
+    CustomStreamWrapper,
+    ModelResponse,
+    Usage,
+)
+from litellm.types.llms.oci import (
+    OCIChatRequestPayload,
+    OCICompletionPayload,
+    OCICompletionResponse,
+    OCIContentPartUnion,
+    OCIImageContentPart,
+    OCIMessage,
+    OCIRoles,
+    OCIServingMode,
+    OCIStreamChunk,
+    OCITextContentPart,
+    OCIToolCall,
+    OCIToolDefinition,
+    OCIVendors,
+)
+from litellm.llms.oci.common_utils import OCIError
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -64,19 +79,30 @@ def load_private_key_from_str(key_str: str):
         password=None,
     )
     if not isinstance(key, rsa.RSAPrivateKey):
-        raise TypeError("The provided private key is not an RSA key, which is required for OCI signing.")
+        raise TypeError(
+            "The provided private key is not an RSA key, which is required for OCI signing."
+        )
     return key
 
-class OCIVendors(Enum):
+
+def get_vendor_from_model(model: str) -> OCIVendors:
     """
-    A class to hold the vendor names for OCI models.
-    This is used to map model names to their respective vendors.
+    Extracts the vendor from the model name.
+    Args:
+        model (str): The model name.
+    Returns:
+        str: The vendor name.
     """
-    COHERE = "COHERE"
-    GENERIC = "GENERIC"
+    vendor = model.split(".")[0].lower()
+    if vendor == "cohere":
+        return OCIVendors.COHERE
+    else:
+        return OCIVendors.GENERIC
+
 
 # 5 minute timeout (models may need to load)
 STREAMING_TIMEOUT = 60 * 5
+
 
 class OCIChatConfig(BaseConfig):
     """
@@ -121,50 +147,13 @@ class OCIChatConfig(BaseConfig):
             "web_search_options": False,
         }
 
-        self.openai_to_oci_cohere_param_map = {
-            "stream": "isStream",
-            "max_tokens": "maxTokens",
-            "max_completion_tokens": "maxTokens",
-            "temperature": "temperature",
-            "tools": "tools",
-            "frequency_penalty": "frequencyPenalty",
-            "presence_penalty": "presencePenalty",
-            "seed": "seed",
-            "stop": "stopSequences",
-            "top_p": "topP",
-            "stream_options": "streamOptions",
-            "max_retries": False,
-            "top_logprobs": False,
-            "modalities": False,
-            "prediction": False,
-            "function_call": False,
-            "functions": False,
-            "extra_headers": False,
-            "parallel_tool_calls": False,
-            "audio": False,
-            "web_search_options": False,
-        }
-
-
-    def _get_vendor_from_model(self, model: str) -> OCIVendors:
-        """
-        Extracts the vendor from the model name.
-        Args:
-            model (str): The model name.
-        Returns:
-            str: The vendor name.
-        """
-        vendor = model.split(".")[0].lower()
-        if vendor == "cohere":
-            return OCIVendors.COHERE
-        else:
-            return OCIVendors.GENERIC
-
     def get_supported_openai_params(self, model: str) -> List[str]:
         supported_params = []
-        vendor = self._get_vendor_from_model(model)
+        vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
+            raise ValueError(
+                "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
+            )
         else:
             open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
         for key, value in open_ai_to_oci_param_map.items():
@@ -180,18 +169,18 @@ class OCIChatConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-
         adapted_params = {}
-        vendor = self._get_vendor_from_model(model)
+        vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
+            raise ValueError(
+                "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
+            )
         else:
             open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
 
         all_params = {**non_default_params, **optional_params}
 
         for key, value in all_params.items():
-
             alias = open_ai_to_oci_param_map.get(key)
 
             if alias is False:
@@ -266,8 +255,17 @@ class OCIChatConfig(BaseConfig):
             "x-content-sha256": x_content_sha256,
         }
 
-        signed_headers = ["date", "(request-target)", "host", "content-length", "content-type", "x-content-sha256"]
-        signing_string = build_signature_string(method, path, headers_to_sign, signed_headers)
+        signed_headers = [
+            "date",
+            "(request-target)",
+            "host",
+            "content-length",
+            "content-type",
+            "x-content-sha256",
+        ]
+        signing_string = build_signature_string(
+            method, path, headers_to_sign, signed_headers
+        )
 
         private_key = load_private_key_from_str(oci_key)
         signature = private_key.sign(
@@ -287,14 +285,16 @@ class OCIChatConfig(BaseConfig):
             f'signature="{signature_b64}"'
         )
 
-        headers.update({
-            "authorization": authorization,
-            "date": date,
-            "host": host,
-            "content-type": content_type,
-            "content-length": content_length,
-            "x-content-sha256": x_content_sha256,
-        })
+        headers.update(
+            {
+                "authorization": authorization,
+                "date": date,
+                "host": host,
+                "content-type": content_type,
+                "content-length": content_length,
+                "x-content-sha256": x_content_sha256,
+            }
+        )
 
         return headers, None
 
@@ -308,15 +308,33 @@ class OCIChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-
-        oci_region = optional_params.get(
-            "oci_region", "us-ashburn-1"
-        )
+        oci_region = optional_params.get("oci_region", "us-ashburn-1")
         api_base = (
             api_base
             or litellm.api_base
             or f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com"
         )
+        oci_user = optional_params.get("oci_user")
+        oci_fingerprint = optional_params.get("oci_fingerprint")
+        oci_tenancy = optional_params.get("oci_tenancy")
+        oci_key = optional_params.get("oci_key")
+        oci_compartment_id = optional_params.get("oci_compartment_id")
+
+        if (
+            not oci_user
+            or not oci_fingerprint
+            or not oci_tenancy
+            or not oci_key
+            or not oci_compartment_id
+        ):
+            raise Exception(
+                "Missing one of the following parameters: oci_user, oci_fingerprint, oci_tenancy, oci_key, oci_compartment_id"
+            )
+
+        if not api_base:
+            raise Exception(
+                "Either `api_base` must be provided or `litellm.api_base` must be set. Alternatively, you can set the `oci_region` optional parameter to use the default OCI region."
+            )
 
         headers.update(
             {
@@ -341,14 +359,15 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        return f"{API_BASE}/{model}"
+        oci_region = optional_params.get("oci_region", "us-ashburn-1")
+        return f"https://inference.generativeai.{oci_region}.oci.oraclecloud.com/20231130/actions/chat"
 
-    def _get_optional_params(
-        self, vendor: OCIVendors, optional_params: dict
-    ) -> Dict:
+    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
         selected_params = {}
         if vendor == OCIVendors.COHERE:
-            open_ai_to_oci_param_map = self.openai_to_oci_cohere_param_map
+            raise ValueError(
+                "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
+            )
         else:
             open_ai_to_oci_param_map = self.openai_to_oci_generic_param_map
 
@@ -356,7 +375,9 @@ class OCIChatConfig(BaseConfig):
             if value in optional_params:
                 selected_params[value] = optional_params[value]
         if "tools" in selected_params:
-            selected_params["tools"] = adapt_tools_to_oci_standard(selected_params["tools"], vendor)
+            selected_params["tools"] = adapt_tool_definition_to_oci_standard(
+                selected_params["tools"], vendor
+            )
         return selected_params
 
     def transform_request(
@@ -369,51 +390,29 @@ class OCIChatConfig(BaseConfig):
     ) -> dict:
         oci_compartment_id = optional_params.get("oci_compartment_id", None)
         if not oci_compartment_id:
-            raise Exception(
-                "kwarg `oci_compartment_id` is required for OCI requests"
-            )
+            raise Exception("kwarg `oci_compartment_id` is required for OCI requests")
 
-        vendor = self._get_vendor_from_model(model)
-
-        data = {
-            "compartmentId": oci_compartment_id,
-            "servingMode": {
-                "servingType": "ON_DEMAND",
-                "modelId": model,
-            },
-            "chatRequest": {
-                "apiFormat": vendor.value,
-            },
-        }
+        vendor = get_vendor_from_model(model)
 
         if vendor == OCIVendors.COHERE:
             raise Exception(
                 "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
             )
-        
-            # TODO: Continue the implementation
-            last_message = messages[-1]
-            if last_message["role"] != "user":
-                raise Exception(
-                    "Last message must be from the USER when using Cohere models"
-                )
-            cast(ChatCompletionUserMessage, last_message)
-            if isinstance(last_message["content"], str):
-                data["chatRequest"]["message"] = last_message["content"]
-            elif isinstance(last_message["content"], list) and len(last_message["content"]) > 0:
-                if type(last_message["content"][0]) is not ChatCompletionTextObject:
-                    raise Exception(
-                        "Message content must be a list of ChatCompletionTextObject when using Cohere models"
-                    )
-                data["chatRequest"]["message"] = last_message["content"][0]["text"]
-            data["chatRequest"]["chatHistory"] = adapt_messages_to_oci_standard(messages[:-1], vendor)  # type: ignore
         else:
-            messages = adapt_messages_to_oci_standard(messages, vendor)  # type: ignore
-            data["chatRequest"]["messages"] = messages
-        
-        data["chatRequest"] = {**data["chatRequest"], **self._get_optional_params(vendor, optional_params)}
+            data = OCICompletionPayload(
+                compartmentId=oci_compartment_id,
+                servingMode=OCIServingMode(
+                    servingType="ON_DEMAND",
+                    modelId=model,
+                ),
+                chatRequest=OCIChatRequestPayload(
+                    apiFormat=vendor.value,
+                    messages=adapt_messages_to_generic_oci_standard(messages),
+                    **self._get_optional_params(vendor, optional_params),
+                ),
+            )
 
-        return data
+        return data.model_dump(exclude_none=True)
 
     def transform_response(
         self,
@@ -429,7 +428,6 @@ class OCIChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
-
         json = raw_response.json()  # noqa: F811
 
         error = json.get("error")
@@ -439,44 +437,51 @@ class OCIChatConfig(BaseConfig):
                 message=str(json["error"]),
                 status_code=raw_response.status_code,
             )
-        output = json.get("chatResponse")
-        if not output:
+
+        if not isinstance(json, dict):
             raise OCIError(
                 message="Invalid response format from OCI",
                 status_code=raw_response.status_code,
             )
 
-        vendor = self._get_vendor_from_model(model)
+        try:
+            completion_response = OCICompletionResponse(**json)
+        except TypeError as e:
+            raise OCIError(
+                message=f"Response cannot be casted to OCICompletionResponse: {str(e)}",
+                status_code=raw_response.status_code,
+            )
+
+        vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            model_response.created = int(time.time())
+            raise ValueError(
+                "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
+            )
         else:
-            iso_str = output["timeCreated"]
+            iso_str = completion_response.chatResponse.timeCreated
             dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
             model_response.created = int(dt.timestamp())
 
-        model_response.model = json.get("modelId", model)
-
-        # Add the output
-        if not output or not isinstance(output, dict):
-            raise OCIError(
-                message="Invalid response format from OCI",
-                status_code=raw_response.status_code,
-            )
+        model_response.model = completion_response.modelId
 
         message = model_response.choices[0].message  # type: ignore
         if vendor == OCIVendors.COHERE:
-            message.content = output["text"] 
+            raise ValueError(
+                "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
+            )
         else:
-            response_message = output["choices"][0]["message"]
-            if "content" in response_message and isinstance(response_message["content"], list):
-                message.content = response_message["content"][0]["text"]
-            if "toolCalls" in response_message:
-                message.tool_calls = adapt_tools_to_openai_standard(response_message["toolCalls"])
+            response_message = completion_response.chatResponse.choices[0].message
+            if response_message.content and response_message.content[0].type == "TEXT":
+                message.content = response_message.content[0].text
+            if response_message.toolCalls:
+                message.tool_calls = adapt_tools_to_openai_standard(
+                    response_message.toolCalls
+                )
 
         usage = Usage(
-            prompt_tokens=output["usage"]["promptTokens"],
-            completion_tokens=output["usage"]["completionTokens"],
-            total_tokens=output["usage"]["totalTokens"],
+            prompt_tokens=completion_response.chatResponse.usage.promptTokens,
+            completion_tokens=completion_response.chatResponse.usage.completionTokens,
+            total_tokens=completion_response.chatResponse.usage.totalTokens,
         )
         model_response.usage = usage  # type: ignore
 
@@ -497,7 +502,9 @@ class OCIChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> "CustomStreamWrapper":
+    ) -> "OCIStreamWrapper":
+        if "stream" in data:
+            del data["stream"]
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
 
@@ -511,16 +518,14 @@ class OCIChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise OCIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise OCIError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise OCIError(status_code=response.status_code, message=response.text)
 
         completion_stream = response.iter_text()
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response = OCIStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -541,7 +546,10 @@ class OCIChatConfig(BaseConfig):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> "CustomStreamWrapper":
+    ) -> "OCIStreamWrapper":
+        if "stream" in data:
+            del data["stream"]
+
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})
 
@@ -555,16 +563,14 @@ class OCIChatConfig(BaseConfig):
                 timeout=STREAMING_TIMEOUT,
             )
         except httpx.HTTPStatusError as e:
-            raise OCIError(
-                status_code=e.response.status_code, message=e.response.text
-            )
+            raise OCIError(status_code=e.response.status_code, message=e.response.text)
 
         if response.status_code != 200:
             raise OCIError(status_code=response.status_code, message=response.text)
 
         completion_stream = response.aiter_text()
 
-        streaming_response = CustomStreamWrapper(
+        streaming_response = OCIStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -578,197 +584,267 @@ class OCIChatConfig(BaseConfig):
         return OCIError(status_code=status_code, message=error_message)
 
 
-open_ai_to_generic_oci_role_map = {
+open_ai_to_generic_oci_role_map: Dict[str, OCIRoles] = {
     "system": "SYSTEM",
     "user": "USER",
     "assistant": "ASSISTANT",
+    "tool": "TOOL",
 }
 
-# TODO: Implement the Cohere role mapping if needed
-# open_ai_to_cohere_role_map = {
-#     "system": "SYSTEM",
-#     "user": "USER",
-#     "assistant": "CHATBOT",
-# }
 
-def adapt_messages_to_oci_standard(messages: List[Dict], vendor: OCIVendors) -> List[Dict]:
-    """
-    Converts the message history to the standard expected by OCI models.
-    This is a specific transformation for OCI models.
-    Args:
-        messages (List[AllMessageValues]): The list of messages to convert.
-        vendor (OCIVendors): The vendor of the model.
-    Returns:
-        List[Dict]: The converted message history.
-    """
-    if vendor == OCIVendors.COHERE:
-        # TODO: Implement the conversion for Cohere models
-        # new_messages = adapt_messages_to_cohere_standard(messages)
-        raise Exception(
-            "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
+def adapt_messages_to_generic_oci_standard_content_message(
+    role: str, content: str | list
+) -> OCIMessage:
+    new_content: list[OCIContentPartUnion] = []
+    if isinstance(content, str):
+        return OCIMessage(
+            role=open_ai_to_generic_oci_role_map[role],
+            content=[OCITextContentPart(text=content)],
+            toolCalls=None,
+            toolCallId=None,
         )
-    else:
-        new_messages = adapt_messages_to_generic_oci_standard(messages)
 
-    return new_messages
+    # content is a list of content items:
+    # [
+    #     {"type": "text", "text": "Hello"},
+    #     {"type": "image_url", "image_url": "https://example.com/image.png"}
+    # ]
+    for content_item in content:
+        if not isinstance(content_item, dict):
+            raise Exception("Each content item must be a dictionary")
 
-def adapt_messages_to_generic_oci_standard(messages: List[Dict]) -> List[Dict]:
+        type = content_item.get("type")
+        if not isinstance(type, str):
+            raise Exception("Prop `type` is not a string")
+
+        if type not in ["text", "image_url"]:
+            raise Exception(f"Prop `{type}` is not supported")
+
+        if type == "text":
+            text = content_item.get("text")
+            if not isinstance(text, str):
+                raise Exception("Prop `text` is not a string")
+            new_content.append(OCITextContentPart(text=text))
+
+        elif type == "image_url":
+            image_url = content_item.get("image_url")
+            if not isinstance(image_url, str):
+                raise Exception("Prop `image_url` is not a string")
+            new_content.append(OCIImageContentPart(imageUrl=image_url))
+
+    return OCIMessage(
+        role=open_ai_to_generic_oci_role_map[role],
+        content=new_content,
+        toolCalls=None,
+        toolCallId=None,
+    )
+
+
+def adapt_messages_to_generic_oci_standard_tool_call(
+    role: str, tool_calls: list
+) -> OCIMessage:
+    tool_calls_formated = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            raise Exception("Each tool call must be a dictionary")
+
+        if tool_call.get("type") != "function":
+            raise Exception("OCI only supports function tools")
+
+        tool_call_id = tool_call.get("id")
+        if not isinstance(tool_call_id, str):
+            raise Exception("Prop `id` is not a string")
+
+        tool_function = tool_call.get("function")
+        if not isinstance(tool_function, dict):
+            raise Exception("Prop `function` is not a dictionary")
+
+        function_name = tool_function.get("name")
+        if not isinstance(function_name, str):
+            raise Exception("Prop `name` is not a string")
+
+        arguments = tool_call["function"].get("arguments", "{}")
+        if not isinstance(arguments, str):
+            raise Exception("Prop `arguments` is not a string")
+
+        # tool_calls_formated.append(OCIToolCall(
+        #     id=tool_call_id,
+        #     type="FUNCTION",
+        #     function=OCIFunction(
+        #         name=function_name,
+        #         arguments=arguments
+        #     )
+        # ))
+
+        tool_calls_formated.append(
+            OCIToolCall(
+                id=tool_call_id,
+                type="FUNCTION",
+                name=function_name,
+                arguments=arguments,
+            )
+        )
+
+    return OCIMessage(
+        role=open_ai_to_generic_oci_role_map[role],
+        content=None,
+        toolCalls=tool_calls_formated,
+        toolCallId=None,
+    )
+
+
+def adapt_messages_to_generic_oci_standard_tool_response(
+    role: str, tool_call_id: str, content: str
+) -> OCIMessage:
+    return OCIMessage(
+        role=open_ai_to_generic_oci_role_map[role],
+        content=[OCITextContentPart(text=content)],
+        toolCalls=None,
+        toolCallId=tool_call_id,
+    )
+
+
+def adapt_messages_to_generic_oci_standard(
+    messages: List[AllMessageValues],
+) -> List[OCIMessage]:
     new_messages = []
     for message in messages:
         role = message["role"]
         content = message.get("content")
         tool_calls = message.get("tool_calls")
-        new_content = []
+        tool_call_id = message.get("tool_call_id")
 
         if role in ["system", "user", "assistant"] and content is not None:
-            if isinstance(content, str):
-                new_content.append({"type": "TEXT", "text": content})
-                new_messages.append({"role": open_ai_to_generic_oci_role_map[role], "content": new_content})
-                continue
-
-            # content is a list of content items:
-            # [
-            #     {"type": "text", "text": "Hello"},
-            #     {"type": "image_url", "image_url": "https://example.com/image.png"}
-            # ]
-            if not isinstance(content, list):
-                raise Exception("Prop `content` must be a list of content items")
-
-            for content_item in content:
-                type = content_item.get("type")
-                if not isinstance(type, str):
-                    raise Exception("Prop `type` is not a string")
-
-                if type not in ["text", "image_url"]:
-                    raise Exception(f"Prop `{type}` is not supported")
-
-                if type == "text":
-                    text = content_item.get("text")
-                    if not isinstance(text, str):
-                        raise Exception("Prop `text` is not a string")
-                    new_content.append({
-                        "type": "TEXT",
-                        "text": text
-                    })
-                
-                elif type == "image_url":
-                    image_url = content_item.get("image_url")
-                    if not isinstance(image_url, str):
-                        raise Exception("Prop `image_url` is not a string")
-                    new_content.append({
-                        "type": "IMAGE",
-                        "imageUrl": image_url
-                    })
-            new_messages.append({"role": open_ai_to_generic_oci_role_map[role], "content": new_content})
+            if not isinstance(content, (str, list)):
+                raise Exception(
+                    "Prop `content` must be a string or a list of content items"
+                )
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_content_message(role, content)
+            )
 
         elif role == "assistant" and tool_calls is not None:
-            tool_calls_formated = []
             if not isinstance(tool_calls, list):
                 raise Exception("Prop `tool_calls` must be a list of tool calls")
-            for tool_call in tool_calls:
-                if tool_call["type"] != "function":
-                    raise Exception("OCI only supports function tools")
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_tool_call(role, tool_calls)
+            )
 
-                tool_call_id = tool_call.get("id")
-                if not isinstance(tool_call_id, str):
-                    raise Exception("Prop `id` is not a string")
-                
-                function_name = tool_call["function"]["name"]
-                if not isinstance(function_name, str):
-                    raise Exception("Prop `name` is not a string")
-
-                arguments = tool_call["function"].get("arguments", "{}")
-                if not isinstance(arguments, str):
-                    raise Exception("Prop `arguments` is not a string")
-
-                tool_calls_formated.append({
-                    "id": tool_call_id,
-                    "type": "FUNCTION",
-                    "name": function_name,
-                    "arguments": arguments
-                })
-            
-            new_messages.append({
-                "role": open_ai_to_generic_oci_role_map[role],
-                # "content": None,
-                "toolCalls": tool_calls_formated
-            })
-        
         elif role == "tool":
-            tool_call_id = message.get("tool_call_id")
             if not isinstance(tool_call_id, str):
-                raise Exception("Prop `tool_call_id` is not a string")
-
-            content = message.get("content")
+                raise Exception("Prop `tool_call_id` is required and must be a string")
             if not isinstance(content, str):
                 raise Exception("Prop `content` is not a string")
-
-            new_messages.append({
-                "role": "TOOL",
-                "toolCallId": tool_call_id,
-                "content": [{
-                    "type": "TEXT",
-                    "text": content
-                }]
-            })
+            new_messages.append(
+                adapt_messages_to_generic_oci_standard_tool_response(
+                    role, tool_call_id, content
+                )
+            )
 
     return new_messages
 
-def adapt_tools_to_oci_standard(tools: List[Dict], vendor: OCIVendors):
+
+def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors):
     new_tools = []
     if vendor == OCIVendors.COHERE:
-        for tool in tools:
-            if tool["type"] != "function":
-                raise Exception("OCI only supports function tools")
-
-            parameters = {}
-            for key, value in tool["function"]["parameters"]["properties"].items():
-                parameters[key] = {
-                    "description": value.get("description", ""),
-                    "type": value.get("type", "string"),
-                }
-            if "required" in tool["function"]["parameters"]:
-                for required_key in tool["function"]["parameters"]["required"]:
-                    if required_key not in parameters:
-                        raise Exception(f"Required key `{required_key}` not found in parameters")
-                    parameters[required_key]["isRequired"] = True
-
-            new_tool = {
-                "name": tool["function"]["name"],
-                "description": tool["function"].get("description", ""),
-                "parameterDefinitions": parameters
-            }
-            new_tools.append(new_tool)
+        raise ValueError(
+            "Cohere models are not yet supported in the litellm OCI chat completion endpoint. Use the Cohere API directly."
+        )
     else:
         for tool in tools:
             if tool["type"] != "function":
                 raise Exception("OCI only supports function tools")
-            
-            new_tool = {
-                "type": "FUNCTION",
-                "name": tool["function"]["name"],
-                "description": tool["function"].get("description", ""),
-                "parameters": tool["function"]["parameters"],
-            }
+
+            tool_function = tool.get("function")
+            if not isinstance(tool_function, dict):
+                raise Exception("Prop `function` is not a dictionary")
+
+            new_tool = OCIToolDefinition(
+                type="FUNCTION",
+                name=tool_function.get("name"),
+                description=tool_function.get("description", ""),
+                parameters=tool_function.get("parameters", {}),
+            )
             new_tools.append(new_tool)
-    
+
     return new_tools
 
-def adapt_tools_to_openai_standard(tools: List[Dict]):
+
+def adapt_tools_to_openai_standard(
+    tools: list[OCIToolCall],
+) -> list[ChatCompletionMessageToolCall]:
     new_tools = []
     for tool in tools:
-        if tool["type"] != "FUNCTION":
-            raise Exception("OCI only supports function tools")
-        
-        new_tool = {
-            "type": "function",
-            "id": tool["id"],
-            "function": {
-                "name": tool["name"],
-                "arguments": tool.get("arguments", ""),
-            }
-        }
-
+        new_tool = ChatCompletionMessageToolCall(
+            id=tool.id,
+            type="function",
+            function={
+                "name": tool.name,
+                "arguments": tool.arguments,
+            },
+        )
         new_tools.append(new_tool)
-    
     return new_tools
+
+
+class OCIStreamWrapper(CustomStreamWrapper):
+    """
+    Custom stream wrapper for OCI responses.
+    This class is used to handle streaming responses from OCI's API.
+    """
+
+    def __init__(
+        self,
+        **kwargs: Any,
+    ):
+        super().__init__(**kwargs)
+
+    def chunk_creator(self, chunk: Any):
+        if not isinstance(chunk, str):
+            raise ValueError(f"Chunk is not a string: {chunk}")
+        if not chunk.startswith("data:"):
+            raise ValueError(f"Chunk does not start with 'data:': {chunk}")
+        dict_chunk = json.loads(chunk[5:])  # Remove 'data: ' prefix and parse JSON
+        try:
+            typed_chunk = OCIStreamChunk(**dict_chunk)
+        except TypeError as e:
+            raise ValueError(f"Chunk cannot be casted to OCIStreamChunk: {str(e)}")
+
+        if typed_chunk.index is None:
+            typed_chunk.index = 0
+
+        text = ""
+        if typed_chunk.message and typed_chunk.message.content:
+            for item in typed_chunk.message.content:
+                if isinstance(item, OCITextContentPart):
+                    text += item.text
+                elif isinstance(item, OCIImageContentPart):
+                    raise ValueError(
+                        "OCI does not support image content in streaming responses"
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported content type in OCI response: {item.type}"
+                    )
+
+        tool_calls = None
+        if typed_chunk.message and typed_chunk.message.toolCalls:
+            tool_calls = adapt_tools_to_openai_standard(typed_chunk.message.toolCalls)
+
+        return ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=typed_chunk.index if typed_chunk.index else 0,
+                    delta=Delta(
+                        content=text,
+                        tool_calls=[tool.model_dump() for tool in tool_calls]
+                        if tool_calls
+                        else None,
+                        provider_specific_fields=None,  # OCI does not have provider specific fields in the response
+                        thinking_blocks=None,  # OCI does not have thinking blocks in the response
+                        reasoning_content=None,  # OCI does not have reasoning content in the response
+                    ),
+                    finish_reason=typed_chunk.finishReason,
+                )
+            ]
+        )
