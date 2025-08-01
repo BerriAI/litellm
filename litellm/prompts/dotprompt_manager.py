@@ -12,7 +12,7 @@ from litellm.integrations.prompt_management_base import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
-from .prompt_manager import PromptManager
+from .prompt_manager import PromptManager, PromptTemplate
 
 
 class DotpromptManager(PromptManagementBase):
@@ -196,7 +196,7 @@ class DotpromptManager(PromptManagementBase):
             "content": content,
         }
 
-    def _extract_optional_params(self, template) -> dict:
+    def _extract_optional_params(self, template: PromptTemplate) -> dict:
         """
         Extract optional parameters from the prompt template metadata.
 
@@ -205,16 +205,8 @@ class DotpromptManager(PromptManagementBase):
         optional_params = {}
 
         # Extract common parameters from metadata
-        if template.temperature is not None:
-            optional_params["temperature"] = template.temperature
-
-        if template.max_tokens is not None:
-            optional_params["max_tokens"] = template.max_tokens
-
-        # Add any other parameters from metadata that aren't model or schema-related
-        for key, value in template.metadata.items():
-            if key not in ["model", "input", "output"] and value is not None:
-                optional_params[key] = value
+        if template.optional_params is not None:
+            optional_params.update(template.optional_params)
 
         return optional_params
 

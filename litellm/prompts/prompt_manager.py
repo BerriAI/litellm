@@ -24,12 +24,15 @@ class PromptTemplate:
         self.template_id = template_id
 
         # Extract common metadata fields
+        restricted_keys = ["model", "input", "output"]
         self.model = self.metadata.get("model")
         self.input_schema = self.metadata.get("input", {}).get("schema", {})
         self.output_format = self.metadata.get("output", {}).get("format")
         self.output_schema = self.metadata.get("output", {}).get("schema", {})
-        self.temperature = self.metadata.get("temperature")
-        self.max_tokens = self.metadata.get("max_tokens")
+        self.optional_params = {}
+        for key in self.metadata.keys():
+            if key not in restricted_keys:
+                self.optional_params[key] = self.metadata[key]
 
     def __repr__(self):
         return f"PromptTemplate(id='{self.template_id}', model='{self.model}')"
