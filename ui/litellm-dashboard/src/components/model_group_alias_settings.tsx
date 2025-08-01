@@ -163,7 +163,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
       >
         <div className="flex flex-col">
           <Title className="mb-0">Model Group Alias Settings</Title>
-          <p className="text-sm text-gray-500">Create aliases for your model groups to simplify API calls. For example, you can create an alias 'gpt-4o' that points to 'gpt-4o-mini-openai' model group.</p>
+          <p className="text-sm text-gray-500">Create aliases for your model groups to simplify API calls. For example, you can create an alias &apos;gpt-4o&apos; that points to &apos;gpt-4o-mini-openai&apos; model group.</p>
         </div>
         <div className="flex items-center">
           {isExpanded ? (
@@ -338,7 +338,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
           <Card>
             <Title className="mb-4">Configuration Example</Title>
             <Text className="text-gray-600 mb-4">
-              Here's how your current aliases would look in the config.yaml:
+              Here&apos;s how your current aliases would look in the config.yaml:
             </Text>
             <div className="bg-gray-100 rounded-lg p-4 font-mono text-sm">
               <div className="text-gray-700">
