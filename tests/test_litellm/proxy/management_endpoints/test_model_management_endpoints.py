@@ -395,3 +395,66 @@ class TestClearCache:
             mock_config.add_deployment.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_preserve_config_models(self):
+        """
+        Test that clear_cache with preserve_config_models=True only clears DB models and preserves config models.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
+
+        # Create mock router with mixed DB and config models
+        mock_router = MagicMock()
+        mock_router.model_list = [
+            {
+                "model_name": "gpt-4",
+                "model_info": {"id": "db-model-1", "db_model": True},
+                "litellm_params": {"model": "gpt-4"}
+            },
+            {
+                "model_name": "gpt-3.5-turbo", 
+                "model_info": {"id": "config-model-1", "db_model": False},
+                "litellm_params": {"model": "gpt-3.5-turbo"}
+            },
+            {
+                "model_name": "claude-3",
+                "model_info": {"id": "db-model-2", "db_model": True},
+                "litellm_params": {"model": "claude-3"}
+            }
+        ]
+        mock_router.delete_deployment = MagicMock(return_value=True)
+        mock_router.auto_routers = MagicMock()
+        mock_router.auto_routers.clear = MagicMock()
+
+        mock_config = MagicMock()
+        mock_config.add_deployment = AsyncMock(return_value=True)
+        mock_config.get_config = AsyncMock(return_value={
+            "litellm_settings": {
+                "preserve_config_models_on_cache_clear": True
+            }
+        })
+
+        mock_prisma = MagicMock()
+        mock_logging = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_config
+        ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
+        ), patch(
+            "litellm.proxy.proxy_server.verbose_proxy_logger"
+        ):
+            await clear_cache()
+
+            # Should have called delete_deployment for both DB models
+            assert mock_router.delete_deployment.call_count == 2
+            mock_router.delete_deployment.assert_any_call(id="db-model-1")
+            mock_router.delete_deployment.assert_any_call(id="db-model-2")
+
+            # Should have cleared auto routers
+            mock_router.auto_routers.clear.assert_called_once()
+
+            # Should have called add_deployment to reload DB models
+            mock_config.add_deployment.assert_called_once_with(
+                prisma_client=mock_prisma, proxy_logging_obj=mock_logging
+            )
