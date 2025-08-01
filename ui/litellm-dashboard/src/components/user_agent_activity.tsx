@@ -210,24 +210,23 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     return userAgent;
   };
 
-  // Get top user agents for each chart type based on their specific data
-  const getTopTagsForData = (data: TagActiveUsersResponse[], limit: number = 3) => {
+  // Get all user agents for each chart type based on their specific data
+  const getAllTagsForData = (data: TagActiveUsersResponse[]) => {
     // Aggregate total active users per tag
     const tagTotals = data.reduce((acc, item) => {
       acc[item.tag] = (acc[item.tag] || 0) + item.active_users;
       return acc;
     }, {} as Record<string, number>);
 
-    // Sort by total active users and return top tags
+    // Sort by total active users and return all tags
     return Object.entries(tagTotals)
       .sort(([, a], [, b]) => b - a)
-      .slice(0, limit)
       .map(([tag]) => tag);
   };
 
-  const topDauTags = getTopTagsForData(dauData.results);
-  const topWauTags = getTopTagsForData(wauData.results);
-  const topMauTags = getTopTagsForData(mauData.results);
+  const allDauTags = getAllTagsForData(dauData.results);
+  const allWauTags = getAllTagsForData(wauData.results);
+  const allMauTags = getAllTagsForData(mauData.results);
 
   // Prepare daily chart data (DAU)
   const dailyChartData = dauData.results.reduce((acc, item) => {
@@ -423,8 +422,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                       <BarChart
                         data={dailyChartData}
                         index="date"
-                        categories={topDauTags.map(extractUserAgent)}
-                        colors={["blue", "green", "orange"]}
+                        categories={allDauTags.map(extractUserAgent)}
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
                         showLegend={true}
@@ -443,8 +441,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                       <BarChart
                         data={weeklyChartData}
                         index="week"
-                        categories={topWauTags.map(extractUserAgent)}
-                        colors={["blue", "green", "orange"]}
+                        categories={allWauTags.map(extractUserAgent)}
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
                         showLegend={true}
@@ -463,8 +460,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                       <BarChart
                         data={monthlyChartData}
                         index="month"
-                        categories={topMauTags.map(extractUserAgent)}
-                        colors={["blue", "green", "orange"]}
+                        categories={allMauTags.map(extractUserAgent)}
                         valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
                         yAxisWidth={60}
                         showLegend={true}

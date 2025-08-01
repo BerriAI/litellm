@@ -158,16 +158,17 @@ async def get_weekly_active_users(
     Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on UTC today + 1 day.
     
     Shows week-by-week breakdown:
-    - Week 1 (Jan 15): Most recent week ending on UTC today + 1 day
-    - Week 2 (Jan 8): Previous week (7 days before Week 1)
-    - Week 3 (Jan 1): Previous week (7 days before Week 2)
+    - Week 1 (Jan 1): Earliest week (7 weeks ago)
+    - Week 2 (Jan 8): Next week (6 weeks ago)
+    - Week 3 (Jan 15): Next week (5 weeks ago)
     - ... and so on for {MAX_WEEKS} weeks total
+    - Week 7: Most recent week ending on UTC today + 1 day
     
     Args:
         tag_filter: Optional filter to specific tag
         
     Returns:
-        ActiveUsersAnalyticsResponse: WAU data by tag for each of the last {MAX_WEEKS} weeks with descriptive week labels (e.g., "Week 1 (Jan 15)")
+        ActiveUsersAnalyticsResponse: WAU data by tag for each of the last {MAX_WEEKS} weeks with descriptive week labels (e.g., "Week 1 (Jan 1)")
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -212,8 +213,8 @@ async def get_weekly_active_users(
         SELECT 
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Week identifier with month and day (Week 1 (Jan 15), Week 2 (Jan 8), etc.)
-            'Week ' || (week_offset + 1)::text || ' (' || 
+            -- Week identifier with month and day (Week 1 (earliest), Week 2, etc.)
+            'Week ' || ({MAX_WEEKS} - week_offset)::text || ' (' || 
             TO_CHAR(DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval, 'Mon DD') || ')' as date,
             -- Calculate week start and end dates for each week
             (DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval)::text as period_start,
@@ -222,7 +223,7 @@ async def get_weekly_active_users(
         FROM weekly_data
         WHERE week_offset < {MAX_WEEKS}
         GROUP BY tag, week_offset
-        ORDER BY week_offset ASC, active_users DESC
+        ORDER BY week_offset DESC, active_users DESC
         """
         
         db_response = await prisma_client.db.query_raw(sql_query, *params)
@@ -264,16 +265,17 @@ async def get_monthly_active_users(
     Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on UTC today + 1 day.
     
     Shows month-by-month breakdown:
-    - Month 1 (Jan): Most recent month ending on UTC today + 1 day (30-day period)
-    - Month 2 (Dec): Previous month (30 days before Month 1)
-    - Month 3 (Nov): Previous month (30 days before Month 2)
+    - Month 1 (Nov): Earliest month (7 months ago, 30-day period)
+    - Month 2 (Dec): Next month (6 months ago)
+    - Month 3 (Jan): Next month (5 months ago)
     - ... and so on for {MAX_MONTHS} months total
+    - Month 7: Most recent month ending on UTC today + 1 day
     
     Args:
         tag_filter: Optional filter to specific tag
         
     Returns:
-        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last {MAX_MONTHS} months with descriptive month labels (e.g., "Month 1 (Jan)")
+        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last {MAX_MONTHS} months with descriptive month labels (e.g., "Month 1 (Nov)")
     """
     from litellm.proxy.proxy_server import prisma_client
     
@@ -318,8 +320,8 @@ async def get_monthly_active_users(
         SELECT 
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Month identifier with month name (Month 1 (Jan), Month 2 (Dec), etc.)
-            'Month ' || (month_offset + 1)::text || ' (' || 
+            -- Month identifier with month name (Month 1 (earliest), Month 2, etc.)
+            'Month ' || ({MAX_MONTHS} - month_offset)::text || ' (' || 
             TO_CHAR(DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval, 'Mon') || ')' as date,
             -- Calculate month start and end dates for each month
             (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
@@ -328,7 +330,7 @@ async def get_monthly_active_users(
         FROM monthly_data
         WHERE month_offset < {MAX_MONTHS}
         GROUP BY tag, month_offset
-        ORDER BY month_offset ASC, active_users DESC
+        ORDER BY month_offset DESC, active_users DESC
         """
         
         db_response = await prisma_client.db.query_raw(sql_query, *params)
