@@ -320,25 +320,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* User Agent Filter */}
-      <Grid numItems={1} className="gap-2 w-full">
-        <Col>
-          <Select
-            value={userAgentFilter}
-            onValueChange={setUserAgentFilter}
-            placeholder="Filter by User Agent"
-          >
-            <SelectItem value="">All User Agents</SelectItem>
-            <SelectItem value="curl">curl</SelectItem>
-            <SelectItem value="litellm">litellm</SelectItem>
-            <SelectItem value="python">python</SelectItem>
-            <SelectItem value="postman">postman</SelectItem>
-            <SelectItem value="axios">axios</SelectItem>
-            <SelectItem value="fetch">fetch</SelectItem>
-          </Select>
-        </Col>
-      </Grid>
-
       {/* Summary Section Card */}
       <Card>
         <div className="space-y-6">
