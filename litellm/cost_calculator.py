@@ -793,6 +793,14 @@ def completion_cost(  # noqa: PLR0915
                             model=model,
                             image_response=completion_response,
                         )
+                    elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
+                        from litellm.llms.gemini.image_generation.cost_calculator import (
+                            cost_calculator as gemini_image_cost_calculator,
+                        )
+                        return gemini_image_cost_calculator(
+                            model=model,
+                            image_response=completion_response,
+                        )
                     else:
                         return default_image_cost_calculator(
                             model=model,

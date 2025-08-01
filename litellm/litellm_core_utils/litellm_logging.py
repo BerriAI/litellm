@@ -167,10 +167,10 @@ try:
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
         SMTPEmailLogger,
     )
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
 
 
     EnterpriseStandardLoggingPayloadSetupVAR: Optional[
@@ -945,7 +945,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if additional_args.get("request_str", None) is not None:
             # print the sagemaker / bedrock client request
             curl_command = "\nRequest Sent from LiteLLM:\n"
-            curl_command += additional_args.get("request_str", None)
+            request_str = additional_args.get("request_str", "")
+            curl_command += request_str
         elif api_base == "":
             curl_command = str(self.model_call_details)
         return curl_command
@@ -2265,15 +2266,23 @@ class Logging(LiteLLMLoggingBaseClass):
                             start_time=start_time,
                             end_time=end_time,
                         )
+                
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    model_call_details: Dict = self.model_call_details
+                    ##################################
+                    # call redaction hook for custom logger
+                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                        model_call_details=model_call_details
+                    )
+                    ##################################
                     if self.stream is True:
                         if (
                             "async_complete_streaming_response"
-                            in self.model_call_details
+                            in model_call_details
                         ):
                             await callback.async_log_success_event(
-                                kwargs=self.model_call_details,
-                                response_obj=self.model_call_details[
+                                kwargs=model_call_details,
+                                response_obj=model_call_details[
                                     "async_complete_streaming_response"
                                 ],
                                 start_time=start_time,
@@ -2281,14 +2290,14 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
-                                kwargs=self.model_call_details,
+                                kwargs=model_call_details,
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
                         await callback.async_log_success_event(
-                            kwargs=self.model_call_details,
+                            kwargs=model_call_details,
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -3209,13 +3218,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(_literalai_logger)
             return _literalai_logger  # type: ignore
         elif logging_integration == "prometheus":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PrometheusLogger):
-                    return callback  # type: ignore
+            if PrometheusLogger is not None:
+                for callback in _in_memory_loggers:
+                    if isinstance(callback, PrometheusLogger):
+                        return callback  # type: ignore
 
-            _prometheus_logger = PrometheusLogger()
-            _in_memory_loggers.append(_prometheus_logger)
-            return _prometheus_logger  # type: ignore
+                _prometheus_logger = PrometheusLogger()
+                _in_memory_loggers.append(_prometheus_logger)
+                return _prometheus_logger  # type: ignore
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
@@ -3531,6 +3541,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             f"[Non-Blocking Error] Error initializing custom logger: {e}"
         )
         return None
+    return None
 
 
 def get_custom_logger_compatible_class(  # noqa: PLR0915
@@ -3572,9 +3583,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, LiteralAILogger):
                     return callback
         elif logging_integration == "prometheus":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PrometheusLogger):
-                    return callback
+            if PrometheusLogger is not None:
+                for callback in _in_memory_loggers:
+                    if isinstance(callback, PrometheusLogger):
+                        return callback
         elif logging_integration == "datadog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DataDogLogger):
