@@ -61,7 +61,7 @@ import { EntityList } from "./entity_usage"
 import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { valueFormatterSpend } from "./usage/utils/value_formatters"
 import CloudZeroExportModal from "./cloudzero_export_modal"
-import { UiLoadingSpinner } from "./ui/ui-loading-spinner"
+import { ChartLoader } from "./shared/chart_loader"
 
 interface NewUsagePageProps {
   accessToken: string | null
@@ -530,7 +530,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                       <Card>
                         <Title>Daily Spend</Title>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
                             data={[...userSpendData.results].sort(
@@ -606,7 +606,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                           </div>
                         </div>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
                             className="mt-4 h-40"
@@ -646,7 +646,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                           <Title>Spend by Provider</Title>
                         </div>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <Grid numItems={2}>
                             <Col numColSpan={1}>
