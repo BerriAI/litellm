@@ -1,6 +1,15 @@
 # Health Checks
 Use this to health check all LLMs defined in your config.yaml
 
+## When to Use Each Endpoint
+
+| Endpoint | Use Case | Purpose |
+|----------|----------|---------|
+| `/health/liveliness` | **Container liveness probes** | Basic alive check - use for container restart decisions |
+| `/health/readiness` | **Load balancer health checks** | Ready to accept traffic - includes DB connection status |
+| `/health` | **Model health monitoring** | Comprehensive LLM model health - makes actual API calls |
+| `/health/services` | **Service debugging** | Check specific integrations (datadog, langfuse, etc.) |
+
 ## Summary 
 
 The proxy exposes: 
