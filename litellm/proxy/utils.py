@@ -52,11 +52,6 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
-from litellm.types.mcp import (
-    MCPPreCallRequestObject,
-    MCPPreCallResponseObject,
-    MCPDuringCallResponseObject,
-)
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
@@ -93,6 +88,11 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
+from litellm.types.mcp import (
+    MCPDuringCallResponseObject,
+    MCPPreCallRequestObject,
+    MCPPreCallResponseObject,
+)
 from litellm.types.utils import CallTypes, LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
@@ -116,33 +116,6 @@ def print_verbose(print_statement):
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
-
-
-def safe_deep_copy(data):
-    """
-    Safe Deep Copy
-
-    The LiteLLM Request has some object that can-not be pickled / deep copied
-
-    Use this function to safely deep copy the LiteLLM Request
-    """
-    if litellm.safe_memory_mode is True:
-        return data
-
-    litellm_parent_otel_span: Optional[Any] = None
-    # Step 1: Remove the litellm_parent_otel_span
-    litellm_parent_otel_span = None
-    if isinstance(data, dict):
-        # remove litellm_parent_otel_span since this is not picklable
-        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
-            litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
-    new_data = copy.deepcopy(data)
-
-    # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
-    if isinstance(data, dict) and litellm_parent_otel_span is not None:
-        if "metadata" in data:
-            data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
-    return new_data
 
 
 class InternalUsageCache:
@@ -474,11 +447,11 @@ class ProxyLogging:
         )
 
     async def async_pre_mcp_tool_call_hook(
-            self,
-            kwargs: dict,
-            request_obj: Any,
-            start_time: datetime,
-            end_time: datetime,
+        self,
+        kwargs: dict,
+        request_obj: Any,
+        start_time: datetime,
+        end_time: datetime,
     ) -> Optional[Any]:
         """
         Pre MCP Tool Call Hook
@@ -489,7 +462,7 @@ class ProxyLogging:
         from litellm.types.mcp import MCPPreCallRequestObject, MCPPreCallResponseObject
 
         callbacks = self.get_combined_callback_list(
-            dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
+            dynamic_success_callbacks=getattr(self, "dynamic_success_callbacks", None),
             global_callbacks=litellm.success_callback,
         )
 
@@ -500,7 +473,7 @@ class ProxyLogging:
                 arguments=kwargs.get("arguments", {}),
                 server_name=kwargs.get("server_name"),
                 user_api_key_auth=kwargs.get("user_api_key_auth"),
-                hidden_params=HiddenParams()
+                hidden_params=HiddenParams(),
             )
 
         for callback in callbacks:
@@ -537,10 +510,10 @@ class ProxyLogging:
             return global_callbacks
         return list(set(dynamic_success_callbacks + global_callbacks))
 
-
-
     def _parse_pre_mcp_call_hook_response(
-            self, response: MCPPreCallResponseObject, original_request: MCPPreCallRequestObject
+        self,
+        response: MCPPreCallResponseObject,
+        original_request: MCPPreCallRequestObject,
     ) -> Dict[str, Any]:
         """
         Parse the response from the pre_mcp_tool_call_hook
@@ -551,18 +524,19 @@ class ProxyLogging:
         """
         result = {
             "should_proceed": response.should_proceed,
-            "modified_arguments": response.modified_arguments or original_request.arguments,
+            "modified_arguments": response.modified_arguments
+            or original_request.arguments,
             "error_message": response.error_message,
             "hidden_params": response.hidden_params,
         }
         return result
 
     async def async_during_mcp_tool_call_hook(
-            self,
-            kwargs: dict,
-            request_obj: Any,
-            start_time: datetime,
-            end_time: datetime,
+        self,
+        kwargs: dict,
+        request_obj: Any,
+        start_time: datetime,
+        end_time: datetime,
     ) -> Optional[Any]:
         """
         During MCP Tool Call Hook
@@ -570,10 +544,13 @@ class ProxyLogging:
         Use this for concurrent monitoring and validation during tool execution.
         """
         from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPDuringCallResponseObject, MCPDuringCallRequestObject
+        from litellm.types.mcp import (
+            MCPDuringCallRequestObject,
+            MCPDuringCallResponseObject,
+        )
 
         callbacks = self.get_combined_callback_list(
-            dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
+            dynamic_success_callbacks=getattr(self, "dynamic_success_callbacks", None),
             global_callbacks=litellm.success_callback,
         )
 
@@ -584,7 +561,7 @@ class ProxyLogging:
                 arguments=kwargs.get("arguments", {}),
                 server_name=kwargs.get("server_name"),
                 start_time=start_time.timestamp() if start_time else None,
-                hidden_params=HiddenParams()
+                hidden_params=HiddenParams(),
             )
 
         for callback in callbacks:
@@ -603,7 +580,9 @@ class ProxyLogging:
                     # this allows for execution control decisions
                     ######################################################################
                     if response is not None:
-                        return self._parse_during_mcp_call_hook_response(response=response)
+                        return self._parse_during_mcp_call_hook_response(
+                            response=response
+                        )
             except Exception as e:
                 verbose_proxy_logger.exception(
                     "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
@@ -613,7 +592,7 @@ class ProxyLogging:
         return None
 
     def _parse_during_mcp_call_hook_response(
-            self, response: MCPDuringCallResponseObject
+        self, response: MCPDuringCallResponseObject
     ) -> Dict[str, Any]:
         """
         Parse the response from the during_mcp_tool_call_hook
@@ -1382,9 +1361,15 @@ class PrismaClient:
             from prisma import Prisma  # type: ignore
         except Exception as e:
             verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
-            verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
-            verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
-            raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
+            verbose_proxy_logger.error(
+                "This usually means 'prisma generate' hasn't been run yet."
+            )
+            verbose_proxy_logger.error(
+                "Please run 'prisma generate' to generate the Prisma client."
+            )
+            raise Exception(
+                "Unable to find Prisma binaries. Please run 'prisma generate' first."
+            )
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
@@ -3434,3 +3419,39 @@ def is_valid_api_key(key: str) -> bool:
         if re.match(r"^[a-fA-F0-9]{64}$", key):
             return True
     return False
+
+
+def construct_database_url_from_env_vars() -> Optional[str]:
+    """
+    Construct a DATABASE_URL from individual environment variables.
+    
+    Returns:
+        Optional[str]: The constructed DATABASE_URL or None if required variables are missing
+    """
+    import urllib.parse
+    
+    # Check if all required variables are provided
+    database_host = os.getenv("DATABASE_HOST")
+    database_username = os.getenv("DATABASE_USERNAME")
+    database_password = os.getenv("DATABASE_PASSWORD")
+    database_name = os.getenv("DATABASE_NAME")
+
+    if (
+        database_host
+        and database_username
+        and database_name
+    ):
+        # Handle the problem of special character escaping in the database URL
+        database_username_enc = urllib.parse.quote_plus(database_username)
+        database_password_enc = urllib.parse.quote_plus(database_password) if database_password else ""
+        database_name_enc = urllib.parse.quote_plus(database_name)
+
+        # Construct DATABASE_URL from the provided variables
+        if database_password:
+            database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+        else:
+            database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
+
+        return database_url
+    
+    return None
