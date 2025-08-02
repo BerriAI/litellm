@@ -70,9 +70,8 @@ This shows the daily, weekly, and monthly active users for each coding tool.
 
 <Image 
   img={require('../../img/agent_4.png')}
-  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+  style={{width: '80%', display: 'block', margin: '2rem auto'}}
 />
-
 
 
 
