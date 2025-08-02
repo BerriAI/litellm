@@ -267,6 +267,7 @@ async def new_team(  # noqa: PLR0915
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
+    - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
     
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
