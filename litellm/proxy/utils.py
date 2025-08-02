@@ -484,8 +484,10 @@ class ProxyLogging:
             try:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
+                    from typing import cast
+                    from litellm import _custom_logger_compatible_callbacks_literal
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
@@ -815,8 +817,10 @@ class ProxyLogging:
             try:
                 _callback: Optional[CustomLogger] = None
                 if isinstance(callback, str):
+                    from typing import cast
+                    from litellm import _custom_logger_compatible_callbacks_literal
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        callback
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback  # type: ignore
