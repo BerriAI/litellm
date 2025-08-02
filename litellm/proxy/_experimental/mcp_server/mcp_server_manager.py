@@ -12,13 +12,13 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional, cast
 
+from fastapi import HTTPException
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from fastapi import HTTPException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -26,10 +26,10 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_tool_name,
     get_server_name_prefix_tool_mcp,
+    get_server_prefix,
     is_tool_name_prefixed,
     normalize_server_name,
     validate_mcp_server_name,
-    get_server_prefix,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -81,21 +81,21 @@ def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVe
         MCPSpecVersionType: The enum value
     """
     if not protocol_version:
-        return MCPSpecVersion.jun_2025
+        return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
     
     # If it's already an MCPSpecVersion enum, return it
     if isinstance(protocol_version, MCPSpecVersion):
-        return protocol_version
+        return cast(MCPSpecVersionType, protocol_version)
     
     # If it's a string, try to match it to enum values
     if isinstance(protocol_version, str):
         for version in MCPSpecVersion:
             if version.value == protocol_version:
-                return version
+                return cast(MCPSpecVersionType, version)
     
     # If no match found, return default
     verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
-    return MCPSpecVersion.jun_2025
+    return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
 
 
 class MCPServerManager:
@@ -903,15 +903,18 @@ class MCPServerManager:
         Returns:
             List of MCP server objects with health and team data
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy._experimental.mcp_server.db import (
+            get_all_mcp_servers,
+            get_mcp_servers,
+        )
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-        from litellm.proxy._experimental.mcp_server.db import get_mcp_servers, get_all_mcp_servers
-        
+        from litellm.proxy.proxy_server import prisma_client
+
         # Get allowed server IDs
         allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
         
         # Get servers from database
-        list_mcp_servers = []
+        list_mcp_servers: List[LiteLLM_MCPServerTable] = []
         if prisma_client is not None:
             list_mcp_servers = await get_mcp_servers(prisma_client, allowed_server_ids)
             
