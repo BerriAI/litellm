@@ -114,7 +114,7 @@ class TestOAuth2FlowInitiation:
                 ))
         
         assert exc_info.value.status_code == 400
-        assert "unsupported_response_type" in str(exc_info.value.detail)
+        assert "Unsupported response_type" in str(exc_info.value.detail)
     
     @patch.dict(os.environ, {
         "MICROSOFT_CLIENT_ID": "test_client_id",
