@@ -331,6 +331,7 @@ async def new_user(
     - key_alias: Optional[str] - Alias for the key auto-created on `/user/new`. Default is None.
     - sso_user_id: Optional[str] - The id of the user in the SSO provider.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
     Returns:
     - key: (str) The generated api key for the user
@@ -985,6 +986,7 @@ async def user_update(
         - duration: Optional[str] - [NOT IMPLEMENTED].
         - key_alias: Optional[str] - [NOT IMPLEMENTED].
         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+        - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     
     """
     try:
