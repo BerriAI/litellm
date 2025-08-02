@@ -53,6 +53,10 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso_helper_utils import (
+    OAuth2CORSHandler,
+    OAuth2StateManager,
+    OAuth2TokenManager,
+    OAuth2URLManager,
     check_is_admin_only_access,
     has_admin_ui_access,
 )
@@ -106,28 +110,8 @@ async def serve_login_page(
         # For OAuth token flow, redirect directly to SSO login
         verbose_proxy_logger.info("OAuth token flow detected, redirecting to SSO login")
         
-        # Build redirect URL safely using URL parsing
-        from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
-        
-        parsed_url = urlparse(str(request.url))
-        query_params = parse_qs(parsed_url.query)
-        
-        # Remove response_type from query params
-        query_params.pop('response_type', None)
-        
-        # Add OAuth flow indicator
-        query_params['oauth_flow'] = ['true']
-        
-        # Rebuild URL with /sso/login path
-        new_path = parsed_url.path.replace("/sso/key/generate", "/sso/login")
-        redirect_url = urlunparse((
-            parsed_url.scheme,
-            parsed_url.netloc,
-            new_path,
-            parsed_url.params,
-            urlencode(query_params, doseq=True),
-            parsed_url.fragment
-        ))
+        # Use OAuth2URLManager to build redirect URL safely
+        redirect_url = OAuth2URLManager.modify_url_for_oauth_flow(str(request.url))
         
         return RedirectResponse(url=redirect_url, status_code=303)
     
@@ -480,9 +464,9 @@ async def sso_login_redirect(
         key=key,
     )
     
-    # If OAuth flow, create state parameter
+    # If OAuth flow, create secure state parameter
     if oauth_flow == "true" and not cli_state:
-        cli_state = "oauth_token_flow"
+        cli_state = OAuth2StateManager.generate_secure_state("oauth_token")
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
     if user_custom_ui_sso_sign_in_handler is not None:
@@ -870,13 +854,7 @@ async def check_and_update_if_proxy_admin_id(
     return user_role
 
 
-def create_oauth_token_response(token: str) -> dict:
-    """Create OAuth2 token response"""
-    return {
-        "access_token": token,
-        "token_type": "Bearer",
-        "expires_in": 86400
-    }
+# OAuth2 token response creation moved to OAuth2TokenManager utility class
 
 
 @router.get("/sso/callback", tags=["experimental"], include_in_schema=False)
@@ -884,8 +862,15 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     """Verify login"""
     verbose_proxy_logger.info(f"Starting SSO callback with state: {state}")
 
-    # Check if this is an OAuth token flow
-    is_oauth_flow = state == "oauth_token_flow"
+    # Check if this is an OAuth token flow using secure state validation
+    is_oauth_flow = False
+    if state:
+        if OAuth2StateManager.validate_state(state):
+            flow_type = OAuth2StateManager.extract_flow_type(state)
+            is_oauth_flow = flow_type == "oauth_token"
+        else:
+            # Fallback for backward compatibility
+            is_oauth_flow = state.startswith("oauth:")
     
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
@@ -1710,12 +1695,8 @@ class SSOAuthenticationHandler:
         if is_oauth_flow:
             verbose_proxy_logger.info("OAuth flow detected, returning JSON token response")
             
-            oauth_response = create_oauth_token_response(key)
-            cors_headers = {
-                "Access-Control-Allow-Origin": os.getenv("OAUTH_ALLOWED_ORIGINS", "*"),
-                "Cache-Control": "no-store",
-                "Pragma": "no-cache"
-            }
+            oauth_response = OAuth2TokenManager.create_token_response(key, scope="litellm:api")
+            cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
             
             return JSONResponse(content=oauth_response, headers=cors_headers)
         

@@ -23,8 +23,13 @@ import pytest
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from litellm.proxy.management_endpoints.sso_helper_utils import (
+    OAuth2TokenManager,
+    OAuth2StateManager,
+    OAuth2URLManager,
+    OAuth2CORSHandler,
+)
 from litellm.proxy.management_endpoints.ui_sso import (
-    create_oauth_token_response,
     serve_login_page,
 )
 
@@ -38,7 +43,7 @@ class TestOAuth2TokenResponse:
         token = "sk-litellm-test123"
         
         # Act
-        response = create_oauth_token_response(token)
+        response = OAuth2TokenManager.create_token_response(token)
         
         # Assert
         assert response == {
@@ -53,7 +58,7 @@ class TestOAuth2TokenResponse:
         token = "sk-litellm-test123"
         
         # Act
-        response = create_oauth_token_response(token)
+        response = OAuth2TokenManager.create_token_response(token)
         
         # Assert
         assert "access_token" in response
@@ -166,18 +171,8 @@ class TestOAuth2StateHandling:
         with patch("litellm.proxy.management_endpoints.ui_sso.RedirectResponse") as mock_redirect:
             mock_redirect.return_value = MagicMock(spec=RedirectResponse)
             
-            # Act - Test the state generation logic directly
-            import time
-            import json
-            import secrets
-            
-            # Simulate what happens in sso_login_redirect when oauth_flow="true"
-            state_data = {
-                "flow": "oauth_token",
-                "timestamp": int(time.time()),
-                "nonce": secrets.token_urlsafe(16)
-            }
-            generated_state = f"oauth:{json.dumps(state_data)}"
+            # Act - Test the state generation logic using OAuth2StateManager
+            generated_state = OAuth2StateManager.generate_secure_state("oauth_token")
             
             # Assert - Verify state structure
             assert generated_state.startswith("oauth:")
@@ -189,44 +184,33 @@ class TestOAuth2StateHandling:
     
     def test_oauth_state_validation_valid(self):
         """Test valid OAuth2 state parameter validation."""
-        # Arrange
-        current_time = int(time.time())
-        state_data = {
-            "flow": "oauth_token",
-            "timestamp": current_time,
-            "nonce": "test_nonce_123"
-        }
-        state = f"oauth:{json.dumps(state_data)}"
+        # Arrange - Generate a valid state using OAuth2StateManager
+        state = OAuth2StateManager.generate_secure_state("oauth_token")
         
-        mock_request = MagicMock(spec=Request)
+        # Act
+        is_valid = OAuth2StateManager.validate_state(state)
+        flow_type = OAuth2StateManager.extract_flow_type(state)
         
-        # Act & Assert
-        # The state validation logic is tested in the callback handler
-        # This would be called during the actual callback processing
-        # We verify the state structure is correctly parsed
-        assert state.startswith("oauth:")
-        parsed_data = json.loads(state[6:])
-        assert parsed_data["flow"] == "oauth_token"
-        assert parsed_data["timestamp"] == current_time
-        assert "nonce" in parsed_data
+        # Assert
+        assert is_valid is True
+        assert flow_type == "oauth_token"
     
     def test_oauth_state_validation_expired(self):
         """Test expired OAuth2 state parameter validation."""
-        # Arrange - Create state with old timestamp (10 minutes ago)
+        # Arrange - Create an expired state by manually setting old timestamp
         old_time = int(time.time()) - 600  # 10 minutes ago
         state_data = {
             "flow": "oauth_token",
             "timestamp": old_time,
             "nonce": "test_nonce_123"
         }
-        state = f"oauth:{json.dumps(state_data)}"
+        expired_state = f"oauth:{json.dumps(state_data)}"
         
         # Act
-        parsed_data = json.loads(state[6:])
-        state_age = time.time() - parsed_data["timestamp"]
+        is_valid = OAuth2StateManager.validate_state(expired_state)
         
         # Assert - State should be considered expired (> 5 minutes)
-        assert state_age > 300  # 5 minutes
+        assert is_valid is False
     
     def test_oauth_state_validation_malformed(self):
         """Test malformed OAuth2 state parameter handling."""
@@ -240,17 +224,11 @@ class TestOAuth2StateHandling:
         ]
         
         for state in malformed_states:
-            # Act & Assert
-            try:
-                if state.startswith("oauth:"):
-                    json.loads(state[6:])
-                    # If we get here, it wasn't malformed enough
-                else:
-                    # Non-oauth states should be handled gracefully
-                    assert not state.startswith("oauth:")
-            except json.JSONDecodeError:
-                # Expected for malformed JSON
-                pass
+            # Act
+            is_valid = OAuth2StateManager.validate_state(state)
+            
+            # Assert - All malformed states should be invalid
+            assert is_valid is False
 
 
 class TestOAuth2ResponseValidation:
@@ -299,17 +277,8 @@ class TestOAuth2CORSHandling:
     
     def test_cors_headers_default(self):
         """Test default CORS headers configuration."""
-        # Arrange
-        token = "sk-litellm-test123"
-        
-        # Act - Simulate the CORS headers that would be set
-        cors_headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Cache-Control": "no-store",
-            "Pragma": "no-cache"
-        }
+        # Act - Get CORS headers using OAuth2CORSHandler
+        cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
         
         # Assert
         assert cors_headers["Access-Control-Allow-Origin"] == "*"
@@ -320,15 +289,8 @@ class TestOAuth2CORSHandling:
     @patch.dict(os.environ, {"OAUTH_ALLOWED_ORIGINS": "https://roocode.com,https://app.roocode.com"})
     def test_cors_headers_configured_origins(self):
         """Test CORS headers with configured allowed origins."""
-        # Arrange
-        allowed_origins = os.getenv("OAUTH_ALLOWED_ORIGINS", "*")
-        
-        # Act
-        cors_headers = {
-            "Access-Control-Allow-Origin": allowed_origins,
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        }
+        # Act - Get CORS headers using OAuth2CORSHandler with configured origins
+        cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
         
         # Assert
         assert cors_headers["Access-Control-Allow-Origin"] == "https://roocode.com,https://app.roocode.com"
@@ -341,7 +303,7 @@ class TestOAuth2SecurityFeatures:
         """Test that OAuth2 responses include proper no-cache headers."""
         # Arrange
         token = "sk-litellm-test123"
-        oauth_response = create_oauth_token_response(token)
+        oauth_response = OAuth2TokenManager.create_token_response(token)
         
         # Expected headers per OAuth2 RFC
         security_headers = {
@@ -358,14 +320,13 @@ class TestOAuth2SecurityFeatures:
     def test_oauth_state_uniqueness(self):
         """Test that OAuth2 state parameters are unique."""
         # Arrange & Act
-        import secrets
-        nonce1 = secrets.token_urlsafe(16)
-        nonce2 = secrets.token_urlsafe(16)
+        state1 = OAuth2StateManager.generate_secure_state("oauth_token")
+        state2 = OAuth2StateManager.generate_secure_state("oauth_token")
         
         # Assert
-        assert nonce1 != nonce2
-        assert len(nonce1) > 10  # Reasonable length
-        assert len(nonce2) > 10
+        assert state1 != state2
+        assert len(state1) > 20  # Reasonable length for full state
+        assert len(state2) > 20
     
     def test_oauth_token_format_validation(self):
         """Test that generated tokens follow expected format."""
@@ -373,7 +334,7 @@ class TestOAuth2SecurityFeatures:
         token = "sk-litellm-1234567890abcdef"
         
         # Act
-        oauth_response = create_oauth_token_response(token)
+        oauth_response = OAuth2TokenManager.create_token_response(token)
         
         # Assert
         assert oauth_response["access_token"].startswith("sk-litellm-")
@@ -400,13 +361,11 @@ class TestOAuth2Integration:
         # Step 2: Expected redirect to SSO login
         expected_redirect = "/sso/login?oauth_flow=true"
         
-        # Step 3: Expected final response format
-        expected_response = {
-            "access_token": "sk-litellm-xxxxxxxxxx",
-            "token_type": "Bearer",
-            "expires_in": 86400,
-            "scope": "litellm:api"
-        }
+        # Step 3: Expected final response format using OAuth2TokenManager
+        expected_response = OAuth2TokenManager.create_token_response(
+            "sk-litellm-xxxxxxxxxx", 
+            scope="litellm:api"
+        )
         
         # Assert flow structure
         assert "response_type" in str(oauth_url)
