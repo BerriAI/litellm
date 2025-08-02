@@ -1,8 +1,18 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Image from '@theme/IdealImage';
+
 # Track Usage for Coding Tools
 
 This tutorial shows how to track usage and costs for AI-powered coding tools like Claude Code, Roo Code, Gemini CLI, and OpenAI Codex through LiteLLM.
 
 Track requests, total costs, and user engagement metrics for each coding tool via User-Agent headers.
+
+<Image 
+  img={require('../../img/agent_1.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
 
 ## Who This Is For
 
@@ -30,6 +40,11 @@ Ensure your coding tool includes identifying User-Agent headers in API requests.
 ### 3. Verify Tracking in LiteLLM Logs
 
 Confirm that LiteLLM is properly tracking requests by checking logs for the expected User-Agent values.
+
+<Image 
+  img={require('../../img/agent_2.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
 ### 4. View Usage Dashboard
 
