@@ -158,7 +158,7 @@ print(model_cost) # {'gpt-3.5-turbo': {'max_tokens': 4000, 'input_cost_per_token
 ### 9. `register_model`
 
 * Input: Provide EITHER a model cost dictionary or a url to a hosted json blob
-* Output: Returns updated model_cost dictionary + updates litellm.model_cost with model details.  
+* Output: Returns updated _model_cost dictionary + updates litellm._model_cost with model details.  
 
 **Dictionary**
 ```python
