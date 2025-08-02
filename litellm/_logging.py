@@ -108,6 +108,10 @@ verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
+# Suppress httpx request logging at INFO level
+httpx_logger = logging.getLogger("httpx")
+httpx_logger.setLevel(logging.WARNING)
+
 ALL_LOGGERS = [
     logging.getLogger(),
     verbose_logger,
