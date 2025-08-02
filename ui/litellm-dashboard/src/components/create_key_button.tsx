@@ -855,14 +855,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     }
                     name="guardrails" 
                     className="mt-4"
-                    help="Select existing guardrails or enter new ones"
+                    help={premiumUser ? "Select existing guardrails or enter new ones" : "Premium feature - Upgrade to set guardrails by key"}
                   >
-                    <Select
-                      mode="tags"
-                      style={{ width: '100%' }}
-                      placeholder="Select or enter guardrails"
-                      options={guardrailsList.map(name => ({ value: name, label: name }))}
-                    />
+                    <Tooltip 
+                      title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set guardrails by key"
+                            : "Select or enter guardrails"
+                        }
+                        options={guardrailsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                     label={
@@ -882,14 +892,24 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     }
                     name="prompts" 
                     className="mt-4"
-                    help="Select existing prompts or enter new ones"
+                    help={premiumUser ? "Select existing prompts or enter new ones" : "Premium feature - Upgrade to set prompts by key"}
                   >
-                    <Select
-                      mode="tags"
-                      style={{ width: '100%' }}
-                      placeholder="Select or enter prompts"
-                      options={promptsList.map(name => ({ value: name, label: name }))}
-                    />
+                    <Tooltip 
+                      title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set prompts by key"
+                            : "Select or enter prompts"
+                        }
+                        options={promptsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                         label={
