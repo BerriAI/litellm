@@ -115,6 +115,8 @@ class InMemoryPromptRegistry:
 
         Returns a Guardrail object if the guardrail is initialized successfully
         """
+        import litellm
+
         prompt_id = prompt.get("prompt_id") or str(uuid.uuid4())
         prompt["prompt_id"] = prompt_id
         if prompt_id in self.IN_MEMORY_PROMPTS:
@@ -138,12 +140,16 @@ class InMemoryPromptRegistry:
 
         if initializer:
             custom_prompt_callback = initializer(litellm_params, prompt)
+            if not isinstance(custom_prompt_callback, CustomPromptManagement):
+                raise ValueError(
+                    f"CustomPromptManagement is required, got {type(custom_prompt_callback)}"
+                )
+            litellm.logging_callback_manager.add_litellm_callback(custom_prompt_callback)  # type: ignore
         else:
             raise ValueError(f"Unsupported prompt: {prompt_integration}")
 
         parsed_prompt = PromptSpec(
             prompt_id=prompt_id,
-            prompt_name=prompt["prompt_name"],
             litellm_params=litellm_params,
         )
 
@@ -152,6 +158,20 @@ class InMemoryPromptRegistry:
         self.prompt_id_to_custom_prompt[prompt_id] = custom_prompt_callback
 
         return parsed_prompt
+
+    def get_prompt_by_id(self, prompt_id: str) -> Optional[PromptSpec]:
+        """
+        Get a prompt by its ID from memory
+        """
+        return self.IN_MEMORY_PROMPTS.get(prompt_id)
+
+    def get_prompt_callback_by_id(
+        self, prompt_id: str
+    ) -> Optional[CustomPromptManagement]:
+        """
+        Get a prompt callback by its ID from memory
+        """
+        return self.prompt_id_to_custom_prompt.get(prompt_id)
 
 
 IN_MEMORY_PROMPT_REGISTRY = InMemoryPromptRegistry()

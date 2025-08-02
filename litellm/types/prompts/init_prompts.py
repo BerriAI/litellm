@@ -19,8 +19,7 @@ class PromptLiteLLMParams(BaseModel):
 
 
 class PromptSpec(TypedDict, total=False):
-    prompt_id: Optional[str]
-    prompt_name: Required[str]
+    prompt_id: Required[str]
     litellm_params: Required[PromptLiteLLMParams]
     prompt_info: Optional[Dict]
     created_at: Optional[datetime]
