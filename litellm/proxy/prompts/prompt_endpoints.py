@@ -400,6 +400,7 @@ async def delete_prompt(
     ```
     """
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import prisma_client
 
     # Only allow proxy admins to delete prompts
     if user_api_key_dict.user_role is None or (
@@ -410,6 +411,11 @@ async def delete_prompt(
             status_code=403, detail="Only proxy admins can delete prompts"
         )
 
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+
     try:
         # Check if prompt exists
         existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
@@ -417,6 +423,17 @@ async def delete_prompt(
             raise HTTPException(
                 status_code=404, detail=f"Prompt with ID {prompt_id} not found"
             )
+
+        if existing_prompt.prompt_info.prompt_type == "config":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete config prompts.",
+            )
+
+        # Delete the prompt from the database
+        await prisma_client.db.litellm_prompttable.delete(
+            where={"prompt_id": prompt_id}
+        )
 
         # Remove the prompt from memory
         del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
