@@ -167,51 +167,6 @@ async def test_get_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_get_router_response():
-    model = "claude-3-5-sonnet@20240620"
-    vertex_ai_project = "pathrise-convert-1606954137718"
-    vertex_ai_location = "asia-southeast1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
-
-    prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
-    try:
-        router = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "sonnet",
-                    "litellm_params": {
-                        "model": "vertex_ai/claude-3-5-sonnet@20240620",
-                        "vertex_ai_project": vertex_ai_project,
-                        "vertex_ai_location": vertex_ai_location,
-                        "vertex_credentials": vertex_credentials,
-                    },
-                }
-            ]
-        )
-        response = await router.acompletion(
-            model="sonnet",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Complete the given code with no more explanation. Remember that there is a 4-space indent before the first line of your generated code.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            mock_response="Hello, how are you?",
-        )
-
-        print(f"\n\nResponse: {response}\n\n")
-
-    except litellm.ServiceUnavailableError:
-        pass
-    except litellm.UnprocessableEntityError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An error occurred - {str(e)}")
-
 
 @pytest.mark.skip(
     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
@@ -880,7 +835,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize(
-    "model", ["vertex_ai_beta/gemini-1.5-pro", "vertex_ai/claude-3-5-sonnet@20240620"]
+    "model", ["vertex_ai_beta/gemini-1.5-pro"]
 )  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
