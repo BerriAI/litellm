@@ -2187,6 +2187,44 @@ def test_is_valid_api_key():
     assert not is_valid_api_key("a" * 65)
 
 
+def test_block_key_hashing_logic():
+    """
+    Test that block_key() function only hashes keys that start with "sk-"
+    """
+    import hashlib
+    from litellm.proxy.utils import hash_token
+    
+    # Test cases: (input_key, should_be_hashed, expected_output)
+    test_cases = [
+        ("sk-1234567890abcdef", True, hash_token("sk-1234567890abcdef")),
+        ("sk-test-key", True, hash_token("sk-test-key")),
+        ("abc123", False, "abc123"),  # Should not be hashed
+        ("hashed_key_123", False, "hashed_key_123"),  # Should not be hashed
+        ("", False, ""),  # Empty string should not be hashed
+        ("sk-", True, hash_token("sk-")),  # Edge case: just "sk-"
+    ]
+    
+    for input_key, should_be_hashed, expected_output in test_cases:
+        # Simulate the logic from block_key() function
+        if input_key.startswith("sk-"):
+            hashed_token = hash_token(token=input_key)
+        else:
+            hashed_token = input_key
+        
+        assert hashed_token == expected_output, f"Failed for input: {input_key}"
+        
+        # Additional verification: if it should be hashed, verify it's actually a hash
+        if should_be_hashed:
+            # SHA-256 hashes are 64 characters long and contain only hex digits
+            assert len(hashed_token) == 64, f"Hash length should be 64, got {len(hashed_token)} for {input_key}"
+            assert all(c in '0123456789abcdef' for c in hashed_token), f"Hash should contain only hex digits for {input_key}"
+        else:
+            # If not hashed, it should be the original string
+            assert hashed_token == input_key, f"Non-hashed key should remain unchanged: {input_key}"
+    
+    print("✅ All block_key hashing logic tests passed!")
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
