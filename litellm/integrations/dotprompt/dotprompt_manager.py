@@ -3,20 +3,17 @@ Dotprompt manager that integrates with LiteLLM's prompt management system.
 Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.prompt_management_base import (
-    PromptManagementBase,
-    PromptManagementClient,
-)
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .prompt_manager import PromptManager, PromptTemplate
 
 
-class DotpromptManager(PromptManagementBase, CustomLogger):
+class DotpromptManager(CustomPromptManagement):
     """
     Dotprompt manager that integrates with LiteLLM's prompt management system.
 
@@ -93,6 +90,7 @@ class DotpromptManager(PromptManagementBase, CustomLogger):
         3. Converts the rendered text into chat messages
         4. Extracts model and optional parameters from metadata
         """
+
         try:
             # Get the prompt template
             template = self.prompt_manager.get_prompt(prompt_id)
@@ -121,6 +119,31 @@ class DotpromptManager(PromptManagementBase, CustomLogger):
 
         except Exception as e:
             raise ValueError(f"Error compiling prompt '{prompt_id}': {e}")
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        from litellm.integrations.prompt_management_base import PromptManagementBase
+
+        return PromptManagementBase.get_chat_completion_prompt(
+            self,
+            model,
+            messages,
+            non_default_params,
+            prompt_id,
+            prompt_variables,
+            dynamic_callback_params,
+            prompt_label,
+            prompt_version,
+        )
 
     def _convert_to_messages(self, rendered_content: str) -> List[AllMessageValues]:
         """
