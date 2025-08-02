@@ -34,6 +34,7 @@ import {
   userFilterUICall,
   keyCreateServiceAccountCall,
   fetchMCPAccessGroups,
+  getPromptsList,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { Team } from "./key_team_helpers/key_list";
@@ -169,6 +170,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
@@ -237,7 +239,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       }
     };
 
+    const fetchPrompts = async () => {
+      try {
+        const response = await getPromptsList(accessToken);
+        setPromptsList(response.prompts.map(prompt => prompt.prompt_id));
+      } catch (error) {
+        console.error("Failed to fetch prompts:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPrompts();
   }, [accessToken]);
 
   // Fetch possible user roles when component mounts
@@ -850,6 +862,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       style={{ width: '100%' }}
                       placeholder="Select or enter guardrails"
                       options={guardrailsList.map(name => ({ value: name, label: name }))}
+                    />
+                  </Form.Item>
+                  <Form.Item 
+                    label={
+                      <span>
+                        Prompts{' '}
+                        <Tooltip title="Allow this key to use specific prompt templates">
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/prompt_management" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="prompts" 
+                    className="mt-4"
+                    help="Select existing prompts or enter new ones"
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: '100%' }}
+                      placeholder="Select or enter prompts"
+                      options={promptsList.map(name => ({ value: name, label: name }))}
                     />
                   </Form.Item>
                   <Form.Item 
