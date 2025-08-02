@@ -21,7 +21,7 @@ import {
   TabPanels,
   Subtitle,
 } from "@tremor/react";
-import UsageDatePicker from "./shared/usage_date_picker";
+import AdvancedDatePicker from "./shared/advanced_date_picker";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
@@ -328,7 +328,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div style={{ width: "100%" }}>
       <Grid numItems={2} className="gap-2 w-full mb-4">
         <Col>
-          <UsageDatePicker value={dateValue} onValueChange={setDateValue} />
+          <AdvancedDatePicker value={dateValue} onValueChange={setDateValue} />
         </Col>
         {entityList && entityList.length > 0 && (
           <Col>
