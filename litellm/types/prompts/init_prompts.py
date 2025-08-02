@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -25,6 +25,7 @@ class PromptSpec(TypedDict, total=False):
     prompt_info: Optional[Dict]
     created_at: Optional[datetime]
     updated_at: Optional[datetime]
+
 
 class ListPromptsResponse(BaseModel):
     prompts: List[PromptSpec]
