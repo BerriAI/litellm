@@ -484,6 +484,7 @@ export default function KeyInfoView({
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
+                  premiumUser={premiumUser}
                 />
               ) : (
                 <div className="space-y-4">
@@ -545,6 +546,19 @@ export default function KeyInfoView({
                       {currentKeyData.max_budget !== null
                         ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
                         : "Unlimited"}
+                    </Text>
+                  </div>
+                  
+                  <div>
+                    <Text className="font-medium">Prompts</Text>
+                    <Text>
+                      {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
+                        ? currentKeyData.metadata.prompts.map((prompt, index) => (
+                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                            {prompt}
+                          </span>
+                        ))
+                        : "No prompts specified"}
                     </Text>
                   </div>
 
