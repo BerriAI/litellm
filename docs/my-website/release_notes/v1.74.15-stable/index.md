@@ -73,10 +73,15 @@ pip install litellm==1.74.15.post1
 
 #### New Model Support
 
-| Provider    | Model                                  | Context Window | Type |
-| ----------- | -------------------------------------- | -------------- | ---- |
-| Google AI Studio | `gemini/imagen4` | N/A | Image Generation | 
-| OpenRouter | `openrouter/grok4` | Various | Text Generation |
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Cost per Image |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | -------------- |
+| OpenRouter | `openrouter/x-ai/grok-4` | 256k | $3 | $15 | N/A |
+| Google AI Studio | `gemini/imagen-4.0-generate-preview-06-06` | N/A | N/A | N/A | $0.04 |
+| Google AI Studio | `gemini/imagen-4.0-ultra-generate-preview-06-06` | N/A | N/A | N/A | $0.06 |
+| Google AI Studio | `gemini/imagen-4.0-fast-generate-preview-06-06` | N/A | N/A | N/A | $0.02 |
+| Google AI Studio | `gemini/imagen-3.0-generate-002` | N/A | N/A | N/A | $0.04 |
+| Google AI Studio | `gemini/imagen-3.0-generate-001` | N/A | N/A | N/A | $0.04 |
+| Google AI Studio | `gemini/imagen-3.0-fast-generate-001` | N/A | N/A | N/A | $0.02 |
 
 #### Features
 
