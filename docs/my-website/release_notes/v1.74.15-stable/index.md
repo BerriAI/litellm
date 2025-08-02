@@ -45,11 +45,10 @@ pip install litellm==1.74.15.post1
 
 ## Key Highlights
 
-- **User Agent Activity Tracking** - Track DAU, WAU, MAU for coding tool usage with comprehensive user activity analytics.
-- **Prompt Management** - Abstract prompt templates away from model list for better permission management.
-- **Google AI Studio Imagen4** - Support for Google's new Imagen4 model family for image generation.
-- **Enhanced MCP Gateway** - Improved health checks, guardrails, and better client protocol handling.
-- **Anthropic Mid-Stream Fallbacks** - Advanced fallback handling with token usage tracking across multiple calls.
+- **User Agent Activity Tracking** - Track how much usage each coding tool gets.
+- **Prompt Management** - Use Git-Ops style prompt management with prompt templates.
+- **MCP Gateway: Guardrails** - Support for using Guardrails with MCP servers.
+- **Google AI Studio Imagen4** - Support for using Imagen4 models on Google AI Studio.
 
 ---
 
@@ -70,13 +69,67 @@ pip install litellm==1.74.15.post1
 
 ---
 
+## New Models / Updated Models
+
+#### New Model Support
+
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Cost per Image |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | -------------- |
+| OpenRouter | `openrouter/x-ai/grok-4` | 256k | $3 | $15 | N/A |
+| Google AI Studio | `gemini/imagen-4.0-generate-preview-06-06` | N/A | N/A | N/A | $0.04 |
+| Google AI Studio | `gemini/imagen-4.0-ultra-generate-preview-06-06` | N/A | N/A | N/A | $0.06 |
+| Google AI Studio | `gemini/imagen-4.0-fast-generate-preview-06-06` | N/A | N/A | N/A | $0.02 |
+| Google AI Studio | `gemini/imagen-3.0-generate-002` | N/A | N/A | N/A | $0.04 |
+| Google AI Studio | `gemini/imagen-3.0-generate-001` | N/A | N/A | N/A | $0.04 |
+| Google AI Studio | `gemini/imagen-3.0-fast-generate-001` | N/A | N/A | N/A | $0.02 |
+
+#### Features
+
+- **[Google AI Studio](../../docs/providers/gemini)**
+    - Added Google AI Studio Imagen4 model family support - [PR #13065](https://github.com/BerriAI/litellm/pull/13065), [Get Started](../../docs/providers/google_ai_studio/image_gen)
+- **[Azure OpenAI](../../docs/providers/azure/azure)**
+    - Azure `api_version="preview"` support - [PR #13072](https://github.com/BerriAI/litellm/pull/13072), [Get Started](../../docs/providers/azure/azure#setting-api-version)
+    - Password protected certificate files support - [PR #12995](https://github.com/BerriAI/litellm/pull/12995), [Get Started](../../docs/providers/azure/azure#authentication)
+- **[AWS Bedrock](../../docs/providers/bedrock)**
+    - Cost tracking via Anthropic `/v1/messages` - [PR #13072](https://github.com/BerriAI/litellm/pull/13072)
+    - Computer use support - [PR #13150](https://github.com/BerriAI/litellm/pull/13150)
+- **[OpenRouter](../../docs/providers/openrouter)**
+    - Added Grok4 model support - [PR #13018](https://github.com/BerriAI/litellm/pull/13018)
+- **[Anthropic](../../docs/providers/anthropic)**
+    - Auto Cache Control Injection - Improved cache_control_injection_points with negative index support - [PR #13187](https://github.com/BerriAI/litellm/pull/13187), [Get Started](../../docs/tutorials/prompt_caching)
+    - Working mid-stream fallbacks with token usage tracking - [PR #13149](https://github.com/BerriAI/litellm/pull/13149), [PR #13170](https://github.com/BerriAI/litellm/pull/13170)
+- **[Perplexity](../../docs/providers/perplexity)**
+    - Citation annotations support - [PR #13225](https://github.com/BerriAI/litellm/pull/13225)
+
+#### Bugs
+
+- **[Gemini](../../docs/providers/gemini)**
+    - Fix merge_reasoning_content_in_choices parameter issue - [PR #13066](https://github.com/BerriAI/litellm/pull/13066), [Get Started](../../docs/tutorials/openweb_ui#render-thinking-content-on-open-webui)
+    - Added support for using `GOOGLE_API_KEY` environment variable for Google AI Studio - [PR #12507](https://github.com/BerriAI/litellm/pull/12507)
+- **[vLLM/OpenAI-like](../../docs/providers/vllm)**
+    - Fix missing extra_headers support for embeddings - [PR #13198](https://github.com/BerriAI/litellm/pull/13198)
+
+---
+
+## LLM API Endpoints
+
+#### Bugs
+
+- **[/generateContent](../../docs/generateContent)**
+    - Support for query_params in generateContent routes for API Key setting - [PR #13100](https://github.com/BerriAI/litellm/pull/13100)
+    - Ensure "x-goog-api-key" is used for auth to google ai studio when using /generateContent on LiteLLM - [PR #13098](https://github.com/BerriAI/litellm/pull/13098)
+    - Ensure tool calling works as expected on generateContent - [PR #13189](https://github.com/BerriAI/litellm/pull/13189)
+- **[/vertex_ai (Passthrough)](../../docs/pass_through/vertex_ai)**
+    - Ensure multimodal embedding responses are logged properly - [PR #13050](https://github.com/BerriAI/litellm/pull/13050)
+
+---
+
 ## [MCP Gateway](../../docs/mcp)
 
 #### Features
 
 - **Health Check Improvements**
     - Add health check endpoints for MCP servers - [PR #13106](https://github.com/BerriAI/litellm/pull/13106)
-    - Ensure MCPs load + don't run health check every time MCPs load on UI - [PR #13228](https://github.com/BerriAI/litellm/pull/13228)
 - **Guardrails Integration**
     - Add pre and during call hooks initialization - [PR #13067](https://github.com/BerriAI/litellm/pull/13067)
     - Move pre and during hooks to ProxyLogging - [PR #13109](https://github.com/BerriAI/litellm/pull/13109)
@@ -89,74 +142,13 @@ pip install litellm==1.74.15.post1
 
 #### Bugs
 
-- **UI & Tools**
+- **UI**
     - Fix scrolling issue with MCP tools - [PR #13015](https://github.com/BerriAI/litellm/pull/13015)
     - Fix MCP client list failure - [PR #13114](https://github.com/BerriAI/litellm/pull/13114)
 
 
 [Read More](../../docs/mcp)
 
----
-
-## New Models / Updated Models
-
-#### New Model Support
-
-| Provider    | Model                                  | Context Window | Type |
-| ----------- | -------------------------------------- | -------------- | ---- |
-| Google AI Studio | `gemini/imagen4` | N/A | Image Generation | 
-| OpenRouter | `openrouter/grok4` | Various | Text Generation |
-
-#### Features
-
-- **[Google AI Studio](../../docs/providers/gemini)**
-    - Added Google AI Studio Imagen4 model family support - [PR #13065](https://github.com/BerriAI/litellm/pull/13065)
-    - Support for query_params in generateContent routes for API Key setting - [PR #13100](https://github.com/BerriAI/litellm/pull/13100)
-- **[Azure OpenAI](../../docs/providers/azure/azure)**
-    - Azure `api_version="preview"` support - [PR #13072](https://github.com/BerriAI/litellm/pull/13072)
-    - Password protected certificate files support - [PR #12995](https://github.com/BerriAI/litellm/pull/12995)
-- **[AWS Bedrock](../../docs/providers/bedrock)**
-    - Cost tracking via Anthropic `/v1/messages` - [PR #13072](https://github.com/BerriAI/litellm/pull/13072)
-    - Computer use support (with fixes) - [PR #13150](https://github.com/BerriAI/litellm/pull/13150)
-    - Framework name in UserAgent header - [PR #13159](https://github.com/BerriAI/litellm/pull/13159)
-- **[OpenRouter](../../docs/providers/openrouter)**
-    - Added Grok4 model support - [PR #13018](https://github.com/BerriAI/litellm/pull/13018)
-- **[Anthropic](../../docs/providers/anthropic)**
-    - Working mid-stream fallbacks with token usage tracking - [PR #13149](https://github.com/BerriAI/litellm/pull/13149), [PR #13170](https://github.com/BerriAI/litellm/pull/13170)
-    - Improved cache_control_injection_points with negative index support - [PR #13187](https://github.com/BerriAI/litellm/pull/13187)
-- **[Perplexity](../../docs/providers/perplexity)**
-    - Citation annotations support - [PR #13225](https://github.com/BerriAI/litellm/pull/13225)
-
-#### Bugs
-
-- **[Gemini](../../docs/providers/gemini)**
-    - Fix merge_reasoning_content_in_choices parameter issue - [PR #13066](https://github.com/BerriAI/litellm/pull/13066)
-    - Fix CLI authorization format issues - [PR #13098](https://github.com/BerriAI/litellm/pull/13098), [PR #13189](https://github.com/BerriAI/litellm/pull/13189)
-    - Environment variable support fixes - [PR #12507](https://github.com/BerriAI/litellm/pull/12507)
-- **[VertexAI](../../docs/providers/vertex)**
-    - Ensure multimodal embedding responses are logged properly - [PR #13050](https://github.com/BerriAI/litellm/pull/13050)
-- **[vLLM/OpenAI-like](../../docs/providers/vllm)**
-    - Fix missing extra_headers support for embeddings - [PR #13198](https://github.com/BerriAI/litellm/pull/13198)
-
----
-
-## LLM API Endpoints
-
-#### Features
-
-- **[/v1/models](../../docs/providers/passthrough)**
-    - Preserve model order in `/v1/models` and `/model_group/info` endpoints - [PR #13178](https://github.com/BerriAI/litellm/pull/13178)
-- **[Passthrough endpoints](../../docs/pass_through/)**
-    - Allow redefining LLM base API URL in passthrough endpoints - [PR #13134](https://github.com/BerriAI/litellm/pull/13134)
-
-#### Bugs
-
-- **Token Counting**
-    - Ignore unsupported keys like prefix in token counter - [PR #11954](https://github.com/BerriAI/litellm/pull/11954)
-- **Fallbacks**
-    - Fix fallback delete functionality - [PR #12606](https://github.com/BerriAI/litellm/pull/12606)
-- **JWT Fields**  
-    - Add dot notation support for all JWT fields - [PR #13013](https://github.com/BerriAI/litellm/pull/13013)
 
 ---
 
@@ -165,28 +157,33 @@ pip install litellm==1.74.15.post1
 #### Features
 
 - **Usage Analytics**
+    - New tab for user agent activity tracking - [PR #13146](https://github.com/BerriAI/litellm/pull/13146)
+    - Daily usage per user analytics - [PR #13147](https://github.com/BerriAI/litellm/pull/13147)
     - Default usage chart date range set to last 7 days - [PR #12917](https://github.com/BerriAI/litellm/pull/12917)
     - New advanced date range picker component - [PR #13141](https://github.com/BerriAI/litellm/pull/13141), [PR #13221](https://github.com/BerriAI/litellm/pull/13221)
     - Show loader on usage cost charts after date selection - [PR #13113](https://github.com/BerriAI/litellm/pull/13113)
-- **User Agent Activity**
-    - New tab for user agent activity tracking - [PR #13146](https://github.com/BerriAI/litellm/pull/13146)
-    - Daily usage per user analytics - [PR #13147](https://github.com/BerriAI/litellm/pull/13147)
-- **Provider Support**
+- **Models**
     - Added Voyage, Jinai, Deepinfra and VolcEngine providers on UI - [PR #13131](https://github.com/BerriAI/litellm/pull/13131)
     - Added Sagemaker on UI - [PR #13117](https://github.com/BerriAI/litellm/pull/13117)
+    - Preserve model order in `/v1/models` and `/model_group/info` endpoints - [PR #13178](https://github.com/BerriAI/litellm/pull/13178)
+
 - **Key Management**
     - Properly parse JSON options for key generation in UI - [PR #12989](https://github.com/BerriAI/litellm/pull/12989)
+- **Authentication**
+    - **JWT Fields**  
+        - Add dot notation support for all JWT fields - [PR #13013](https://github.com/BerriAI/litellm/pull/13013)
 
 #### Bugs
 
 - **Permissions**
     - Fix object permission for organizations - [PR #13142](https://github.com/BerriAI/litellm/pull/13142)
     - Fix list team v2 security check - [PR #13094](https://github.com/BerriAI/litellm/pull/13094)
-- **Model Management**
+- **Models**
     - Fix model reload on model update - [PR #13216](https://github.com/BerriAI/litellm/pull/13216)
-    - Fix fallbacks UI display - [PR #13191](https://github.com/BerriAI/litellm/pull/13191)
-- **Configuration**
+- **Router Settings**
+    - Fix displaying models for fallbacks in UI - [PR #13191](https://github.com/BerriAI/litellm/pull/13191)
     - Fix wildcard model name handling with custom values - [PR #13116](https://github.com/BerriAI/litellm/pull/13116)
+    - Fix fallback delete functionality - [PR #12606](https://github.com/BerriAI/litellm/pull/12606)
 
 ---
 
@@ -255,7 +252,8 @@ pip install litellm==1.74.15.post1
     - Fix DB config through environment variables - [PR #13111](https://github.com/BerriAI/litellm/pull/13111)
 - **Logging**
     - Suppress httpx logging - [PR #13217](https://github.com/BerriAI/litellm/pull/13217)
-
+- **Token Counting**
+    - Ignore unsupported keys like prefix in token counter - [PR #11954](https://github.com/BerriAI/litellm/pull/11954)
 ---
 
 ## New Contributors
