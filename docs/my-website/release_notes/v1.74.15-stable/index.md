@@ -70,7 +70,31 @@ pip install litellm==1.74.15.post1
 
 ---
 
-## MCP Gateway - MCP Guardrails
+## [MCP Gateway](../../docs/mcp)
+
+#### Features
+
+- **Health Check Improvements**
+    - Add health check endpoints for MCP servers - [PR #13106](https://github.com/BerriAI/litellm/pull/13106)
+    - Ensure MCPs load + don't run health check every time MCPs load on UI - [PR #13228](https://github.com/BerriAI/litellm/pull/13228)
+- **Guardrails Integration**
+    - Add pre and during call hooks initialization - [PR #13067](https://github.com/BerriAI/litellm/pull/13067)
+    - Move pre and during hooks to ProxyLogging - [PR #13109](https://github.com/BerriAI/litellm/pull/13109)
+    - MCP pre and during guardrails implementation - [PR #13188](https://github.com/BerriAI/litellm/pull/13188)
+- **Protocol & Header Support**
+    - Add protocol headers support - [PR #13062](https://github.com/BerriAI/litellm/pull/13062)
+- **URL & Namespacing**
+    - Improve MCP server URL validation for internal/Kubernetes URLs - [PR #13099](https://github.com/BerriAI/litellm/pull/13099)
+
+
+#### Bugs
+
+- **UI & Tools**
+    - Fix scrolling issue with MCP tools - [PR #13015](https://github.com/BerriAI/litellm/pull/13015)
+    - Fix MCP client list failure - [PR #13114](https://github.com/BerriAI/litellm/pull/13114)
+
+
+[Read More](../../docs/mcp)
 
 ---
 
