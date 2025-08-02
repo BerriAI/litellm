@@ -5,7 +5,17 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 ### INIT VARIABLES ####################
 import threading
 import os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args, TYPE_CHECKING
+from typing import (
+    Callable,
+    List,
+    Optional,
+    Dict,
+    Union,
+    Any,
+    Literal,
+    get_args,
+    TYPE_CHECKING,
+)
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
@@ -259,6 +269,11 @@ blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+### PROMPTS ###
+from litellm.types.prompts.init_prompts import PromptSpec
+
+prompt_name_config_map: Dict[str, PromptSpec] = {}
+
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False

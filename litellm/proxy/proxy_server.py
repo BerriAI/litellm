@@ -1856,6 +1856,7 @@ class ProxyConfig:
                     )
 
                     litellm.guardrail_name_config_map = guardrail_name_config_map
+
                 elif key == "global_prompt_directory":
                     from litellm.integrations.dotprompt import (
                         set_global_prompt_directory,
@@ -2234,6 +2235,15 @@ class ProxyConfig:
             init_guardrails_v2(
                 all_guardrails=guardrails_v2, config_file_path=config_file_path
             )
+
+        ## Prompt settings
+        prompts: Optional[List[Dict]] = None
+        if config is not None:
+            prompts = config.get("prompts", None)
+        if prompts:
+            from litellm.proxy.prompts.init_prompts import init_prompts
+
+            init_prompts(all_prompts=prompts, config_file_path=config_file_path)
 
         ## CREDENTIALS
         credential_list_dict = self.load_credential_list(config=config)
