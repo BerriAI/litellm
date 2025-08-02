@@ -218,6 +218,7 @@ if MCP_AVAILABLE:
 
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 
         # Validate arguments
         user_api_key_auth, mcp_auth_header, _, mcp_server_auth_headers, mcp_protocol_version = get_auth_context()
@@ -254,9 +255,34 @@ if MCP_AVAILABLE:
                 mcp_protocol_version=mcp_protocol_version,
                 **data,  # for logging
             )
+        except BlockedPiiEntityError as e:
+            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+            # Return error as text content for MCP protocol
+            return [TextContent(
+                text=f"Error: Blocked PII entity detected - {str(e)}",
+                type="text"
+            )]
+        except GuardrailRaisedException as e:
+            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+            # Return error as text content for MCP protocol
+            return [TextContent(
+                text=f"Error: Guardrail violation - {str(e)}",
+                type="text"
+            )]
+        except HTTPException as e:
+            verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+            # Return error as text content for MCP protocol
+            return [TextContent(
+                text=f"Error: {str(e.detail)}",
+                type="text"
+            )]
         except Exception as e:
             verbose_logger.exception(f"MCP mcp_server_tool_call - error: {e}")
-            raise e
+            # Return error as text content for MCP protocol
+            return [TextContent(
+                text=f"Error: {str(e)}",
+                type="text"
+            )]
 
         return response
 

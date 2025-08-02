@@ -451,7 +451,11 @@ export function ToolTestPanel({
                             )}
                           </div>
                           <div className="bg-white border border-red-200 rounded p-2 max-h-48 overflow-y-auto">
-                            <pre className="text-xs whitespace-pre-wrap text-red-700 font-mono">{error.message}</pre>
+                            <pre className="text-xs whitespace-pre-wrap text-red-700 font-mono">
+                              {(() => {
+                                return error.message;
+                              })()}
+                            </pre>
                           </div>
                         </div>
                       </div>

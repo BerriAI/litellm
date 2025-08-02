@@ -73,6 +73,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         
 
+        # Set supported event hooks to include MCP hooks
+        if 'supported_event_hooks' not in kwargs:
+            kwargs['supported_event_hooks'] = [
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+                GuardrailEventHooks.during_call,
+                GuardrailEventHooks.pre_mcp_call,
+                GuardrailEventHooks.during_mcp_call,
+            ]
+        
         super().__init__(**kwargs)
         BaseAWSLLM.__init__(self)
 
@@ -400,6 +410,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
@@ -458,6 +469,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ):
         from litellm.proxy.common_utils.callback_utils import (

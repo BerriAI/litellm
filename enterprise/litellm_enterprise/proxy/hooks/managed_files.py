@@ -290,6 +290,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "aretrieve_fine_tuning_job",
             "alist_fine_tuning_jobs",
             "acancel_fine_tuning_job",
+            "mcp_call",
         ],
     ) -> Union[Exception, str, Dict, None]:
         """

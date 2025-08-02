@@ -42,6 +42,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ):
         text = ""

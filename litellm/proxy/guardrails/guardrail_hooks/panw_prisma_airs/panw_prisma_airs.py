@@ -245,6 +245,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[Dict[str, Any]]:
         """

@@ -105,6 +105,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ):
         """

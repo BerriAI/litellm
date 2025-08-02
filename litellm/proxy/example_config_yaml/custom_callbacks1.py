@@ -30,6 +30,7 @@ class MyCustomHandler(
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ):
         return data
@@ -63,6 +64,7 @@ class MyCustomHandler(
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ):
         pass
