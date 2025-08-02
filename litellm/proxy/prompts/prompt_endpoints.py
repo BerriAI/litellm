@@ -204,7 +204,9 @@ async def create_prompt(
                 "litellm_params": {
                     "prompt_id": "my_prompt",
                     "prompt_integration": "dotprompt",
-                    "prompt_directory": "/path/to/prompts"
+                    ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
+                    "prompt_directory": "/path/to/prompts",
+                    "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
                 },
                 "prompt_info": {
                     "prompt_type": "config"
