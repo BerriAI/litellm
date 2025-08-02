@@ -57,3 +57,35 @@ def test_proxy_only_error_false_for_other_error_type():
         )
         is False
     )
+
+
+def test_get_model_group_info_order():
+    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/tts-1",
+                "litellm_params": {
+                    "model": "openai/tts-1",
+                    "api_key": "sk-1234",
+                },
+            },
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "sk-1234",
+                },
+            },
+        ]
+    )
+    model_list = _get_model_group_info(
+        llm_router=router,
+        all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
+        model_group=None,
+    )
+
+    model_groups = [m.model_group for m in model_list]
+    assert model_groups == ["openai/tts-1", "openai/gpt-3.5-turbo"]
