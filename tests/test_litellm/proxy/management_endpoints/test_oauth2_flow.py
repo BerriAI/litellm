@@ -344,6 +344,121 @@ class TestOAuth2SecurityFeatures:
 
 
 # Integration test helper
+class TestOAuth2RedirectURI:
+    """Test redirect_uri functionality for VSCode extension compatibility."""
+    
+    def test_redirect_uri_validation_valid_vscode(self):
+        """Test valid VSCode redirect_uri validation."""
+        # Arrange
+        valid_vscode_uris = [
+            "vscode://extension-id/callback",
+            "vscode-insiders://extension-id/callback/path",
+            "https://example.com/callback",
+            "http://localhost:3000/callback"
+        ]
+        
+        for uri in valid_vscode_uris:
+            # Act
+            is_valid = OAuth2URLManager.validate_redirect_uri(uri)
+            
+            # Assert
+            assert is_valid is True, f"URI should be valid: {uri}"
+    
+    def test_redirect_uri_validation_invalid(self):
+        """Test invalid redirect_uri validation."""
+        # Arrange
+        invalid_uris = [
+            "javascript:alert('xss')",
+            "data:text/html,<script>alert('xss')</script>",
+            "ftp://malicious.com/callback",
+            "file:///etc/passwd",
+            "",
+            "not-a-uri",
+            "vscode://",  # Missing extension id
+            "https://"    # Invalid URL
+        ]
+        
+        for uri in invalid_uris:
+            # Act
+            is_valid = OAuth2URLManager.validate_redirect_uri(uri)
+            
+            # Assert
+            assert is_valid is False, f"URI should be invalid: {uri}"
+    
+    def test_build_callback_redirect_url_vscode(self):
+        """Test building VSCode callback redirect URL."""
+        # Arrange
+        redirect_uri = "vscode://roocode.roo/litellm"
+        access_token = "sk-litellm-test123"
+        
+        # Act
+        callback_url = OAuth2URLManager.build_callback_redirect_url(
+            redirect_uri=redirect_uri,
+            access_token=access_token,
+            token_type="Bearer",
+            expires_in=86400
+        )
+        
+        # Assert
+        parsed_url = urlparse(callback_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        assert parsed_url.scheme == "vscode"
+        assert parsed_url.netloc == "roocode.roo"
+        assert parsed_url.path == "/litellm"
+        assert query_params["access_token"] == ["sk-litellm-test123"]
+        assert query_params["token_type"] == ["Bearer"]
+        assert query_params["expires_in"] == ["86400"]
+    
+    def test_build_callback_redirect_url_https(self):
+        """Test building HTTPS callback redirect URL."""
+        # Arrange
+        redirect_uri = "https://example.com/oauth/callback"
+        access_token = "sk-litellm-test123"
+        
+        # Act
+        callback_url = OAuth2URLManager.build_callback_redirect_url(
+            redirect_uri=redirect_uri,
+            access_token=access_token
+        )
+        
+        # Assert
+        parsed_url = urlparse(callback_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        assert parsed_url.scheme == "https"
+        assert parsed_url.netloc == "example.com"
+        assert parsed_url.path == "/oauth/callback"
+        assert query_params["access_token"] == ["sk-litellm-test123"]
+    
+    def test_state_with_redirect_uri(self):
+        """Test state generation and extraction with redirect_uri."""
+        # Arrange
+        redirect_uri = "vscode://roocode.roo/litellm"
+        
+        # Act
+        state = OAuth2StateManager.generate_secure_state("oauth_token", redirect_uri)
+        extracted_flow = OAuth2StateManager.extract_flow_type(state)
+        extracted_uri = OAuth2StateManager.extract_redirect_uri(state)
+        
+        # Assert
+        assert extracted_flow == "oauth_token"
+        assert extracted_uri == redirect_uri
+        assert OAuth2StateManager.validate_state(state) is True
+    
+    def test_state_without_redirect_uri(self):
+        """Test state generation without redirect_uri (backward compatibility)."""
+        # Arrange & Act
+        state = OAuth2StateManager.generate_secure_state("oauth_token")
+        extracted_flow = OAuth2StateManager.extract_flow_type(state)
+        extracted_uri = OAuth2StateManager.extract_redirect_uri(state)
+        
+        # Assert
+        assert extracted_flow == "oauth_token"
+        assert extracted_uri is None
+        assert OAuth2StateManager.validate_state(state) is True
+
+
 class TestOAuth2Integration:
     """Integration tests for complete OAuth2 flow."""
     
@@ -371,6 +486,42 @@ class TestOAuth2Integration:
         assert "response_type" in str(oauth_url)
         assert "oauth_flow" in expected_redirect
         assert all(key in expected_response for key in ["access_token", "token_type", "expires_in"])
+    
+    def test_vscode_extension_flow_structure(self):
+        """Test VSCode extension OAuth flow structure with redirect_uri."""
+        # Arrange - VSCode extension OAuth URL
+        vscode_oauth_url = (
+            "https://your-litellm-proxy.com/sso/key/generate"
+            "?response_type=oauth_token"
+            "&redirect_uri=vscode://roocode.roo/litellm"
+        )
+        
+        # Parse URL
+        parsed_url = urlparse(vscode_oauth_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        # Step 1: Verify OAuth parameters
+        assert query_params["response_type"] == ["oauth_token"]
+        assert query_params["redirect_uri"] == ["vscode://roocode.roo/litellm"]
+        
+        # Step 2: Expected callback URL format
+        expected_callback = (
+            "vscode://roocode.roo/litellm"
+            "?access_token=sk-litellm-xxxxxxxxxx"
+            "&token_type=Bearer"
+            "&expires_in=86400"
+        )
+        
+        # Verify callback structure
+        callback_parsed = urlparse(expected_callback)
+        callback_params = parse_qs(callback_parsed.query)
+        
+        assert callback_parsed.scheme == "vscode"
+        assert callback_parsed.netloc == "roocode.roo"
+        assert callback_parsed.path == "/litellm"
+        assert "access_token" in callback_params
+        assert "token_type" in callback_params
+        assert "expires_in" in callback_params
 
 
 # Async test utilities

@@ -86,6 +86,7 @@ async def serve_login_page(
     key: Optional[str] = None,
     error: Optional[str] = None,
     response_type: Optional[str] = None,
+    redirect_uri: Optional[str] = None,
 ):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
@@ -109,6 +110,14 @@ async def serve_login_page(
     if response_type == "oauth_token":
         # For OAuth token flow, redirect directly to SSO login
         verbose_proxy_logger.info("OAuth token flow detected, redirecting to SSO login")
+        
+        # Validate redirect_uri if provided
+        if redirect_uri:
+            if not OAuth2URLManager.validate_redirect_uri(redirect_uri):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid redirect_uri: {redirect_uri}. Must be a valid URI with allowed scheme."
+                )
         
         # Use OAuth2URLManager to build redirect URL safely
         redirect_url = OAuth2URLManager.modify_url_for_oauth_flow(str(request.url))
@@ -423,7 +432,8 @@ async def sso_login_redirect(
     request: Request, 
     source: Optional[str] = None, 
     key: Optional[str] = None,
-    oauth_flow: Optional[str] = None
+    oauth_flow: Optional[str] = None,
+    redirect_uri: Optional[str] = None
 ):
     """
     Handles SSO login redirect - this is what the "Login with SSO" button points to
@@ -466,7 +476,7 @@ async def sso_login_redirect(
     
     # If OAuth flow, create secure state parameter
     if oauth_flow == "true" and not cli_state:
-        cli_state = OAuth2StateManager.generate_secure_state("oauth_token")
+        cli_state = OAuth2StateManager.generate_secure_state("oauth_token", redirect_uri)
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
     if user_custom_ui_sso_sign_in_handler is not None:
@@ -864,10 +874,12 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
 
     # Check if this is an OAuth token flow using secure state validation
     is_oauth_flow = False
+    oauth_redirect_uri = None
     if state:
         if OAuth2StateManager.validate_state(state):
             flow_type = OAuth2StateManager.extract_flow_type(state)
             is_oauth_flow = flow_type == "oauth_token"
+            oauth_redirect_uri = OAuth2StateManager.extract_redirect_uri(state)
         else:
             # Fallback for backward compatibility
             is_oauth_flow = state.startswith("oauth:")
@@ -963,6 +975,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         generic_client_id=generic_client_id,
         ui_access_mode=ui_access_mode,
         is_oauth_flow=is_oauth_flow,
+        oauth_redirect_uri=oauth_redirect_uri,
     )
 
 
@@ -1531,6 +1544,7 @@ class SSOAuthenticationHandler:
         generic_client_id: Optional[str] = None,
         ui_access_mode: Optional[Dict] = None,
         is_oauth_flow: bool = False,
+        oauth_redirect_uri: Optional[str] = None,
     ) -> Union[RedirectResponse, JSONResponse]:
         import jwt
 
@@ -1691,14 +1705,36 @@ class SSOAuthenticationHandler:
             request_base_url=str(request.base_url), route="ui/"
         )
 
-        # Check if this is an OAuth flow - return JSON response
+        # Check if this is an OAuth flow - either redirect or JSON response
         if is_oauth_flow:
-            verbose_proxy_logger.info("OAuth flow detected, returning JSON token response")
-            
-            oauth_response = OAuth2TokenManager.create_token_response(key, scope="litellm:api")
-            cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
-            
-            return JSONResponse(content=oauth_response, headers=cors_headers)
+            if oauth_redirect_uri:
+                # VSCode extension style - redirect with access_token query param
+                verbose_proxy_logger.info(f"OAuth flow with redirect_uri detected, redirecting to: {oauth_redirect_uri}")
+                
+                # Validate redirect_uri again for security
+                if not OAuth2URLManager.validate_redirect_uri(oauth_redirect_uri):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid redirect_uri: {oauth_redirect_uri}"
+                    )
+                
+                # Build redirect URL with access_token
+                callback_url = OAuth2URLManager.build_callback_redirect_url(
+                    redirect_uri=oauth_redirect_uri,
+                    access_token=key,
+                    token_type="Bearer",
+                    expires_in=86400
+                )
+                
+                return RedirectResponse(url=callback_url, status_code=303)
+            else:
+                # Direct JSON response (original behavior)
+                verbose_proxy_logger.info("OAuth flow detected, returning JSON token response")
+                
+                oauth_response = OAuth2TokenManager.create_token_response(key, scope="litellm:api")
+                cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
+                
+                return JSONResponse(content=oauth_response, headers=cors_headers)
         
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             _user_info: Optional[LiteLLM_UserTable] = None

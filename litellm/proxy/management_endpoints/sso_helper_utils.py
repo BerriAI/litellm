@@ -66,13 +66,15 @@ class OAuth2StateManager:
     STATE_EXPIRY_SECONDS = 300  # 5 minutes
     
     @staticmethod
-    def generate_secure_state(flow_type: str) -> str:
+    def generate_secure_state(flow_type: str, redirect_uri: Optional[str] = None) -> str:
         """Generate a secure, timestamped OAuth2 state parameter."""
         state_data = {
             "flow": flow_type,
             "timestamp": int(time.time()),
             "nonce": secrets.token_urlsafe(16)
         }
+        if redirect_uri:
+            state_data["redirect_uri"] = redirect_uri
         return f"oauth:{json.dumps(state_data)}"
     
     @staticmethod
@@ -106,6 +108,18 @@ class OAuth2StateManager:
             
             state_data = json.loads(state[6:])
             return state_data.get("flow")
+        except (json.JSONDecodeError, KeyError):
+            return None
+    
+    @staticmethod
+    def extract_redirect_uri(state: str) -> Optional[str]:
+        """Extract redirect_uri from valid state parameter."""
+        try:
+            if not state.startswith("oauth:"):
+                return None
+            
+            state_data = json.loads(state[6:])
+            return state_data.get("redirect_uri")
         except (json.JSONDecodeError, KeyError):
             return None
 
@@ -157,6 +171,60 @@ class OAuth2URLManager:
             urlencode(query_params, doseq=True),
             parsed_url.fragment
         ))
+    
+    @staticmethod
+    def build_callback_redirect_url(redirect_uri: str, access_token: str, **kwargs) -> str:
+        """Build callback redirect URL with access_token for VSCode extension compatibility."""
+        parsed_url = urlparse(redirect_uri)
+        query_params = parse_qs(parsed_url.query)
+        
+        # Add access_token to query parameters
+        query_params['access_token'] = [access_token]
+        
+        # Add any additional parameters
+        for key, value in kwargs.items():
+            if value is not None:
+                query_params[key] = [str(value)]
+        
+        return urlunparse((
+            parsed_url.scheme,
+            parsed_url.netloc,
+            parsed_url.path,
+            parsed_url.params,
+            urlencode(query_params, doseq=True),
+            parsed_url.fragment
+        ))
+    
+    @staticmethod
+    def validate_redirect_uri(redirect_uri: str, allowed_schemes: Optional[list] = None) -> bool:
+        """Validate redirect_uri for security purposes."""
+        if not redirect_uri:
+            return False
+            
+        try:
+            parsed = urlparse(redirect_uri)
+            
+            # Default allowed schemes for VSCode extensions and common OAuth
+            if allowed_schemes is None:
+                allowed_schemes = ['vscode', 'vscode-insiders', 'https', 'http']
+            
+            # Check if scheme is allowed
+            if parsed.scheme not in allowed_schemes:
+                return False
+            
+            # For VSCode schemes, ensure it's a proper extension callback
+            if parsed.scheme.startswith('vscode'):
+                # VSCode URIs should have format: vscode://extension-id/callback-path
+                return len(parsed.netloc) > 0 and len(parsed.path) > 0
+            
+            # For HTTP(S), ensure it's a valid URL
+            if parsed.scheme in ['http', 'https']:
+                return bool(parsed.netloc)
+            
+            return True
+            
+        except Exception:
+            return False
 
 
 class OAuth2CORSHandler:
