@@ -1504,7 +1504,7 @@ class SSOAuthenticationHandler:
             user_api_key_cache,
             user_custom_sso,
         )
-        from litellm.proxy.utils import get_custom_url, get_prisma_client_or_throw
+        from litellm.proxy.utils import get_prisma_client_or_throw
         from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
         prisma_client = get_prisma_client_or_throw(
