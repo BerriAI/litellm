@@ -5,6 +5,7 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 from typing import Any, Callable, List, Optional, Tuple, Union
+import urllib.parse
 
 import httpx
 
@@ -333,6 +334,16 @@ class BedrockEmbedding(BaseAWSLLM):
         credentials, aws_region_name = self._load_credentials(optional_params)
 
         ### TRANSFORMATION ###
+        unencoded_model_id = (
+            optional_params.pop("model_id", None) or model
+        ) # default to model if not passed
+        modelId = urllib.parse.quote(unencoded_model_id, safe="")
+        aws_region_name = self._get_aws_region_name(
+            optional_params=optional_params,
+            model=model,
+            model_id=unencoded_model_id,
+        )
+
         provider = model.split(".")[0]
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
@@ -343,9 +354,6 @@ class BedrockEmbedding(BaseAWSLLM):
         inference_params.pop(
             "user", None
         )  # make sure user is not passed in for bedrock call
-        modelId = (
-            optional_params.pop("model_id", None) or model
-        )  # default to model if not passed
 
         data: Optional[CohereEmbeddingRequest] = None
         batch_data: Optional[List] = None
