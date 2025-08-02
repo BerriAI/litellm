@@ -225,6 +225,7 @@ vertex_location: Optional[str] = None
 predibase_tenant_id: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 cloudflare_api_key: Optional[str] = None
+vercel_ai_gateway_key: Optional[str] = None
 baseten_key: Optional[str] = None
 llama_api_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
@@ -469,6 +470,7 @@ mistral_chat_models: List = []
 text_completion_codestral_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
+vercel_ai_gateway_models: List = []
 datarobot_models: List = []
 vertex_language_models: List = []
 vertex_vision_models: List = []
@@ -586,6 +588,8 @@ def add_known_models():
             empower_models.append(key)
         elif value.get("litellm_provider") == "openrouter":
             openrouter_models.append(key)
+        elif value.get("litellm_provider") == "vercel_ai_gateway":
+            vercel_ai_gateway_models.append(key)
         elif value.get("litellm_provider") == "datarobot":
             datarobot_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -755,6 +759,7 @@ model_list = (
     + anthropic_models
     + replicate_models
     + openrouter_models
+    + vercel_ai_gateway_models
     + datarobot_models
     + huggingface_models
     + vertex_chat_models
@@ -824,6 +829,7 @@ models_by_provider: dict = {
     "together_ai": together_ai_models,
     "baseten": baseten_models,
     "openrouter": openrouter_models,
+    "vercel_ai_gateway": vercel_ai_gateway_models,
     "datarobot": datarobot_models,
     "vertex_ai": vertex_chat_models
     + vertex_text_models
@@ -1202,6 +1208,7 @@ from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
