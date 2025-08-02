@@ -179,23 +179,15 @@ class BaseAWSLLM:
                 aws_sts_endpoint=aws_sts_endpoint,
             )
         elif aws_role_name is not None:
-            # Check if we're in IRSA and trying to assume the same role we already have
-            current_role_arn = os.getenv("AWS_ROLE_ARN")
-            if (current_role_arn and current_role_arn == aws_role_name and 
-                aws_access_key_id is None and aws_secret_access_key is None):
-                # We're already running as this role via IRSA, no need to assume it again
-                # Use the default boto3 credentials (which will use the IRSA credentials)
-                credentials, _cache_ttl = self._auth_with_env_vars()
-            else:
-                # If aws_session_name is not provided, generate a default one
-                if aws_session_name is None:
-                    aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
-                credentials, _cache_ttl = self._auth_with_aws_role(
-                    aws_access_key_id=aws_access_key_id,
-                    aws_secret_access_key=aws_secret_access_key,
-                    aws_role_name=aws_role_name,
-                    aws_session_name=aws_session_name,
-                )
+            # If aws_session_name is not provided, generate a default one
+            if aws_session_name is None:
+                aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
+            credentials, _cache_ttl = self._auth_with_aws_role(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_role_name=aws_role_name,
+                aws_session_name=aws_session_name,
+            )
 
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             credentials, _cache_ttl = self._auth_with_aws_profile(aws_profile_name)
@@ -454,92 +446,6 @@ class BaseAWSLLM:
         iam_creds = session.get_credentials()
         return iam_creds, self._get_default_ttl_for_boto3_credentials()
 
-    def _handle_irsa_cross_account(self, irsa_role_arn: str, aws_role_name: str, 
-                                   aws_session_name: str, region: str, web_identity_token_file: str) -> dict:
-        """Handle cross-account role assumption for IRSA."""
-        import boto3
-        
-        verbose_logger.debug("Cross-account role assumption detected")
-        
-        # Read the web identity token
-        with open(web_identity_token_file, 'r') as f:
-            web_identity_token = f.read().strip()
-        
-        # Create an STS client without credentials
-        with tracer.trace("boto3.client(sts) for manual IRSA"):
-            sts_client = boto3.client('sts', region_name=region)
-        
-        # Manually assume the IRSA role with the session name
-        verbose_logger.debug(f"Manually assuming IRSA role {irsa_role_arn} with session {aws_session_name}")
-        irsa_response = sts_client.assume_role_with_web_identity(
-            RoleArn=irsa_role_arn,
-            RoleSessionName=aws_session_name,
-            WebIdentityToken=web_identity_token
-        )
-        
-        # Extract the credentials from the IRSA assumption
-        irsa_creds = irsa_response["Credentials"]
-        
-        # Create a new STS client with the IRSA credentials
-        with tracer.trace("boto3.client(sts) with manual IRSA credentials"):
-            sts_client_with_creds = boto3.client(
-                'sts',
-                region_name=region,
-                aws_access_key_id=irsa_creds["AccessKeyId"],
-                aws_secret_access_key=irsa_creds["SecretAccessKey"],
-                aws_session_token=irsa_creds["SessionToken"]
-            )
-        
-        # Get current caller identity for debugging
-        try:
-            caller_identity = sts_client_with_creds.get_caller_identity()
-            verbose_logger.debug(f"Current identity after manual IRSA assumption: {caller_identity.get('Arn', 'unknown')}")
-        except Exception as e:
-            verbose_logger.debug(f"Failed to get caller identity: {e}")
-        
-        # Now assume the target role
-        verbose_logger.debug(f"Attempting to assume target role: {aws_role_name} with session: {aws_session_name}")
-        return sts_client_with_creds.assume_role(
-            RoleArn=aws_role_name, RoleSessionName=aws_session_name
-        )
-
-    def _handle_irsa_same_account(self, aws_role_name: str, aws_session_name: str, region: str) -> dict:
-        """Handle same-account role assumption for IRSA."""
-        import boto3
-        
-        verbose_logger.debug("Same account role assumption, using automatic IRSA")
-        with tracer.trace("boto3.client(sts) with automatic IRSA"):
-            sts_client = boto3.client("sts", region_name=region)
-        
-        # Get current caller identity for debugging
-        try:
-            caller_identity = sts_client.get_caller_identity()
-            verbose_logger.debug(f"Current IRSA identity: {caller_identity.get('Arn', 'unknown')}")
-        except Exception as e:
-            verbose_logger.debug(f"Failed to get caller identity: {e}")
-        
-        # Assume the role
-        verbose_logger.debug(f"Attempting to assume role: {aws_role_name} with session: {aws_session_name}")
-        return sts_client.assume_role(
-            RoleArn=aws_role_name, RoleSessionName=aws_session_name
-        )
-
-    def _extract_credentials_and_ttl(self, sts_response: dict) -> Tuple[Credentials, Optional[int]]:
-        """Extract credentials and TTL from STS response."""
-        from botocore.credentials import Credentials
-        
-        sts_credentials = sts_response["Credentials"]
-        credentials = Credentials(
-            access_key=sts_credentials["AccessKeyId"],
-            secret_key=sts_credentials["SecretAccessKey"],
-            token=sts_credentials["SessionToken"],
-        )
-        
-        expiration_time = sts_credentials["Expiration"]
-        ttl = int((expiration_time - datetime.now(expiration_time.tzinfo)).total_seconds())
-        
-        return credentials, ttl
-
     @tracer.wrap()
     def _auth_with_aws_role(
         self,
@@ -554,58 +460,12 @@ class BaseAWSLLM:
         import boto3
         from botocore.credentials import Credentials
 
-        # Check if we're in an EKS/IRSA environment
-        web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
-        irsa_role_arn = os.getenv("AWS_ROLE_ARN")
-        
-        # If we have IRSA environment variables and no explicit credentials,
-        # we need to use the web identity token flow
-        if (web_identity_token_file and irsa_role_arn and 
-            aws_access_key_id is None and aws_secret_access_key is None):
-            # For cross-account role assumption with specific session names,
-            # we need to manually assume the IRSA role first with the correct session name
-            verbose_logger.debug(f"IRSA detected: using web identity token from {web_identity_token_file}")
-            
-            try:
-                # Get region from environment
-                region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
-                
-                # Check if we need to do cross-account role assumption
-                if aws_role_name != irsa_role_arn:
-                    sts_response = self._handle_irsa_cross_account(
-                        irsa_role_arn, aws_role_name, aws_session_name, region, web_identity_token_file
-                    )
-                else:
-                    sts_response = self._handle_irsa_same_account(
-                        aws_role_name, aws_session_name, region
-                    )
-                
-                return self._extract_credentials_and_ttl(sts_response)
-                
-            except Exception as e:
-                verbose_logger.debug(f"Failed to assume role via IRSA: {e}")
-                if "AccessDenied" in str(e) and "is not authorized to perform: sts:AssumeRole" in str(e):
-                    # Provide a more helpful error message for trust policy issues
-                    verbose_logger.error(
-                        f"Access denied when trying to assume role {aws_role_name}. "
-                        f"Please ensure the trust policy of {aws_role_name} allows "
-                        f"the current role to assume it. Current identity: check logs with verbose mode."
-                    )
-                # Re-raise the exception instead of falling through
-                raise
-        
-        # In EKS/IRSA environments, use ambient credentials (no explicit keys needed)
-        # This allows the web identity token to work automatically
-        if aws_access_key_id is None and aws_secret_access_key is None:
-            with tracer.trace("boto3.client(sts)"):
-                sts_client = boto3.client("sts")
-        else:
-            with tracer.trace("boto3.client(sts)"):
-                sts_client = boto3.client(
-                    "sts",
-                    aws_access_key_id=aws_access_key_id,
-                    aws_secret_access_key=aws_secret_access_key,
-                )
+        with tracer.trace("boto3.client(sts)"):
+            sts_client = boto3.client(
+                "sts",
+                aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
+                aws_secret_access_key=aws_secret_access_key,  # [OPTIONAL]
+            )
 
         sts_response = sts_client.assume_role(
             RoleArn=aws_role_name, RoleSessionName=aws_session_name
