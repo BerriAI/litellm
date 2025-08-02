@@ -2692,7 +2692,10 @@ async def block_key(
             param="key",
             code=status.HTTP_400_BAD_REQUEST,
         )
-    hashed_token = hash_token(token=data.key)
+    if data.key.startswith("sk-"):
+        hashed_token = hash_token(token=data.key)
+    else:
+        hashed_token = data.key
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update
