@@ -5253,6 +5253,7 @@ export const callMCPTool = async (
       headers[MCP_AUTH_HEADER] = authValue;
     }
 
+
     const response = await fetch(url, {
       method: "POST",
       headers,
@@ -5263,9 +5264,43 @@ export const callMCPTool = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      let errorMessage = "Network response was not ok";
+      let errorDetails = null;
+      
+      // First, try to get the response as text to see what we're dealing with
+      const responseText = await response.text();
+      
+      try {
+        // Try to parse as JSON
+        const errorData = JSON.parse(responseText);
+        
+        if (errorData.detail) {
+          if (typeof errorData.detail === 'string') {
+            errorMessage = errorData.detail;
+          } else if (typeof errorData.detail === 'object') {
+            errorMessage = errorData.detail.message || errorData.detail.error || "An error occurred";
+            errorDetails = errorData.detail;
+          }
+        } else {
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        }
+        
+      } catch (parseError) {
+        console.error("Failed to parse JSON error response:", parseError);
+        // If JSON parsing fails, use the raw text
+        if (responseText) {
+          errorMessage = responseText;
+        }
+      }
+      
+      // Create a more informative error object
+      const enhancedError = new Error(errorMessage);
+      (enhancedError as any).status = response.status;
+      (enhancedError as any).statusText = response.statusText;
+      (enhancedError as any).details = errorDetails;
+      
+      handleError(errorMessage);
+      throw enhancedError;
     }
 
     const data = await response.json();
@@ -5273,6 +5308,11 @@ export const callMCPTool = async (
     return data;
   } catch (error) {
     console.error("Failed to call MCP tool:", error);
+    console.error("Error type:", typeof error);
+    if (error instanceof Error) {
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+    }
     throw error;
   }
 };
