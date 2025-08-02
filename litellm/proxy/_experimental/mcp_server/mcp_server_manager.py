@@ -17,6 +17,8 @@ from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from fastapi import HTTPException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -592,22 +594,22 @@ class MCPServerManager:
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
             }
-            pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
-                kwargs=pre_hook_kwargs,
-                request_obj=None,  # Will be created in the hook
-                start_time=start_time,
-                end_time=start_time,
-            )
-            
-            if pre_hook_result:
-                # Check if the call should proceed
-                if not pre_hook_result.get("should_proceed", True):
-                    error_message = pre_hook_result.get("error_message", "Tool call rejected by pre-hook")
-                    raise ValueError(error_message)
+            try:
+                pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
+                    kwargs=pre_hook_kwargs,
+                    request_obj=None,  # Will be created in the hook
+                    start_time=start_time,
+                    end_time=start_time,
+                )
                 
-                # Apply any argument modifications
-                if pre_hook_result.get("modified_arguments"):
-                    arguments = pre_hook_result["modified_arguments"]
+                if pre_hook_result:                
+                    # Apply any argument modifications
+                    if pre_hook_result.get("modified_arguments"):
+                        arguments = pre_hook_result["modified_arguments"]
+            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                # Re-raise guardrail exceptions to properly fail the MCP call
+                verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
+                raise e
 
         # Get server-specific auth header if available
         server_auth_header = None
@@ -627,6 +629,7 @@ class MCPServerManager:
         )
         
         async with client:
+
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
@@ -635,40 +638,39 @@ class MCPServerManager:
             
             # Initialize during_hook_task as None
             during_hook_task = None
-            
+            tasks = []
             # Start during hook if proxy_logging_obj is available
             if proxy_logging_obj:
-                try:
-                    during_hook_task = asyncio.create_task(
-                        proxy_logging_obj.async_during_mcp_tool_call_hook(
-                            kwargs={
-                                "name": name,
-                                "arguments": arguments,
-                                "server_name": server_name_from_prefix,
-                            },
-                            request_obj=None,  # Will be created in the hook
-                            start_time=start_time,
-                            end_time=start_time,
-                        )
+                during_hook_task = asyncio.create_task(
+                    proxy_logging_obj.async_during_mcp_tool_call_hook(
+                        kwargs={
+                            "name": name,
+                            "arguments": arguments,
+                            "server_name": server_name_from_prefix,
+                        },
+                        request_obj=None,  # Will be created in the hook
+                        start_time=start_time,
+                        end_time=start_time,
                     )
-                except Exception as e:
-                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
+                )
+                tasks.append(during_hook_task)
             
-            result = await client.call_tool(call_tool_params)
-            
-            #########################################################
-            # Check during hook result if it completed
-            #########################################################
-            if proxy_logging_obj and during_hook_task is not None:
-                try:
-                    during_hook_result = await during_hook_task
-                    if during_hook_result and not during_hook_result.get("should_continue", True):
-                        error_message = during_hook_result.get("error_message", "Tool call cancelled by during-hook")
-                        raise ValueError(error_message)
-                except Exception as e:
-                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
-            
-            return result
+
+            tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
+            try:
+
+                mcp_responses = await asyncio.gather(*tasks)
+
+                # If proxy_logging_obj is None, the tool call result is at index 0
+                # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
+                result_index = 1 if proxy_logging_obj else 0
+                result = mcp_responses[result_index]
+                
+                return cast(CallToolResult, result)
+            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                    # Re-raise guardrail exceptions to properly fail the MCP call
+                    verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {str(e)}")
+                    raise e
 
     #########################################################
     # End of Methods that call the upstream MCP servers
