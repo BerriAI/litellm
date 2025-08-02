@@ -1546,7 +1546,7 @@ class SSOAuthenticationHandler:
         generic_client_id: Optional[str] = None,
         ui_access_mode: Optional[Dict] = None,
         is_oauth_flow: bool = False,
-    ) -> Union[RedirectResponse, Dict]:
+    ) -> Union[RedirectResponse, JSONResponse]:
         import jwt
 
         from litellm.proxy.proxy_server import (
