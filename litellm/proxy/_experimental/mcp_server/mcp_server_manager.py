@@ -655,27 +655,19 @@ class MCPServerManager:
                 )
                 tasks.append(during_hook_task)
             
-            tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
-            mcp_responses = await asyncio.gather(*tasks)
 
-            result = mcp_responses[1]
-            #########################################################
-            # Check during hook result if it completed
-            #########################################################
-            if proxy_logging_obj and during_hook_task is not None:
-                try:
-                    during_hook_result = await during_hook_task
-                    if during_hook_result and not during_hook_result.get("should_continue", True):
-                        error_message = during_hook_result.get("error_message", "Tool call cancelled by during-hook")
-                        raise ValueError(error_message)
-                except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+            tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
+            try:
+
+                mcp_responses = await asyncio.gather(*tasks)
+
+                result = mcp_responses[1]
+                
+                return result
+            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
                     # Re-raise guardrail exceptions to properly fail the MCP call
                     verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {str(e)}")
                     raise e
-                except Exception as e:
-                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
-            
-            return result
 
     #########################################################
     # End of Methods that call the upstream MCP servers

@@ -524,9 +524,10 @@ class ProxyLogging:
                         )
                         is not True
                     ):
+                        print("guardrail should not run")
                         continue
 
-                    
+                    print("guardrail should run")
                     # Convert MCP tool call to LLM message format for existing guardrail logic
                     synthetic_llm_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
                     # Reuse existing LLM guardrail logic
@@ -802,7 +803,6 @@ class ProxyLogging:
         """
         from litellm.types.llms.base import HiddenParams
         from litellm.types.mcp import MCPDuringCallRequestObject
-        from litellm.proxy.guardrails.guardrail_hooks.base_guardrail import CustomGuardrail
 
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=getattr(self, 'dynamic_success_callbacks', None),
@@ -839,9 +839,10 @@ class ProxyLogging:
                         )
                         is not True
                     ):
+                        print("Guardrail should not run for during_mcp_call hook")
                         continue
 
-                    
+                    print("Guardrail should run for during_mcp_call hook")
                     # Convert MCP tool call to LLM message format for existing guardrail logic
                     synthetic_llm_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
                     
