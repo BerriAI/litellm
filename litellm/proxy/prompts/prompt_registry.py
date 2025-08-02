@@ -12,6 +12,7 @@ from litellm.types.prompts.init_prompts import (
     SupportedPromptIntegrations,
 )
 
+
 prompt_initializer_registry = {}
 
 

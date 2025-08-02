@@ -204,6 +204,7 @@ class GuardrailsAI(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[
         Union[Exception, str, dict]
