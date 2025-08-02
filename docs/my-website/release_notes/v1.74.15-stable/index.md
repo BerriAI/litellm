@@ -86,20 +86,18 @@ pip install litellm==1.74.15.post1
 #### Features
 
 - **[Google AI Studio](../../docs/providers/gemini)**
-    - Added Google AI Studio Imagen4 model family support - [PR #13065](https://github.com/BerriAI/litellm/pull/13065)
-    - Support for query_params in generateContent routes for API Key setting - [PR #13100](https://github.com/BerriAI/litellm/pull/13100)
+    - Added Google AI Studio Imagen4 model family support - [PR #13065](https://github.com/BerriAI/litellm/pull/13065), [Get Started](../../docs/providers/google_ai_studio/image_gen)
 - **[Azure OpenAI](../../docs/providers/azure/azure)**
-    - Azure `api_version="preview"` support - [PR #13072](https://github.com/BerriAI/litellm/pull/13072)
-    - Password protected certificate files support - [PR #12995](https://github.com/BerriAI/litellm/pull/12995)
+    - Azure `api_version="preview"` support - [PR #13072](https://github.com/BerriAI/litellm/pull/13072), [Get Started](../../docs/providers/azure/azure#completion---using-api_key-api_base-api_version)
+    - Password protected certificate files support - [PR #12995](https://github.com/BerriAI/litellm/pull/12995), [Get Started](../../docs/providers/azure/azure#authentication)
 - **[AWS Bedrock](../../docs/providers/bedrock)**
     - Cost tracking via Anthropic `/v1/messages` - [PR #13072](https://github.com/BerriAI/litellm/pull/13072)
-    - Computer use support (with fixes) - [PR #13150](https://github.com/BerriAI/litellm/pull/13150)
-    - Framework name in UserAgent header - [PR #13159](https://github.com/BerriAI/litellm/pull/13159)
+    - Computer use support - [PR #13150](https://github.com/BerriAI/litellm/pull/13150)
 - **[OpenRouter](../../docs/providers/openrouter)**
     - Added Grok4 model support - [PR #13018](https://github.com/BerriAI/litellm/pull/13018)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Working mid-stream fallbacks with token usage tracking - [PR #13149](https://github.com/BerriAI/litellm/pull/13149), [PR #13170](https://github.com/BerriAI/litellm/pull/13170)
-    - Improved cache_control_injection_points with negative index support - [PR #13187](https://github.com/BerriAI/litellm/pull/13187)
+    - Improved cache_control_injection_points with negative index support - [PR #13187](https://github.com/BerriAI/litellm/pull/13187), [Get Started](../../docs/tutorials/prompt_caching)
 - **[Perplexity](../../docs/providers/perplexity)**
     - Citation annotations support - [PR #13225](https://github.com/BerriAI/litellm/pull/13225)
 
@@ -127,12 +125,13 @@ pip install litellm==1.74.15.post1
 
 #### Bugs
 
+- **[/generateContent](../../docs/generateContent)**
+    - Support for query_params in generateContent routes for API Key setting - [PR #13100](https://github.com/BerriAI/litellm/pull/13100)
+
 - **Token Counting**
     - Ignore unsupported keys like prefix in token counter - [PR #11954](https://github.com/BerriAI/litellm/pull/11954)
 - **Fallbacks**
     - Fix fallback delete functionality - [PR #12606](https://github.com/BerriAI/litellm/pull/12606)
-- **JWT Fields**  
-    - Add dot notation support for all JWT fields - [PR #13013](https://github.com/BerriAI/litellm/pull/13013)
 
 ---
 
@@ -170,27 +169,29 @@ pip install litellm==1.74.15.post1
 #### Features
 
 - **Usage Analytics**
+    - New tab for user agent activity tracking - [PR #13146](https://github.com/BerriAI/litellm/pull/13146)
+    - Daily usage per user analytics - [PR #13147](https://github.com/BerriAI/litellm/pull/13147)
     - Default usage chart date range set to last 7 days - [PR #12917](https://github.com/BerriAI/litellm/pull/12917)
     - New advanced date range picker component - [PR #13141](https://github.com/BerriAI/litellm/pull/13141), [PR #13221](https://github.com/BerriAI/litellm/pull/13221)
     - Show loader on usage cost charts after date selection - [PR #13113](https://github.com/BerriAI/litellm/pull/13113)
-- **User Agent Activity**
-    - New tab for user agent activity tracking - [PR #13146](https://github.com/BerriAI/litellm/pull/13146)
-    - Daily usage per user analytics - [PR #13147](https://github.com/BerriAI/litellm/pull/13147)
-- **Provider Support**
+- **Models**
     - Added Voyage, Jinai, Deepinfra and VolcEngine providers on UI - [PR #13131](https://github.com/BerriAI/litellm/pull/13131)
     - Added Sagemaker on UI - [PR #13117](https://github.com/BerriAI/litellm/pull/13117)
 - **Key Management**
     - Properly parse JSON options for key generation in UI - [PR #12989](https://github.com/BerriAI/litellm/pull/12989)
+- **Authentication**
+    - **JWT Fields**  
+        - Add dot notation support for all JWT fields - [PR #13013](https://github.com/BerriAI/litellm/pull/13013)
 
 #### Bugs
 
 - **Permissions**
     - Fix object permission for organizations - [PR #13142](https://github.com/BerriAI/litellm/pull/13142)
     - Fix list team v2 security check - [PR #13094](https://github.com/BerriAI/litellm/pull/13094)
-- **Model Management**
+- **Models**
     - Fix model reload on model update - [PR #13216](https://github.com/BerriAI/litellm/pull/13216)
-    - Fix fallbacks UI display - [PR #13191](https://github.com/BerriAI/litellm/pull/13191)
-- **Configuration**
+- **Router Settings**
+    - Fix displaying models for fallbacks in UI - [PR #13191](https://github.com/BerriAI/litellm/pull/13191)
     - Fix wildcard model name handling with custom values - [PR #13116](https://github.com/BerriAI/litellm/pull/13116)
 
 ---
