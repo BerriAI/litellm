@@ -45,11 +45,10 @@ pip install litellm==1.74.15.post1
 
 ## Key Highlights
 
-- **User Agent Activity Tracking** - Track DAU, WAU, MAU for coding tool usage with comprehensive user activity analytics.
-- **Prompt Management** - Abstract prompt templates away from model list for better permission management.
-- **Google AI Studio Imagen4** - Support for Google's new Imagen4 model family for image generation.
-- **Enhanced MCP Gateway** - Improved health checks, guardrails, and better client protocol handling.
-- **Anthropic Mid-Stream Fallbacks** - Advanced fallback handling with token usage tracking across multiple calls.
+- **User Agent Activity Tracking** - Track how much usage each coding tool gets.
+- **Prompt Management** - Use Git-Ops style prompt management with prompt templates.
+- **MCP Gateway: Guardrails** - Support for using Guardrails with MCP servers.
+- **Google AI Studio Imagen4** - Support for using Imagen4 models on Google AI Studio.
 
 ---
 
@@ -67,34 +66,6 @@ pip install litellm==1.74.15.post1
 
 
 [Read More](../../docs/proxy/prompt_management)
-
----
-
-## [MCP Gateway](../../docs/mcp)
-
-#### Features
-
-- **Health Check Improvements**
-    - Add health check endpoints for MCP servers - [PR #13106](https://github.com/BerriAI/litellm/pull/13106)
-    - Ensure MCPs load + don't run health check every time MCPs load on UI - [PR #13228](https://github.com/BerriAI/litellm/pull/13228)
-- **Guardrails Integration**
-    - Add pre and during call hooks initialization - [PR #13067](https://github.com/BerriAI/litellm/pull/13067)
-    - Move pre and during hooks to ProxyLogging - [PR #13109](https://github.com/BerriAI/litellm/pull/13109)
-    - MCP pre and during guardrails implementation - [PR #13188](https://github.com/BerriAI/litellm/pull/13188)
-- **Protocol & Header Support**
-    - Add protocol headers support - [PR #13062](https://github.com/BerriAI/litellm/pull/13062)
-- **URL & Namespacing**
-    - Improve MCP server URL validation for internal/Kubernetes URLs - [PR #13099](https://github.com/BerriAI/litellm/pull/13099)
-
-
-#### Bugs
-
-- **UI & Tools**
-    - Fix scrolling issue with MCP tools - [PR #13015](https://github.com/BerriAI/litellm/pull/13015)
-    - Fix MCP client list failure - [PR #13114](https://github.com/BerriAI/litellm/pull/13114)
-
-
-[Read More](../../docs/mcp)
 
 ---
 
@@ -157,6 +128,35 @@ pip install litellm==1.74.15.post1
     - Fix fallback delete functionality - [PR #12606](https://github.com/BerriAI/litellm/pull/12606)
 - **JWT Fields**  
     - Add dot notation support for all JWT fields - [PR #13013](https://github.com/BerriAI/litellm/pull/13013)
+
+---
+
+## [MCP Gateway](../../docs/mcp)
+
+#### Features
+
+- **Health Check Improvements**
+    - Add health check endpoints for MCP servers - [PR #13106](https://github.com/BerriAI/litellm/pull/13106)
+    - Ensure MCPs load + don't run health check every time MCPs load on UI - [PR #13228](https://github.com/BerriAI/litellm/pull/13228)
+- **Guardrails Integration**
+    - Add pre and during call hooks initialization - [PR #13067](https://github.com/BerriAI/litellm/pull/13067)
+    - Move pre and during hooks to ProxyLogging - [PR #13109](https://github.com/BerriAI/litellm/pull/13109)
+    - MCP pre and during guardrails implementation - [PR #13188](https://github.com/BerriAI/litellm/pull/13188)
+- **Protocol & Header Support**
+    - Add protocol headers support - [PR #13062](https://github.com/BerriAI/litellm/pull/13062)
+- **URL & Namespacing**
+    - Improve MCP server URL validation for internal/Kubernetes URLs - [PR #13099](https://github.com/BerriAI/litellm/pull/13099)
+
+
+#### Bugs
+
+- **UI**
+    - Fix scrolling issue with MCP tools - [PR #13015](https://github.com/BerriAI/litellm/pull/13015)
+    - Fix MCP client list failure - [PR #13114](https://github.com/BerriAI/litellm/pull/13114)
+
+
+[Read More](../../docs/mcp)
+
 
 ---
 
