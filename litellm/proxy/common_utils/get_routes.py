@@ -53,7 +53,7 @@ class GetRoutes:
                         "path": full_path,
                         "methods": getattr(sub_route, "methods", ["GET", "POST"]),
                         "name": getattr(sub_route, "name", None),
-                        "endpoint": endpoint_func.__name__ if callable(endpoint_func) else None,
+                        "endpoint": getattr(endpoint_func, '__name__', endpoint_func.__class__.__name__) if callable(endpoint_func) else None,
                         "mounted_app": True,
                     }
                     routes.append(route_info)
