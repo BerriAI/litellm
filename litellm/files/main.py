@@ -46,11 +46,90 @@ vertex_ai_files_instance = VertexAIFilesHandler()
 #################################################
 
 
+def _create_bedrock_file_handler(
+    bedrock_litellm_params: dict,
+    create_file_request: CreateFileRequest,
+    extra_headers: Optional[Dict[str, str]],
+    optional_params: GenericLiteLLMParams,
+    logging_obj: LiteLLMLoggingObj,
+    is_async: bool,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]],
+    timeout: Optional[Union[float, httpx.Timeout]],
+) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
+    """Helper function to handle Bedrock file creation"""
+    from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+
+    class BedrockFilesConfig(BaseFilesConfig):
+        @property
+        def custom_llm_provider(self) -> LlmProviders:
+            return LlmProviders.BEDROCK
+
+        def get_supported_openai_params(self, model: str):
+            return []
+
+        def map_openai_params(
+            self,
+            non_default_params: dict,
+            optional_params: dict,
+            model: str,
+            drop_params: bool,
+        ) -> dict:
+            return {}
+
+        def validate_environment(
+            self,
+            headers: dict,
+            model: str,
+            messages: list,
+            optional_params: dict,
+            litellm_params: dict,
+            api_key: Optional[str] = None,
+            api_base: Optional[str] = None,
+        ) -> dict:
+            # Basic validation for AWS environment
+            return {}
+
+        def get_error_class(self, error_message: str, status_code: int, headers):
+            from litellm.llms.bedrock.common_utils import BedrockError
+            return BedrockError(message=error_message, status_code=status_code)
+
+        def transform_create_file_request(
+            self,
+            model: str,
+            create_file_data: CreateFileRequest,
+            optional_params: dict,
+            litellm_params: dict,
+        ) -> Union[bytes, str, dict]:
+            # CreateFileRequest is a TypedDict, convert to dict
+            return dict(create_file_data)
+
+        def transform_create_file_response(
+            self, model, raw_response, logging_obj, litellm_params
+        ):
+            return raw_response
+
+    provider_config = BedrockFilesConfig()
+    return base_llm_http_handler.create_file(
+        provider_config=provider_config,
+        litellm_params=bedrock_litellm_params,
+        create_file_data=create_file_request,
+        headers=extra_headers or {},
+        api_base=optional_params.api_base,
+        api_key=optional_params.api_key,
+        logging_obj=logging_obj,
+        _is_async=is_async,
+        client=client
+        if client is not None and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+        else None,
+        timeout=timeout,
+    )
+
+
 @client
 async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -94,7 +173,9 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai"]] = None,
+    custom_llm_provider: Optional[
+        Literal["openai", "azure", "vertex_ai", "bedrock"]
+    ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -250,9 +331,25 @@ def create_file(
                 max_retries=optional_params.max_retries,
                 create_file_data=_create_file_request,
             )
+        elif custom_llm_provider == "bedrock":
+            from litellm.llms.bedrock.common_utils import prepare_bedrock_params
+
+            bedrock_litellm_params = prepare_bedrock_params(
+                optional_params, litellm_params_dict
+            )
+            response = _create_bedrock_file_handler(
+                bedrock_litellm_params=bedrock_litellm_params,
+                create_file_request=_create_file_request,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                logging_obj=logging_obj,
+                is_async=_is_async,
+                client=client,
+                timeout=timeout,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai'] are supported.".format(
+                message="LiteLLM doesn't support {} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'bedrock'] are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
