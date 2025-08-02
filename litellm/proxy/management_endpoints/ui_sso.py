@@ -108,8 +108,8 @@ async def serve_login_page(
         )
     
     if response_type == "oauth_token":
-        # For OAuth token flow, redirect directly to SSO login
-        verbose_proxy_logger.info("OAuth token flow detected, redirecting to SSO login")
+        # For OAuth token flow, check if user is already authenticated first
+        verbose_proxy_logger.info("OAuth token flow detected")
         
         # Validate redirect_uri if provided
         if redirect_uri:
@@ -119,7 +119,18 @@ async def serve_login_page(
                     detail=f"Invalid redirect_uri: {redirect_uri}. Must be a valid URI with allowed scheme."
                 )
         
-        # Use OAuth2URLManager to build redirect URL safely
+        # Check if user is already authenticated via Authorization header
+        existing_token = await _check_existing_authentication(request)
+        if existing_token:
+            verbose_proxy_logger.info("User already authenticated, generating new OAuth session key")
+            return await _handle_authenticated_oauth_flow(
+                request=request,
+                existing_token=existing_token,
+                redirect_uri=redirect_uri
+            )
+        
+        # User not authenticated, redirect to SSO login
+        verbose_proxy_logger.info("User not authenticated, redirecting to SSO login")
         redirect_url = OAuth2URLManager.modify_url_for_oauth_flow(str(request.url))
         
         return RedirectResponse(url=redirect_url, status_code=303)
@@ -2312,3 +2323,134 @@ async def process_login(request: Request):
     except Exception as e:
         verbose_proxy_logger.error(f"Error processing login: {e}")
         return RedirectResponse(url="/sso/key/generate?error=1", status_code=303)
+
+
+async def _check_existing_authentication(request: Request) -> Optional[str]:
+    """
+    Check if the user is already authenticated by examining the Authorization header.
+    Returns the API key if authenticated, None otherwise.
+    """
+    try:
+        # Check Authorization header for existing token
+        authorization = request.headers.get("Authorization")
+        if not authorization:
+            return None
+        
+        # Extract the token from "Bearer <token>"
+        if not authorization.startswith("Bearer "):
+            return None
+        
+        api_key = authorization[7:]  # Remove "Bearer " prefix
+        
+        # Validate the token by attempting to authenticate it
+        from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+        
+        try:
+            user_auth_obj = await _user_api_key_auth_builder(
+                request=request,
+                api_key=api_key,
+                azure_api_key_header=None,
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data=None,
+                custom_litellm_key_header=None,
+            )
+            
+            # If authentication succeeds, return the token
+            if user_auth_obj and user_auth_obj.api_key:
+                verbose_proxy_logger.info(f"Found existing valid authentication for user: {user_auth_obj.user_id}")
+                return api_key
+                
+        except Exception as auth_error:
+            verbose_proxy_logger.debug(f"Existing token validation failed: {auth_error}")
+            return None
+            
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error checking existing authentication: {e}")
+        return None
+    
+    return None
+
+
+async def _handle_authenticated_oauth_flow(
+    request: Request,
+    existing_token: str,
+    redirect_uri: Optional[str] = None
+) -> Union[RedirectResponse, JSONResponse]:
+    """
+    Handle OAuth flow for already authenticated users by generating a new session key.
+    """
+    try:
+        # Get user information from the existing token
+        from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+        
+        user_auth_obj = await _user_api_key_auth_builder(
+            request=request,
+            api_key=existing_token,
+            azure_api_key_header=None,
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=None,
+            custom_litellm_key_header=None,
+        )
+        
+        if not user_auth_obj:
+            raise HTTPException(
+                status_code=401,
+                detail="Unable to validate existing authentication"
+            )
+        
+        # Determine client type from redirect_uri
+        client_type = "oauth_external_app"
+        if redirect_uri:
+            from urllib.parse import urlparse
+            parsed_uri = urlparse(redirect_uri)
+            if parsed_uri.scheme.startswith('vscode'):
+                client_type = "vscode_extension"
+            elif parsed_uri.scheme == 'cursor':
+                client_type = "cursor_extension"
+            elif parsed_uri.scheme in ['fleet', 'zed', 'sublime', 'atom']:
+                client_type = f"{parsed_uri.scheme}_extension"
+            else:
+                client_type = f"{parsed_uri.scheme}_app"
+        
+        # Generate a new OAuth session key
+        session_key = await OAuth2TokenManager.generate_oauth_session_key(
+            user_id=user_auth_obj.user_id or "oauth_user",
+            user_email=user_auth_obj.user_email,
+            user_role=user_auth_obj.user_role,
+            team_id=user_auth_obj.team_id,
+            client_type=client_type,
+            expires_in=86400,  # 24 hours
+            scopes=["api_access"],
+            redirect_uri=redirect_uri
+        )
+        
+        verbose_proxy_logger.info(f"Generated new OAuth session key for authenticated user {user_auth_obj.user_id}: {session_key[:20]}...")
+        
+        if redirect_uri:
+            # Redirect to IDE with access_token
+            callback_url = OAuth2URLManager.build_callback_redirect_url(
+                redirect_uri=redirect_uri,
+                access_token=session_key,
+                token_type="Bearer",
+                expires_in=86400
+            )
+            
+            verbose_proxy_logger.info(f"Redirecting authenticated user to: {redirect_uri}")
+            return RedirectResponse(url=callback_url, status_code=303)
+        else:
+            # Return JSON response
+            oauth_response = OAuth2TokenManager.create_token_response(session_key, scope="litellm:api")
+            cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
+            
+            return JSONResponse(content=oauth_response, headers=cors_headers)
+            
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error handling authenticated OAuth flow: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate OAuth session key for authenticated user"
+        )

@@ -515,6 +515,89 @@ class TestOAuth2RedirectURI:
         assert query_params["expires_in"] == ["86400"]
 
 
+class TestOAuth2AuthenticatedFlow:
+    """Test OAuth2 flow for already authenticated users."""
+    
+    @patch("litellm.proxy.management_endpoints.ui_sso._check_existing_authentication")
+    @patch("litellm.proxy.management_endpoints.ui_sso._handle_authenticated_oauth_flow")
+    def test_oauth_flow_with_existing_authentication(self, mock_handle_auth_flow, mock_check_auth):
+        """Test OAuth flow when user is already authenticated."""
+        # Arrange
+        mock_request = MagicMock(spec=Request)
+        mock_request.url = MagicMock()
+        mock_request.url.__str__.return_value = "https://your-litellm-proxy.com/sso/key/generate?response_type=oauth_token&redirect_uri=vscode://roocode.roo/litellm"
+        mock_request.headers = {"Authorization": "Bearer sk-existing-token-123"}
+        
+        # Mock existing authentication check
+        mock_check_auth.return_value = "sk-existing-token-123"
+        
+        # Mock authenticated OAuth flow handler
+        from fastapi.responses import RedirectResponse
+        expected_redirect = RedirectResponse(
+            url="vscode://roocode.roo/litellm?access_token=sk-new-session-key&token_type=Bearer&expires_in=86400",
+            status_code=303
+        )
+        mock_handle_auth_flow.return_value = expected_redirect
+        
+        # Act
+        with patch("litellm.proxy.management_endpoints.ui_sso.str_to_bool", return_value=False):
+            with patch.dict(os.environ, {
+                "MICROSOFT_CLIENT_ID": "test_client_id",
+                "LITELLM_LICENSE": "test_license"
+            }):
+                with patch("litellm.proxy.proxy_server.premium_user", True):
+                    response = run_async_test(serve_login_page(
+                        request=mock_request,
+                        response_type="oauth_token",
+                        redirect_uri="vscode://roocode.roo/litellm"
+                    ))
+        
+        # Assert
+        mock_check_auth.assert_called_once_with(mock_request)
+        mock_handle_auth_flow.assert_called_once_with(
+            request=mock_request,
+            existing_token="sk-existing-token-123",
+            redirect_uri="vscode://roocode.roo/litellm"
+        )
+        assert response == expected_redirect
+    
+    @patch("litellm.proxy.management_endpoints.ui_sso._check_existing_authentication")
+    def test_oauth_flow_without_existing_authentication(self, mock_check_auth):
+        """Test OAuth flow when user is not authenticated - should redirect to SSO."""
+        # Arrange
+        mock_request = MagicMock(spec=Request)
+        mock_request.url = MagicMock()
+        mock_request.url.__str__.return_value = "https://your-litellm-proxy.com/sso/key/generate?response_type=oauth_token&redirect_uri=vscode://roocode.roo/litellm"
+        
+        # Mock no existing authentication
+        mock_check_auth.return_value = None
+        
+        # Act
+        with patch("litellm.proxy.management_endpoints.ui_sso.str_to_bool", return_value=False):
+            with patch.dict(os.environ, {
+                "MICROSOFT_CLIENT_ID": "test_client_id",
+                "LITELLM_LICENSE": "test_license"
+            }):
+                with patch("litellm.proxy.proxy_server.premium_user", True):
+                    response = run_async_test(serve_login_page(
+                        request=mock_request,
+                        response_type="oauth_token",
+                        redirect_uri="vscode://roocode.roo/litellm"
+                    ))
+        
+        # Assert
+        mock_check_auth.assert_called_once_with(mock_request)
+        assert isinstance(response, RedirectResponse)
+        assert response.status_code == 303
+        
+        # Verify redirect URL contains oauth_flow=true
+        redirect_url = response.headers["location"]
+        parsed_url = urlparse(redirect_url)
+        query_params = parse_qs(parsed_url.query)
+        assert query_params.get("oauth_flow") == ["true"]
+        assert query_params.get("redirect_uri") == ["vscode://roocode.roo/litellm"]
+
+
 class TestOAuth2Integration:
     """Integration tests for complete OAuth2 flow."""
     
