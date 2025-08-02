@@ -393,7 +393,7 @@ def get_redis_async_client(
         else:
             gcp_service_account = redis_kwargs.get("gcp_service_account") or get_secret_str("REDIS_GCP_SERVICE_ACCOUNT")
         
-        verbose_logger.info(f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account={gcp_service_account}")
+        verbose_logger.info(f"DEBUG: Redis cluster kwargs: redis_connect_func={redis_connect_func is not None}, gcp_service_account_provided={gcp_service_account is not None}")
         
         # If GCP IAM is configured (indicated by redis_connect_func), generate access token and use as password
         if redis_connect_func and gcp_service_account:
