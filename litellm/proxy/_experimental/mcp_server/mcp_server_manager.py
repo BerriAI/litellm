@@ -661,7 +661,10 @@ class MCPServerManager:
 
                 mcp_responses = await asyncio.gather(*tasks)
 
-                result = mcp_responses[1]
+                # If proxy_logging_obj is None, the tool call result is at index 0
+                # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
+                result_index = 1 if proxy_logging_obj else 0
+                result = mcp_responses[result_index]
                 
                 return result
             except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
