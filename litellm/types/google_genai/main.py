@@ -15,9 +15,11 @@ GoogleGenAIGenerateContentResponse = _genai_types.GenerateContentResponse
 GenerateContentContentListUnionDict = _genai_types.ContentListUnionDict
 GenerateContentConfigDict = _genai_types.GenerateContentConfigDict
 GenerateContentRequestParametersDict = _genai_types._GenerateContentParametersDict
+ToolConfigDict = _genai_types.ToolConfigDict
 
 class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
     generationConfig: Optional[Any]
+    tools: Optional[ToolConfigDict]
 
 
 class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]

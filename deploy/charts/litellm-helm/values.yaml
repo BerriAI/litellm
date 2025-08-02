@@ -63,6 +63,12 @@ service:
   # optionally specify loadBalancerClass
   # loadBalancerClass: tailscale
 
+# Separate health app configuration
+# When enabled, health checks will use a separate port and the application
+# will receive SEPARATE_HEALTH_APP=1 and SEPARATE_HEALTH_PORT from environment variables
+separateHealthApp: false
+separateHealthPort: 8081
+
 ingress:
   enabled: false
   className: "nginx"
@@ -201,6 +207,13 @@ migrationJob:
   annotations: {}
   ttlSecondsAfterFinished: 120
   extraContainers: []
+  
+  # Hook configuration
+  hooks:
+    argocd:
+      enabled: true
+    helm:
+      enabled: false
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {
