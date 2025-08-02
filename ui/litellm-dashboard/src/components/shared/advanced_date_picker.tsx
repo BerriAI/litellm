@@ -71,12 +71,38 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false)
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value)
+  const [selectedOption, setSelectedOption] = useState<string | null>(null)
 
   // Custom date inputs only - removed time inputs
   const [startDate, setStartDate] = useState("")
   const [endDate, setEndDate] = useState("")
 
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Function to check if current value matches a relative time option
+  const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
+    if (!currentValue.from || !currentValue.to) return null
+
+    for (const option of relativeTimeOptions) {
+      const optionRange = option.getValue()
+
+      // Compare dates with some tolerance (to account for time differences)
+      const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day")
+      const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day")
+
+      if (fromMatches && toMatches) {
+        return option.shortLabel
+      }
+    }
+
+    return null
+  }, [])
+
+  // Update selected option when value changes
+  useEffect(() => {
+    const matchingOption = getMatchingOption(value)
+    setSelectedOption(matchingOption)
+  }, [value, getMatchingOption])
 
   // Validation logic - simplified for dates only
   const validateDateRange = useCallback(() => {
@@ -171,11 +197,29 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const handleRelativeTimeSelect = (option: RelativeTimeOption) => {
     const { from, to } = option.getValue()
     const newValue = { from, to }
+
+    // Immediately apply the selected option
+    onValueChange(newValue)
+
+    // Apply the same background adjustment logic as the original component
+    requestIdleCallback(
+      () => {
+        const adjustedValue = adjustDateRange(newValue)
+        onValueChange(adjustedValue)
+      },
+      { timeout: 100 },
+    )
+
+    // Update local state to reflect the selection
     setTempValue(newValue)
+    setSelectedOption(option.shortLabel)
 
     // Update the form inputs to reflect the selection
     setStartDate(moment(from).format("YYYY-MM-DD"))
     setEndDate(moment(to).format("YYYY-MM-DD"))
+
+    // Close the dropdown
+    setIsOpen(false)
   }
 
   const updateTempValueFromInputs = useCallback(() => {
@@ -186,13 +230,18 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
         const to = moment(endDate, "YYYY-MM-DD").endOf("day")
 
         if (from.isValid() && to.isValid()) {
-          setTempValue({ from: from.toDate(), to: to.toDate() })
+          const newValue = { from: from.toDate(), to: to.toDate() }
+          setTempValue(newValue)
+
+          // Check if this matches any preset option
+          const matchingOption = getMatchingOption(newValue)
+          setSelectedOption(matchingOption)
         }
       }
     } catch (error) {
       console.warn("Invalid date format:", error)
     }
-  }, [startDate, endDate, validation.isValid])
+  }, [startDate, endDate, validation.isValid, getMatchingOption])
 
   // Update tempValue when inputs change
   useEffect(() => {
@@ -228,6 +277,10 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     if (value.to) {
       setEndDate(moment(value.to).format("YYYY-MM-DD"))
     }
+
+    // Reset selected option
+    const matchingOption = getMatchingOption(value)
+    setSelectedOption(matchingOption)
 
     setIsOpen(false)
   }
@@ -267,17 +320,30 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 <div className="p-3 border-b border-gray-200">
                   <span className="text-sm font-semibold text-gray-900">Relative time (today, 7d, 30d, MTD, YTD)</span>
                 </div>
-                <div className="h-[500px] overflow-y-auto">
-                  {relativeTimeOptions.map((option) => (
-                    <div
-                      key={option.label}
-                      className="flex items-center justify-between px-5 py-4 hover:bg-gray-50 cursor-pointer border-b border-gray-100"
-                      onClick={() => handleRelativeTimeSelect(option)}
-                    >
-                      <span className="text-sm text-gray-700">{option.label}</span>
-                      <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">{option.shortLabel}</span>
-                    </div>
-                  ))}
+                <div className="h-[350px] overflow-y-auto">
+                  {relativeTimeOptions.map((option) => {
+                    const isSelected = selectedOption === option.shortLabel
+                    return (
+                      <div
+                        key={option.label}
+                        className={`flex items-center justify-between px-5 py-4 cursor-pointer border-b border-gray-100 transition-colors ${
+                          isSelected ? "bg-blue-50 hover:bg-blue-100 border-blue-200" : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handleRelativeTimeSelect(option)}
+                      >
+                        <span className={`text-sm ${isSelected ? "text-blue-700 font-medium" : "text-gray-700"}`}>
+                          {option.label}
+                        </span>
+                        <span
+                          className={`text-xs px-2 py-1 rounded ${
+                            isSelected ? "text-blue-700 bg-blue-100" : "text-gray-500 bg-gray-100"
+                          }`}
+                        >
+                          {option.shortLabel}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
 
