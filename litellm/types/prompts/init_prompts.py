@@ -1,8 +1,9 @@
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Optional, Required, TypedDict
+from typing import Dict, Optional
 
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import Required, TypedDict
 
 
 class SupportedPromptIntegrations(str, Enum):
