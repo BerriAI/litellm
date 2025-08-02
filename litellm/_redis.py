@@ -420,7 +420,7 @@ def get_redis_async_client(
                 
                 access_token = generate_access_token()
                 cluster_kwargs["password"] = access_token
-                verbose_logger.info(f"DEBUG: Successfully generated GCP IAM access token for async Redis cluster")
+                verbose_logger.info("DEBUG: Successfully generated GCP IAM access token for async Redis cluster")
             except Exception as e:
                 verbose_logger.error(f"Failed to generate GCP IAM access token: {e}")
                 raise AuthenticationError("Failed to generate GCP IAM access token")
