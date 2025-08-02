@@ -347,17 +347,31 @@ class TestOAuth2SecurityFeatures:
 class TestOAuth2RedirectURI:
     """Test redirect_uri functionality for VSCode extension compatibility."""
     
-    def test_redirect_uri_validation_valid_vscode(self):
-        """Test valid VSCode redirect_uri validation."""
+    def test_redirect_uri_validation_valid_ide_schemes(self):
+        """Test valid IDE and editor redirect_uri validation."""
         # Arrange
-        valid_vscode_uris = [
+        valid_ide_uris = [
+            # VSCode family
             "vscode://extension-id/callback",
             "vscode-insiders://extension-id/callback/path",
+            "vscodium://extension-id/callback",
+            "code-oss://extension-id/callback",
+            # Other popular IDEs
+            "cursor://extension-id/callback",
+            "fleet://extension-id/callback", 
+            "zed://extension-id/callback",
+            "sublime://extension-id/callback",
+            "atom://extension-id/callback",
+            "nova://extension-id/callback",
+            # Web protocols
             "https://example.com/callback",
-            "http://localhost:3000/callback"
+            "http://localhost:3000/callback",
+            # Development tools
+            "github-desktop://callback/path",
+            "sourcetree://callback"
         ]
         
-        for uri in valid_vscode_uris:
+        for uri in valid_ide_uris:
             # Act
             is_valid = OAuth2URLManager.validate_redirect_uri(uri)
             
@@ -457,6 +471,48 @@ class TestOAuth2RedirectURI:
         assert extracted_flow == "oauth_token"
         assert extracted_uri is None
         assert OAuth2StateManager.validate_state(state) is True
+    
+    @patch.dict(os.environ, {"OAUTH_ALLOWED_REDIRECT_SCHEMES": "myide,customapp,special-editor"})
+    def test_custom_redirect_schemes_from_env(self):
+        """Test custom redirect schemes from environment variable."""
+        # Arrange
+        custom_uris = [
+            "myide://extension/callback",
+            "customapp://oauth/callback", 
+            "special-editor://callback/path"
+        ]
+        
+        for uri in custom_uris:
+            # Act
+            is_valid = OAuth2URLManager.validate_redirect_uri(uri)
+            
+            # Assert
+            assert is_valid is True, f"Custom scheme URI should be valid: {uri}"
+    
+    def test_cursor_editor_specific_flow(self):
+        """Test Cursor editor specific OAuth flow."""
+        # Arrange
+        redirect_uri = "cursor://roocode-extension/oauth-callback"
+        access_token = "sk-litellm-cursor-test123"
+        
+        # Act
+        callback_url = OAuth2URLManager.build_callback_redirect_url(
+            redirect_uri=redirect_uri,
+            access_token=access_token,
+            token_type="Bearer",
+            expires_in=86400
+        )
+        
+        # Assert
+        parsed_url = urlparse(callback_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        assert parsed_url.scheme == "cursor"
+        assert parsed_url.netloc == "roocode-extension"
+        assert parsed_url.path == "/oauth-callback"
+        assert query_params["access_token"] == ["sk-litellm-cursor-test123"]
+        assert query_params["token_type"] == ["Bearer"]
+        assert query_params["expires_in"] == ["86400"]
 
 
 class TestOAuth2Integration:
@@ -519,6 +575,42 @@ class TestOAuth2Integration:
         assert callback_parsed.scheme == "vscode"
         assert callback_parsed.netloc == "roocode.roo"
         assert callback_parsed.path == "/litellm"
+        assert "access_token" in callback_params
+        assert "token_type" in callback_params
+        assert "expires_in" in callback_params
+    
+    def test_cursor_extension_flow_structure(self):
+        """Test Cursor editor OAuth flow structure with redirect_uri."""
+        # Arrange - Cursor extension OAuth URL
+        cursor_oauth_url = (
+            "https://your-litellm-proxy.com/sso/key/generate"
+            "?response_type=oauth_token"
+            "&redirect_uri=cursor://roocode-extension/oauth-callback"
+        )
+        
+        # Parse URL
+        parsed_url = urlparse(cursor_oauth_url)
+        query_params = parse_qs(parsed_url.query)
+        
+        # Step 1: Verify OAuth parameters
+        assert query_params["response_type"] == ["oauth_token"]
+        assert query_params["redirect_uri"] == ["cursor://roocode-extension/oauth-callback"]
+        
+        # Step 2: Expected callback URL format
+        expected_callback = (
+            "cursor://roocode-extension/oauth-callback"
+            "?access_token=sk-litellm-xxxxxxxxxx"
+            "&token_type=Bearer"
+            "&expires_in=86400"
+        )
+        
+        # Verify callback structure
+        callback_parsed = urlparse(expected_callback)
+        callback_params = parse_qs(callback_parsed.query)
+        
+        assert callback_parsed.scheme == "cursor"
+        assert callback_parsed.netloc == "roocode-extension"
+        assert callback_parsed.path == "/oauth-callback"
         assert "access_token" in callback_params
         assert "token_type" in callback_params
         assert "expires_in" in callback_params

@@ -204,24 +204,56 @@ class OAuth2URLManager:
         try:
             parsed = urlparse(redirect_uri)
             
-            # Default allowed schemes for VSCode extensions and common OAuth
+            # Default allowed schemes for IDE extensions and common OAuth
             if allowed_schemes is None:
-                allowed_schemes = ['vscode', 'vscode-insiders', 'https', 'http']
+                # Start with default schemes
+                allowed_schemes = [
+                    # Web protocols
+                    'http', 'https',
+                    # VSCode family
+                    'vscode', 'vscode-insiders',
+                    # Other popular IDEs/editors
+                    'cursor',           # Cursor editor
+                    'vscodium',         # VSCodium (open source VSCode)
+                    'code-oss',         # VSCode OSS
+                    'fleet',            # JetBrains Fleet
+                    'zed',              # Zed editor
+                    'sublime',          # Sublime Text
+                    'atom',             # Atom editor
+                    'brackets',         # Adobe Brackets
+                    'nova',             # Nova editor
+                    'coderunner',       # CodeRunner
+                    'textmate',         # TextMate
+                    # Development tools
+                    'github-desktop',   # GitHub Desktop
+                    'sourcetree',       # Sourcetree
+                    'tower',            # Tower Git
+                    'fork',             # Fork Git
+                ]
+                
+                # Add custom schemes from environment variable
+                custom_schemes = os.getenv("OAUTH_ALLOWED_REDIRECT_SCHEMES", "")
+                if custom_schemes:
+                    additional_schemes = [scheme.strip() for scheme in custom_schemes.split(",") if scheme.strip()]
+                    allowed_schemes.extend(additional_schemes)
             
             # Check if scheme is allowed
             if parsed.scheme not in allowed_schemes:
                 return False
             
-            # For VSCode schemes, ensure it's a proper extension callback
-            if parsed.scheme.startswith('vscode'):
-                # VSCode URIs should have format: vscode://extension-id/callback-path
+            # For IDE/editor schemes, ensure it's a proper extension callback
+            ide_schemes = ['vscode', 'vscode-insiders', 'cursor', 'vscodium', 'code-oss', 
+                          'fleet', 'zed', 'sublime', 'atom', 'brackets', 'nova']
+            if parsed.scheme in ide_schemes:
+                # IDE URIs should have format: scheme://extension-id/callback-path
                 return len(parsed.netloc) > 0 and len(parsed.path) > 0
             
             # For HTTP(S), ensure it's a valid URL
             if parsed.scheme in ['http', 'https']:
                 return bool(parsed.netloc)
             
-            return True
+            # For other development tools, basic validation
+            return bool(parsed.netloc or parsed.path)
             
         except Exception:
             return False
