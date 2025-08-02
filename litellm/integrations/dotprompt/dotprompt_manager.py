@@ -37,7 +37,9 @@ class DotpromptManager(CustomPromptManagement):
     def __init__(
         self,
         prompt_directory: Optional[str] = None,
+        prompt_file: Optional[str] = None,
         prompt_data: Optional[Union[dict, str]] = None,
+        prompt_id: Optional[str] = None,
     ):
         import litellm
 
@@ -49,6 +51,8 @@ class DotpromptManager(CustomPromptManagement):
             self.prompt_data = prompt_data or {}
 
         self._prompt_manager: Optional[PromptManager] = None
+        self.prompt_file = prompt_file
+        self.prompt_id = prompt_id
 
     @property
     def integration_name(self) -> str:
@@ -59,13 +63,20 @@ class DotpromptManager(CustomPromptManagement):
     def prompt_manager(self) -> PromptManager:
         """Lazy-load the prompt manager."""
         if self._prompt_manager is None:
-            if self.prompt_directory is None and not self.prompt_data:
+            if (
+                self.prompt_directory is None
+                and not self.prompt_data
+                and not self.prompt_file
+            ):
                 raise ValueError(
                     "Either prompt_directory or prompt_data must be set before using dotprompt manager. "
                     "Set litellm.global_prompt_directory, initialize with prompt_directory parameter, or provide prompt_data."
                 )
             self._prompt_manager = PromptManager(
-                prompt_directory=self.prompt_directory, prompt_data=self.prompt_data
+                prompt_directory=self.prompt_directory,
+                prompt_data=self.prompt_data,
+                prompt_file=self.prompt_file,
+                prompt_id=self.prompt_id,
             )
         return self._prompt_manager
 
@@ -104,6 +115,7 @@ class DotpromptManager(CustomPromptManagement):
         """
 
         try:
+
             # Get the prompt template
             template = self.prompt_manager.get_prompt(prompt_id)
             if template is None:
@@ -143,6 +155,7 @@ class DotpromptManager(CustomPromptManagement):
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
     ) -> Tuple[str, List[AllMessageValues], dict]:
+
         from litellm.integrations.prompt_management_base import PromptManagementBase
 
         return PromptManagementBase.get_chat_completion_prompt(

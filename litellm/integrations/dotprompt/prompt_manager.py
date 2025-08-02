@@ -51,11 +51,14 @@ class PromptManager:
 
     def __init__(
         self,
+        prompt_id: Optional[str] = None,
         prompt_directory: Optional[str] = None,
         prompt_data: Optional[Dict[str, Dict[str, Any]]] = None,
+        prompt_file: Optional[str] = None,
     ):
         self.prompt_directory = Path(prompt_directory) if prompt_directory else None
         self.prompts: Dict[str, PromptTemplate] = {}
+        self.prompt_file = prompt_file
         self.jinja_env = Environment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
@@ -72,9 +75,16 @@ class PromptManager:
         if self.prompt_directory:
             self._load_prompts()
 
+        if self.prompt_file:
+            if not prompt_id:
+                raise ValueError("prompt_id is required when prompt_file is provided")
+
+            template = self._load_prompt_file(self.prompt_file, prompt_id)
+            self.prompts[prompt_id] = template
+
         # Load prompts from JSON data if provided
         if prompt_data:
-            self._load_prompts_from_json(prompt_data)
+            self._load_prompts_from_json(prompt_data, prompt_id)
 
     def _load_prompts(self) -> None:
         """Load all .prompt files from the prompt directory."""
@@ -95,7 +105,9 @@ class PromptManager:
                 # Optional: print(f"Error loading prompt file {prompt_file}")
                 pass
 
-    def _load_prompts_from_json(self, prompt_data: Dict[str, Dict[str, Any]]) -> None:
+    def _load_prompts_from_json(
+        self, prompt_data: Dict[str, Dict[str, Any]], prompt_id: Optional[str] = None
+    ) -> None:
         """Load prompts from JSON data structure.
 
         Expected format:
@@ -105,7 +117,17 @@ class PromptManager:
                 "metadata": {"model": "gpt-4", "temperature": 0.7, ...}
             }
         }
+
+        or
+
+        {
+            "content": "template content",
+            "metadata": {"model": "gpt-4", "temperature": 0.7, ...}
+        } + prompt_id
         """
+        if prompt_id:
+            prompt_data = {prompt_id: prompt_data}
+
         for prompt_id, prompt_info in prompt_data.items():
             try:
                 content = prompt_info.get("content", "")
@@ -121,8 +143,13 @@ class PromptManager:
                 # Optional: print(f"Error loading prompt from JSON: {prompt_id}")
                 pass
 
-    def _load_prompt_file(self, file_path: Path, prompt_id: str) -> PromptTemplate:
+    def _load_prompt_file(
+        self, file_path: Union[str, Path], prompt_id: str
+    ) -> PromptTemplate:
         """Load and parse a single .prompt file."""
+        if isinstance(file_path, str):
+            file_path = Path(file_path)
+
         content = file_path.read_text(encoding="utf-8")
 
         # Split frontmatter and content
