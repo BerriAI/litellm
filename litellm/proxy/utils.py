@@ -500,10 +500,8 @@ class ProxyLogging:
                         )
                         is not True
                     ):
-                        print("guardrail should not run")
                         continue
 
-                    print("guardrail should run")
                     # Convert MCP tool call to LLM message format for existing guardrail logic
                     synthetic_llm_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
                     # Reuse existing LLM guardrail logic
@@ -833,10 +831,7 @@ class ProxyLogging:
                         )
                         is not True
                     ):
-                        print("Guardrail should not run for during_mcp_call hook")
                         continue
-
-                    print("Guardrail should run for during_mcp_call hook")
                     # Convert MCP tool call to LLM message format for existing guardrail logic
                     synthetic_llm_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
                     
