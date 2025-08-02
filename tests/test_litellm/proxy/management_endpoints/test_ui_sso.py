@@ -938,10 +938,10 @@ class TestUISSO_FunctionsExistence:
         from litellm.proxy.management_endpoints.ui_sso import auth_callback
         assert callable(auth_callback)
 
-    def test_sso_login_redirect_exists(self):
-        """Test that sso_login_redirect function exists"""
-        from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
-        assert callable(sso_login_redirect)
+    def test_google_login_exists(self):
+        """Test that google_login function exists"""
+        from litellm.proxy.management_endpoints.ui_sso import google_login
+        assert callable(google_login)
 
     def test_sso_authentication_handler_exists(self):
         """Test that SSOAuthenticationHandler class exists with new methods"""
@@ -1054,7 +1054,7 @@ class TestCustomUISSO:
         """Test that proper error is raised when enterprise module is not available"""
         from unittest.mock import MagicMock, patch
 
-        from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
+        from litellm.proxy.management_endpoints.ui_sso import google_login
 
         # Mock request
         mock_request = MagicMock()
