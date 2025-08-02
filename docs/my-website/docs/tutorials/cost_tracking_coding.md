@@ -4,9 +4,9 @@ import Image from '@theme/IdealImage';
 
 # Track Usage for Coding Tools
 
-This tutorial shows how to track usage and costs for AI-powered coding tools like Claude Code, Roo Code, Gemini CLI, and OpenAI Codex through LiteLLM.
+Track usage and costs for AI-powered coding tools like Claude Code, Roo Code, Gemini CLI, and OpenAI Codex through LiteLLM.
 
-Track requests, total costs, and user engagement metrics for each coding tool via User-Agent headers.
+Monitor requests, costs, and user engagement metrics for each coding tool using User-Agent headers.
 
 <Image 
   img={require('../../img/agent_1.png')}
@@ -16,24 +16,24 @@ Track requests, total costs, and user engagement metrics for each coding tool vi
 
 ## Who This Is For
 
-Central AI Platform teams providing developers access to coding tools through LiteLLM. Use this to monitor tool engagement and track individual user usage patterns.
+Central AI Platform teams providing developers access to coding tools through LiteLLM. Monitor tool engagement and track individual user usage patterns.
 
-## What LiteLLM Tracks
+## What You Can Track
 
 ### Summary Metrics
 - Cost per coding tool
 - Successful requests and token usage per tool
 
-### User Engagement Metrics  
+### User Engagement Metrics
 - Daily, weekly, and monthly active users for each User-Agent 
 
 ## Quick Start
 
 ### 1. Connect Your Coding Tool to LiteLLM
 
-Configure your coding tool to send requests through LiteLLM proxy with appropriate User-Agent headers.
+Configure your coding tool to send requests through the LiteLLM proxy with appropriate User-Agent headers.
 
-Follow these instructions to connect your coding tool to LiteLLM: 
+**Setup guides:**
 - [Use LiteLLM with Claude Code](../../docs/tutorials/claude_responses_api)
 - [Use LiteLLM with Gemini CLI](../../docs/tutorials/litellm_gemini_cli)
 - [Use LiteLLM with OpenAI Codex](../../docs/tutorials/openai_codex)
@@ -44,7 +44,7 @@ Ensure your coding tool includes identifying User-Agent headers in API requests.
 
 ### 3. Verify Tracking in LiteLLM Logs
 
-Confirm that LiteLLM is properly tracking requests by checking logs for the expected User-Agent values.
+Confirm LiteLLM is properly tracking requests by checking logs for the expected User-Agent values.
 
 <Image 
   img={require('../../img/agent_2.png')}
@@ -57,28 +57,21 @@ Access the LiteLLM dashboard to view aggregated usage metrics and user engagemen
 
 #### Summary Metrics
 
-This shows the total cost and successful requests for each coding tool. 
-
-<br/>
+View total cost and successful requests for each coding tool.
 
 <Image 
   img={require('../../img/agent_3.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
+#### Daily, Weekly, and Monthly Active Users
 
-#### DAU, WAU, MAU 
-
-This shows the daily, weekly, and monthly active users for each coding tool. 
-
-<br/>
+View active user metrics for each coding tool.
 
 <Image 
   img={require('../../img/agent_4.png')}
   style={{width: '80%', display: 'block', margin: '2rem auto'}}
 />
-
-
 
 ## How LiteLLM Identifies Coding Tools
 
@@ -86,13 +79,13 @@ LiteLLM tracks coding tools by monitoring the `User-Agent` header in incoming AP
 
 ### Example Request
 
-Here's an example using `claude-cli` as the User-Agent:
+Example using `claude-cli` as the User-Agent:
 
 ```shell
 curl -X POST \
--H "Content-Type: application/json" \
--H "Authorization: Bearer sk-1234" \
--H "User-Agent: claude-cli/1.0" \
--d '{"model": "claude-3-5-sonnet-latest", "messages": [{"role": "user", "content": "Hello, how are you?"}]}' \
-http://localhost:4000/chat/completions
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "User-Agent: claude-cli/1.0" \
+  -d '{"model": "claude-3-5-sonnet-latest", "messages": [{"role": "user", "content": "Hello, how are you?"}]}' \
+  http://localhost:4000/chat/completions
 ```
