@@ -357,7 +357,7 @@ def get_redis_client(**env_overrides):
 
 def get_redis_async_client(
     **env_overrides,
-) -> async_redis.Redis:
+) -> Union[async_redis.Redis, async_redis.RedisCluster]:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
