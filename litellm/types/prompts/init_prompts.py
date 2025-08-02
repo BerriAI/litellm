@@ -25,12 +25,12 @@ class PromptLiteLLMParams(BaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
-class PromptSpec(TypedDict, total=False):
-    prompt_id: Required[str]
-    litellm_params: Required[PromptLiteLLMParams]
-    prompt_info: Optional[PromptInfo]
-    created_at: Optional[datetime]
-    updated_at: Optional[datetime]
+class PromptSpec(BaseModel):
+    prompt_id: str
+    litellm_params: PromptLiteLLMParams
+    prompt_info: PromptInfo
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class ListPromptsResponse(BaseModel):
