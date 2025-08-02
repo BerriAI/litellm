@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
@@ -209,6 +209,7 @@ async def create_prompt(
     from datetime import datetime
 
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import prisma_client
 
     # Only allow proxy admins to create prompts
     if user_api_key_dict.user_role is None or (
@@ -219,15 +220,27 @@ async def create_prompt(
             status_code=403, detail="Only proxy admins can create prompts"
         )
 
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+
     try:
         # Create the prompt spec
-        prompt_spec = PromptSpec(
-            prompt_id=request.prompt_id,
-            litellm_params=request.litellm_params,
-            prompt_info=request.prompt_info or PromptInfo(prompt_type="db"),
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+        # store prompt in db
+        prompt_db_entry = await prisma_client.db.litellm_prompttable.create(
+            data={
+                "prompt_id": request.prompt_id,
+                "litellm_params": request.litellm_params.model_dump_json(),
+                "prompt_info": (
+                    request.prompt_info.model_dump_json()
+                    if request.prompt_info
+                    else PromptInfo(prompt_type="db").model_dump_json()
+                ),
+            }
         )
+
+        prompt_spec = PromptSpec(**prompt_db_entry.model_dump())
 
         # Initialize the prompt
         initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
@@ -304,7 +317,7 @@ async def update_prompt(
             prompt_id=prompt_id,
             litellm_params=request.litellm_params,
             prompt_info=request.prompt_info or PromptInfo(prompt_type="db"),
-            created_at=existing_prompt.get("created_at"),
+            created_at=existing_prompt.created_at,
             updated_at=datetime.now(),
         )
 
@@ -447,13 +460,13 @@ async def patch_prompt(
         updated_litellm_params = (
             request.litellm_params
             if request.litellm_params is not None
-            else existing_prompt.get("litellm_params")
+            else existing_prompt.litellm_params
         )
 
         updated_prompt_info = (
             request.prompt_info
             if request.prompt_info is not None
-            else existing_prompt.get("prompt_info")
+            else existing_prompt.prompt_info
         )
 
         # Ensure we have valid litellm_params
@@ -465,7 +478,7 @@ async def patch_prompt(
             prompt_id=prompt_id,
             litellm_params=cast(PromptLiteLLMParams, updated_litellm_params),
             prompt_info=updated_prompt_info,
-            created_at=existing_prompt.get("created_at"),
+            created_at=existing_prompt.created_at,
             updated_at=datetime.now(),
         )
 
