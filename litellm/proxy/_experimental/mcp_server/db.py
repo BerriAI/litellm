@@ -82,14 +82,20 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    mcp_servers: List[LiteLLM_MCPServerTable] = (
+    _mcp_servers: List[LiteLLM_MCPServerTable] = (
         await prisma_client.db.litellm_mcpservertable.find_many(
             where={
                 "server_id": {"in": server_ids},
             }
         )
     )
-    return mcp_servers
+    final_mcp_servers: List[LiteLLM_MCPServerTable] = []
+    for _mcp_server in _mcp_servers:
+        final_mcp_servers.append(
+            LiteLLM_MCPServerTable(**_mcp_server.model_dump())
+        )
+
+    return final_mcp_servers
 
 
 async def get_mcp_servers_by_verificationtoken(
