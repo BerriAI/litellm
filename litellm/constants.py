@@ -331,6 +331,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "metadata",
 ]
 
 OPENAI_TRANSCRIPTION_PARAMS = [
@@ -385,6 +386,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "reasoning_effort": None,
     "thinking": None,
     "web_search_options": None,
+    "metadata": None,
 }
 
 openai_compatible_endpoints: List = [
