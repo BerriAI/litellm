@@ -243,8 +243,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
   // Helper function to truncate user agent name with tooltip
   const truncateUserAgent = (userAgent: string): string => {
-    if (userAgent.length > 10) {
-      return userAgent.substring(0, 10) + "...";
+    if (userAgent.length > 15) {
+      return userAgent.substring(0, 15) + "...";
     }
     return userAgent;
   };
