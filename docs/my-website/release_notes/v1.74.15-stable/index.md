@@ -88,7 +88,7 @@ pip install litellm==1.74.15.post1
 - **[Google AI Studio](../../docs/providers/gemini)**
     - Added Google AI Studio Imagen4 model family support - [PR #13065](https://github.com/BerriAI/litellm/pull/13065), [Get Started](../../docs/providers/google_ai_studio/image_gen)
 - **[Azure OpenAI](../../docs/providers/azure/azure)**
-    - Azure `api_version="preview"` support - [PR #13072](https://github.com/BerriAI/litellm/pull/13072), [Get Started](../../docs/providers/azure/azure#completion---using-api_key-api_base-api_version)
+    - Azure `api_version="preview"` support - [PR #13072](https://github.com/BerriAI/litellm/pull/13072), [Get Started](../../docs/providers/azure/azure#setting-api-version)
     - Password protected certificate files support - [PR #12995](https://github.com/BerriAI/litellm/pull/12995), [Get Started](../../docs/providers/azure/azure#authentication)
 - **[AWS Bedrock](../../docs/providers/bedrock)**
     - Cost tracking via Anthropic `/v1/messages` - [PR #13072](https://github.com/BerriAI/litellm/pull/13072)
@@ -104,11 +104,11 @@ pip install litellm==1.74.15.post1
 #### Bugs
 
 - **[Gemini](../../docs/providers/gemini)**
-    - Fix merge_reasoning_content_in_choices parameter issue - [PR #13066](https://github.com/BerriAI/litellm/pull/13066)
+    - Fix merge_reasoning_content_in_choices parameter issue - [PR #13066](https://github.com/BerriAI/litellm/pull/13066), [Get Started](../../docs/tutorials/openweb_ui#render-thinking-content-on-open-webui)
     - Fix CLI authorization format issues - [PR #13098](https://github.com/BerriAI/litellm/pull/13098), [PR #13189](https://github.com/BerriAI/litellm/pull/13189)
     - Environment variable support fixes - [PR #12507](https://github.com/BerriAI/litellm/pull/12507)
 - **[VertexAI](../../docs/providers/vertex)**
-    - Ensure multimodal embedding responses are logged properly - [PR #13050](https://github.com/BerriAI/litellm/pull/13050)
+
 - **[vLLM/OpenAI-like](../../docs/providers/vllm)**
     - Fix missing extra_headers support for embeddings - [PR #13198](https://github.com/BerriAI/litellm/pull/13198)
 
@@ -127,11 +127,8 @@ pip install litellm==1.74.15.post1
 
 - **[/generateContent](../../docs/generateContent)**
     - Support for query_params in generateContent routes for API Key setting - [PR #13100](https://github.com/BerriAI/litellm/pull/13100)
-
-- **Token Counting**
-    - Ignore unsupported keys like prefix in token counter - [PR #11954](https://github.com/BerriAI/litellm/pull/11954)
-- **Fallbacks**
-    - Fix fallback delete functionality - [PR #12606](https://github.com/BerriAI/litellm/pull/12606)
+- **[VertexAI Passthrough /vertex](../../docs/pass_through/vertex_ai)**
+    - Ensure multimodal embedding responses are logged properly - [PR #13050](https://github.com/BerriAI/litellm/pull/13050)
 
 ---
 
@@ -193,6 +190,7 @@ pip install litellm==1.74.15.post1
 - **Router Settings**
     - Fix displaying models for fallbacks in UI - [PR #13191](https://github.com/BerriAI/litellm/pull/13191)
     - Fix wildcard model name handling with custom values - [PR #13116](https://github.com/BerriAI/litellm/pull/13116)
+    - Fix fallback delete functionality - [PR #12606](https://github.com/BerriAI/litellm/pull/12606)
 
 ---
 
@@ -261,7 +259,8 @@ pip install litellm==1.74.15.post1
     - Fix DB config through environment variables - [PR #13111](https://github.com/BerriAI/litellm/pull/13111)
 - **Logging**
     - Suppress httpx logging - [PR #13217](https://github.com/BerriAI/litellm/pull/13217)
-
+- **Token Counting**
+    - Ignore unsupported keys like prefix in token counter - [PR #11954](https://github.com/BerriAI/litellm/pull/11954)
 ---
 
 ## New Contributors
