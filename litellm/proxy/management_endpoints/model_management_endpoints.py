@@ -1126,32 +1126,9 @@ def _deduplicate_litellm_router_models(models: List[Dict]) -> List[Dict]:
     return unique_models
 
 
-async def clear_cache(preserve_config_models: Optional[bool] = None):
+async def clear_cache():
     """
     Clear router caches and reload models.
-    
-    This function clears the router's model cache and reloads models from the database.
-    When preserve_config_models=True, only database-stored models are cleared and reloaded,
-    while config-based models are preserved. This is useful when you want to update
-    only DB models without affecting models defined in configuration files.
-    
-    Args:
-        preserve_config_models (bool): If True, only clear DB models and preserve config models.
-                                     If None, uses the setting from litellm_settings.preserve_config_models_on_cache_clear.
-                                     If False, clear all models (default behavior).
-    
-    Examples:
-        # Clear all models (default behavior)
-        await clear_cache()
-        
-        # Clear only DB models, preserve config models
-        await clear_cache(preserve_config_models=True)
-        
-        # Use config setting (if preserve_config_models_on_cache_clear is set in litellm_settings)
-        await clear_cache()
-        
-        # This is useful when updating DB models via PATCH endpoints
-        # as it preserves config models that shouldn't be affected
     """
     from litellm.proxy.proxy_server import (
         llm_router,
@@ -1167,57 +1144,38 @@ async def clear_cache(preserve_config_models: Optional[bool] = None):
         )
         return
 
-    # If preserve_config_models is None, check the config setting
-    if preserve_config_models is None:
-        try:
-            config = await proxy_config.get_config()
-            litellm_settings = config.get("litellm_settings", {})
-            preserve_config_models = litellm_settings.get("preserve_config_models_on_cache_clear", False)
-        except Exception as e:
-            verbose_proxy_logger.debug(f"Could not load config setting, using default: {str(e)}")
-            preserve_config_models = False
 
     try:
-        if preserve_config_models:
-            # Only clear DB models, preserve config models
-            verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
-            
-            # Get current models and filter out DB models
-            current_models = llm_router.model_list.copy()
-            config_models = []
-            db_model_ids = []
-            
-            for model in current_models:
-                model_info = model.get("model_info", {})
-                if model_info.get("db_model", False):
-                    # This is a DB model, mark for deletion
-                    db_model_ids.append(model_info.get("id"))
-                else:
-                    # This is a config model, preserve it
-                    config_models.append(model)
-            
-            # Clear only DB models
-            for model_id in db_model_ids:
-                llm_router.delete_deployment(id=model_id)
-            
-            # Clear auto routers
-            llm_router.auto_routers.clear()
-            
-            # Reload only DB models
-            await proxy_config.add_deployment(
-                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-            )
-            
-            verbose_proxy_logger.debug(f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models")
-        else:
-            # Clear all models (original behavior)
-            verbose_proxy_logger.debug("Clearing all models")
-            llm_router.model_list.clear()
-            llm_router.auto_routers.clear()
-
-            await proxy_config.add_deployment(
-                prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
-            )
+        # Only clear DB models, preserve config models
+        verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
+        
+        # Get current models and filter out DB models
+        current_models = llm_router.model_list.copy()
+        config_models = []
+        db_model_ids = []
+        
+        for model in current_models:
+            model_info = model.get("model_info", {})
+            if model_info.get("db_model", False):
+                # This is a DB model, mark for deletion
+                db_model_ids.append(model_info.get("id"))
+            else:
+                # This is a config model, preserve it
+                config_models.append(model)
+        
+        # Clear only DB models
+        for model_id in db_model_ids:
+            llm_router.delete_deployment(id=model_id)
+        
+        # Clear auto routers
+        llm_router.auto_routers.clear()
+        
+        # Reload only DB models
+        await proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+        )
+        
+        verbose_proxy_logger.debug(f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models")
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Failed to clear cache and reload models. Due to error - {str(e)}"

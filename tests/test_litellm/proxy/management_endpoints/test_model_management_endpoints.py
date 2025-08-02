@@ -390,16 +390,14 @@ class TestClearCache:
         ):
             await clear_cache()
 
-            assert len(mock_router.model_list) == 0
+            assert len(mock_router.model_list) == 2
 
-            mock_config.add_deployment.assert_called_once_with(
-                prisma_client=mock_prisma, proxy_logging_obj=mock_logging
-            )
+            assert len(mock_router.auto_routers) == 0
 
     @pytest.mark.asyncio
     async def test_clear_cache_preserve_config_models(self):
         """
-        Test that clear_cache with preserve_config_models=True only clears DB models and preserves config models.
+        Test that clear_cache clears DB models and preserves config models.
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
@@ -428,11 +426,6 @@ class TestClearCache:
 
         mock_config = MagicMock()
         mock_config.add_deployment = AsyncMock(return_value=True)
-        mock_config.get_config = AsyncMock(return_value={
-            "litellm_settings": {
-                "preserve_config_models_on_cache_clear": True
-            }
-        })
 
         mock_prisma = MagicMock()
         mock_logging = MagicMock()

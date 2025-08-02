@@ -38,10 +38,7 @@ litellm_settings:
   context_window_fallbacks: [{"gpt-3.5-turbo-small": ["gpt-3.5-turbo-large", "claude-opus"]}] # fallbacks for ContextWindowExceededErrors
 
   # MCP Aliases - Map aliases to MCP server names for easier tool access
-  mcp_aliases: { "github": "github_mcp_server", "zapier": "zapier_mcp_server", "deepwiki": "deepwiki_mcp_server" } # Maps friendly aliases to MCP server names. Only the first alias for each server is used.
- 
-  # Cache Management settings
-  preserve_config_models_on_cache_clear: boolean  # If true, when clearing cache (e.g., during model updates), only DB models are cleared while config models are preserved. This improves performance and maintains config model availability during maintenance operations.
+  mcp_aliases: { "github": "github_mcp_server", "zapier": "zapier_mcp_server", "deepwiki": "deepwiki_mcp_server" } # Maps friendly aliases to MCP server names. Only the first alias for each server is used
 
   # Caching settings
   cache: true 
@@ -149,7 +146,6 @@ general_settings:
 | disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
 | enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
 | disable_copilot_system_to_assistant | boolean | If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior. Useful for tools (like Claude Code) that send system messages, which Copilot does not support. |
-| preserve_config_models_on_cache_clear | boolean | If true, when clearing cache (e.g., during model updates), only DB models are cleared while config models are preserved. This improves performance and maintains config model availability during maintenance operations. |
 
 ### general_settings - Reference
 
