@@ -9,63 +9,47 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.prompts.init_prompts import ListPromptsResponse, PromptSpec
 
 router = APIRouter()
 
 
-def _get_prompts_list_response(
-    prompts_config: List[PromptSpec],
-) -> ListPromptsResponse:
-    """
-    Helper function to get the guardrails list response
-    """
-    prompt_configs: List[PromptSpec] = []
-    for prompt in prompts_config:
-        # validate prompt
-        if not isinstance(prompt, dict):
-            verbose_proxy_logger.info(
-                f"Prompt must be a dictionary, got {type(prompt)}, skipping..."
-            )
-            continue
-
-        # validate prompt_id
-        if not prompt.get("prompt_id"):
-            verbose_proxy_logger.info(f"Prompt ID is required, skipping... {prompt}")
-            continue
-
-        # validate litellm_params
-        if not prompt.get("litellm_params"):
-            verbose_proxy_logger.info(
-                f"Litellm params are required, skipping... {prompt}"
-            )
-            continue
-
-        # validate prompt_info
-        if not prompt.get("prompt_info"):
-            verbose_proxy_logger.info(f"Prompt info is required, skipping... {prompt}")
-            continue
-
-        prompt_configs.append(
-            PromptSpec(
-                prompt_id=prompt.get("prompt_id"),
-                litellm_params=prompt.get("litellm_params"),
-                prompt_info=prompt.get("prompt_info"),
-            )
-        )
-    return ListPromptsResponse(prompts=prompt_configs)
-
-
 @router.get(
     "/prompt/list",
     tags=["Prompt Management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ListPromptsResponse,
 )
-async def list_prompts():
+async def list_prompts(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     List of available prompts for a given key.
     """
+    from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
-    return list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
+    # check key metadata for prompts
+    key_metadata = user_api_key_dict.metadata
+    if key_metadata is not None:
+        prompts = cast(Optional[List[str]], key_metadata.get("prompts", None))
+        if prompts is not None:
+            return ListPromptsResponse(
+                prompts=[
+                    IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt]
+                    for prompt in prompts
+                    if prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS
+                ]
+            )
+    # check if user is proxy admin - show all prompts
+    if user_api_key_dict.user_role is not None and (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        return ListPromptsResponse(
+            prompts=list(IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.values())
+        )
+    else:
+        return ListPromptsResponse(prompts=[])
