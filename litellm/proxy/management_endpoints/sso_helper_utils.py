@@ -58,6 +58,59 @@ class OAuth2TokenManager:
         if description:
             response["error_description"] = description
         return response
+    
+    @staticmethod
+    async def generate_oauth_session_key(
+        user_id: str,
+        user_email: Optional[str] = None,
+        user_role: Optional[str] = None,
+        team_id: Optional[str] = None,
+        client_type: str = "oauth_external_app",
+        expires_in: int = 86400,
+        scopes: Optional[list] = None,
+        redirect_uri: Optional[str] = None
+    ) -> str:
+        """Generate a new session-specific API key for OAuth flows."""
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            generate_key_helper_fn,
+        )
+        
+        # Create session metadata
+        session_metadata = {
+            "oauth_flow": True,
+            "client_type": client_type,
+            "created_at": time.time(),
+            "session_type": "oauth_external_app",
+            "expires_at": time.time() + expires_in
+        }
+        
+        if scopes:
+            session_metadata["scopes"] = scopes
+        if redirect_uri:
+            session_metadata["redirect_uri"] = redirect_uri
+        
+        # Generate session-specific key alias
+        session_id = secrets.token_urlsafe(8)
+        key_alias = f"oauth_session_{session_id}_{int(time.time())}"
+        
+        # Calculate duration string for expires_in
+        duration_hours = expires_in // 3600
+        duration = f"{duration_hours}h" if duration_hours > 0 else "24h"
+        
+        # Generate the session key
+        response = await generate_key_helper_fn(
+            request_type="key",
+            duration=duration,
+            user_id=user_id,
+            user_email=user_email,
+            user_role=user_role,
+            team_id=team_id,
+            key_alias=key_alias,
+            metadata=session_metadata,
+            table_name="key"
+        )
+        
+        return response["token"]
 
 
 class OAuth2StateManager:
@@ -150,7 +203,7 @@ class OAuth2URLManager:
     
     @staticmethod
     def modify_url_for_oauth_flow(request_url: str) -> str:
-        """Modify URL to redirect to OAuth flow (remove response_type, add oauth_flow)."""
+        """Modify URL to redirect to OAuth flow (remove response_type, add oauth_flow, preserve redirect_uri)."""
         parsed_url = urlparse(request_url)
         query_params = parse_qs(parsed_url.query)
         
@@ -159,6 +212,9 @@ class OAuth2URLManager:
         
         # Add OAuth flow indicator
         query_params['oauth_flow'] = ['true']
+        
+        # Preserve redirect_uri if present (needed for VSCode extension compatibility)
+        # redirect_uri is automatically preserved since we're not removing it
         
         # Rebuild URL with /sso/login path
         new_path = parsed_url.path.replace("/sso/key/generate", "/sso/login")
