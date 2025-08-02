@@ -3898,6 +3898,9 @@ def embedding(  # noqa: PLR0915
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
 
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
                 model=model,
