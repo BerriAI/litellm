@@ -2,19 +2,48 @@
 CRUD ENDPOINTS FOR PROMPTS
 """
 
-from typing import List, Optional, cast
+import os
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional, cast
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.prompts.init_prompts import ListPromptsResponse, PromptSpec
+from litellm.types.prompts.init_prompts import (
+    ListPromptsResponse,
+    PromptInfo,
+    PromptLiteLLMParams,
+    PromptSpec,
+)
 
 router = APIRouter()
 
 
+class Prompt(BaseModel):
+    prompt_id: Optional[str] = None
+    litellm_params: PromptLiteLLMParams
+    prompt_info: Optional[PromptInfo] = None
+
+
+class CreatePromptRequest(BaseModel):
+    prompt: Prompt
+
+
+class UpdatePromptRequest(BaseModel):
+    prompt: Prompt
+
+
+class PatchPromptRequest(BaseModel):
+    litellm_params: Optional[PromptLiteLLMParams] = None
+    prompt_info: Optional[PromptInfo] = None
+
+
 @router.get(
-    "/prompt/list",
+    "/prompts/list",
     tags=["Prompt Management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=ListPromptsResponse,
@@ -23,7 +52,35 @@ async def list_prompts(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    List of available prompts for a given key.
+    List the prompts that are available on the proxy server
+
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/prompts/list" -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "prompts": [
+            {
+                "prompt_id": "my_prompt_id",
+                "litellm_params": {
+                    "prompt_id": "my_prompt_id",
+                    "prompt_integration": "dotprompt",
+                    "prompt_directory": "/path/to/prompts"
+                },
+                "prompt_info": {
+                    "prompt_type": "config"
+                },
+                "created_at": "2023-11-09T12:34:56.789Z",
+                "updated_at": "2023-11-09T12:34:56.789Z"
+            }
+        ]
+    }
+    ```
     """
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
@@ -53,17 +110,48 @@ async def list_prompts(
 
 
 @router.get(
-    "/prompt/info",
+    "/prompts/{prompt_id}",
     tags=["Prompt Management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=PromptSpec,
 )
-async def get_prompt(
+@router.get(
+    "/prompts/{prompt_id}/info",
+    tags=["Prompt Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=PromptSpec,
+)
+async def get_prompt_info(
     prompt_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get info about a prompt
+    Get detailed information about a specific prompt by ID
+
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/prompts/my_prompt_id/info" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "prompt_id": "my_prompt_id",
+        "litellm_params": {
+            "prompt_id": "my_prompt_id",
+            "prompt_integration": "dotprompt",
+            "prompt_directory": "/path/to/prompts"
+        },
+        "prompt_info": {
+            "prompt_type": "config"
+        },
+        "created_at": "2023-11-09T12:34:56.789Z",
+        "updated_at": "2023-11-09T12:34:56.789Z"
+    }
+    ```
     """
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
@@ -90,3 +178,388 @@ async def get_prompt(
     if prompt_spec is None:
         raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
     return prompt_spec
+
+
+@router.post(
+    "/prompts",
+    tags=["Prompt Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def create_prompt(
+    request: CreatePromptRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Create a new prompt
+
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/prompts" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "prompt": {
+                "litellm_params": {
+                    "prompt_id": "my_prompt",
+                    "prompt_integration": "dotprompt",
+                    "prompt_directory": "/path/to/prompts"
+                },
+                "prompt_info": {
+                    "prompt_type": "config"
+                }
+            }
+        }'
+    ```
+    """
+    import uuid
+    from datetime import datetime
+
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    # Only allow proxy admins to create prompts
+    if user_api_key_dict.user_role is None or (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can create prompts"
+        )
+
+    try:
+        # Generate prompt_id if not provided
+        prompt_id = request.prompt.prompt_id or str(uuid.uuid4())
+
+        # Create the prompt spec
+        prompt_spec = PromptSpec(
+            prompt_id=prompt_id,
+            litellm_params=request.prompt.litellm_params,
+            prompt_info=request.prompt.prompt_info or PromptInfo(prompt_type="config"),
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        # Initialize the prompt
+        initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
+            prompt=prompt_spec, config_file_path=None
+        )
+
+        if initialized_prompt is None:
+            raise HTTPException(status_code=500, detail="Failed to initialize prompt")
+
+        return initialized_prompt
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error creating prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put(
+    "/prompts/{prompt_id}",
+    tags=["Prompt Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_prompt(
+    prompt_id: str,
+    request: UpdatePromptRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update an existing prompt
+
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+
+    Example Request:
+    ```bash
+    curl -X PUT "http://localhost:4000/prompts/my_prompt_id" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "prompt": {
+                "litellm_params": {
+                    "prompt_id": "my_prompt",
+                    "prompt_integration": "dotprompt",
+                    "prompt_directory": "/path/to/prompts"
+                },
+                "prompt_info": {
+                    "prompt_type": "config"
+                }
+            }
+        }'
+    ```
+    """
+    from datetime import datetime
+
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    # Only allow proxy admins to update prompts
+    if user_api_key_dict.user_role is None or (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can update prompts"
+        )
+
+    try:
+        # Check if prompt exists
+        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+        if existing_prompt is None:
+            raise HTTPException(
+                status_code=404, detail=f"Prompt with ID {prompt_id} not found"
+            )
+
+        # Create updated prompt spec
+        updated_prompt_spec = PromptSpec(
+            prompt_id=prompt_id,
+            litellm_params=request.prompt.litellm_params,
+            prompt_info=request.prompt.prompt_info or PromptInfo(prompt_type="config"),
+            created_at=existing_prompt.get("created_at"),
+            updated_at=datetime.now(),
+        )
+
+        # Remove the old prompt from memory
+        del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
+        if prompt_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
+            del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[prompt_id]
+
+        # Initialize the updated prompt
+        initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
+            prompt=updated_prompt_spec, config_file_path=None
+        )
+
+        if initialized_prompt is None:
+            raise HTTPException(status_code=500, detail="Failed to update prompt")
+
+        return initialized_prompt
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error updating prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/prompts/{prompt_id}",
+    tags=["Prompt Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def delete_prompt(
+    prompt_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete a prompt
+
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+
+    Example Request:
+    ```bash
+    curl -X DELETE "http://localhost:4000/prompts/my_prompt_id" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "message": "Prompt my_prompt_id deleted successfully"
+    }
+    ```
+    """
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    # Only allow proxy admins to delete prompts
+    if user_api_key_dict.user_role is None or (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can delete prompts"
+        )
+
+    try:
+        # Check if prompt exists
+        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+        if existing_prompt is None:
+            raise HTTPException(
+                status_code=404, detail=f"Prompt with ID {prompt_id} not found"
+            )
+
+        # Remove the prompt from memory
+        del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
+        if prompt_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
+            del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[prompt_id]
+
+        return {"message": f"Prompt {prompt_id} deleted successfully"}
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error deleting prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch(
+    "/prompts/{prompt_id}",
+    tags=["Prompt Management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def patch_prompt(
+    prompt_id: str,
+    request: PatchPromptRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Partially update an existing prompt
+
+    👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
+
+    This endpoint allows updating specific fields of a prompt without sending the entire object.
+    Only the following fields can be updated:
+    - litellm_params: LiteLLM parameters for the prompt
+    - prompt_info: Additional information about the prompt
+
+    Example Request:
+    ```bash
+    curl -X PATCH "http://localhost:4000/prompts/my_prompt_id" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "prompt_info": {
+                "prompt_type": "db"
+            }
+        }'
+    ```
+    """
+    from datetime import datetime
+
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    # Only allow proxy admins to patch prompts
+    if user_api_key_dict.user_role is None or (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can patch prompts"
+        )
+
+    try:
+        # Check if prompt exists and get current data
+        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+        if existing_prompt is None:
+            raise HTTPException(
+                status_code=404, detail=f"Prompt with ID {prompt_id} not found"
+            )
+
+        # Update fields if provided
+        updated_litellm_params = (
+            request.litellm_params
+            if request.litellm_params is not None
+            else existing_prompt.get("litellm_params")
+        )
+
+        updated_prompt_info = (
+            request.prompt_info
+            if request.prompt_info is not None
+            else existing_prompt.get("prompt_info")
+        )
+
+        # Ensure we have valid litellm_params
+        if updated_litellm_params is None:
+            raise HTTPException(status_code=400, detail="litellm_params cannot be None")
+
+        # Create updated prompt spec - cast to satisfy typing
+        updated_prompt_spec = PromptSpec(
+            prompt_id=prompt_id,
+            litellm_params=cast(PromptLiteLLMParams, updated_litellm_params),
+            prompt_info=updated_prompt_info,
+            created_at=existing_prompt.get("created_at"),
+            updated_at=datetime.now(),
+        )
+
+        # Remove the old prompt from memory
+        del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
+        if prompt_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
+            del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[prompt_id]
+
+        # Initialize the updated prompt
+        initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
+            prompt=updated_prompt_spec, config_file_path=None
+        )
+
+        if initialized_prompt is None:
+            raise HTTPException(status_code=500, detail="Failed to patch prompt")
+
+        return initialized_prompt
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error patching prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/utils/dotprompt_json_converter",
+    tags=["prompts", "utils"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def convert_prompt_file_to_json(
+    file: UploadFile = File(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Dict[str, Any]:
+    """
+    Convert a .prompt file to JSON format.
+
+    This endpoint accepts a .prompt file upload and returns the equivalent JSON representation
+    that can be stored in a database or used programmatically.
+
+    Returns the JSON structure with 'content' and 'metadata' fields.
+    """
+    global general_settings
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
+
+    # Validate file extension
+    if not file.filename or not file.filename.endswith(".prompt"):
+        raise HTTPException(status_code=400, detail="File must have .prompt extension")
+
+    temp_file_path = None
+    try:
+        # Read file content
+        file_content = await file.read()
+
+        # Create temporary file
+        temp_file_path = Path(tempfile.mkdtemp()) / file.filename
+        temp_file_path.write_bytes(file_content)
+
+        # Create a PromptManager instance just for conversion
+        prompt_manager = PromptManager()
+
+        # Convert to JSON
+        json_data = prompt_manager.prompt_file_to_json(temp_file_path)
+
+        # Extract prompt ID from filename
+        prompt_id = temp_file_path.stem
+
+        return {
+            "prompt_id": prompt_id,
+            "json_data": json_data,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error converting prompt file: {str(e)}"
+        )
+
+    finally:
+        # Clean up temp file
+        if temp_file_path and temp_file_path.exists():
+            temp_file_path.unlink()
+            # Also try to remove the temp directory if it's empty
+            try:
+                temp_file_path.parent.rmdir()
+            except OSError:
+                pass  # Directory not empty or other error
