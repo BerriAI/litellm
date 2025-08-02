@@ -2238,6 +2238,7 @@ class LlmProviders(str, Enum):
     TEXT_COMPLETION_OPENAI = "text-completion-openai"
     COHERE = "cohere"
     COHERE_CHAT = "cohere_chat"
+    COHERE_V2 = "cohere_v2"
     CLARIFAI = "clarifai"
     ANTHROPIC = "anthropic"
     ANTHROPIC_TEXT = "anthropic_text"
