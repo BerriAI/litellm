@@ -413,6 +413,7 @@ openai_compatible_endpoints: List = [
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://api.inference.net/v1",
 ]
 
 
@@ -454,6 +455,7 @@ openai_compatible_providers: List = [
     "morph",
     "lambda_ai",
     "hyperbolic",
+    "inference",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
@@ -469,6 +471,7 @@ openai_text_completion_compatible_providers: List = (
         "v0",
         "lambda_ai",
         "hyperbolic",
+        "inference",
     ]
 )
 _openai_like_providers: List = [

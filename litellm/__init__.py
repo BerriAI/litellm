@@ -513,6 +513,7 @@ v0_models: List = []
 morph_models: List = []
 lambda_ai_models: List = []
 hyperbolic_models: List = []
+inference_models: List = []
 recraft_models: List = []
 
 
@@ -703,7 +704,8 @@ def add_known_models():
             hyperbolic_models.append(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
-
+        elif value.get("litellm_provider") == "inference":
+            inference_models.append(key)
 
 add_known_models()
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
@@ -791,6 +793,7 @@ model_list = (
     + morph_models
     + lambda_ai_models
     + recraft_models
+    + inference_models
 )
 
 model_list_set = set(model_list)
@@ -864,6 +867,7 @@ models_by_provider: dict = {
     "lambda_ai": lambda_ai_models,
     "hyperbolic": hyperbolic_models,
     "recraft": recraft_models,
+    "inference": inference_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1187,6 +1191,7 @@ from .llms.v0.chat.transformation import V0ChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+from .llms.inference.chat.transformation import InferenceChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients

@@ -416,6 +416,7 @@ const sidebars = {
           ]
         },
         "providers/hyperbolic",
+        "providers/inference",
         "providers/databricks",
         "providers/deepgram",
         "providers/watsonx",
