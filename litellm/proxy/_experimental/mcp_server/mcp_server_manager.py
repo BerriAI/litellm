@@ -977,14 +977,6 @@ class MCPServerManager:
                             "organization_id": team.organization_id
                         })
 
-        # Get health check results if requested
-        all_health_results = {}
-        if include_health:
-            try:
-                all_health_results = await self.health_check_allowed_servers(user_api_key_auth)
-            except Exception as e:
-                verbose_logger.debug(f"Error performing health checks: {e}")
-
         # Map servers to their teams and return with health data
         from typing import cast
         return [
@@ -1004,10 +996,6 @@ class MCPServerManager:
                 mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
                 mcp_info=server.mcp_info,
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
-                # Health check status
-                status=all_health_results.get(server.server_id, {}).get("status", "unknown"),
-                last_health_check=datetime.datetime.fromisoformat(all_health_results.get(server.server_id, {}).get("last_health_check", datetime.datetime.now().isoformat())) if all_health_results.get(server.server_id, {}).get("last_health_check") else None,
-                health_check_error=all_health_results.get(server.server_id, {}).get("error"),
                 # Stdio-specific fields
                 command=getattr(server, 'command', None),
                 args=getattr(server, 'args', None) or [],
