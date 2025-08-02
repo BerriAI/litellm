@@ -3,22 +3,17 @@ Dotprompt manager that integrates with LiteLLM's prompt management system.
 Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
-from typing import List, Literal, Optional, Union
+from typing import List, Optional
 
-from litellm.caching.dual_cache import DualCache
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.prompt_management_base import (
-    PromptManagementBase,
-    PromptManagementClient,
-)
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .prompt_manager import PromptManager, PromptTemplate
 
 
-class DotpromptManager(PromptManagementBase, CustomLogger):
+class DotpromptManager(CustomPromptManagement):
     """
     Dotprompt manager that integrates with LiteLLM's prompt management system.
 
