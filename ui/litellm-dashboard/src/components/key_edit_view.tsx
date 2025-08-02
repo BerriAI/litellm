@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, Select, Button as AntdButton } from "antd";
+import { Form, Input, Select, Button as AntdButton, Tooltip } from "antd";
 import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
@@ -151,6 +151,8 @@ export function KeyEditView({
       : []
   };
 
+  console.log("premiumUser:", premiumUser);
+
   return (
     <Form
       form={form}
@@ -213,25 +215,46 @@ export function KeyEditView({
         <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
 
+      
       <Form.Item label="Guardrails" name="guardrails">
-        <Select
-          mode="tags"
-          style={{ width: "100%" }}
-          placeholder="Select or enter guardrails"
-        />
+        <Tooltip 
+          title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
+          placement="top"
+        >
+          <Select
+            mode="tags"
+            style={{ width: "100%" }}
+            disabled={!premiumUser}
+            placeholder={
+              !premiumUser
+                ? "Premium feature - Upgrade to set guardrails by key"
+                : Array.isArray(keyData.metadata?.guardrails) && keyData.metadata.guardrails.length > 0
+                  ? `Current: ${keyData.metadata.guardrails.join(', ')}`
+                  : "Select or enter guardrails"
+            }
+          />
+        </Tooltip>
       </Form.Item>
 
       <Form.Item label="Prompts" name="prompts">
-        <Select
-          mode="tags"
-          style={{ width: "100%" }}
-          placeholder={
-            Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
-              ? `Current: ${keyData.metadata.prompts.join(', ')}`
-              : "Select or enter prompts"
-          }
-          options={promptsList.map(name => ({ value: name, label: name }))}
-        />
+        <Tooltip 
+          title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
+          placement="top"
+        >
+          <Select
+            mode="tags"
+            style={{ width: "100%" }}
+            disabled={!premiumUser}
+            placeholder={
+              !premiumUser
+                ? "Premium feature - Upgrade to set prompts by key"
+                : Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
+                  ? `Current: ${keyData.metadata.prompts.join(', ')}`
+                  : "Select or enter prompts"
+            }
+            options={promptsList.map(name => ({ value: name, label: name }))}
+          />
+        </Tooltip>
       </Form.Item>
 
       <Form.Item label="Vector Stores" name="vector_stores">

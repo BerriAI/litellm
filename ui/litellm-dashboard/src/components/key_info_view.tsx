@@ -484,6 +484,7 @@ export default function KeyInfoView({
                   accessToken={accessToken}
                   userID={userID}
                   userRole={userRole}
+                  premiumUser={premiumUser}
                 />
               ) : (
                 <div className="space-y-4">
