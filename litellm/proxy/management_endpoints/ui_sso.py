@@ -168,7 +168,11 @@ async def serve_login_page(
         """
 
     # Get the base URL for form action using proper URL construction
-    form_action = get_custom_url(request_base_url=str(request.base_url), route="login")
+    url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
+    server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+    if server_root_path != "":
+        url_to_redirect_to += server_root_path
+    url_to_redirect_to += "/login"
 
     unified_login_html = f"""
 <!DOCTYPE html>
@@ -346,7 +350,7 @@ async def serve_login_page(
     </style>
 </head>
 <body>
-    <form action="{form_action}" method="post">
+    <form action="{url_to_redirect_to}" method="post">
         <div class="logo-container">
             <div class="logo">
                 🚅 LiteLLM
