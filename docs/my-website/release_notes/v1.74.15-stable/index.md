@@ -96,8 +96,8 @@ pip install litellm==1.74.15.post1
 - **[OpenRouter](../../docs/providers/openrouter)**
     - Added Grok4 model support - [PR #13018](https://github.com/BerriAI/litellm/pull/13018)
 - **[Anthropic](../../docs/providers/anthropic)**
+    - Auto Cache Control Injection - Improved cache_control_injection_points with negative index support - [PR #13187](https://github.com/BerriAI/litellm/pull/13187), [Get Started](../../docs/tutorials/prompt_caching)
     - Working mid-stream fallbacks with token usage tracking - [PR #13149](https://github.com/BerriAI/litellm/pull/13149), [PR #13170](https://github.com/BerriAI/litellm/pull/13170)
-    - Improved cache_control_injection_points with negative index support - [PR #13187](https://github.com/BerriAI/litellm/pull/13187), [Get Started](../../docs/tutorials/prompt_caching)
 - **[Perplexity](../../docs/providers/perplexity)**
     - Citation annotations support - [PR #13225](https://github.com/BerriAI/litellm/pull/13225)
 
