@@ -13,7 +13,7 @@ custom headers or other request attributes.
 from typing import TYPE_CHECKING, Dict, Optional, Union, cast
 
 from fastapi import Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 if TYPE_CHECKING:
     from fastapi_sso.sso.base import OpenID
@@ -35,7 +35,7 @@ class EnterpriseCustomSSOHandler:
     @staticmethod
     async def handle_custom_ui_sso_sign_in(
         request: Request,
-    ) -> RedirectResponse:
+    ) -> Union[RedirectResponse, JSONResponse]:
         """
         Allow a user to execute their custom code to parse incoming request headers and return a OpenID object
 
