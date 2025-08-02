@@ -76,12 +76,6 @@ def test_usage_dump():
 
 
 def test_usage_completion_tokens_details_text_tokens():
-    """
-    Test for issue: completion_tokens_details.text_tokens field missing from model_dump() output
-    
-    Reproduces the issue where Usage.model_dump() was missing the text_tokens field
-    from completion_tokens_details, even though it was present in the object.
-    """
     from litellm.types.utils import Usage
 
     # Test data from the reported issue
