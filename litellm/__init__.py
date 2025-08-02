@@ -222,6 +222,7 @@ nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
 nebius_key: Optional[str] = None
+heroku_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -507,6 +508,7 @@ nebius_models: List = []
 nebius_embedding_models: List = []
 deepgram_models: List = []
 elevenlabs_models: List = []
+heroku_models: List = []
 dashscope_models: List = []
 moonshot_models: List = []
 v0_models: List = []
@@ -689,6 +691,8 @@ def add_known_models():
             deepgram_models.append(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.append(key)
+        elif value.get("litellm_provider") == "heroku":
+            heroku_models.append(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.append(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -785,6 +789,7 @@ model_list = (
     + nscale_models
     + deepgram_models
     + elevenlabs_models
+    + heroku_models
     + dashscope_models
     + moonshot_models
     + v0_models
@@ -857,6 +862,7 @@ models_by_provider: dict = {
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
+    "heroku": heroku_models,
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
     "v0": v0_models,
@@ -1164,6 +1170,7 @@ from .llms.azure.azure import (
     AzureOpenAIAssistantsAPIConfig,
 )
 
+from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
