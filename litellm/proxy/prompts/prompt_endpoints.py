@@ -2,16 +2,13 @@
 CRUD ENDPOINTS FOR PROMPTS
 """
 
-import inspect
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
+from typing import List, Optional, cast
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends
 
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.prompts.init_prompts import ListPromptsResponse, PromptSpec
+from litellm.types.prompts.init_prompts import ListPromptsResponse
 
 router = APIRouter()
 

@@ -6,12 +6,7 @@ from typing import Callable, Dict, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
-from litellm.types.prompts.init_prompts import (
-    PromptLiteLLMParams,
-    PromptSpec,
-    SupportedPromptIntegrations,
-)
-
+from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
 prompt_initializer_registry = {}
 
