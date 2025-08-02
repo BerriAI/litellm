@@ -197,12 +197,29 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const handleRelativeTimeSelect = (option: RelativeTimeOption) => {
     const { from, to } = option.getValue()
     const newValue = { from, to }
+
+    // Immediately apply the selected option
+    onValueChange(newValue)
+
+    // Apply the same background adjustment logic as the original component
+    requestIdleCallback(
+      () => {
+        const adjustedValue = adjustDateRange(newValue)
+        onValueChange(adjustedValue)
+      },
+      { timeout: 100 },
+    )
+
+    // Update local state to reflect the selection
     setTempValue(newValue)
     setSelectedOption(option.shortLabel)
 
     // Update the form inputs to reflect the selection
     setStartDate(moment(from).format("YYYY-MM-DD"))
     setEndDate(moment(to).format("YYYY-MM-DD"))
+
+    // Close the dropdown
+    setIsOpen(false)
   }
 
   const updateTempValueFromInputs = useCallback(() => {
@@ -303,7 +320,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 <div className="p-3 border-b border-gray-200">
                   <span className="text-sm font-semibold text-gray-900">Relative time (today, 7d, 30d, MTD, YTD)</span>
                 </div>
-                <div className="h-[500px] overflow-y-auto">
+                <div className="h-[350px] overflow-y-auto">
                   {relativeTimeOptions.map((option) => {
                     const isSelected = selectedOption === option.shortLabel
                     return (
