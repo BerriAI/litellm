@@ -3,7 +3,7 @@ import { Form, Input, Select, Button as AntdButton } from "antd";
 import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
-import { modelAvailableCall } from "./networking";
+import { modelAvailableCall, getPromptsList } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
@@ -54,6 +54,7 @@ export function KeyEditView({
 }: KeyEditViewProps) {
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [promptsList, setPromptsList] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
@@ -102,6 +103,17 @@ export function KeyEditView({
       }
     };
 
+    const fetchPrompts = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await getPromptsList(accessToken);
+        setPromptsList(response.prompts.map(prompt => prompt.prompt_id));
+      } catch (error) {
+        console.error("Failed to fetch prompts:", error);
+      }
+    };
+
+    fetchPrompts();
     fetchModels();
   }, [userID, userRole, accessToken, team, keyData.team_id]);
 
@@ -205,6 +217,15 @@ export function KeyEditView({
           mode="tags"
           style={{ width: "100%" }}
           placeholder="Select or enter guardrails"
+        />
+      </Form.Item>
+
+      <Form.Item label="Prompts" name="prompts">
+        <Select
+          mode="tags"
+          style={{ width: "100%" }}
+          placeholder="Select or enter prompts"
+          options={promptsList.map(name => ({ value: name, label: name }))}
         />
       </Form.Item>
 
