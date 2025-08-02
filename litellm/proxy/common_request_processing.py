@@ -343,6 +343,9 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
 
+        if "messages" in self.data and self.data["messages"]:
+            logging_obj.update_messages(self.data["messages"])
+
         return self.data, logging_obj
 
     async def base_process_llm_request(
