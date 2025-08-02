@@ -227,6 +227,14 @@ async def create_prompt(
 
     try:
         # Create the prompt spec
+        # Check if prompt exists and get current data
+        existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(request.prompt_id)
+        if existing_prompt is not None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt with ID {request.prompt_id} already exists",
+            )
+
         # store prompt in db
         prompt_db_entry = await prisma_client.db.litellm_prompttable.create(
             data={
@@ -294,6 +302,7 @@ async def update_prompt(
     from datetime import datetime
 
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import prisma_client
 
     # Only allow proxy admins to update prompts
     if user_api_key_dict.user_role is None or (
@@ -304,12 +313,23 @@ async def update_prompt(
             status_code=403, detail="Only proxy admins can update prompts"
         )
 
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+
     try:
         # Check if prompt exists
         existing_prompt = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
         if existing_prompt is None:
             raise HTTPException(
                 status_code=404, detail=f"Prompt with ID {prompt_id} not found"
+            )
+
+        if existing_prompt.prompt_info.prompt_type == "config":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot update config prompts.",
             )
 
         # Create updated prompt spec
@@ -321,6 +341,14 @@ async def update_prompt(
             updated_at=datetime.now(),
         )
 
+        updated_prompt_db_entry = await prisma_client.db.litellm_prompttable.update(
+            where={"prompt_id": prompt_id},
+            data={
+                "litellm_params": updated_prompt_spec.litellm_params.model_dump_json(),
+                "prompt_info": updated_prompt_spec.prompt_info.model_dump_json(),
+            },
+        )
+
         # Remove the old prompt from memory
         del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
         if prompt_id in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
@@ -328,7 +356,8 @@ async def update_prompt(
 
         # Initialize the updated prompt
         initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
-            prompt=updated_prompt_spec, config_file_path=None
+            prompt=PromptSpec(**updated_prompt_db_entry.model_dump()),
+            config_file_path=None,
         )
 
         if initialized_prompt is None:
@@ -462,6 +491,12 @@ async def patch_prompt(
                 status_code=404, detail=f"Prompt with ID {prompt_id} not found"
             )
 
+        if existing_prompt.prompt_info.prompt_type == "config":
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot update config prompts.",
+            )
+
         # Update fields if provided
         updated_litellm_params = (
             request.litellm_params
@@ -480,7 +515,6 @@ async def patch_prompt(
             raise HTTPException(status_code=400, detail="litellm_params cannot be None")
 
         # Create updated prompt spec - cast to satisfy typing
-        ## update prompt in db
         updated_prompt_db_entry = await prisma_client.db.litellm_prompttable.update(
             where={"prompt_id": prompt_id},
             data={
