@@ -1199,6 +1199,7 @@ from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
+from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
