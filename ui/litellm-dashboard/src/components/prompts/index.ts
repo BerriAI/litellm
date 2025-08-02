@@ -1,0 +1,1 @@
+export { default as PromptTable } from './prompt_table'

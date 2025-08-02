@@ -75,10 +75,16 @@ export interface Model {
   model_info: Object | null;
 }
 
-interface PromptSpec {
+interface PromptInfo {
+  prompt_type: string;
+}
+
+export interface PromptSpec {
   prompt_id: string;
   litellm_params: Object;
-  prompt_info: Object;
+  prompt_info: PromptInfo;
+  created_at?: string
+  updated_at?: string
 }
 
 interface ListPromptsResponse {
