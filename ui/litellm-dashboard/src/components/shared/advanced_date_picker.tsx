@@ -267,7 +267,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                 <div className="p-3 border-b border-gray-200">
                   <span className="text-sm font-semibold text-gray-900">Relative time (today, 7d, 30d, MTD, YTD)</span>
                 </div>
-                <div className="h-[500px] overflow-y-auto">
+                <div className="h-[350px] overflow-y-auto">
                   {relativeTimeOptions.map((option) => (
                     <div
                       key={option.label}
