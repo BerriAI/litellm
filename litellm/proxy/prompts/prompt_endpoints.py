@@ -438,6 +438,7 @@ async def patch_prompt(
     from datetime import datetime
 
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+    from litellm.proxy.proxy_server import prisma_client
 
     # Only allow proxy admins to patch prompts
     if user_api_key_dict.user_role is None or (
@@ -446,6 +447,11 @@ async def patch_prompt(
     ):
         raise HTTPException(
             status_code=403, detail="Only proxy admins can patch prompts"
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
         )
 
     try:
@@ -474,13 +480,16 @@ async def patch_prompt(
             raise HTTPException(status_code=400, detail="litellm_params cannot be None")
 
         # Create updated prompt spec - cast to satisfy typing
-        updated_prompt_spec = PromptSpec(
-            prompt_id=prompt_id,
-            litellm_params=cast(PromptLiteLLMParams, updated_litellm_params),
-            prompt_info=updated_prompt_info,
-            created_at=existing_prompt.created_at,
-            updated_at=datetime.now(),
+        ## update prompt in db
+        updated_prompt_db_entry = await prisma_client.db.litellm_prompttable.update(
+            where={"prompt_id": prompt_id},
+            data={
+                "litellm_params": updated_litellm_params.model_dump_json(),
+                "prompt_info": updated_prompt_info.model_dump_json(),
+            },
         )
+
+        updated_prompt_spec = PromptSpec(**updated_prompt_db_entry.model_dump())
 
         # Remove the old prompt from memory
         del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[prompt_id]
