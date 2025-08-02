@@ -175,22 +175,27 @@ def get_complete_model_list(
     If list contains wildcard -> return known provider models
     """
 
-    unique_models: Set[str] = set()
+    unique_models = []
+    def append_unique(models):
+        for model in models:
+            if model not in unique_models:
+                unique_models.append(model)
+
     if key_models:
-        unique_models.update(key_models)
+        append_unique(key_models)
     elif team_models:
-        unique_models.update(team_models)
+        append_unique(team_models)
     else:
-        unique_models.update(proxy_model_list)
+        append_unique(proxy_model_list)
         if include_model_access_groups:
-            unique_models.update(model_access_groups.keys())
+            append_unique(list(model_access_groups.keys())) # TODO: keys order
 
         if user_model:
-            unique_models.add(user_model)
+            append_unique([user_model])
 
         if infer_model_from_keys:
             valid_models = get_valid_models()
-            unique_models.update(valid_models)
+            append_unique(valid_models)
 
     if only_model_access_groups:
         model_access_groups_to_return: List[str] = []
@@ -205,7 +210,7 @@ def get_complete_model_list(
         llm_router=llm_router,
     )
 
-    complete_model_list = list(unique_models) + all_wildcard_models
+    complete_model_list = unique_models + all_wildcard_models
 
     return complete_model_list
 
@@ -261,7 +266,7 @@ def get_known_models_from_wildcard(
 
 
 def _get_wildcard_models(
-    unique_models: Set[str],
+    unique_models: List[str],
     return_wildcard_routes: Optional[bool] = False,
     llm_router: Optional[Router] = None,
 ) -> List[str]:
