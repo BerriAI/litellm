@@ -99,6 +99,33 @@ def _redis_kwargs_from_environment():
     return return_dict
 
 
+def _generate_gcp_iam_access_token(service_account: str) -> str:
+    """
+    Generate GCP IAM access token for Redis authentication.
+    
+    Args:
+        service_account: GCP service account in format 'projects/-/serviceAccounts/name@project.iam.gserviceaccount.com'
+    
+    Returns:
+        Access token string for GCP IAM authentication
+    """
+    try:
+        from google.cloud import iam_credentials_v1
+    except ImportError:
+        raise ImportError(
+            "google-cloud-iam is required for GCP IAM Redis authentication. "
+            "Install it with: pip install google-cloud-iam"
+        )
+    
+    client = iam_credentials_v1.IAMCredentialsClient()
+    request = iam_credentials_v1.GenerateAccessTokenRequest(
+        name=service_account,
+        scope=['https://www.googleapis.com/auth/cloud-platform'],
+    )
+    response = client.generate_access_token(request=request)
+    return str(response.access_token)
+
+
 def create_gcp_iam_redis_connect_func(
     service_account: str,
     ssl_ca_certs: Optional[str] = None,
@@ -113,23 +140,6 @@ def create_gcp_iam_redis_connect_func(
     Returns:
         A connection function that can be used with Redis clients
     """
-    def generate_access_token() -> str:
-        try:
-            from google.cloud import iam_credentials_v1
-        except ImportError:
-            raise ImportError(
-                "google-cloud-iam is required for GCP IAM Redis authentication. "
-                "Install it with: pip install google-cloud-iam"
-            )
-        
-        client = iam_credentials_v1.IAMCredentialsClient()
-        request = iam_credentials_v1.GenerateAccessTokenRequest(
-            name=service_account,
-            scope=['https://www.googleapis.com/auth/cloud-platform'],
-        )
-        response = client.generate_access_token(request=request)
-        return str(response.access_token)
-    
     def iam_connect(self):
         """Initialize the connection and authenticate using GCP IAM"""
         from redis.exceptions import AuthenticationError, AuthenticationWrongNumberOfArgsError
@@ -137,7 +147,7 @@ def create_gcp_iam_redis_connect_func(
         
         self._parser.on_connect(self)
         
-        auth_args = (generate_access_token(),)
+        auth_args = (_generate_gcp_iam_access_token(service_account),)
         self.send_command("AUTH", *auth_args, check_health=False)
         
         try:
@@ -399,30 +409,13 @@ def get_redis_async_client(
         if redis_connect_func and gcp_service_account:
             verbose_logger.info(f"DEBUG: Generating IAM token for service account: {gcp_service_account}")
             try:
-                from redis.exceptions import AuthenticationError
-                # Generate IAM access token using the existing function
-                def generate_access_token():
-                    try:
-                        from google.cloud import iam_credentials_v1
-                    except ImportError:
-                        raise ImportError(
-                            "google-cloud-iam is required for GCP IAM Redis authentication. "
-                            "Install it with: pip install google-cloud-iam"
-                        )
-                    
-                    client = iam_credentials_v1.IAMCredentialsClient()
-                    request = iam_credentials_v1.GenerateAccessTokenRequest(
-                        name=gcp_service_account,
-                        scope=['https://www.googleapis.com/auth/cloud-platform'],
-                    )
-                    response = client.generate_access_token(request=request)
-                    return str(response.access_token)
-                
-                access_token = generate_access_token()
+                # Generate IAM access token using the helper function
+                access_token = _generate_gcp_iam_access_token(gcp_service_account)
                 cluster_kwargs["password"] = access_token
                 verbose_logger.info("DEBUG: Successfully generated GCP IAM access token for async Redis cluster")
             except Exception as e:
                 verbose_logger.error(f"Failed to generate GCP IAM access token: {e}")
+                from redis.exceptions import AuthenticationError
                 raise AuthenticationError("Failed to generate GCP IAM access token")
         else:
             verbose_logger.info(f"DEBUG: Not using GCP IAM auth - redis_connect_func={redis_connect_func is not None}, gcp_service_account={gcp_service_account}")
