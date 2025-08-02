@@ -50,6 +50,32 @@ Confirm that LiteLLM is properly tracking requests by checking logs for the expe
 
 Access the LiteLLM dashboard to view aggregated usage metrics and user engagement data.
 
+#### Summary Metrics
+
+This shows the total cost and successful requests for each coding tool. 
+
+<br/>
+
+<Image 
+  img={require('../../img/agent_3.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
+#### DAU, WAU, MAU 
+
+This shows the daily, weekly, and monthly active users for each coding tool. 
+
+<br/>
+
+<Image 
+  img={require('../../img/agent_4.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
+
+
 ## How LiteLLM Identifies Coding Tools
 
 LiteLLM tracks coding tools by monitoring the `User-Agent` header in incoming API requests (`/chat/completions`, `/responses`, etc.). Each unique User-Agent is tracked separately for usage analytics.
