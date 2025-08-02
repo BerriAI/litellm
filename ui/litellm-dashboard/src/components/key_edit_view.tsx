@@ -139,6 +139,7 @@ export function KeyEditView({
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: formatMetadataForDisplay(keyData.metadata),
     guardrails: keyData.metadata?.guardrails || [],
+    prompts: keyData.metadata?.prompts || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
@@ -224,7 +225,11 @@ export function KeyEditView({
         <Select
           mode="tags"
           style={{ width: "100%" }}
-          placeholder="Select or enter prompts"
+          placeholder={
+            Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
+              ? `Current: ${keyData.metadata.prompts.join(', ')}`
+              : "Select or enter prompts"
+          }
           options={promptsList.map(name => ({ value: name, label: name }))}
         />
       </Form.Item>
