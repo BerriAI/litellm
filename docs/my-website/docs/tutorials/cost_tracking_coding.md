@@ -33,6 +33,11 @@ Central AI Platform teams providing developers access to coding tools through Li
 
 Configure your coding tool to send requests through LiteLLM proxy with appropriate User-Agent headers.
 
+Follow these instructions to connect your coding tool to LiteLLM: 
+- [Use LiteLLM with Claude Code](../../docs/tutorials/claude_responses_api)
+- [Use LiteLLM with Gemini CLI](../../docs/tutorials/litellm_gemini_cli)
+- [Use LiteLLM with OpenAI Codex](../../docs/tutorials/openai_codex)
+
 ### 2. Send Requests with User-Agent Headers
 
 Ensure your coding tool includes identifying User-Agent headers in API requests.
