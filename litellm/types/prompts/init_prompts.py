@@ -13,6 +13,7 @@ class SupportedPromptIntegrations(str, Enum):
 
 class PromptLiteLLMParams(BaseModel):
     prompt_id: str
+    prompt_integration: str
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 

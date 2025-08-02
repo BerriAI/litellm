@@ -2,7 +2,7 @@ import importlib
 import os
 import uuid
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -25,11 +25,11 @@ def get_prompt_initializer_from_integrations():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers = {}
+    discovered_initializers: Dict[str, Callable] = {}
 
     try:
         # Get the path to the prompt_integrations directory
-        current_dir = Path(__file__).parent
+        current_dir = Path(__file__).parent.parent
         integrations_dir = os.path.join(current_dir, "integrations")
 
         if not os.path.exists(integrations_dir):
@@ -130,16 +130,16 @@ class InMemoryPromptRegistry:
         else:
             litellm_params = litellm_params_data
 
-        prompt_id = litellm_params.prompt_id
-        if prompt_id is None:
-            raise ValueError("prompt_id is required")
+        prompt_integration = litellm_params.prompt_integration
+        if prompt_integration is None:
+            raise ValueError("prompt_integration is required")
 
-        initializer = prompt_initializer_registry.get(prompt_id)
+        initializer = prompt_initializer_registry.get(prompt_integration)
 
         if initializer:
             custom_prompt_callback = initializer(litellm_params, prompt)
         else:
-            raise ValueError(f"Unsupported prompt: {prompt_id}")
+            raise ValueError(f"Unsupported prompt: {prompt_integration}")
 
         parsed_prompt = PromptSpec(
             prompt_id=prompt_id,
