@@ -902,7 +902,7 @@ https://railway.app
 
 **Step 1: Click the button** to deploy to Railway
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/S7P9sn?referralCode=t3ukrU)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/S7P9sn?referralCode=t3ukrU&utm_medium=integration&utm_source=docs&utm_campaign=litellm)
 
 **Step 2:** Set `PORT` = 4000 on Railway Environment Variables
 

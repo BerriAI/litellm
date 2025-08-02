@@ -498,6 +498,7 @@ const sidebars = {
         "completion/batching",
         "completion/mock_requests",
         "completion/reliable_completions",
+        "guides/deploy_proxy"
 
       ]
     },
