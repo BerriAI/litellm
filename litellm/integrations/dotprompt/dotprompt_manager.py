@@ -3,7 +3,8 @@ Dotprompt manager that integrates with LiteLLM's prompt management system.
 Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+import json
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -34,13 +35,18 @@ class DotpromptManager(CustomPromptManagement):
     """
 
     def __init__(
-        self, prompt_directory: Optional[str] = None, prompt_data: Optional[dict] = None
+        self,
+        prompt_directory: Optional[str] = None,
+        prompt_data: Optional[Union[dict, str]] = None,
     ):
         import litellm
 
         self.prompt_directory = prompt_directory or litellm.global_prompt_directory
         # Support for JSON-based prompts stored in memory/database
-        self.prompt_data = prompt_data or {}
+        if isinstance(prompt_data, str):
+            self.prompt_data = json.loads(prompt_data)
+        else:
+            self.prompt_data = prompt_data or {}
 
         self._prompt_manager: Optional[PromptManager] = None
 
