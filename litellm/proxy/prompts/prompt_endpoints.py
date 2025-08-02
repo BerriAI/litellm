@@ -24,17 +24,9 @@ router = APIRouter()
 
 
 class Prompt(BaseModel):
-    prompt_id: Optional[str] = None
+    prompt_id: str
     litellm_params: PromptLiteLLMParams
     prompt_info: Optional[PromptInfo] = None
-
-
-class CreatePromptRequest(BaseModel):
-    prompt: Prompt
-
-
-class UpdatePromptRequest(BaseModel):
-    prompt: Prompt
 
 
 class PatchPromptRequest(BaseModel):
@@ -186,7 +178,7 @@ async def get_prompt_info(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def create_prompt(
-    request: CreatePromptRequest,
+    request: Prompt,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -200,22 +192,20 @@ async def create_prompt(
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "prompt": {
-                "litellm_params": {
-                    "prompt_id": "my_prompt",
-                    "prompt_integration": "dotprompt",
-                    ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
-                    "prompt_directory": "/path/to/prompts",
-                    "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
-                },
-                "prompt_info": {
-                    "prompt_type": "config"
-                }
+            "prompt_id": "my_prompt",
+            "litellm_params": {
+                "prompt_id": "json_prompt",
+                "prompt_integration": "dotprompt",
+                ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
+                "prompt_directory": "/path/to/dotprompt/folder",
+                "prompt_data": {"json_prompt": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}}
+            },
+            "prompt_info": {
+                "prompt_type": "config"
             }
         }'
     ```
     """
-    import uuid
     from datetime import datetime
 
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
@@ -230,14 +220,11 @@ async def create_prompt(
         )
 
     try:
-        # Generate prompt_id if not provided
-        prompt_id = request.prompt.prompt_id or str(uuid.uuid4())
-
         # Create the prompt spec
         prompt_spec = PromptSpec(
-            prompt_id=prompt_id,
-            litellm_params=request.prompt.litellm_params,
-            prompt_info=request.prompt.prompt_info or PromptInfo(prompt_type="config"),
+            prompt_id=request.prompt_id,
+            litellm_params=request.litellm_params,
+            prompt_info=request.prompt_info or PromptInfo(prompt_type="db"),
             created_at=datetime.now(),
             updated_at=datetime.now(),
         )
@@ -264,7 +251,7 @@ async def create_prompt(
 )
 async def update_prompt(
     prompt_id: str,
-    request: UpdatePromptRequest,
+    request: Prompt,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -278,9 +265,9 @@ async def update_prompt(
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "prompt": {
-                "litellm_params": {
-                    "prompt_id": "my_prompt",
+            "prompt_id": "my_prompt",
+            "litellm_params": {
+                "prompt_id": "my_prompt",
                     "prompt_integration": "dotprompt",
                     "prompt_directory": "/path/to/prompts"
                 },
@@ -315,8 +302,8 @@ async def update_prompt(
         # Create updated prompt spec
         updated_prompt_spec = PromptSpec(
             prompt_id=prompt_id,
-            litellm_params=request.prompt.litellm_params,
-            prompt_info=request.prompt.prompt_info or PromptInfo(prompt_type="config"),
+            litellm_params=request.litellm_params,
+            prompt_info=request.prompt_info or PromptInfo(prompt_type="db"),
             created_at=existing_prompt.get("created_at"),
             updated_at=datetime.now(),
         )
