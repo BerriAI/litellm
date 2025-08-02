@@ -22,7 +22,7 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react";
-import { Select } from "antd";
+import { Select, Tooltip } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall } from "./networking";
 import AdvancedDatePicker from "./shared/advanced_date_picker";
@@ -241,7 +241,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
     return tag;
   };
 
-  // Helper function to truncate user agent name with tooltip
+  // Helper function to truncate user agent name (used with Ant Design Tooltip)
   const truncateUserAgent = (userAgent: string): string => {
     if (userAgent.length > 15) {
       return userAgent.substring(0, 15) + "...";
@@ -450,9 +450,11 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
                 const displayName = truncateUserAgent(userAgent);
                 return (
                   <Card key={index}>
-                    <Title className="truncate" title={userAgent}>
-                      {displayName}
-                    </Title>
+                    <Tooltip title={userAgent} placement="top">
+                      <Title className="truncate">
+                        {displayName}
+                      </Title>
+                    </Tooltip>
                     <div className="mt-4 space-y-3">
                       <div>
                         <Text className="text-sm text-gray-600">Success Requests</Text>

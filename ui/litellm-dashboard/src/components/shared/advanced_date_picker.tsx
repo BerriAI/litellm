@@ -198,19 +198,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     const { from, to } = option.getValue()
     const newValue = { from, to }
 
-    // Immediately apply the selected option
-    onValueChange(newValue)
-
-    // Apply the same background adjustment logic as the original component
-    requestIdleCallback(
-      () => {
-        const adjustedValue = adjustDateRange(newValue)
-        onValueChange(adjustedValue)
-      },
-      { timeout: 100 },
-    )
-
-    // Update local state to reflect the selection
+    // Update local state to reflect the selection (don't apply immediately)
     setTempValue(newValue)
     setSelectedOption(option.shortLabel)
 
@@ -218,8 +206,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     setStartDate(moment(from).format("YYYY-MM-DD"))
     setEndDate(moment(to).format("YYYY-MM-DD"))
 
-    // Close the dropdown
-    setIsOpen(false)
+    // Don't close the dropdown - let user click Apply to confirm
   }
 
   const updateTempValueFromInputs = useCallback(() => {
