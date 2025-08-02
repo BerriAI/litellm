@@ -469,11 +469,14 @@ class ProxyLogging:
 
         # Create the request object if it's not already one
         if not isinstance(request_obj, MCPPreCallRequestObject):
+            # Convert UserAPIKeyAuth object to dict if needed
+            user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(kwargs.get("user_api_key_auth"))
+            
             request_obj = MCPPreCallRequestObject(
                 tool_name=kwargs.get("name", ""),
                 arguments=kwargs.get("arguments", {}),
                 server_name=kwargs.get("server_name"),
-                user_api_key_auth=kwargs.get("user_api_key_auth"),
+                user_api_key_auth=user_api_key_auth_dict,
                 hidden_params=HiddenParams(),
             )
 
@@ -504,8 +507,10 @@ class ProxyLogging:
                     # Convert MCP tool call to LLM message format for existing guardrail logic
                     synthetic_llm_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
                     # Reuse existing LLM guardrail logic
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(kwargs.get("user_api_key_auth"))
+
                     result = await _callback.async_pre_call_hook(
-                        user_api_key_dict=kwargs.get("user_api_key_auth"),
+                        user_api_key_dict=user_api_key_auth_dict,
                         cache=self.call_details["user_api_key_cache"],
                         data=synthetic_llm_data,
                         call_type="mcp_call"
@@ -529,6 +534,20 @@ class ProxyLogging:
                     )
                 )
         return None
+
+    def _convert_user_api_key_auth_to_dict(self, user_api_key_auth_obj):
+        """
+        Helper function to convert UserAPIKeyAuth object to dictionary.
+        Handles both Pydantic models and regular objects.
+        """
+        if user_api_key_auth_obj is not None:
+            if hasattr(user_api_key_auth_obj, 'model_dump'):
+                # If it's a Pydantic model, convert to dict
+                return user_api_key_auth_obj.model_dump()
+            elif hasattr(user_api_key_auth_obj, '__dict__'):
+                # If it's a regular object, convert to dict
+                return user_api_key_auth_obj.__dict__
+        return user_api_key_auth_obj
 
     def _convert_mcp_to_llm_format(self, request_obj, kwargs: dict) -> dict:
         """
@@ -822,9 +841,11 @@ class ProxyLogging:
                     synthetic_llm_data = self._convert_mcp_to_llm_format(request_obj, kwargs)
                     
                     # Reuse existing LLM guardrail logic for during call
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(kwargs.get("user_api_key_auth"))
+
                     result = await _callback.async_moderation_hook(
                         data=synthetic_llm_data,
-                        user_api_key_dict=kwargs.get("user_api_key_auth"),
+                        user_api_key_dict=user_api_key_auth_dict,
                         call_type="mcp_call"
                     )                    
                     # Convert result back to MCP response format if blocked/modified
