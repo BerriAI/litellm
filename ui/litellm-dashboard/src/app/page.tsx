@@ -32,6 +32,7 @@ import {
 } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import PromptsPanel from "@/components/prompts";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
@@ -358,6 +359,11 @@ export default function CreateKeyPage() {
                 <BudgetPanel accessToken={accessToken} />
               ) : page == "guardrails" ? (
                 <GuardrailsPanel
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
+              ) : page == "prompts" ? (
+                <PromptsPanel
                   accessToken={accessToken}
                   userRole={userRole}
                 />
