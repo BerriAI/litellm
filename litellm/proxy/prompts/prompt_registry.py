@@ -29,7 +29,7 @@ def get_prompt_initializer_from_integrations():
 
     try:
         # Get the path to the prompt_integrations directory
-        current_dir = Path(__file__).parent.parent
+        current_dir = Path(__file__).parent.parent.parent
         integrations_dir = os.path.join(current_dir, "integrations")
 
         if not os.path.exists(integrations_dir):

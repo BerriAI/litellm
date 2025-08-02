@@ -707,22 +707,30 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion")
         ):
-            (
-                model,
-                messages,
-                optional_params,
-            ) = litellm_logging_obj.get_chat_completion_prompt(
-                model=data.get("model", ""),
-                messages=data.get("messages", []),
-                non_default_params=get_non_default_completion_params(kwargs=data),
-                prompt_id=prompt_id,
-                prompt_variables=data.get("prompt_variables", None),
-                prompt_label=data.get("prompt_label", None),
-                prompt_version=data.get("prompt_version", None),
+            from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+            custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
+                prompt_id
             )
-            data["model"] = model
-            data["messages"] = messages
-            data.update(optional_params)
+
+            if custom_logger:
+                (
+                    model,
+                    messages,
+                    optional_params,
+                ) = litellm_logging_obj.get_chat_completion_prompt(
+                    model=data.get("model", ""),
+                    messages=data.get("messages", []),
+                    non_default_params=get_non_default_completion_params(kwargs=data),
+                    prompt_id=prompt_id,
+                    prompt_management_logger=custom_logger,
+                    prompt_variables=data.get("prompt_variables", None),
+                    prompt_label=data.get("prompt_label", None),
+                    prompt_version=data.get("prompt_version", None),
+                )
+                data["model"] = model
+                data["messages"] = messages
+                data.update(optional_params)
 
         try:
             for callback in litellm.callbacks:

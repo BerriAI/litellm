@@ -270,7 +270,9 @@ banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 ### PROMPTS ###
-from litellm.prompts import prompt_name_config_map
+from litellm.types.prompts.init_prompts import PromptSpec
+
+prompt_name_config_map: Dict[str, PromptSpec] = {}
 
 ##################
 ### PREVIEW FEATURES ###

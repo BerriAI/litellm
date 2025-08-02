@@ -2203,13 +2203,13 @@ class ProxyConfig:
             )
 
         ## Prompt settings
-        prompts_v2: Optional[List[Dict]] = None
+        prompts: Optional[List[Dict]] = None
         if config is not None:
-            prompts_v2 = config.get("prompts", None)
-        if prompts_v2:
-            from litellm.prompts.init_prompts import init_prompts
+            prompts = config.get("prompts", None)
+        if prompts:
+            from litellm.proxy.prompts.init_prompts import init_prompts
 
-            init_prompts(all_prompts=prompts_v2, config_file_path=config_file_path)
+            init_prompts(all_prompts=prompts, config_file_path=config_file_path)
 
         ## CREDENTIALS
         credential_list_dict = self.load_credential_list(config=config)

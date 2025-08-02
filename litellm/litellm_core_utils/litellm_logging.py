@@ -645,19 +645,6 @@ class Logging(LiteLLMLoggingBaseClass):
         Returns:
             A CustomLogger instance if one is found, None otherwise
         """
-        # First check if model starts with a known custom logger compatible callback
-        if prompt_id:
-            from litellm.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
-
-            custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
-                prompt_id
-            )
-
-            if custom_logger:
-                self.model_call_details["prompt_integration"] = (
-                    custom_logger.integration_name
-                )
-                return custom_logger
 
         for callback_name in litellm._known_custom_logger_compatible_callbacks:
             if model.startswith(callback_name):
