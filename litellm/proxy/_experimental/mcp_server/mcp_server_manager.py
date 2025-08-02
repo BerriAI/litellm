@@ -586,6 +586,7 @@ class MCPServerManager:
         #########################################################
         # Pre MCP Tool Call Hook
         # Allow validation and modification of tool calls before execution
+        # Using standard pre_call_hook with call_type="mcp_call"
         #########################################################
         if proxy_logging_obj:
             pre_hook_kwargs = {
@@ -593,19 +594,32 @@ class MCPServerManager:
                 "arguments": arguments,
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
+                "user_api_key_user_id": getattr(user_api_key_auth, 'user_id', None) if user_api_key_auth else None,
+                "user_api_key_team_id": getattr(user_api_key_auth, 'team_id', None) if user_api_key_auth else None,
+                "user_api_key_end_user_id": getattr(user_api_key_auth, 'end_user_id', None) if user_api_key_auth else None,
+                "user_api_key_hash": getattr(user_api_key_auth, 'api_key_hash', None) if user_api_key_auth else None,
             }
+            
+            # Create MCP request object for processing
+            mcp_request_obj = proxy_logging_obj._create_mcp_request_object_from_kwargs(pre_hook_kwargs)
+            
+            # Convert to LLM format for existing guardrail compatibility
+            synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
+            
             try:
-                pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
-                    kwargs=pre_hook_kwargs,
-                    request_obj=None,  # Will be created in the hook
-                    start_time=start_time,
-                    end_time=start_time,
+                # Use standard pre_call_hook with call_type="mcp_call"
+                modified_data = await proxy_logging_obj.pre_call_hook(
+                    user_api_key_dict=user_api_key_auth, #type: ignore
+                    data=synthetic_llm_data,
+                    call_type="mcp_call" #type: ignore
                 )
                 
-                if pre_hook_result:                
-                    # Apply any argument modifications
-                    if pre_hook_result.get("modified_arguments"):
-                        arguments = pre_hook_result["modified_arguments"]
+                if modified_data:
+                    # Convert response back to MCP format and apply modifications
+                    modified_kwargs = proxy_logging_obj._convert_mcp_hook_response_to_kwargs(modified_data, pre_hook_kwargs)
+                    if modified_kwargs.get("arguments") != arguments:
+                        arguments = modified_kwargs["arguments"]
+                        
             except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
                 # Re-raise guardrail exceptions to properly fail the MCP call
                 verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
@@ -636,21 +650,35 @@ class MCPServerManager:
                 arguments=arguments,
             )
             
-            # Initialize during_hook_task as None
-            during_hook_task = None
+            # Setup concurrent tasks (during hook + tool call)
             tasks = []
-            # Start during hook if proxy_logging_obj is available
             if proxy_logging_obj:
+                # Create synthetic LLM data for during hook processing
+                from litellm.types.mcp import MCPDuringCallRequestObject
+                from litellm.types.llms.base import HiddenParams
+                
+                request_obj = MCPDuringCallRequestObject(
+                    tool_name=name,
+                    arguments=arguments,
+                    server_name=server_name_from_prefix,
+                    start_time=start_time.timestamp() if start_time else None,
+                    hidden_params=HiddenParams(),
+                )
+                
+                during_hook_kwargs = {
+                    "name": name,
+                    "arguments": arguments,
+                    "server_name": server_name_from_prefix,
+                    "user_api_key_auth": user_api_key_auth,
+                }
+                
+                synthetic_llm_data = proxy_logging_obj._convert_mcp_to_llm_format(request_obj, during_hook_kwargs)
+                
                 during_hook_task = asyncio.create_task(
-                    proxy_logging_obj.async_during_mcp_tool_call_hook(
-                        kwargs={
-                            "name": name,
-                            "arguments": arguments,
-                            "server_name": server_name_from_prefix,
-                        },
-                        request_obj=None,  # Will be created in the hook
-                        start_time=start_time,
-                        end_time=start_time,
+                    proxy_logging_obj.during_call_hook(
+                        user_api_key_dict=user_api_key_auth,
+                        data=synthetic_llm_data,
+                        call_type="mcp_call" #type: ignore
                     )
                 )
                 tasks.append(during_hook_task)
