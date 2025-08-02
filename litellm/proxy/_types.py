@@ -513,6 +513,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/model/{model_id}/update",
+        "/prompt/list",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -683,6 +684,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    prompts: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
@@ -920,7 +922,10 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     # Health check status
-    status: Optional[str] = Field(default="unknown", description="Health status: 'healthy', 'unhealthy', 'unknown'")
+    status: Optional[str] = Field(
+        default="unknown",
+        description="Health status: 'healthy', 'unhealthy', 'unknown'",
+    )
     last_health_check: Optional[datetime] = None
     health_check_error: Optional[str] = None
     # Stdio-specific fields
@@ -1178,6 +1183,7 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
+    prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
@@ -2891,6 +2897,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
     "tags",
     "team_member_key_duration",
+    "prompts",
 ]
 
 

@@ -504,6 +504,15 @@ class Logging(LiteLLMLoggingBaseClass):
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
 
+    def update_messages(self, messages: List[AllMessageValues]):
+        """
+        Update the logged value of the messages in the model_call_details
+
+        Allows pre-call hooks to update the messages before the call is made
+        """
+        self.messages = messages
+        self.model_call_details["messages"] = messages
+
     def should_run_prompt_management_hooks(
         self,
         non_default_params: Dict,
@@ -562,9 +571,7 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model,
-                non_default_params=non_default_params,
-                prompt_id=prompt_id,
+                model=model, non_default_params=non_default_params
             )
         )
 
@@ -583,7 +590,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 prompt_label=prompt_label,
                 prompt_version=prompt_version,
             )
-
         self.messages = messages
         return model, messages, non_default_params
 
@@ -602,10 +608,7 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_logger = (
             prompt_management_logger
             or self.get_custom_logger_for_prompt_management(
-                model=model,
-                tools=tools,
-                non_default_params=non_default_params,
-                prompt_id=prompt_id,
+                model=model, tools=tools, non_default_params=non_default_params
             )
         )
 
@@ -630,11 +633,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return model, messages, non_default_params
 
     def get_custom_logger_for_prompt_management(
-        self,
-        model: str,
-        non_default_params: Dict,
-        tools: Optional[List[Dict]] = None,
-        prompt_id: Optional[str] = None,
+        self, model: str, non_default_params: Dict, tools: Optional[List[Dict]] = None
     ) -> Optional[CustomLogger]:
         """
         Get a custom logger for prompt management based on model name or available callbacks.
@@ -645,7 +644,7 @@ class Logging(LiteLLMLoggingBaseClass):
         Returns:
             A CustomLogger instance if one is found, None otherwise
         """
-
+        # First check if model starts with a known custom logger compatible callback
         for callback_name in litellm._known_custom_logger_compatible_callbacks:
             if model.startswith(callback_name):
                 custom_logger = _init_custom_logger_compatible_class(
