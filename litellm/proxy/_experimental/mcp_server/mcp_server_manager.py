@@ -666,7 +666,7 @@ class MCPServerManager:
                 result_index = 1 if proxy_logging_obj else 0
                 result = mcp_responses[result_index]
                 
-                return result
+                return cast(CallToolResult, result)
             except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
                     # Re-raise guardrail exceptions to properly fail the MCP call
                     verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {str(e)}")
