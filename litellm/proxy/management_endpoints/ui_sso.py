@@ -75,6 +75,31 @@ else:
 router = APIRouter()
 
 
+def ensure_form_action_url_matches_request_scheme(
+    form_action_url: str,
+    request: Request,
+) -> str:
+    """
+    Ensure the form action URL uses the same scheme as the request URL.
+    
+    Args:
+        form_action: The form action URL to normalize
+        request_base_url: The base URL from the request
+        
+    Returns:
+        The form action URL with scheme matching the request URL scheme
+    """
+    from urllib.parse import urlparse
+    
+    request_url_scheme = urlparse(str(request.base_url)).scheme
+    form_action_scheme = urlparse(form_action_url).scheme
+    
+    if form_action_scheme != request_url_scheme:
+        form_action_url = form_action_url.replace(form_action_scheme, request_url_scheme)
+    
+    return form_action_url
+
+
 @router.get("/sso/key/generate", tags=["experimental"], include_in_schema=False)
 async def serve_login_page(
     request: Request,
@@ -169,6 +194,11 @@ async def serve_login_page(
 
     # Get the base URL for form action using proper URL construction
     form_action = get_custom_url(request_base_url=str(request.base_url), route="login")
+    # ensure the form action url uses the same scheme as the request
+    form_action = ensure_form_action_url_matches_request_scheme(
+        form_action_url=form_action,
+        request=request
+    )
 
     unified_login_html = f"""
 <!DOCTYPE html>
