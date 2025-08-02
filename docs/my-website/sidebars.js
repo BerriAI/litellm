@@ -78,6 +78,7 @@ const sidebars = {
         "tutorials/litellm_qwen_code_cli",
         "tutorials/github_copilot_integration",
         "tutorials/claude_responses_api",
+        "tutorials/cost_tracking_coding",
       ]
     },
     
