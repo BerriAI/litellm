@@ -58,6 +58,13 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        model_id = optional_params.get("model_id", None)
+        if model_id is not None:
+            # Add model_id as InferenceComponentName header
+            # boto3 doc: https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpoint.html
+            headers.update(
+                {"X-Amzn-SageMaker-Inference-Component": model_id}
+            )
         return headers
 
     def get_complete_url(
@@ -108,6 +115,47 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             stream=stream,
             fake_stream=fake_stream,
         )
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        messages = self._transform_messages(messages=messages, model=model)
+        model_id = optional_params.get("model_id", None)
+        request_data = {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
+        if model_id:
+            del request_data["model"]
+        return request_data
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        transformed_messages = await self._transform_messages(
+            messages=messages, model=model, is_async=True
+        )
+        model_id = optional_params.get("model_id", None)
+
+        request_data = {
+            "model": model,
+            "messages": transformed_messages,
+             **optional_params,
+        }
+        if model_id:
+            del request_data["model"]
+        return request_data
 
     @property
     def has_custom_stream_wrapper(self) -> bool:
