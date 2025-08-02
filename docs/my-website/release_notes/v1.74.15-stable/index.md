@@ -105,10 +105,7 @@ pip install litellm==1.74.15.post1
 
 - **[Gemini](../../docs/providers/gemini)**
     - Fix merge_reasoning_content_in_choices parameter issue - [PR #13066](https://github.com/BerriAI/litellm/pull/13066), [Get Started](../../docs/tutorials/openweb_ui#render-thinking-content-on-open-webui)
-    - Fix CLI authorization format issues - [PR #13098](https://github.com/BerriAI/litellm/pull/13098), [PR #13189](https://github.com/BerriAI/litellm/pull/13189)
-    - Environment variable support fixes - [PR #12507](https://github.com/BerriAI/litellm/pull/12507)
-- **[VertexAI](../../docs/providers/vertex)**
-
+    - Added support for using `GOOGLE_API_KEY` environment variable for Google AI Studio - [PR #12507](https://github.com/BerriAI/litellm/pull/12507)
 - **[vLLM/OpenAI-like](../../docs/providers/vllm)**
     - Fix missing extra_headers support for embeddings - [PR #13198](https://github.com/BerriAI/litellm/pull/13198)
 
@@ -116,18 +113,13 @@ pip install litellm==1.74.15.post1
 
 ## LLM API Endpoints
 
-#### Features
-
-- **[/v1/models](../../docs/providers/passthrough)**
-    - Preserve model order in `/v1/models` and `/model_group/info` endpoints - [PR #13178](https://github.com/BerriAI/litellm/pull/13178)
-- **[Passthrough endpoints](../../docs/pass_through/)**
-    - Allow redefining LLM base API URL in passthrough endpoints - [PR #13134](https://github.com/BerriAI/litellm/pull/13134)
-
 #### Bugs
 
 - **[/generateContent](../../docs/generateContent)**
     - Support for query_params in generateContent routes for API Key setting - [PR #13100](https://github.com/BerriAI/litellm/pull/13100)
-- **[VertexAI Passthrough /vertex](../../docs/pass_through/vertex_ai)**
+    - Ensure "x-goog-api-key" is used for auth to google ai studio when using /generateContent on LiteLLM - [PR #13098](https://github.com/BerriAI/litellm/pull/13098)
+    - Ensure tool calling works as expected on generateContent - [PR #13189](https://github.com/BerriAI/litellm/pull/13189)
+- **[/vertex_ai (Passthrough)](../../docs/pass_through/vertex_ai)**
     - Ensure multimodal embedding responses are logged properly - [PR #13050](https://github.com/BerriAI/litellm/pull/13050)
 
 ---
@@ -138,7 +130,6 @@ pip install litellm==1.74.15.post1
 
 - **Health Check Improvements**
     - Add health check endpoints for MCP servers - [PR #13106](https://github.com/BerriAI/litellm/pull/13106)
-    - Ensure MCPs load + don't run health check every time MCPs load on UI - [PR #13228](https://github.com/BerriAI/litellm/pull/13228)
 - **Guardrails Integration**
     - Add pre and during call hooks initialization - [PR #13067](https://github.com/BerriAI/litellm/pull/13067)
     - Move pre and during hooks to ProxyLogging - [PR #13109](https://github.com/BerriAI/litellm/pull/13109)
@@ -174,6 +165,8 @@ pip install litellm==1.74.15.post1
 - **Models**
     - Added Voyage, Jinai, Deepinfra and VolcEngine providers on UI - [PR #13131](https://github.com/BerriAI/litellm/pull/13131)
     - Added Sagemaker on UI - [PR #13117](https://github.com/BerriAI/litellm/pull/13117)
+    - Preserve model order in `/v1/models` and `/model_group/info` endpoints - [PR #13178](https://github.com/BerriAI/litellm/pull/13178)
+
 - **Key Management**
     - Properly parse JSON options for key generation in UI - [PR #12989](https://github.com/BerriAI/litellm/pull/12989)
 - **Authentication**
