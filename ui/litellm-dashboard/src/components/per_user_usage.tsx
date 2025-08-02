@@ -42,13 +42,13 @@ interface PerUserAnalyticsResponse {
 
 interface PerUserUsageProps {
   accessToken: string | null;
-  dateValue: DateRangePickerValue;
+  selectedTags: string[];
   formatAbbreviatedNumber: (value: number, decimalPlaces?: number) => string;
 }
 
 const PerUserUsage: React.FC<PerUserUsageProps> = ({
   accessToken,
-  dateValue,
+  selectedTags,
   formatAbbreviatedNumber,
 }) => {
   const [perUserData, setPerUserData] = useState<PerUserAnalyticsResponse>({
@@ -63,16 +63,15 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchPerUserData = async () => {
-    if (!accessToken || !dateValue.from || !dateValue.to) return;
+    if (!accessToken) return;
 
     setLoading(true);
     try {
       const response = await perUserAnalyticsCall(
         accessToken,
-        dateValue.from,
-        dateValue.to,
         currentPage,
-        50
+        50,
+        selectedTags.length > 0 ? selectedTags : undefined
       );
       setPerUserData(response);
     } catch (error) {
@@ -84,7 +83,7 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({
 
   useEffect(() => {
     fetchPerUserData();
-  }, [accessToken, dateValue, currentPage]);
+  }, [accessToken, selectedTags, currentPage]);
 
   const handleNextPage = () => {
     if (currentPage < perUserData.total_pages) {
