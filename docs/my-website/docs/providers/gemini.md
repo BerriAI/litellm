@@ -30,7 +30,7 @@ import os
 
 os.environ['GEMINI_API_KEY'] = ""
 response = completion(
-    model="gemini/gemini-pro", 
+    model="gemini/gemini-2.5-pro", 
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
 )
 ```
