@@ -3711,7 +3711,14 @@ def function_call_prompt(messages: list, functions: list):
     function_added_to_prompt = False
     for message in messages:
         if "system" in message["role"]:
-            message["content"] += f""" {function_prompt}"""
+            if isinstance(message["content"], str):
+                message["content"] += f""" {function_prompt}"""
+            else:
+                message["content"].append({
+                    "type": "text",
+                    "text": f""" {function_prompt}""",
+                    "cache_control": {"type": "ephemeral"}
+                })
             function_added_to_prompt = True
 
     if function_added_to_prompt is False:
