@@ -687,6 +687,7 @@ def run_server(  # noqa: PLR0915
             if database_url is None and os.getenv("DATABASE_URL") is None:
                 # Use helper function to construct DATABASE_URL from individual variables
                 from litellm.proxy.utils import construct_database_url_from_env_vars
+
                 database_url = construct_database_url_from_env_vars()
                 if database_url:
                     os.environ["DATABASE_URL"] = database_url
@@ -716,14 +717,19 @@ def run_server(  # noqa: PLR0915
         if config is None and os.getenv("DATABASE_URL") is None:
             # Use helper function to construct DATABASE_URL from individual variables
             from litellm.proxy.utils import construct_database_url_from_env_vars
+
             database_url = construct_database_url_from_env_vars()
             if database_url:
                 os.environ["DATABASE_URL"] = database_url
 
         # Set default values for connection pool settings when no config is used
         if config is None:
-            db_connection_pool_limit = LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value
-            db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+            db_connection_pool_limit = (
+                LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value
+            )
+            db_connection_timeout = (
+                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+            )
 
         if (
             os.getenv("DATABASE_URL", None) is not None
