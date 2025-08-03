@@ -166,7 +166,6 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
           initialValue="dotprompt"
         >
           <Select 
-            size="medium"
             value={promptIntegration}
             onChange={setPromptIntegration}
           >
@@ -182,7 +181,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
               extra="Upload a .prompt file that follows the Dotprompt specification"
             >
               <Upload {...uploadProps}>
-                <Button icon={<UploadOutlined />} size="medium">
+                <Button icon={<UploadOutlined />}>
                   Select .prompt File
                 </Button>
               </Upload>
