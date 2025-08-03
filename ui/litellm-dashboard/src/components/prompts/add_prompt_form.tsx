@@ -166,11 +166,11 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
           initialValue="dotprompt"
         >
           <Select 
-            size="large"
+            size="medium"
             value={promptIntegration}
             onChange={setPromptIntegration}
           >
-            <Option value="dotprompt">Dotprompt</Option>
+            <Option value="dotprompt">dotprompt</Option>
           </Select>
         </Form.Item>
 
