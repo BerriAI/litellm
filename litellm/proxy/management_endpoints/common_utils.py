@@ -1,6 +1,7 @@
 from typing import Any, Optional, Union
 
 from litellm.proxy._types import (
+    GenerateKeyRequest,
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_TeamTable,
