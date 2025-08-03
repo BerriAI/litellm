@@ -807,6 +807,11 @@ def prepare_metadata_fields(
                     casted_metadata[k] = v.isoformat()
                 else:
                     casted_metadata[k] = v
+            if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+                from litellm.proxy.utils import _premium_user_check
+
+                _premium_user_check()
+                casted_metadata[k] = v
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -848,21 +853,15 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
 ):
-    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if getattr(data, field, None) is not None:
-            _set_object_metadata_field(
-                object_data=data,
-                field_name=field,
-                value=getattr(data, field),
-            )
-            delattr(data, field)
-
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     non_default_values = {}
     for k, v in data_json.items():
-        if k in LiteLLM_ManagementEndpoint_MetadataFields:
+        if (
+            k in LiteLLM_ManagementEndpoint_MetadataFields
+            or k in LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             continue
         non_default_values[k] = v
 
