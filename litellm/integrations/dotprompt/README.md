@@ -275,7 +275,7 @@ Represents a single prompt with metadata.
 **Prompt not found**: Ensure the `.prompt` file exists and has correct extension
 ```python
 # Check available prompts
-from litellm.prompts import get_dotprompt_manager
+from litellm.integrations.dotprompt import get_dotprompt_manager
 manager = get_dotprompt_manager()
 print(manager.prompt_manager.list_prompts())
 ```

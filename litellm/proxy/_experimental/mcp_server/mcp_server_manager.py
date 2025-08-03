@@ -12,11 +12,13 @@ import hashlib
 import json
 from typing import Any, Dict, List, Optional, cast
 
+from fastapi import HTTPException
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult
 from mcp.types import Tool as MCPTool
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -24,10 +26,10 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_tool_name,
     get_server_name_prefix_tool_mcp,
+    get_server_prefix,
     is_tool_name_prefixed,
     normalize_server_name,
     validate_mcp_server_name,
-    get_server_prefix,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -79,21 +81,21 @@ def _convert_protocol_version_to_enum(protocol_version: Optional[str | MCPSpecVe
         MCPSpecVersionType: The enum value
     """
     if not protocol_version:
-        return MCPSpecVersion.jun_2025
+        return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
     
     # If it's already an MCPSpecVersion enum, return it
     if isinstance(protocol_version, MCPSpecVersion):
-        return protocol_version
+        return cast(MCPSpecVersionType, protocol_version)
     
     # If it's a string, try to match it to enum values
     if isinstance(protocol_version, str):
         for version in MCPSpecVersion:
             if version.value == protocol_version:
-                return version
+                return cast(MCPSpecVersionType, version)
     
     # If no match found, return default
     verbose_logger.warning(f"Unknown protocol version '{protocol_version}', using default")
-    return MCPSpecVersion.jun_2025
+    return cast(MCPSpecVersionType, MCPSpecVersion.jun_2025)
 
 
 class MCPServerManager:
@@ -592,22 +594,22 @@ class MCPServerManager:
                 "server_name": server_name_from_prefix,
                 "user_api_key_auth": user_api_key_auth,
             }
-            pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
-                kwargs=pre_hook_kwargs,
-                request_obj=None,  # Will be created in the hook
-                start_time=start_time,
-                end_time=start_time,
-            )
-            
-            if pre_hook_result:
-                # Check if the call should proceed
-                if not pre_hook_result.get("should_proceed", True):
-                    error_message = pre_hook_result.get("error_message", "Tool call rejected by pre-hook")
-                    raise ValueError(error_message)
+            try:
+                pre_hook_result = await proxy_logging_obj.async_pre_mcp_tool_call_hook(
+                    kwargs=pre_hook_kwargs,
+                    request_obj=None,  # Will be created in the hook
+                    start_time=start_time,
+                    end_time=start_time,
+                )
                 
-                # Apply any argument modifications
-                if pre_hook_result.get("modified_arguments"):
-                    arguments = pre_hook_result["modified_arguments"]
+                if pre_hook_result:                
+                    # Apply any argument modifications
+                    if pre_hook_result.get("modified_arguments"):
+                        arguments = pre_hook_result["modified_arguments"]
+            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                # Re-raise guardrail exceptions to properly fail the MCP call
+                verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
+                raise e
 
         # Get server-specific auth header if available
         server_auth_header = None
@@ -627,6 +629,7 @@ class MCPServerManager:
         )
         
         async with client:
+
             # Use the original tool name (without prefix) for the actual call
             call_tool_params = MCPCallToolRequestParams(
                 name=original_tool_name,
@@ -635,40 +638,39 @@ class MCPServerManager:
             
             # Initialize during_hook_task as None
             during_hook_task = None
-            
+            tasks = []
             # Start during hook if proxy_logging_obj is available
             if proxy_logging_obj:
-                try:
-                    during_hook_task = asyncio.create_task(
-                        proxy_logging_obj.async_during_mcp_tool_call_hook(
-                            kwargs={
-                                "name": name,
-                                "arguments": arguments,
-                                "server_name": server_name_from_prefix,
-                            },
-                            request_obj=None,  # Will be created in the hook
-                            start_time=start_time,
-                            end_time=start_time,
-                        )
+                during_hook_task = asyncio.create_task(
+                    proxy_logging_obj.async_during_mcp_tool_call_hook(
+                        kwargs={
+                            "name": name,
+                            "arguments": arguments,
+                            "server_name": server_name_from_prefix,
+                        },
+                        request_obj=None,  # Will be created in the hook
+                        start_time=start_time,
+                        end_time=start_time,
                     )
-                except Exception as e:
-                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
+                )
+                tasks.append(during_hook_task)
             
-            result = await client.call_tool(call_tool_params)
-            
-            #########################################################
-            # Check during hook result if it completed
-            #########################################################
-            if proxy_logging_obj and during_hook_task is not None:
-                try:
-                    during_hook_result = await during_hook_task
-                    if during_hook_result and not during_hook_result.get("should_continue", True):
-                        error_message = during_hook_result.get("error_message", "Tool call cancelled by during-hook")
-                        raise ValueError(error_message)
-                except Exception as e:
-                    verbose_logger.warning(f"During hook error (non-blocking): {str(e)}")
-            
-            return result
+
+            tasks.append(asyncio.create_task(client.call_tool(call_tool_params)))
+            try:
+
+                mcp_responses = await asyncio.gather(*tasks)
+
+                # If proxy_logging_obj is None, the tool call result is at index 0
+                # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
+                result_index = 1 if proxy_logging_obj else 0
+                result = mcp_responses[result_index]
+                
+                return cast(CallToolResult, result)
+            except (BlockedPiiEntityError, GuardrailRaisedException, HTTPException) as e:
+                    # Re-raise guardrail exceptions to properly fail the MCP call
+                    verbose_logger.error(f"Guardrail blocked MCP tool call during result check: {str(e)}")
+                    raise e
 
     #########################################################
     # End of Methods that call the upstream MCP servers
@@ -901,15 +903,18 @@ class MCPServerManager:
         Returns:
             List of MCP server objects with health and team data
         """
-        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy._experimental.mcp_server.db import (
+            get_all_mcp_servers,
+            get_mcp_servers,
+        )
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-        from litellm.proxy._experimental.mcp_server.db import get_mcp_servers, get_all_mcp_servers
-        
+        from litellm.proxy.proxy_server import prisma_client
+
         # Get allowed server IDs
         allowed_server_ids = await self.get_allowed_mcp_servers(user_api_key_auth)
         
         # Get servers from database
-        list_mcp_servers = []
+        list_mcp_servers: List[LiteLLM_MCPServerTable] = []
         if prisma_client is not None:
             list_mcp_servers = await get_mcp_servers(prisma_client, allowed_server_ids)
             
@@ -972,14 +977,6 @@ class MCPServerManager:
                             "organization_id": team.organization_id
                         })
 
-        # Get health check results if requested
-        all_health_results = {}
-        if include_health:
-            try:
-                all_health_results = await self.health_check_allowed_servers(user_api_key_auth)
-            except Exception as e:
-                verbose_logger.debug(f"Error performing health checks: {e}")
-
         # Map servers to their teams and return with health data
         from typing import cast
         return [
@@ -999,10 +996,6 @@ class MCPServerManager:
                 mcp_access_groups=server.mcp_access_groups if server.mcp_access_groups is not None else [],
                 mcp_info=server.mcp_info,
                 teams=cast(List[Dict[str, str | None]], server_to_teams_map.get(server.server_id, [])),
-                # Health check status
-                status=all_health_results.get(server.server_id, {}).get("status", "unknown"),
-                last_health_check=datetime.datetime.fromisoformat(all_health_results.get(server.server_id, {}).get("last_health_check", datetime.datetime.now().isoformat())) if all_health_results.get(server.server_id, {}).get("last_health_check") else None,
-                health_check_error=all_health_results.get(server.server_id, {}).get("error"),
                 # Stdio-specific fields
                 command=getattr(server, 'command', None),
                 args=getattr(server, 'args', None) or [],
