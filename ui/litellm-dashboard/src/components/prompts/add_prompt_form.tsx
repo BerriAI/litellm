@@ -1,5 +1,6 @@
 import React, { useState } from "react"
-import { Modal, Form, Input, Select, Upload, Button, message, Divider } from "antd"
+import { Modal, Form, Select, Upload, Button, message, Divider } from "antd"
+import { TextInput } from "@tremor/react"
 import { UploadOutlined } from "@ant-design/icons"
 import type { UploadFile, UploadProps } from "antd"
 import { convertPromptFileToJson, createPromptCall } from "../networking"
@@ -130,7 +131,6 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
         </Button>,
         <Button
           key="submit"
-          type="primary"
           loading={loading}
           onClick={handleSubmit}
         >
@@ -155,9 +155,8 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
             }
           ]}
         >
-          <Input 
+          <TextInput 
             placeholder="Enter unique prompt ID (e.g., my_prompt_id)"
-            size="large"
           />
         </Form.Item>
 
@@ -183,7 +182,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
               extra="Upload a .prompt file that follows the Dotprompt specification"
             >
               <Upload {...uploadProps}>
-                <Button icon={<UploadOutlined />} size="large">
+                <Button icon={<UploadOutlined />} size="medium">
                   Select .prompt File
                 </Button>
               </Upload>
