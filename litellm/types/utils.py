@@ -567,97 +567,48 @@ def add_provider_specific_fields(
 
 
 class Message(OpenAIObject):
-    content: Optional[str]
-    role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
-    function_call: Optional[FunctionCall]
-    audio: Optional[ChatCompletionAudioResponse] = None
-    reasoning_content: Optional[str] = None
+    content: Optional[str] = None
+    role: Literal["assistant", "user", "system", "tool", "function"] = "assistant"
+    tool_calls: Optional[List[Any]] = None
+    function_call: Optional[Any] = None
+    audio: Optional[ChatCompletionAudioResponse] = Field(default=None)
+    reasoning_content: Optional[str] = Field(default=None) 
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
-    ] = None
+    ] = Field(default=None)
     provider_specific_fields: Optional[Dict[str, Any]] = Field(
-        default=None, exclude=True
+        default=None
     )
-    annotations: Optional[List[ChatCompletionAnnotation]] = None
+    annotations: Optional[List[ChatCompletionAnnotation]] = Field(default=None)
+    logprobs: Optional[float] = Field(default=None)
 
-    def __init__(
-        self,
-        content: Optional[str] = None,
-        role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
-        function_call=None,
-        tool_calls: Optional[list] = None,
-        audio: Optional[ChatCompletionAudioResponse] = None,
-        provider_specific_fields: Optional[Dict[str, Any]] = None,
-        reasoning_content: Optional[str] = None,
-        thinking_blocks: Optional[
-            List[
-                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-            ]
-        ] = None,
-        annotations: Optional[List[ChatCompletionAnnotation]] = None,
-        **params,
-    ):
-        init_values: Dict[str, Any] = {
-            "content": content,
-            "role": role or "assistant",  # handle null input
-            "function_call": (
-                FunctionCall(**function_call) if function_call is not None else None
-            ),
-            "tool_calls": (
-                [
-                    (
-                        ChatCompletionMessageToolCall(**tool_call)
-                        if isinstance(tool_call, dict)
-                        else tool_call
-                    )
-                    for tool_call in tool_calls
-                ]
-                if tool_calls is not None and len(tool_calls) > 0
-                else None
-            ),
-        }
-
-        if audio is not None:
-            init_values["audio"] = audio
-
-        if thinking_blocks is not None:
-            init_values["thinking_blocks"] = thinking_blocks
-
-        if annotations is not None:
-            init_values["annotations"] = annotations
-
-        if reasoning_content is not None:
-            init_values["reasoning_content"] = reasoning_content
-
-        super(Message, self).__init__(
-            **init_values,  # type: ignore
-            **params,
-        )
-
-        if audio is None:
-            # delete audio from self
-            # OpenAI compatible APIs like mistral API will raise an error if audio is passed in
-            if hasattr(self, "audio"):
-                del self.audio
-
-        if annotations is None:
-            # ensure default response matches OpenAI spec
-            # Some OpenAI compatible APIs raise an error if annotations are passed in
-            if hasattr(self, "annotations"):
-                del self.annotations
-
-        if reasoning_content is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "reasoning_content"):
-                del self.reasoning_content
-
-        if thinking_blocks is None:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "thinking_blocks"):
-                del self.thinking_blocks
-
-        add_provider_specific_fields(self, provider_specific_fields)
+    @model_validator(mode='before')
+    @classmethod
+    def _convert_tool_calls(cls, values):
+        """Convert tool_calls to proper format and handle provider_specific_fields"""
+        if isinstance(values, dict):
+            # Handle tool_calls conversion
+            tool_calls = values.get('tool_calls')
+            if tool_calls is not None and isinstance(tool_calls, list) and len(tool_calls) > 0:
+                converted_tool_calls = []
+                for tool_call in tool_calls:
+                    if isinstance(tool_call, dict):
+                        converted_tool_calls.append(ChatCompletionMessageToolCall(**tool_call))
+                    else:
+                        converted_tool_calls.append(tool_call)
+                values['tool_calls'] = converted_tool_calls
+            
+            # Handle function_call conversion
+            function_call = values.get('function_call')
+            if function_call is not None and isinstance(function_call, dict):
+                values['function_call'] = FunctionCall(**function_call)
+                
+        return values
+    
+    def model_post_init(self, __context):
+        """Handle provider_specific_fields after model initialization"""
+        if self.provider_specific_fields:
+            add_provider_specific_fields(self, self.provider_specific_fields)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -677,6 +628,16 @@ class Message(OpenAIObject):
         except Exception:
             # if using pydantic v1
             return self.dict()
+        
+    def model_dump(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump(**kwargs)
+    
+    def model_dump_json(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump_json(**kwargs)
 
 
 class Delta(OpenAIObject):
@@ -766,56 +727,43 @@ class Delta(OpenAIObject):
 
 
 class Choices(OpenAIObject):
-    finish_reason: str
-    index: int
-    message: Message
-    logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
-
+    finish_reason: Optional[str] = "stop"
+    index: int = 0
+    message: Message = Field(default_factory=Message)
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = Field(default=None)
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
+    enhancements: Optional[Any] = Field(default=None)
 
-    def __init__(
-        self,
-        finish_reason=None,
-        index=0,
-        message: Optional[Union[Message, dict]] = None,
-        logprobs: Optional[Union[ChoiceLogprobs, dict, Any]] = None,
-        enhancements=None,
-        provider_specific_fields: Optional[Dict[str, Any]] = None,
-        **params,
-    ):
-        if finish_reason is not None:
-            params["finish_reason"] = map_finish_reason(finish_reason)
-        else:
-            params["finish_reason"] = "stop"
-        if index is not None:
-            params["index"] = index
-        else:
-            params["index"] = 0
-        if message is None:
-            params["message"] = Message()
-        else:
-            if isinstance(message, Message):
-                params["message"] = message
+    @model_validator(mode='before')
+    @classmethod
+    def _process_choice_data(cls, values):
+        """Process choice data and handle conversions"""
+        if isinstance(values, dict):
+            # Handle finish_reason mapping - can be None for some providers
+            finish_reason = values.get('finish_reason')
+            if finish_reason is not None:
+                values['finish_reason'] = map_finish_reason(finish_reason)
+            # If finish_reason is None, keep it as None (don't force to "stop")
+            
+            # Handle index
+            if values.get('index') is None:
+                values['index'] = 0
+            
+            # Handle message conversion
+            message = values.get('message')
+            if message is None:
+                values['message'] = Message()
             elif isinstance(message, dict):
-                params["message"] = Message(**message)
-        if logprobs is not None:
-            if isinstance(logprobs, dict):
-                params["logprobs"] = ChoiceLogprobs(**logprobs)
-            else:
-                params["logprobs"] = logprobs
-        else:
-            params["logprobs"] = None
-        super(Choices, self).__init__(**params)
-
-        if enhancements is not None:
-            self.enhancements = enhancements
-
-        self.provider_specific_fields = provider_specific_fields
-
-        if self.logprobs is None:
-            del self.logprobs
-        if self.provider_specific_fields is None:
-            del self.provider_specific_fields
+                values['message'] = Message(**message)
+            elif not isinstance(message, Message):
+                values['message'] = Message()
+            
+            # Handle logprobs conversion
+            logprobs = values.get('logprobs')
+            if logprobs is not None and isinstance(logprobs, dict):
+                values['logprobs'] = ChoiceLogprobs(**logprobs)
+                
+        return values
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -832,7 +780,16 @@ class Choices(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+    
+    def model_dump(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump(**kwargs)
 
+    def model_dump_json(self, **kwargs):
+        # Override to exclude None values for specific fields
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump_json(**kwargs)
 
 class CompletionTokensDetailsWrapper(
     CompletionTokensDetails
@@ -1013,38 +970,42 @@ class Usage(CompletionUsage):
 
 
 class StreamingChoices(OpenAIObject):
-    def __init__(
-        self,
-        finish_reason=None,
-        index=0,
-        delta: Optional[Delta] = None,
-        logprobs=None,
-        enhancements=None,
-        **params,
-    ):
-        # Fix Perplexity return both delta and message cause OpenWebUI repect text
-        # https://github.com/BerriAI/litellm/issues/8455
-        params.pop("message", None)
-        super(StreamingChoices, self).__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = None
-        self.index = index
-        if delta is not None:
-            if isinstance(delta, Delta):
-                self.delta = delta
-            elif isinstance(delta, dict):
-                self.delta = Delta(**delta)
-        else:
-            self.delta = Delta()
-        if enhancements is not None:
-            self.enhancements = enhancements
+    finish_reason: Optional[str] = None
+    index: int = 0
+    delta: Delta = Field(default_factory=Delta)
+    logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
+    enhancements: Optional[Any] = None
 
-        if logprobs is not None and isinstance(logprobs, dict):
-            self.logprobs = ChoiceLogprobs(**logprobs)
-        else:
-            self.logprobs = logprobs  # type: ignore
+    @model_validator(mode='before')
+    @classmethod
+    def _process_streaming_choice_data(cls, values):
+        """Process streaming choice data and handle conversions"""
+        if isinstance(values, dict):
+            # Fix Perplexity return both delta and message cause OpenWebUI respect text
+            # https://github.com/BerriAI/litellm/issues/8455
+            values.pop("message", None)
+            
+            # Handle finish_reason mapping
+            finish_reason = values.get('finish_reason')
+            if finish_reason:
+                values['finish_reason'] = map_finish_reason(finish_reason)
+            
+            # Handle delta conversion
+            delta = values.get('delta')
+            if delta is not None:
+                if isinstance(delta, dict):
+                    values['delta'] = Delta(**delta)
+                elif not isinstance(delta, Delta):
+                    values['delta'] = Delta()
+            else:
+                values['delta'] = Delta()
+            
+            # Handle logprobs conversion
+            logprobs = values.get('logprobs')
+            if logprobs is not None and isinstance(logprobs, dict):
+                values['logprobs'] = ChoiceLogprobs(**logprobs)
+                
+        return values
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1064,14 +1025,28 @@ class StreamingChoices(OpenAIObject):
 
 
 class StreamingChatCompletionChunk(OpenAIChatCompletionChunk):
-    def __init__(self, **kwargs):
-        new_choices = []
-        for choice in kwargs["choices"]:
-            new_choice = StreamingChoices(**choice).model_dump()
-            new_choices.append(new_choice)
-        kwargs["choices"] = new_choices
-
-        super().__init__(**kwargs)
+    @model_validator(mode='before')
+    @classmethod
+    def _process_streaming_chunk_data(cls, values):
+        """Process streaming chunk data and convert choices to StreamingChoices"""
+        if isinstance(values, dict):
+            # Handle choices conversion
+            choices = values.get('choices', [])
+            if choices:
+                new_choices = []
+                for choice in choices:
+                    if isinstance(choice, dict):
+                        # Convert to StreamingChoices and then back to dict for OpenAI compatibility
+                        streaming_choice = StreamingChoices(**choice)
+                        new_choices.append(streaming_choice.model_dump())
+                    elif isinstance(choice, StreamingChoices):
+                        new_choices.append(choice.model_dump())
+                    else:
+                        # Keep as-is if it's already in the right format
+                        new_choices.append(choice)
+                values['choices'] = new_choices
+                
+        return values
 
 
 from openai.types.chat import ChatCompletionChunk
