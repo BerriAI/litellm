@@ -10094,6 +10094,42 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
+    "gemini/imagen-4.0-generate-preview-06-06": {
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "gemini/imagen-4.0-ultra-generate-preview-06-06": {
+        "output_cost_per_image": 0.06,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "gemini/imagen-4.0-fast-generate-preview-06-06": {
+        "output_cost_per_image": 0.02,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "gemini/imagen-3.0-generate-002": {
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "gemini/imagen-3.0-generate-001": {
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "gemini/imagen-3.0-fast-generate-001": {
+        "output_cost_per_image": 0.02,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "command-a-03-2025": {
         "max_tokens": 8000,
         "max_input_tokens": 256000,
@@ -10444,12 +10480,26 @@
         "supports_tool_choice": true,
         "supports_prompt_caching": true
     },
+    "openrouter/x-ai/grok-4":{
+        "max_tokens": 256000,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://openrouter.ai/x-ai/grok-4",
+        "supports_web_search": true
+    },
     "openrouter/bytedance/ui-tars-1.5-7b":{
         "max_tokens": 2048,
         "max_input_tokens": 131072,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 1e-01,
-        "output_cost_per_token": 2e-01,
+        "input_cost_per_token": 0.1e-06,
+        "output_cost_per_token": 0.2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "source": "https://openrouter.ai/api/v1/models/bytedance/ui-tars-1.5-7b",
@@ -11128,8 +11178,8 @@
         "max_tokens": 8192,
         "max_input_tokens": 8192,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 2.1e-04,
-        "output_cost_per_token": 6.3e-04,
+        "input_cost_per_token": 0.21e-06,
+        "output_cost_per_token": 0.63e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true

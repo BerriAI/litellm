@@ -34,6 +34,7 @@ import {
   userFilterUICall,
   keyCreateServiceAccountCall,
   fetchMCPAccessGroups,
+  getPromptsList,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { Team } from "./key_team_helpers/key_list";
@@ -169,6 +170,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
@@ -237,7 +239,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       }
     };
 
+    const fetchPrompts = async () => {
+      try {
+        const response = await getPromptsList(accessToken);
+        setPromptsList(response.prompts.map(prompt => prompt.prompt_id));
+      } catch (error) {
+        console.error("Failed to fetch prompts:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPrompts();
   }, [accessToken]);
 
   // Fetch possible user roles when component mounts
@@ -689,14 +701,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     </div>
                   </div>
                 </Option>
-                <Option value="read_only" label="Read Only">
-                  <div style={{ padding: '4px 0' }}>
-                    <div style={{ fontWeight: 500 }}>Read Only</div>
-                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                      Can only call only info routes (e.g. /key/info, /user/info, /team/info)
-                    </div>
-                  </div>
-                </Option>
               </Select>
             </Form.Item>
             
@@ -851,14 +855,61 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     }
                     name="guardrails" 
                     className="mt-4"
-                    help="Select existing guardrails or enter new ones"
+                    help={premiumUser ? "Select existing guardrails or enter new ones" : "Premium feature - Upgrade to set guardrails by key"}
                   >
-                    <Select
-                      mode="tags"
-                      style={{ width: '100%' }}
-                      placeholder="Select or enter guardrails"
-                      options={guardrailsList.map(name => ({ value: name, label: name }))}
-                    />
+                    <Tooltip 
+                      title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set guardrails by key"
+                            : "Select or enter guardrails"
+                        }
+                        options={guardrailsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Tooltip>
+                  </Form.Item>
+                  <Form.Item 
+                    label={
+                      <span>
+                        Prompts{' '}
+                        <Tooltip title="Allow this key to use specific prompt templates">
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/prompt_management" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="prompts" 
+                    className="mt-4"
+                    help={premiumUser ? "Select existing prompts or enter new ones" : "Premium feature - Upgrade to set prompts by key"}
+                  >
+                    <Tooltip 
+                      title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set prompts by key"
+                            : "Select or enter prompts"
+                        }
+                        options={promptsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                         label={

@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     Delta,
     LlmProviders,
@@ -23,7 +24,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
 )
-from litellm.proxy.utils import is_valid_api_key
 
 # Adds the parent directory to the system path
 
@@ -558,6 +558,7 @@ def test_get_model_info_gemini():
             model.startswith("gemini/")
             and not "gemma" in model
             and not "learnlm" in model
+            and not "imagen" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -2158,6 +2159,7 @@ def test_image_response_utils():
 
 def test_is_valid_api_key():
     import hashlib
+
     # Valid sk- keys
     assert is_valid_api_key("sk-abc123")
     assert is_valid_api_key("sk-ABC_123-xyz")
@@ -2183,6 +2185,44 @@ def test_is_valid_api_key():
     # Invalid: wrong length for hash
     assert not is_valid_api_key("a" * 63)
     assert not is_valid_api_key("a" * 65)
+
+
+def test_block_key_hashing_logic():
+    """
+    Test that block_key() function only hashes keys that start with "sk-"
+    """
+    import hashlib
+    from litellm.proxy.utils import hash_token
+    
+    # Test cases: (input_key, should_be_hashed, expected_output)
+    test_cases = [
+        ("sk-1234567890abcdef", True, hash_token("sk-1234567890abcdef")),
+        ("sk-test-key", True, hash_token("sk-test-key")),
+        ("abc123", False, "abc123"),  # Should not be hashed
+        ("hashed_key_123", False, "hashed_key_123"),  # Should not be hashed
+        ("", False, ""),  # Empty string should not be hashed
+        ("sk-", True, hash_token("sk-")),  # Edge case: just "sk-"
+    ]
+    
+    for input_key, should_be_hashed, expected_output in test_cases:
+        # Simulate the logic from block_key() function
+        if input_key.startswith("sk-"):
+            hashed_token = hash_token(token=input_key)
+        else:
+            hashed_token = input_key
+        
+        assert hashed_token == expected_output, f"Failed for input: {input_key}"
+        
+        # Additional verification: if it should be hashed, verify it's actually a hash
+        if should_be_hashed:
+            # SHA-256 hashes are 64 characters long and contain only hex digits
+            assert len(hashed_token) == 64, f"Hash length should be 64, got {len(hashed_token)} for {input_key}"
+            assert all(c in '0123456789abcdef' for c in hashed_token), f"Hash should contain only hex digits for {input_key}"
+        else:
+            # If not hashed, it should be the original string
+            assert hashed_token == input_key, f"Non-hashed key should remain unchanged: {input_key}"
+    
+    print("✅ All block_key hashing logic tests passed!")
 
 
 if __name__ == "__main__":

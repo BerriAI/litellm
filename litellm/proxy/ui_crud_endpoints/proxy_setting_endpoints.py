@@ -257,14 +257,20 @@ async def update_default_team_member_budget(
     for team in teams:
         team_id = team.team_id
         max_budget_in_team = team.max_budget_in_team
-        await update_team(
-            data=UpdateTeamRequest(
-                team_id=team_id,
-                team_member_budget=max_budget_in_team,
-            ),
-            user_api_key_dict=user_api_key_dict,
-            http_request=Request(scope={"type": "http"}),
-        )
+        try:
+            await update_team(
+                data=UpdateTeamRequest(
+                    team_id=team_id,
+                    team_member_budget=max_budget_in_team,
+                ),
+                user_api_key_dict=user_api_key_dict,
+                http_request=Request(scope={"type": "http"}),
+            )
+        except Exception as e:
+            verbose_proxy_logger.info(
+                f"Error updating team {team_id} with team member budget {max_budget_in_team} with error: {e}, skipping.."
+            )
+            continue
 
 
 async def _update_litellm_setting(
@@ -480,7 +486,7 @@ async def update_sso_settings(sso_config: SSOConfig):
         elif field_name == "ui_access_mode" and value is not None:
 
             config["general_settings"]["ui_access_mode"] = value
-        elif field_name in env_var_mapping and value is not None and len(value) > 0:
+        elif field_name in env_var_mapping and value is not None:
             env_var_name = env_var_mapping[field_name]
             # Update in config
             config["environment_variables"][env_var_name] = value
