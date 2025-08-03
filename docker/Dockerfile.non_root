@@ -71,6 +71,20 @@ RUN mkdir -p /nonexistent /.npm && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup $PRISMA_PATH
 
+# --- OpenShift Compatibility: Apply Red Hat recommended pattern ---
+# Get paths for directories that need write access at runtime
+RUN PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
+    LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
+    # Set group ownership to 0 (root group) for OpenShift compatibility && \
+    chgrp -R 0 $PRISMA_PATH && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
+    # Mirror owner permissions to group (g=u) as recommended by Red Hat && \
+    chmod -R g=u $PRISMA_PATH && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
+    # Ensure directories are writable by group && \
+    chmod -R g+w $PRISMA_PATH && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true
+
 # Switch to non-root user
 USER nobody
 
