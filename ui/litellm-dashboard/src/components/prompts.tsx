@@ -71,7 +71,6 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
       ) : (
         <>
           <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Prompts</Text>
             <Button onClick={handleAddPrompt} disabled={!accessToken}>
               + Add New Prompt
             </Button>
