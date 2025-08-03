@@ -87,6 +87,17 @@ export interface PromptSpec {
   updated_at?: string
 }
 
+export interface PromptTemplateBase {
+  litellm_prompt_id: string;
+  content: string;
+  metadata?: Record<string, any> | null;
+}
+
+export interface PromptInfoResponse {
+  prompt_spec: PromptSpec;
+  raw_prompt_template: PromptTemplateBase | null;
+}
+
 export interface ListPromptsResponse {
   prompts: PromptSpec[];
 }
@@ -4899,8 +4910,8 @@ export const getGuardrailsList = async (accessToken: String) => {
 export const getPromptsList = async (accessToken: String) : Promise<ListPromptsResponse> => {
   try {
     const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/prompt/list`
-      : `/prompt/list`;
+      ? `${proxyBaseUrl}/prompts/list`
+      : `/prompts/list`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4923,9 +4934,9 @@ export const getPromptsList = async (accessToken: String) : Promise<ListPromptsR
   }
 };
 
-export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptSpec> => {
+export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptInfoResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompt/info?prompt_id=${promptId}` : `/prompt/info?prompt_id=${promptId}`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -4944,6 +4955,160 @@ export const getPromptInfo = async (accessToken: String, promptId: string): Prom
     return data;
   } catch (error) {
     console.error("Failed to get prompt info:", error);
+    throw error;
+  }
+};
+
+export const createPromptCall = async (
+  accessToken: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts` : `/prompts`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create prompt:", error);
+    throw error;
+  }
+};
+
+export const updatePromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update prompt:", error);
+    throw error;
+  }
+};
+
+export const deletePromptCall = async (
+  accessToken: string,
+  promptId: string
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to delete prompt:", error);
+    throw error;
+  }
+};
+
+export const convertPromptFileToJson = async (
+  accessToken: string,
+  file: File
+): Promise<{ prompt_id: string; json_data: any }> => {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/utils/dotprompt_json_converter` 
+      : `/utils/dotprompt_json_converter`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to convert prompt file:", error);
+    throw error;
+  }
+};
+
+export const patchPromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to patch prompt:", error);
     throw error;
   }
 };
