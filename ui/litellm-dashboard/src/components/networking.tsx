@@ -75,6 +75,16 @@ export interface Model {
   model_info: Object | null;
 }
 
+interface PromptSpec {
+  prompt_id: string;
+  litellm_params: Object;
+  prompt_info: Object;
+}
+
+interface ListPromptsResponse {
+  prompts: PromptSpec[];
+}
+
 export interface Organization {
   organization_id: string | null;
   organization_alias: string;
@@ -4876,6 +4886,33 @@ export const getGuardrailsList = async (accessToken: String) => {
     return data;
   } catch (error) {
     console.error("Failed to get guardrails list:", error);
+    throw error;
+  }
+};
+
+export const getPromptsList = async (accessToken: String) : Promise<ListPromptsResponse> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/prompt/list`
+      : `/prompt/list`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompts list:", error);
     throw error;
   }
 };
