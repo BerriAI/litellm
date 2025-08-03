@@ -2,12 +2,11 @@
 CRUD ENDPOINTS FOR PROMPTS
 """
 
-import os
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -242,7 +241,6 @@ async def create_prompt(
         }'
     ```
     """
-    from datetime import datetime
 
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
     from litellm.proxy.proxy_server import prisma_client
@@ -517,7 +515,6 @@ async def patch_prompt(
         }'
     ```
     """
-    from datetime import datetime
 
     from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
     from litellm.proxy.proxy_server import prisma_client
