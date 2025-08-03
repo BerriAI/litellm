@@ -756,7 +756,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Team ID</Text>
-                    <div className="font-mono">{info.team_id}</div>
+                    <div className="font-mono truncate overflow-hidden">{info.team_id}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Created At</Text>
@@ -805,7 +805,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Organization ID</Text>
-                    <div>{info.organization_id}</div>
+                    <div className="truncate overflow-hidden">{info.organization_id}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Status</Text>
