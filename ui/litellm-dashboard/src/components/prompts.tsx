@@ -95,6 +95,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           onClose={() => setSelectedPromptId(null)}
           accessToken={accessToken}
           isAdmin={isAdmin}
+          onDelete={fetchPrompts}
         />
       ) : (
         <>
