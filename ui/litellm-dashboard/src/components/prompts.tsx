@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react"
 import { Card, Text, Button } from "@tremor/react"
-import { getPromptsList, PromptSpec, ListPromptsResponse } from "./networking"
+import { Modal, message } from "antd"
+import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking"
 import PromptTable from "./prompts/prompt_table"
 import PromptInfoView from "./prompts/prompt_info"
 import AddPromptForm from "./prompts/add_prompt_form"
@@ -16,6 +17,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [isLoading, setIsLoading] = useState(false)
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null)
   const [isAddModalVisible, setIsAddModalVisible] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null)
 
   const isAdmin = userRole ? isAdminRole(userRole) : false
 
@@ -59,6 +62,31 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     fetchPrompts()
   }
 
+  const handleDeleteClick = (promptId: string, promptName: string) => {
+    setPromptToDelete({ id: promptId, name: promptName })
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!promptToDelete || !accessToken) return
+
+    setIsDeleting(true)
+    try {
+      await deletePromptCall(accessToken, promptToDelete.id)
+      message.success(`Prompt "${promptToDelete.name}" deleted successfully`)
+      fetchPrompts() // Refresh the list
+    } catch (error) {
+      console.error("Error deleting prompt:", error)
+      message.error("Failed to delete prompt")
+    } finally {
+      setIsDeleting(false)
+      setPromptToDelete(null)
+    }
+  }
+
+  const handleDeleteCancel = () => {
+    setPromptToDelete(null)
+  }
+
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       {selectedPromptId ? (
@@ -80,6 +108,9 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
             promptsList={promptsList}
             isLoading={isLoading}
             onPromptClick={handlePromptClick}
+            onDeleteClick={handleDeleteClick}
+            accessToken={accessToken}
+            isAdmin={isAdmin}
           />
         </>
       )}
@@ -90,6 +121,21 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         accessToken={accessToken}
         onSuccess={handleSuccess}
       />
+
+      {promptToDelete && (
+        <Modal
+          title="Delete Prompt"
+          open={promptToDelete !== null}
+          onOk={handleDeleteConfirm}
+          onCancel={handleDeleteCancel}
+          confirmLoading={isDeleting}
+          okText="Delete"
+          okButtonProps={{ danger: true }}
+        >
+          <p>Are you sure you want to delete prompt: {promptToDelete.name} ?</p>
+          <p>This action cannot be undone.</p>
+        </Modal>
+      )}
     </div>
   )
 }
