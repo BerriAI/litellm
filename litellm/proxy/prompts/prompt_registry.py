@@ -1,6 +1,5 @@
 import importlib
 import os
-import uuid
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -117,14 +116,13 @@ class InMemoryPromptRegistry:
         """
         import litellm
 
-        prompt_id = prompt.get("prompt_id") or str(uuid.uuid4())
-        prompt["prompt_id"] = prompt_id
+        prompt_id = prompt.prompt_id
         if prompt_id in self.IN_MEMORY_PROMPTS:
             verbose_proxy_logger.debug("prompt_id already exists in IN_MEMORY_PROMPTS")
             return self.IN_MEMORY_PROMPTS[prompt_id]
 
         custom_prompt_callback: Optional[CustomPromptManagement] = None
-        litellm_params_data = prompt["litellm_params"]
+        litellm_params_data = prompt.litellm_params
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
@@ -151,7 +149,9 @@ class InMemoryPromptRegistry:
         parsed_prompt = PromptSpec(
             prompt_id=prompt_id,
             litellm_params=litellm_params,
-            prompt_info=PromptInfo(prompt_type="config"),
+            prompt_info=prompt.prompt_info or PromptInfo(prompt_type="config"),
+            created_at=prompt.created_at,
+            updated_at=prompt.updated_at,
         )
 
         # store references to the prompt in memory

@@ -12,9 +12,9 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react"
-import { Button, message, Tooltip } from "antd"
-import { ArrowLeftIcon } from "@heroicons/react/outline"
-import { getPromptInfo, PromptSpec } from "@/components/networking"
+import { Button, message, Tooltip, Modal } from "antd"
+import { ArrowLeftIcon, TrashIcon } from "@heroicons/react/outline"
+import { getPromptInfo, PromptInfoResponse, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking"
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CheckIcon, CopyIcon } from "lucide-react"
 
@@ -23,20 +23,25 @@ export interface PromptInfoProps {
   onClose: () => void
   accessToken: string | null
   isAdmin: boolean
+  onDelete?: () => void
 }
 
-const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin }) => {
+const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin, onDelete }) => {
   const [promptData, setPromptData] = useState<PromptSpec | null>(null)
+  const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null)
   const [rawApiResponse, setRawApiResponse] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   const fetchPromptInfo = async () => {
     try {
       setLoading(true)
       if (!accessToken) return
       const response = await getPromptInfo(accessToken, promptId)
-      setPromptData(response)
+      setPromptData(response.prompt_spec)
+      setPromptTemplate(response.raw_prompt_template)
       setRawApiResponse(response) // Store the raw response for the Raw JSON tab
     } catch (error) {
       message.error("Failed to load prompt information")
@@ -75,32 +80,73 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     }
   }
 
+  const handleDeleteClick = () => {
+    setShowDeleteConfirm(true)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!accessToken || !promptData) return
+
+    setIsDeleting(true)
+    try {
+      await deletePromptCall(accessToken, promptData.prompt_id)
+      message.success(`Prompt "${promptData.prompt_id}" deleted successfully`)
+      onDelete?.() // Call the callback to refresh the parent component
+      onClose() // Close the info view
+    } catch (error) {
+      console.error("Error deleting prompt:", error)
+      message.error("Failed to delete prompt")
+    } finally {
+      setIsDeleting(false)
+      setShowDeleteConfirm(false)
+    }
+  }
+
+  const handleDeleteCancel = () => {
+    setShowDeleteConfirm(false)
+  }
+
   return (
     <div className="p-4">
       <div>
         <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
           Back to Prompts
         </TremorButton>
-        <Title>Prompt Details</Title>
-        <div className="flex items-center cursor-pointer">
-          <Text className="text-gray-500 font-mono">{promptData.prompt_id}</Text>
-          <Button
-            type="text"
-            size="small"
-            icon={copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-            onClick={() => copyToClipboard(promptData.prompt_id, "prompt-id")}
-            className={`left-2 z-10 transition-all duration-200 ${
-              copiedStates["prompt-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-            }`}
-          />
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            <Title>Prompt Details</Title>
+            <div className="flex items-center cursor-pointer">
+              <Text className="text-gray-500 font-mono">{promptData.prompt_id}</Text>
+              <Button
+                type="text"
+                size="small"
+                icon={copiedStates["prompt-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                onClick={() => copyToClipboard(promptData.prompt_id, "prompt-id")}
+                className={`left-2 z-10 transition-all duration-200 ${
+                  copiedStates["prompt-id"]
+                    ? "text-green-600 bg-green-50 border-green-200"
+                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
+              />
+            </div>
+          </div>
+          {isAdmin && (
+            <TremorButton
+              icon={TrashIcon}
+              variant="secondary"
+              onClick={handleDeleteClick}
+              className="flex items-center"
+            >
+              Delete Prompt
+            </TremorButton>
+          )}
         </div>
       </div>
 
       <TabGroup>
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
+          {promptTemplate ? <Tab key="prompt-template">Prompt Template</Tab> : <></>}
           {isAdmin ? <Tab key="details">Details</Tab> : <></>}
           <Tab key="raw-json">Raw JSON</Tab>
         </TabList>
@@ -147,6 +193,55 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             )}
           </TabPanel>
 
+          {/* Prompt Template Panel */}
+          {promptTemplate && (
+            <TabPanel>
+              <Card>
+                <div className="flex justify-between items-center mb-4">
+                  <Title>Prompt Template</Title>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                    onClick={() => copyToClipboard(promptTemplate.content, "prompt-content")}
+                    className={`transition-all duration-200 ${
+                      copiedStates["prompt-content"]
+                        ? "text-green-600 bg-green-50 border-green-200"
+                        : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                    }`}
+                  >
+                    {copiedStates["prompt-content"] ? "Copied!" : "Copy Content"}
+                  </Button>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <Text className="font-medium">Template ID</Text>
+                    <div className="font-mono text-sm bg-gray-50 p-2 rounded">{promptTemplate.litellm_prompt_id}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Content</Text>
+                    <div className="mt-2 p-4 bg-gray-50 rounded-md border overflow-auto max-h-96">
+                      <pre className="text-sm text-gray-800 whitespace-pre-wrap">{promptTemplate.content}</pre>
+                    </div>
+                  </div>
+
+                  {promptTemplate.metadata && Object.keys(promptTemplate.metadata).length > 0 && (
+                    <div>
+                      <Text className="font-medium">Template Metadata</Text>
+                      <div className="mt-2 p-3 bg-gray-50 rounded-md border">
+                        <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-auto max-h-64">
+                          {JSON.stringify(promptTemplate.metadata, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            </TabPanel>
+          )}
+          
           {/* Details Panel (only for admins) */}
           {isAdmin && (
             <TabPanel>
@@ -224,6 +319,20 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
           </TabPanel>
         </TabPanels>
       </TabGroup>
+      
+      {/* Delete Confirmation Modal */}
+      <Modal
+        title="Delete Prompt"
+        open={showDeleteConfirm}
+        onOk={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
+        confirmLoading={isDeleting}
+        okText="Delete"
+        okButtonProps={{ danger: true }}
+      >
+        <p>Are you sure you want to delete prompt: <strong>{promptData?.prompt_id}</strong>?</p>
+        <p>This action cannot be undone.</p>
+      </Modal>
     </div>
   )
 }

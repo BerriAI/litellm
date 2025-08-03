@@ -1,6 +1,6 @@
 import React, { useState } from "react"
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Button } from "@tremor/react"
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline"
+import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, TrashIcon } from "@heroicons/react/outline"
 import { Tooltip } from "antd"
 import {PromptSpec} from "@/components/networking"
 import {
@@ -17,12 +17,18 @@ interface PromptTableProps {
   promptsList: PromptSpec[]
   isLoading: boolean
   onPromptClick?: (id: string) => void
+  onDeleteClick?: (id: string, name: string) => void
+  accessToken: string | null
+  isAdmin: boolean
 }
 
 const PromptTable: React.FC<PromptTableProps> = ({
   promptsList,
   isLoading,
   onPromptClick,
+  onDeleteClick,
+  accessToken,
+  isAdmin,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }])
 
@@ -86,6 +92,33 @@ const PromptTable: React.FC<PromptTableProps> = ({
         )
       },
     },
+    ...(isAdmin ? [{
+      header: "Actions",
+      id: "actions",
+      enableSorting: false,
+      cell: ({ row }: any) => {
+        const prompt = row.original
+        const promptName = prompt.prompt_id || "Unknown Prompt"
+        
+        return (
+          <div className="flex items-center gap-1">
+            <Tooltip title="Delete prompt">
+              <Button
+                size="xs"
+                variant="light"
+                color="red"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDeleteClick?.(prompt.prompt_id, promptName)
+                }}
+                icon={TrashIcon}
+                className="text-red-500 hover:text-red-700 hover:bg-red-50"
+              />
+            </Tooltip>
+          </div>
+        )
+      },
+    }] : []),
   ]
 
   const table = useReactTable({

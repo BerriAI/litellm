@@ -33,10 +33,27 @@ def prompt_initializer(
     Initialize a prompt from a .prompt file.
     """
     prompt_directory = getattr(litellm_params, "prompt_directory", None)
-    if not prompt_directory:
-        raise ValueError("prompt_directory is required for dotprompt")
+    prompt_data = getattr(litellm_params, "prompt_data", None)
+    prompt_id = getattr(litellm_params, "prompt_id", None)
+    if prompt_directory:
+        raise ValueError(
+            "Cannot set prompt_directory when working with prompt_initializer. Needs to be a specific dotprompt file"
+        )
 
-    return DotpromptManager(prompt_directory)
+    prompt_file = getattr(litellm_params, "prompt_file", None)
+
+    try:
+        dot_prompt_manager = DotpromptManager(
+            prompt_directory=prompt_directory,
+            prompt_data=prompt_data,
+            prompt_file=prompt_file,
+            prompt_id=prompt_id,
+        )
+
+        return dot_prompt_manager
+    except Exception as e:
+
+        raise e
 
 
 prompt_initializer_registry = {
