@@ -5049,6 +5049,39 @@ export const deletePromptCall = async (
   }
 };
 
+export const convertPromptFileToJson = async (
+  accessToken: string,
+  file: File
+): Promise<{ prompt_id: string; json_data: any }> => {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/utils/dotprompt_json_converter` 
+      : `/utils/dotprompt_json_converter`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to convert prompt file:", error);
+    throw error;
+  }
+};
+
 export const patchPromptCall = async (
   accessToken: string,
   promptId: string,

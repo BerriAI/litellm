@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react"
-import { Card, Text } from "@tremor/react"
+import { Card, Text, Button } from "@tremor/react"
 import { getPromptsList, PromptSpec, ListPromptsResponse } from "./networking"
 import PromptTable from "./prompts/prompt_table"
 import PromptInfoView from "./prompts/prompt_info"
+import AddPromptForm from "./prompts/add_prompt_form"
 import { isAdminRole } from "@/utils/roles"
 
 interface PromptsProps {
@@ -14,6 +15,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null)
+  const [isAddModalVisible, setIsAddModalVisible] = useState(false)
 
   const isAdmin = userRole ? isAdminRole(userRole) : false
 
@@ -38,8 +40,23 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     fetchPrompts()
   }, [accessToken])
 
-    const handlePromptClick = (promptId: string) => {
+  const handlePromptClick = (promptId: string) => {
     setSelectedPromptId(promptId)
+  }
+
+  const handleAddPrompt = () => {
+    if (selectedPromptId) {
+      setSelectedPromptId(null)
+    }
+    setIsAddModalVisible(true)
+  }
+
+  const handleCloseModal = () => {
+    setIsAddModalVisible(false)
+  }
+
+  const handleSuccess = () => {
+    fetchPrompts()
   }
 
   return (
@@ -55,6 +72,9 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         <>
           <div className="flex justify-between items-center mb-4">
             <Text className="text-lg font-semibold">Prompts</Text>
+            <Button onClick={handleAddPrompt} disabled={!accessToken}>
+              + Add New Prompt
+            </Button>
           </div>
 
           <PromptTable
@@ -64,6 +84,13 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           />
         </>
       )}
+
+      <AddPromptForm
+        visible={isAddModalVisible}
+        onClose={handleCloseModal}
+        accessToken={accessToken}
+        onSuccess={handleSuccess}
+      />
     </div>
   )
 }
