@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react"
+
 import { Card, Text, Button } from "@tremor/react"
 import { Modal, message } from "antd"
 import { getPromptsList, PromptSpec, ListPromptsResponse, deletePromptCall } from "./networking"
 import PromptTable from "./prompts/prompt_table"
 import PromptInfoView from "./prompts/prompt_info"
 import AddPromptForm from "./prompts/add_prompt_form"
+
 import { isAdminRole } from "@/utils/roles"
 
 interface PromptsProps {
@@ -86,6 +88,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const handleDeleteCancel = () => {
     setPromptToDelete(null)
   }
+
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">

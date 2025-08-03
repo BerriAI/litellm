@@ -241,7 +241,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               </Card>
             </TabPanel>
           )}
-
+          
           {/* Details Panel (only for admins) */}
           {isAdmin && (
             <TabPanel>
@@ -319,7 +319,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
           </TabPanel>
         </TabPanels>
       </TabGroup>
-
+      
       {/* Delete Confirmation Modal */}
       <Modal
         title="Delete Prompt"

@@ -55,5 +55,6 @@ class PromptInfoResponse(BaseModel):
     raw_prompt_template: Optional[PromptTemplateBase] = None
 
 
+
 class ListPromptsResponse(BaseModel):
     prompts: List[PromptSpec]
