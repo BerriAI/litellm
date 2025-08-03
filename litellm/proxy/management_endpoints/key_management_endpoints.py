@@ -856,14 +856,6 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
 ):
-    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-        if getattr(data, field, None) is not None:
-            _set_object_metadata_field(
-                object_data=data,
-                field_name=field,
-                value=getattr(data, field),
-            )
-            delattr(data, field)
 
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
