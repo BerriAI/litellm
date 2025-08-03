@@ -87,6 +87,17 @@ export interface PromptSpec {
   updated_at?: string
 }
 
+export interface PromptTemplateBase {
+  litellm_prompt_id: string;
+  content: string;
+  metadata?: Record<string, any> | null;
+}
+
+export interface PromptInfoResponse {
+  prompt_spec: PromptSpec;
+  raw_prompt_template: PromptTemplateBase | null;
+}
+
 export interface ListPromptsResponse {
   prompts: PromptSpec[];
 }
@@ -4923,7 +4934,7 @@ export const getPromptsList = async (accessToken: String) : Promise<ListPromptsR
   }
 };
 
-export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptSpec> => {
+export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptInfoResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
     const response = await fetch(url, {
@@ -5069,44 +5080,6 @@ export const patchPromptCall = async (
   }
 };
 
-export const uploadPromptFile = async (
-  accessToken: string,
-  file: File,
-  promptId?: string,
-  promptIntegration: string = "dotprompt"
-) => {
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/upload` : `/prompts/upload`;
-
-    const formData = new FormData();
-    formData.append("file", file);
-    if (promptId) {
-      formData.append("prompt_id", promptId);
-    }
-    formData.append("prompt_integration", promptIntegration);
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        // Don't set Content-Type header - let browser set it for FormData
-      },
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to upload prompt file:", error);
-    throw error;
-  }
-};
 
 export const createGuardrailCall = async (
   accessToken: string,

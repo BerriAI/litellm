@@ -14,7 +14,7 @@ import {
 } from "@tremor/react"
 import { Button, message, Tooltip } from "antd"
 import { ArrowLeftIcon } from "@heroicons/react/outline"
-import { getPromptInfo, PromptSpec } from "@/components/networking"
+import { getPromptInfo, PromptInfoResponse, PromptSpec, PromptTemplateBase } from "@/components/networking"
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CheckIcon, CopyIcon } from "lucide-react"
 
@@ -27,6 +27,7 @@ export interface PromptInfoProps {
 
 const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessToken, isAdmin }) => {
   const [promptData, setPromptData] = useState<PromptSpec | null>(null)
+  const [promptTemplate, setPromptTemplate] = useState<PromptTemplateBase | null>(null)
   const [rawApiResponse, setRawApiResponse] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
@@ -36,7 +37,8 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       setLoading(true)
       if (!accessToken) return
       const response = await getPromptInfo(accessToken, promptId)
-      setPromptData(response)
+      setPromptData(response.prompt_spec)
+      setPromptTemplate(response.raw_prompt_template)
       setRawApiResponse(response) // Store the raw response for the Raw JSON tab
     } catch (error) {
       message.error("Failed to load prompt information")
@@ -101,6 +103,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       <TabGroup>
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
+          {promptTemplate ? <Tab key="prompt-template">Prompt Template</Tab> : <></>}
           {isAdmin ? <Tab key="details">Details</Tab> : <></>}
           <Tab key="raw-json">Raw JSON</Tab>
         </TabList>
@@ -146,6 +149,55 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
               </Card>
             )}
           </TabPanel>
+
+          {/* Prompt Template Panel */}
+          {promptTemplate && (
+            <TabPanel>
+              <Card>
+                <div className="flex justify-between items-center mb-4">
+                  <Title>Prompt Template</Title>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={copiedStates["prompt-content"] ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+                    onClick={() => copyToClipboard(promptTemplate.content, "prompt-content")}
+                    className={`transition-all duration-200 ${
+                      copiedStates["prompt-content"]
+                        ? "text-green-600 bg-green-50 border-green-200"
+                        : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                    }`}
+                  >
+                    {copiedStates["prompt-content"] ? "Copied!" : "Copy Content"}
+                  </Button>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <Text className="font-medium">Template ID</Text>
+                    <div className="font-mono text-sm bg-gray-50 p-2 rounded">{promptTemplate.litellm_prompt_id}</div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Content</Text>
+                    <div className="mt-2 p-4 bg-gray-50 rounded-md border overflow-auto max-h-96">
+                      <pre className="text-sm text-gray-800 whitespace-pre-wrap">{promptTemplate.content}</pre>
+                    </div>
+                  </div>
+
+                  {promptTemplate.metadata && Object.keys(promptTemplate.metadata).length > 0 && (
+                    <div>
+                      <Text className="font-medium">Template Metadata</Text>
+                      <div className="mt-2 p-3 bg-gray-50 rounded-md border">
+                        <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-auto max-h-64">
+                          {JSON.stringify(promptTemplate.metadata, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            </TabPanel>
+          )}
 
           {/* Details Panel (only for admins) */}
           {isAdmin && (

@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Required, TypedDict
@@ -42,6 +42,17 @@ class PromptSpec(BaseModel):
             ):
                 data["prompt_info"]["prompt_type"] = "config"
         super().__init__(**data)
+
+
+class PromptTemplateBase(BaseModel):
+    litellm_prompt_id: str
+    content: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class PromptInfoResponse(BaseModel):
+    prompt_spec: PromptSpec
+    raw_prompt_template: Optional[PromptTemplateBase] = None
 
 
 class ListPromptsResponse(BaseModel):

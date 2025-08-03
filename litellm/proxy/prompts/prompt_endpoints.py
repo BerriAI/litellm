@@ -16,8 +16,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
     PromptInfo,
+    PromptInfoResponse,
     PromptLiteLLMParams,
     PromptSpec,
+    PromptTemplateBase,
 )
 
 router = APIRouter()
@@ -105,20 +107,20 @@ async def list_prompts(
     "/prompts/{prompt_id}",
     tags=["Prompt Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=PromptSpec,
+    response_model=PromptInfoResponse,
 )
 @router.get(
     "/prompts/{prompt_id}/info",
     tags=["Prompt Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=PromptSpec,
+    response_model=PromptInfoResponse,
 )
 async def get_prompt_info(
     prompt_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get detailed information about a specific prompt by ID
+    Get detailed information about a specific prompt by ID, including prompt content
 
     👉 [Prompt docs](https://docs.litellm.ai/docs/proxy/prompt_management)
 
@@ -141,7 +143,8 @@ async def get_prompt_info(
             "prompt_type": "config"
         },
         "created_at": "2023-11-09T12:34:56.789Z",
-        "updated_at": "2023-11-09T12:34:56.789Z"
+        "updated_at": "2023-11-09T12:34:56.789Z",
+        "content": "System: You are a helpful assistant.\n\nUser: {{user_message}}"
     }
     ```
     """
@@ -169,7 +172,40 @@ async def get_prompt_info(
     prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
     if prompt_spec is None:
         raise HTTPException(status_code=400, detail=f"Prompt {prompt_id} not found")
-    return prompt_spec
+
+    # Get prompt content from the callback
+    prompt_template: Optional[PromptTemplateBase] = None
+    try:
+        prompt_callback = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(prompt_id)
+        if prompt_callback is not None:
+            # Extract content based on integration type
+            integration_name = prompt_callback.integration_name
+
+            if integration_name == "dotprompt":
+                # For dotprompt integration, get content from the prompt manager
+                from litellm.integrations.dotprompt.dotprompt_manager import (
+                    DotpromptManager,
+                )
+
+                if isinstance(prompt_callback, DotpromptManager):
+                    template = prompt_callback.prompt_manager.get_all_prompts_as_json()
+                    if template is not None and len(template) == 1:
+                        template_id = list(template.keys())[0]
+                        prompt_template = PromptTemplateBase(
+                            litellm_prompt_id=template_id,  # id sent to prompt management tool
+                            content=template[template_id]["content"],
+                            metadata=template[template_id]["metadata"],
+                        )
+
+    except Exception:
+        # If content extraction fails, continue without content
+        pass
+
+    # Create response with content
+    return PromptInfoResponse(
+        prompt_spec=prompt_spec,
+        raw_prompt_template=prompt_template,
+    )
 
 
 @router.post(
