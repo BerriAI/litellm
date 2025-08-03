@@ -32,6 +32,17 @@ class PromptSpec(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+    def __init__(self, **data):
+        if "prompt_info" not in data:
+            data["prompt_info"] = PromptInfo(prompt_type="config")
+        elif "prompt_info" in data:
+            if (
+                isinstance(data["prompt_info"], dict)
+                and data["prompt_info"].get("prompt_type") is None
+            ):
+                data["prompt_info"]["prompt_type"] = "config"
+        super().__init__(**data)
+
 
 class ListPromptsResponse(BaseModel):
     prompts: List[PromptSpec]

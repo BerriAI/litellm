@@ -19,7 +19,7 @@ def init_prompts(
 
     for prompt in all_prompts:
         initialized_prompt = IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(
-            prompt=cast(PromptSpec, prompt),
+            prompt=PromptSpec(**prompt),
             config_file_path=config_file_path,
         )
         if initialized_prompt:
