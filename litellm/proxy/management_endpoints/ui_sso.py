@@ -116,6 +116,14 @@ async def serve_login_page(
     missing_env_vars = show_missing_vars_in_env()
     if missing_env_vars is not None:
         return missing_env_vars
+    #########################################################
+    # Construct Redirect URL
+    base_url_to_redirect_to: Optional[str] = None
+    base_url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
+    server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+    if server_root_path != "":
+        base_url_to_redirect_to += server_root_path
+    #########################################################
 
     # Build the unified login page HTML
     error_message = ""
@@ -137,7 +145,7 @@ async def serve_login_page(
 
     sso_button = ""
     if sso_available:
-        sso_button = """
+        sso_button = f"""
         <div style="
             margin-top: 20px;
             padding-top: 20px;
@@ -149,7 +157,7 @@ async def serve_login_page(
                 font-size: 14px;
                 margin-bottom: 16px;
             ">or</p>
-            <a href="/sso/login" style="
+            <a href="{base_url_to_redirect_to}/sso/login" style="
                 display: inline-block;
                 background-color: #f8fafc;
                 border: 1px solid #e2e8f0;
@@ -168,12 +176,7 @@ async def serve_login_page(
         """
 
     # Get the base URL for form action using proper URL construction
-    url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
-    server_root_path = os.getenv("SERVER_ROOT_PATH", "")
-    if server_root_path != "":
-        url_to_redirect_to += server_root_path
-    url_to_redirect_to += "/login"
-
+    url_to_redirect_to = f"{base_url_to_redirect_to}/login"
     unified_login_html = f"""
 <!DOCTYPE html>
 <html lang="en">
