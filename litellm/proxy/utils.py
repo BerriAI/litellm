@@ -3801,33 +3801,79 @@ def is_valid_api_key(key: str) -> bool:
 
 def construct_database_url_from_env_vars() -> Optional[str]:
     """
-    Construct a DATABASE_URL from individual environment variables.
-
-    Returns:
-        Optional[str]: The constructed DATABASE_URL or None if required variables are missing
+    Construct database URL from environment variables
     """
-    import urllib.parse
-
-    # Check if all required variables are provided
-    database_host = os.getenv("DATABASE_HOST")
-    database_username = os.getenv("DATABASE_USERNAME")
-    database_password = os.getenv("DATABASE_PASSWORD")
-    database_name = os.getenv("DATABASE_NAME")
-
-    if database_host and database_username and database_name:
-        # Handle the problem of special character escaping in the database URL
-        database_username_enc = urllib.parse.quote_plus(database_username)
-        database_password_enc = (
-            urllib.parse.quote_plus(database_password) if database_password else ""
-        )
-        database_name_enc = urllib.parse.quote_plus(database_name)
-
-        # Construct DATABASE_URL from the provided variables
-        if database_password:
-            database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
-        else:
-            database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
-
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
         return database_url
+    
+    # Try to construct from individual env vars
+    db_host = os.getenv("DB_HOST")
+    db_port = os.getenv("DB_PORT", "5432")
+    db_name = os.getenv("DB_NAME")
+    db_user = os.getenv("DB_USER")
+    db_password = os.getenv("DB_PASSWORD")
+    
+    if all([db_host, db_name, db_user, db_password]):
+        return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    
+    return None
 
+
+async def count_tokens_with_anthropic_api(
+    model_to_use: str,
+    messages: Optional[List[Dict[str, Any]]],
+    deployment: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Helper function to count tokens using Anthropic API directly.
+    
+    Args:
+        model_to_use: The model name to use for token counting
+        messages: The messages to count tokens for
+        deployment: Optional deployment configuration containing API key
+        
+    Returns:
+        Optional dict with token count and tokenizer info, or None if failed
+    """
+    if not messages:
+        return None
+        
+    try:
+        import anthropic
+        import os
+        
+        # Get Anthropic API key from deployment config
+        anthropic_api_key = None
+        if deployment is not None:
+            anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
+        
+        # Fallback to environment variable
+        if not anthropic_api_key:
+            anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        
+        if anthropic_api_key and messages:
+            # Call Anthropic API directly for more accurate token counting
+            client = anthropic.Anthropic(api_key=anthropic_api_key)
+            
+            # Call with explicit parameters to satisfy type checking
+            # Type ignore for now since messages come from generic dict input
+            response = client.beta.messages.count_tokens(
+                model=model_to_use,
+                messages=messages,  # type: ignore
+                betas=["token-counting-2024-11-01"]
+            )
+            total_tokens = response.input_tokens
+            tokenizer_used = "anthropic_api"
+            
+            return {
+                "total_tokens": total_tokens,
+                "tokenizer_used": tokenizer_used,
+            }
+        
+    except ImportError:
+        verbose_proxy_logger.warning("Anthropic library not available, falling back to LiteLLM tokenizer")
+    except Exception as e:
+        verbose_proxy_logger.warning(f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer")
+    
     return None

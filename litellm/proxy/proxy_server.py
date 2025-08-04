@@ -5661,44 +5661,21 @@ async def token_counter(request: TokenCountRequest, from_anthropic_endpoint: boo
     
     # If called from Anthropic endpoint and it's an Anthropic provider, use Anthropic API
     if from_anthropic_endpoint and is_anthropic_provider:
-        try:
-            import anthropic
-            import os
-            
-            # Get Anthropic API key from deployment config
-            anthropic_api_key = None
-            if deployment is not None:
-                anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
-            
-            # Fallback to environment variable
-            if not anthropic_api_key:
-                anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-            
-            if anthropic_api_key and messages:
-                # Call Anthropic API directly for more accurate token counting
-                client = anthropic.Anthropic(api_key=anthropic_api_key)
-                
-                # Call with explicit parameters to satisfy type checking
-                # Type ignore for now since messages come from generic dict input
-                response = client.beta.messages.count_tokens(
-                    model=model_to_use,
-                    messages=messages,  # type: ignore
-                    betas=["token-counting-2024-11-01"]
-                )
-                total_tokens = response.input_tokens
-                tokenizer_used = "anthropic_api"
-                
-                return TokenCountResponse(
-                    total_tokens=total_tokens,
-                    request_model=request.model,
-                    model_used=model_to_use,
-                    tokenizer_type=tokenizer_used,
-                )
-            
-        except ImportError:
-            verbose_proxy_logger.warning("Anthropic library not available, falling back to LiteLLM tokenizer")
-        except Exception as e:
-            verbose_proxy_logger.warning(f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer")
+        from litellm.proxy.utils import count_tokens_with_anthropic_api
+        
+        result = await count_tokens_with_anthropic_api(
+            model_to_use=model_to_use,
+            messages=messages, # type: ignore
+            deployment=deployment,
+        )
+        
+        if result is not None:
+            return TokenCountResponse(
+                total_tokens=result["total_tokens"],
+                request_model=request.model,
+                model_used=model_to_use,
+                tokenizer_type=result["tokenizer_used"],
+            )
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
