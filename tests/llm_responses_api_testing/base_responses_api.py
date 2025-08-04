@@ -385,9 +385,9 @@ class BaseResponsesAPITest(ABC):
             {
                 "type": "function_call",
                 "arguments": "{\"location\": \"São Paulo, Brazil\"}",
-                "call_id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "call_id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
                 "name": "get_weather",
-                "id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
                 "status": "completed"
             },
             {
