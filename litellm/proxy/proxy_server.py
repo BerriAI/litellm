@@ -2925,6 +2925,14 @@ class ProxyConfig:
         await self._init_vector_stores_in_db(prisma_client=prisma_client)
         await self._init_mcp_servers_in_db()
         await self._init_pass_through_endpoints_in_db()
+        await self._init_prompts_in_db(prisma_client=prisma_client)
+
+    async def _init_prompts_in_db(self, prisma_client: PrismaClient):
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+        prompts_in_db = await prisma_client.db.litellm_prompttable.find_many()
+        for prompt in prompts_in_db:
+            IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt)
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
