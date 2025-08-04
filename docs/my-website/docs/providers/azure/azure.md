@@ -175,6 +175,25 @@ print(response)
 </Tabs>
 
 
+### Setting API Version
+
+You can set the `api_version` for Azure OpenAI in your proxy config.yaml in the following ways
+
+#### Option 1: Per Model Configuration
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/my-gpt4-deployment
+      api_base: https://your-resource.openai.azure.com/
+      api_version: "2024-08-01-preview"  # Set version per model
+      api_key: os.environ/AZURE_API_KEY
+```
+
+
+
+
 
 ## Azure OpenAI Chat Completion Models
 

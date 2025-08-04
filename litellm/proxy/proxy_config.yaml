@@ -1,19 +1,6 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: vertex_ai/*
     litellm_params:
-      model: anthropic/*
-  - model_name: openai/*
-    litellm_params:
-      model: openai/*
+      model: vertex_ai/*
 
-  - model_name: vertex_ai/gemini-2.5-pro # Vertex AI Gemini
-    litellm_params:
-      model: vertex_ai/gemini-2.5-pro
-      thinking: {"type": "enabled", "budget_tokens": 1024}
-      merge_reasoning_content_in_choices: true
-
-
-litellm_settings:
-  callbacks: ["datadog_llm_observability"]
-  cache: true
 

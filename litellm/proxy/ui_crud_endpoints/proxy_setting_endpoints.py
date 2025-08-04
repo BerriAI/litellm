@@ -257,14 +257,20 @@ async def update_default_team_member_budget(
     for team in teams:
         team_id = team.team_id
         max_budget_in_team = team.max_budget_in_team
-        await update_team(
-            data=UpdateTeamRequest(
-                team_id=team_id,
-                team_member_budget=max_budget_in_team,
-            ),
-            user_api_key_dict=user_api_key_dict,
-            http_request=Request(scope={"type": "http"}),
-        )
+        try:
+            await update_team(
+                data=UpdateTeamRequest(
+                    team_id=team_id,
+                    team_member_budget=max_budget_in_team,
+                ),
+                user_api_key_dict=user_api_key_dict,
+                http_request=Request(scope={"type": "http"}),
+            )
+        except Exception as e:
+            verbose_proxy_logger.info(
+                f"Error updating team {team_id} with team member budget {max_budget_in_team} with error: {e}, skipping.."
+            )
+            continue
 
 
 async def _update_litellm_setting(

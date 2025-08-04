@@ -190,11 +190,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         predictions = response_data.get("predictions", [])
         for prediction in predictions:
             # Google AI returns base64 encoded images in the prediction
-            generated_images = prediction.get("generatedImages", [])
-            for image_data in generated_images:
-                model_response.data.append(ImageObject(
-                    b64_json=image_data.get("bytesBase64Encoded", None),
-                    url=None,  # Google AI returns base64, not URLs
-                ))
+            model_response.data.append(ImageObject(
+                b64_json=prediction.get("bytesBase64Encoded", None),
+                url=None,  # Google AI returns base64, not URLs
+            ))
         
         return model_response

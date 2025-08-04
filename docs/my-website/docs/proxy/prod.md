@@ -271,16 +271,7 @@ Or [watch on Loom](https://www.loom.com/share/b08be303331246b88fdc053940d03281?s
 ## Extras
 ### Expected Performance in Production
 
-1 LiteLLM Uvicorn Worker on Kubernetes
-
-| Description | Value |
-|--------------|-------|
-| Avg latency | `50ms` |
-| Median latency | `51ms` |
-| `/chat/completions` Requests/second | `100` |
-| `/chat/completions` Requests/minute | `6000` |
-| `/chat/completions` Requests/hour | `360K` |
-
+See benchmarks [here](../benchmarks#performance-metrics)
 
 ### Verifying Debugging logs are off
 

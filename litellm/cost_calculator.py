@@ -789,6 +789,7 @@ def completion_cost(  # noqa: PLR0915
                         from litellm.llms.recraft.cost_calculator import (
                             cost_calculator as recraft_image_cost_calculator,
                         )
+
                         return recraft_image_cost_calculator(
                             model=model,
                             image_response=completion_response,
@@ -797,6 +798,7 @@ def completion_cost(  # noqa: PLR0915
                         from litellm.llms.gemini.image_generation.cost_calculator import (
                             cost_calculator as gemini_image_cost_calculator,
                         )
+
                         return gemini_image_cost_calculator(
                             model=model,
                             image_response=completion_response,
@@ -867,7 +869,10 @@ def completion_cost(  # noqa: PLR0915
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
                         MCPCostCalculator,
                     )
-                    return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
+
+                    return MCPCostCalculator.calculate_mcp_tool_call_cost(
+                        litellm_logging_obj=litellm_logging_obj
+                    )
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model
@@ -1318,7 +1323,7 @@ class BaseTokenUsageProcessor:
                     combined.completion_tokens_details = CompletionTokensDetails()
 
                 # Check what keys exist in the model's completion_tokens_details
-                for attr in dir(usage.completion_tokens_details):
+                for attr in usage.completion_tokens_details.model_fields:
                     if not attr.startswith("_") and not callable(
                         getattr(usage.completion_tokens_details, attr)
                     ):
@@ -1326,7 +1331,8 @@ class BaseTokenUsageProcessor:
                             combined.completion_tokens_details, attr, 0
                         )
                         new_val = getattr(usage.completion_tokens_details, attr, 0)
-                        if new_val is not None:
+
+                        if new_val is not None and current_val is not None:
                             setattr(
                                 combined.completion_tokens_details,
                                 attr,
