@@ -5638,16 +5638,10 @@ def _get_provider_token_counter(deployment: dict, model_to_use: str):
         
         # Switch case pattern using existing get_provider_model_info
         from litellm.utils import ProviderConfigManager
-        from litellm.constants import LlmProviders
+        from litellm.types.utils import LlmProviders
         
         # Convert string provider to LlmProviders enum
-        llm_provider_enum = None
-        if provider == "anthropic":
-            llm_provider_enum = LlmProviders.ANTHROPIC
-        elif provider == "openai":
-            llm_provider_enum = LlmProviders.OPENAI
-        elif provider == "gemini":
-            llm_provider_enum = LlmProviders.GEMINI
+        llm_provider_enum = LlmProviders(provider)
         # Add more provider mappings as needed
         
         if llm_provider_enum:
