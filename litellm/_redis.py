@@ -407,7 +407,7 @@ def get_redis_async_client(
         
         # If GCP IAM is configured (indicated by redis_connect_func), generate access token and use as password
         if redis_connect_func and gcp_service_account:
-            verbose_logger.info(f"DEBUG: Generating IAM token for service account: {gcp_service_account}")
+            verbose_logger.info("DEBUG: Generating IAM token for service account (value not logged for security reasons)")
             try:
                 # Generate IAM access token using the helper function
                 access_token = _generate_gcp_iam_access_token(gcp_service_account)
