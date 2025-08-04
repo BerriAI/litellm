@@ -155,6 +155,8 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 from litellm.proxy._types import *
+from litellm.proxy.token_counting_factory import TokenCountingFactory
+from litellm.proxy.token_counters import AnthropicTokenCounter
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -676,6 +678,9 @@ app = FastAPI(
     root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,
 )
+
+# Initialize token counting factory
+TokenCountingFactory.register_counter(AnthropicTokenCounter())
 
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
@@ -5653,29 +5658,22 @@ async def token_counter(request: TokenCountRequest, from_anthropic_endpoint: boo
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
 
-    # Check if this is an Anthropic provider (not just model name)
-    is_anthropic_provider = False
-    if deployment is not None:
-        full_model = deployment.get("litellm_params", {}).get("model", "")
-        is_anthropic_provider = full_model.startswith("anthropic/") or "anthropic" in full_model.lower()
+    # Try provider-specific token counting first
+    provider_counter = TokenCountingFactory.get_counter(
+        deployment=deployment,
+        from_endpoint=from_anthropic_endpoint
+    )
     
-    # If called from Anthropic endpoint and it's an Anthropic provider, use Anthropic API
-    if from_anthropic_endpoint and is_anthropic_provider:
-        from litellm.proxy.utils import count_tokens_with_anthropic_api
-        
-        result = await count_tokens_with_anthropic_api(
+    if provider_counter is not None:
+        result = await provider_counter.count_tokens(
             model_to_use=model_to_use,
             messages=messages, # type: ignore
             deployment=deployment,
+            request_model=request.model,
         )
         
         if result is not None:
-            return TokenCountResponse(
-                total_tokens=result["total_tokens"],
-                request_model=request.model,
-                model_used=model_to_use,
-                tokenizer_type=result["tokenizer_used"],
-            )
+            return result
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None

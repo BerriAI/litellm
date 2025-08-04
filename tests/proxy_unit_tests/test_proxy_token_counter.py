@@ -380,3 +380,188 @@ async def test_anthropic_endpoint_error_handling():
         
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
+
+
+@pytest.mark.asyncio
+async def test_factory_anthropic_endpoint_calls_anthropic_counter():
+    """Test that /v1/messages/count_tokens with Anthropic model uses Anthropic counter."""
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from litellm.proxy.proxy_server import app
+    
+    # Mock the anthropic token counting function
+    with patch('litellm.proxy.utils.count_tokens_with_anthropic_api') as mock_anthropic_count:
+        mock_anthropic_count.return_value = {
+            "total_tokens": 42,
+            "tokenizer_used": "anthropic"
+        }
+        
+        # Mock router to return Anthropic deployment
+        with patch('litellm.proxy.proxy_server.llm_router') as mock_router:
+            mock_router.model_list = [{
+                "model_name": "claude-3-5-sonnet",
+                "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"},
+                "model_info": {}
+            }]
+            
+            client = TestClient(app)
+            
+            response = client.post(
+                "/v1/messages/count_tokens",
+                json={
+                    "model": "claude-3-5-sonnet",
+                    "messages": [{"role": "user", "content": "Hello"}]
+                },
+                headers={"Authorization": "Bearer test-key"}
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["input_tokens"] == 42
+            
+            # Verify that Anthropic API was called
+            mock_anthropic_count.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
+    """Test that /v1/messages/count_tokens with GPT-4 does NOT use Anthropic counter."""
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from litellm.proxy.proxy_server import app
+    
+    # Mock the anthropic token counting function
+    with patch('litellm.proxy.utils.count_tokens_with_anthropic_api') as mock_anthropic_count:
+        # Mock litellm token counter
+        with patch('litellm.token_counter') as mock_litellm_counter:
+            mock_litellm_counter.return_value = 50
+            
+            # Mock router to return GPT-4 deployment
+            with patch('litellm.proxy.proxy_server.llm_router') as mock_router:
+                mock_router.model_list = [{
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4"},
+                    "model_info": {}
+                }]
+                
+                client = TestClient(app)
+                
+                response = client.post(
+                    "/v1/messages/count_tokens",
+                    json={
+                        "model": "gpt-4",
+                        "messages": [{"role": "user", "content": "Hello"}]
+                    },
+                    headers={"Authorization": "Bearer test-key"}
+                )
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert data["input_tokens"] == 50
+                
+                # Verify that Anthropic API was NOT called
+                mock_anthropic_count.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
+    """Test that /utils/token_counter does NOT use Anthropic counter even with Anthropic model."""
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from litellm.proxy.proxy_server import app
+    
+    # Mock the anthropic token counting function
+    with patch('litellm.proxy.utils.count_tokens_with_anthropic_api') as mock_anthropic_count:
+        # Mock litellm token counter
+        with patch('litellm.token_counter') as mock_litellm_counter:
+            mock_litellm_counter.return_value = 35
+            
+            # Mock router to return Anthropic deployment
+            with patch('litellm.proxy.proxy_server.llm_router') as mock_router:
+                mock_router.model_list = [{
+                    "model_name": "claude-3-5-sonnet",
+                    "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"},
+                    "model_info": {}
+                }]
+                
+                client = TestClient(app)
+                
+                response = client.post(
+                    "/utils/token_counter",
+                    json={
+                        "model": "claude-3-5-sonnet",
+                        "messages": [{"role": "user", "content": "Hello"}]
+                    },
+                    headers={"Authorization": "Bearer test-key"}
+                )
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert data["total_tokens"] == 35
+                
+                # Verify that Anthropic API was NOT called (since from_anthropic_endpoint=False)
+                mock_anthropic_count.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_factory_registration():
+    """Test that the factory correctly registers and retrieves counters."""
+    from litellm.proxy.token_counting_factory import TokenCountingFactory
+    from litellm.proxy.token_counters import AnthropicTokenCounter
+    
+    # Create a test deployment
+    anthropic_deployment = {
+        "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"}
+    }
+    
+    non_anthropic_deployment = {
+        "litellm_params": {"model": "openai/gpt-4"}
+    }
+    
+    # Test Anthropic counter selection
+    counter = TokenCountingFactory.get_counter(
+        deployment=anthropic_deployment,
+        from_endpoint=True
+    )
+    assert counter is not None
+    assert isinstance(counter, AnthropicTokenCounter)
+    
+    # Test no counter for non-Anthropic from Anthropic endpoint
+    counter = TokenCountingFactory.get_counter(
+        deployment=non_anthropic_deployment,
+        from_endpoint=True
+    )
+    assert counter is None
+    
+    # Test no counter when not from Anthropic endpoint
+    counter = TokenCountingFactory.get_counter(
+        deployment=anthropic_deployment,
+        from_endpoint=False
+    )
+    assert counter is None
+
+
+@pytest.mark.asyncio 
+async def test_factory_anthropic_counter_supports_provider():
+    """Test AnthropicTokenCounter provider detection logic."""
+    from litellm.proxy.token_counters import AnthropicTokenCounter
+    
+    counter = AnthropicTokenCounter()
+    
+    # Test Anthropic provider detection
+    anthropic_deployment = {
+        "litellm_params": {"model": "anthropic/claude-3-5-sonnet-20241022"}
+    }
+    assert counter.supports_provider(anthropic_deployment, from_endpoint=True)
+    assert not counter.supports_provider(anthropic_deployment, from_endpoint=False)
+    
+    # Test non-Anthropic provider
+    openai_deployment = {
+        "litellm_params": {"model": "openai/gpt-4"}
+    }
+    assert not counter.supports_provider(openai_deployment, from_endpoint=True)
+    assert not counter.supports_provider(openai_deployment, from_endpoint=False)
+    
+    # Test None deployment
+    assert not counter.supports_provider(None, from_endpoint=True)
+    assert not counter.supports_provider(None, from_endpoint=False)
