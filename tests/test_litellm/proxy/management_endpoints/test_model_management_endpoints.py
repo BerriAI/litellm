@@ -473,7 +473,7 @@ class TestModelInfoEndpoint:
              patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
              patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
              patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
-             patch("litellm.proxy.proxy_server.get_llm_provider") as mock_get_provider:
+             patch("litellm.get_llm_provider") as mock_get_provider:
             
             # Setup mocks
             mock_router.get_model_names.return_value = ["gpt-4", "claude-3", "gpt-3.5-turbo"]
@@ -548,7 +548,7 @@ class TestModelInfoEndpoint:
              patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
              patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
              patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
-             patch("litellm.proxy.proxy_server.get_llm_provider") as mock_get_provider:
+             patch("litellm.get_llm_provider") as mock_get_provider:
             
             # Setup mocks
             mock_router.get_model_names.return_value = ["team-model-1"]
