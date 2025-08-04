@@ -279,6 +279,7 @@ LITELLM_CHAT_PROVIDERS = [
     "dashscope",
     "moonshot",
     "v0",
+    "oci",
     "morph",
     "lambda_ai",
 ]
