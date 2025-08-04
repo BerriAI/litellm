@@ -261,8 +261,8 @@ async def count_tokens(
             messages=messages
         )
         
-        # Call the internal token counter function with Anthropic endpoint flag
-        token_response = await internal_token_counter(token_request, from_anthropic_endpoint=True)
+        # Call the internal token counter function with direct request flag set to False
+        token_response = await internal_token_counter(token_request, is_direct_request=False)
         
         # Convert the internal response to Anthropic API format
         return {"input_tokens": token_response.total_tokens}

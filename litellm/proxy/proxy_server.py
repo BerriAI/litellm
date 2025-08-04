@@ -155,8 +155,6 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
 from litellm.proxy._types import *
-from litellm.proxy.token_counting_factory import TokenCountingFactory
-from litellm.proxy.token_counters import AnthropicTokenCounter
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -679,8 +677,6 @@ app = FastAPI(
     lifespan=proxy_startup_event,
 )
 
-# Initialize token counting factory
-TokenCountingFactory.register_counter(AnthropicTokenCounter())
 
 
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
@@ -5619,13 +5615,63 @@ async def run_thread(
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 
 
+def _get_provider_token_counter(deployment: dict, model_to_use: str):
+    """
+    Auto-route to the correct provider's token counter based on model/deployment.
+    Uses the existing get_provider_model_info infrastructure with switch-case pattern.
+    """
+    if deployment is None:
+        return None
+        
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    
+    full_model = deployment.get("litellm_params", {}).get("model", "")
+    
+    try:
+        # Use existing LiteLLM logic to determine provider
+        model, provider, dynamic_api_key, api_base = get_llm_provider(
+            model=full_model,
+            custom_llm_provider=deployment.get("litellm_params", {}).get("custom_llm_provider"),
+            api_base=deployment.get("litellm_params", {}).get("api_base"),
+            api_key=deployment.get("litellm_params", {}).get("api_key")
+        )
+        
+        # Switch case pattern using existing get_provider_model_info
+        from litellm.utils import ProviderConfigManager
+        from litellm.constants import LlmProviders
+        
+        # Convert string provider to LlmProviders enum
+        llm_provider_enum = None
+        if provider == "anthropic":
+            llm_provider_enum = LlmProviders.ANTHROPIC
+        elif provider == "openai":
+            llm_provider_enum = LlmProviders.OPENAI
+        elif provider == "gemini":
+            llm_provider_enum = LlmProviders.GEMINI
+        # Add more provider mappings as needed
+        
+        if llm_provider_enum:
+            provider_model_info = ProviderConfigManager.get_provider_model_info(model=full_model, provider=llm_provider_enum)
+            if provider_model_info is not None:
+                return provider_model_info.get_token_counter()
+            
+    except Exception:
+        # If provider detection fails, fall back to manual checks
+        if full_model.startswith("anthropic/") or "anthropic" in full_model.lower():
+            from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+            anthropic_model_info = AnthropicModelInfo()
+            return anthropic_model_info.get_token_counter()
+    
+    return None
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountResponse,
 )
-async def token_counter(request: TokenCountRequest, from_anthropic_endpoint: bool = False):
+async def token_counter(request: TokenCountRequest, is_direct_request: bool = True):
     """ """
     from litellm import token_counter
 
@@ -5658,13 +5704,13 @@ async def token_counter(request: TokenCountRequest, from_anthropic_endpoint: boo
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
 
-    # Try provider-specific token counting first
-    provider_counter = TokenCountingFactory.get_counter(
-        deployment=deployment,
-        from_endpoint=from_anthropic_endpoint
-    )
+    # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
+    provider_counter = None
+    if deployment is not None and not is_direct_request:
+        # Auto-route to the correct provider based on model
+        provider_counter = _get_provider_token_counter(deployment, model_to_use)
     
-    if provider_counter is not None:
+    if provider_counter is not None and provider_counter.supports_provider(deployment=deployment, from_endpoint=not is_direct_request):
         result = await provider_counter.count_tokens(
             model_to_use=model_to_use,
             messages=messages, # type: ignore
@@ -5673,7 +5719,12 @@ async def token_counter(request: TokenCountRequest, from_anthropic_endpoint: boo
         )
         
         if result is not None:
-            return result
+            return TokenCountResponse(
+                total_tokens=result["total_tokens"],
+                request_model=result["request_model"],
+                model_used=result["model_used"],
+                tokenizer_type=result["tokenizer_type"],
+            )
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
