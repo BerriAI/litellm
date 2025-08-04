@@ -136,3 +136,247 @@ async def test_gpt_token_counting():
         response.tokenizer_type == "openai_tokenizer"
     )  # SHOULD use the OpenAI tokenizer
     assert response.request_model == "gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_count_tokens_endpoint():
+    """
+    Test /v1/messages/count_tokens endpoint with Anthropic model
+    - Should return response in Anthropic format: {"input_tokens": <count>}
+    - Should work as wrapper around internal token_counter function
+    """
+    from litellm.proxy.anthropic_endpoints.endpoints import count_tokens
+    from fastapi import Request
+    from unittest.mock import AsyncMock, MagicMock
+    
+    # Mock request object
+    mock_request = MagicMock(spec=Request)
+    mock_request_data = {
+        "model": "claude-3-sonnet-20240229",
+        "messages": [{"role": "user", "content": "Hello Claude!"}]
+    }
+    
+    # Mock the _read_request_body function
+    async def mock_read_request_body(request):
+        return mock_request_data
+    
+    # Mock UserAPIKeyAuth
+    mock_user_api_key_dict = MagicMock()
+    
+    # Patch the _read_request_body function
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+    
+    # Mock the internal token_counter function to return a controlled response
+    async def mock_token_counter(request, from_anthropic_endpoint=False):
+        assert from_anthropic_endpoint == True, "Should be called with from_anthropic_endpoint=True"
+        assert request.model == "claude-3-sonnet-20240229"
+        assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
+        
+        from litellm.proxy._types import TokenCountResponse
+        return TokenCountResponse(
+            total_tokens=15,
+            request_model="claude-3-sonnet-20240229",
+            model_used="claude-3-sonnet-20240229",
+            tokenizer_type="openai_tokenizer"
+        )
+    
+    # Patch the imported token_counter function from proxy_server
+    import litellm.proxy.proxy_server as proxy_server
+    original_token_counter = proxy_server.token_counter
+    proxy_server.token_counter = mock_token_counter
+    
+    try:
+        # Call the endpoint
+        response = await count_tokens(mock_request, mock_user_api_key_dict)
+        
+        # Verify response format matches Anthropic spec
+        assert isinstance(response, dict)
+        assert "input_tokens" in response
+        assert response["input_tokens"] == 15
+        assert len(response) == 1  # Should only contain input_tokens
+        
+        print("✅ Anthropic endpoint test passed!")
+        
+    finally:
+        # Restore original functions
+        anthropic_endpoints._read_request_body = original_read_request_body
+        proxy_server.token_counter = original_token_counter
+
+
+@pytest.mark.asyncio 
+async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
+    """
+    Test /v1/messages/count_tokens endpoint with non-Anthropic model (GPT-4)
+    - Should still work and return Anthropic format
+    - Should call internal token_counter with from_anthropic_endpoint=True
+    """
+    from litellm.proxy.anthropic_endpoints.endpoints import count_tokens
+    from fastapi import Request
+    from unittest.mock import AsyncMock, MagicMock
+    
+    # Mock request object
+    mock_request = MagicMock(spec=Request)
+    mock_request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello GPT!"}]
+    }
+    
+    # Mock the _read_request_body function
+    async def mock_read_request_body(request):
+        return mock_request_data
+    
+    # Mock UserAPIKeyAuth
+    mock_user_api_key_dict = MagicMock()
+    
+    # Patch the _read_request_body function
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+    
+    # Mock the internal token_counter function to return a controlled response
+    async def mock_token_counter(request, from_anthropic_endpoint=False):
+        assert from_anthropic_endpoint == True, "Should be called with from_anthropic_endpoint=True"
+        assert request.model == "gpt-4"
+        assert request.messages == [{"role": "user", "content": "Hello GPT!"}]
+        
+        from litellm.proxy._types import TokenCountResponse
+        return TokenCountResponse(
+            total_tokens=12,
+            request_model="gpt-4", 
+            model_used="gpt-4",
+            tokenizer_type="openai_tokenizer"
+        )
+    
+    # Patch the imported token_counter function from proxy_server
+    import litellm.proxy.proxy_server as proxy_server
+    original_token_counter = proxy_server.token_counter
+    proxy_server.token_counter = mock_token_counter
+    
+    try:
+        # Call the endpoint
+        response = await count_tokens(mock_request, mock_user_api_key_dict)
+        
+        # Verify response format matches Anthropic spec
+        assert isinstance(response, dict)
+        assert "input_tokens" in response
+        assert response["input_tokens"] == 12
+        assert len(response) == 1  # Should only contain input_tokens
+        
+        print("✅ Non-Anthropic model test passed!")
+        
+    finally:
+        # Restore original functions
+        anthropic_endpoints._read_request_body = original_read_request_body
+        proxy_server.token_counter = original_token_counter
+
+
+@pytest.mark.asyncio
+async def test_internal_token_counter_anthropic_provider_detection():
+    """
+    Test that the internal token_counter correctly detects Anthropic providers
+    and handles the from_anthropic_endpoint flag appropriately
+    """
+    
+    # Test with Anthropic provider
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "claude-test",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-sonnet-20240229",
+                    "api_key": "test-key"
+                },
+            }
+        ]
+    )
+    
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    
+    # Test with from_anthropic_endpoint=True (should detect Anthropic provider)
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="claude-test",
+            messages=[{"role": "user", "content": "hello"}],
+        ),
+        from_anthropic_endpoint=True
+    )
+    
+    print("Anthropic provider test response:", response)
+    
+    # Verify response structure
+    assert response.request_model == "claude-test"
+    assert response.model_used == "claude-3-sonnet-20240229"
+    assert response.total_tokens > 0
+    
+    # Test with non-Anthropic provider
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-test",
+                "litellm_params": {
+                    "model": "gpt-4",
+                },
+            }
+        ]
+    )
+    
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    
+    # Test with from_anthropic_endpoint=True but non-Anthropic provider
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="gpt-test",
+            messages=[{"role": "user", "content": "hello"}],
+        ),
+        from_anthropic_endpoint=True
+    )
+    
+    print("Non-Anthropic provider test response:", response)
+    
+    # Verify response structure 
+    assert response.request_model == "gpt-test"
+    assert response.model_used == "gpt-4"
+    assert response.total_tokens > 0
+    assert response.tokenizer_type == "openai_tokenizer"  # Should use LiteLLM tokenizer
+
+
+@pytest.mark.asyncio
+async def test_anthropic_endpoint_error_handling():
+    """
+    Test error handling in the /v1/messages/count_tokens endpoint
+    """
+    from litellm.proxy.anthropic_endpoints.endpoints import count_tokens
+    from fastapi import Request, HTTPException
+    from unittest.mock import MagicMock
+    
+    # Mock request object
+    mock_request = MagicMock(spec=Request)
+    mock_user_api_key_dict = MagicMock()
+    
+    # Test missing model parameter
+    mock_request_data = {
+        "messages": [{"role": "user", "content": "Hello!"}]
+        # Missing "model" key
+    }
+    
+    async def mock_read_request_body(request):
+        return mock_request_data
+    
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+    
+    try:
+        # Should raise HTTPException for missing model
+        with pytest.raises(HTTPException) as exc_info:
+            await count_tokens(mock_request, mock_user_api_key_dict)
+        
+        assert exc_info.value.status_code == 400
+        assert "model parameter is required" in str(exc_info.value.detail)
+        
+        print("✅ Error handling test passed!")
+        
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body
