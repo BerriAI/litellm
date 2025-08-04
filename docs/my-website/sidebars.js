@@ -468,7 +468,8 @@ const sidebars = {
         "providers/featherless_ai",
         "providers/nebius",
         "providers/dashscope",
-        "providers/bytez"
+        "providers/bytez",
+        "providers/oci",
       ],
     },
     {
