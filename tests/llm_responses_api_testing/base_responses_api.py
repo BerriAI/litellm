@@ -392,7 +392,7 @@ class BaseResponsesAPITest(ABC):
             },
             {
                 "type": "function_call_output",
-                "call_id": "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "call_id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
                 "output": "Rainy"
             }
         ]
