@@ -89,8 +89,7 @@ class TestGoogleAIStudioResponsesAPITest(BaseResponsesAPITest):
     def get_base_completion_call_args(self):
         #litellm._turn_on_debug()
         return {
-            "model": "gemini/gemini-2.5-flash-lite",
-            "max_output_tokens": 100,
+            "model": "gemini/gemini-2.5-flash-lite"
         }
     
     async def test_basic_openai_responses_delete_endpoint(self, sync_mode=False):
