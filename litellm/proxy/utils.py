@@ -3831,7 +3831,6 @@ def construct_database_url_from_env_vars() -> Optional[str]:
     
     return None
 
-
 async def count_tokens_with_anthropic_api(
     model_to_use: str,
     messages: Optional[List[Dict[str, Any]]],
@@ -3839,35 +3838,35 @@ async def count_tokens_with_anthropic_api(
 ) -> Optional[Dict[str, Any]]:
     """
     Helper function to count tokens using Anthropic API directly.
-    
+
     Args:
         model_to_use: The model name to use for token counting
         messages: The messages to count tokens for
         deployment: Optional deployment configuration containing API key
-        
+
     Returns:
         Optional dict with token count and tokenizer info, or None if failed
     """
     if not messages:
         return None
-        
+
     try:
         import anthropic
         import os
-        
+
         # Get Anthropic API key from deployment config
         anthropic_api_key = None
         if deployment is not None:
             anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
-        
+
         # Fallback to environment variable
         if not anthropic_api_key:
             anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-        
+
         if anthropic_api_key and messages:
             # Call Anthropic API directly for more accurate token counting
             client = anthropic.Anthropic(api_key=anthropic_api_key)
-            
+
             # Call with explicit parameters to satisfy type checking
             # Type ignore for now since messages come from generic dict input
             response = client.beta.messages.count_tokens(
@@ -3877,13 +3876,14 @@ async def count_tokens_with_anthropic_api(
             )
             total_tokens = response.input_tokens
             tokenizer_used = "anthropic_api"
-            
+
             return {
                 "total_tokens": total_tokens,
                 "tokenizer_used": tokenizer_used,
             }
-        
+
     except ImportError:
         verbose_proxy_logger.warning("Anthropic library not available, falling back to LiteLLM tokenizer")
     except Exception as e:
         verbose_proxy_logger.warning(f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer")
+    return None
