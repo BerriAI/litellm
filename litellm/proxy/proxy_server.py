@@ -284,6 +284,9 @@ from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
+from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
+    router as user_agent_analytics_router,
+)
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -302,6 +305,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
@@ -366,6 +370,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import RouterGeneralSettings, updateDeployment
@@ -1349,6 +1354,13 @@ async def _run_background_health_check():
         # make 1 deep copy of llm_model_list on every health check iteration
         _llm_model_list = copy.deepcopy(llm_model_list) or []
 
+        # filter out models that have disabled background health checks
+        _llm_model_list = [
+            m
+            for m in _llm_model_list
+            if not m.get("model_info", {}).get("disable_background_health_check", False)
+        ]
+
         healthy_endpoints, unhealthy_endpoints = await perform_health_check(
             model_list=_llm_model_list, details=health_check_details
         )
@@ -1811,6 +1823,16 @@ class ProxyConfig:
                     )
 
                     litellm.guardrail_name_config_map = guardrail_name_config_map
+
+                elif key == "global_prompt_directory":
+                    from litellm.integrations.dotprompt import (
+                        set_global_prompt_directory,
+                    )
+
+                    set_global_prompt_directory(value)
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code}Set Global Prompt Directory on LiteLLM Proxy{reset_color_code}"
+                    )
                 elif key == "callbacks":
                     initialize_callbacks_on_proxy(
                         value=value,
@@ -2181,6 +2203,15 @@ class ProxyConfig:
                 all_guardrails=guardrails_v2, config_file_path=config_file_path
             )
 
+        ## Prompt settings
+        prompts: Optional[List[Dict]] = None
+        if config is not None:
+            prompts = config.get("prompts", None)
+        if prompts:
+            from litellm.proxy.prompts.init_prompts import init_prompts
+
+            init_prompts(all_prompts=prompts, config_file_path=config_file_path)
+
         ## CREDENTIALS
         credential_list_dict = self.load_credential_list(config=config)
         litellm.credential_list = credential_list_dict
@@ -2205,7 +2236,13 @@ class ProxyConfig:
                 global_mcp_server_manager,
             )
 
-            global_mcp_server_manager.load_servers_from_config(mcp_servers_config)
+            # Get mcp_aliases from litellm_settings if available
+            litellm_settings = config.get("litellm_settings", {})
+            mcp_aliases = litellm_settings.get("mcp_aliases", None)
+
+            global_mcp_server_manager.load_servers_from_config(
+                mcp_servers_config, mcp_aliases
+            )
 
         ## VECTOR STORES
         vector_store_registry_config = config.get("vector_store_registry", None)
@@ -2417,7 +2454,7 @@ class ProxyConfig:
                 for k, v in _litellm_params.items():
                     if isinstance(v, str):
                         # decrypt value
-                        _value = decrypt_value_helper(value=v)
+                        _value = decrypt_value_helper(value=v, key=k)
                         if _value is None:
                             raise Exception("Unable to decrypt value={}".format(v))
                         # sanity check if string > size 0
@@ -2453,7 +2490,7 @@ class ProxyConfig:
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    decrypted_value = decrypt_value_helper(value=v)
+                    decrypted_value = decrypt_value_helper(value=v, key=k)
                     _litellm_params[k] = decrypted_value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
@@ -2517,9 +2554,6 @@ class ProxyConfig:
         config_data = await proxy_config.get_config()
         self._add_callbacks_from_db_config(config_data)
 
-        # we need to set env variables too
-        self._add_environment_variables_from_db_config(config_data)
-
         # router settings
         await self._add_router_settings_from_db_config(
             config_data=config_data, llm_router=llm_router, prisma_client=prisma_client
@@ -2569,13 +2603,6 @@ class ProxyConfig:
                         failure_callback
                     )
 
-    def _add_environment_variables_from_db_config(self, config_data: dict) -> None:
-        """
-        Adds environment variables from DB config to litellm
-        """
-        environment_variables = config_data.get("environment_variables", {})
-        self._decrypt_and_set_db_env_variables(environment_variables)
-
     def _encrypt_env_variables(
         self, environment_variables: dict, new_encryption_key: Optional[str] = None
     ) -> dict:
@@ -2601,7 +2628,7 @@ class ProxyConfig:
         decrypted_env_vars = {}
         for k, v in environment_variables.items():
             try:
-                decrypted_value = decrypt_value_helper(value=v)
+                decrypted_value = decrypt_value_helper(value=v, key=k)
                 if decrypted_value is not None:
                     os.environ[k] = decrypted_value
                     decrypted_env_vars[k] = decrypted_value
@@ -2754,7 +2781,10 @@ class ProxyConfig:
         """
 
         if param_name == "environment_variables":
-            self._decrypt_and_set_db_env_variables(db_param_value)
+            decrypted_env_vars = self._decrypt_and_set_db_env_variables(db_param_value)
+            current_config.setdefault("environment_variables", {}).update(
+                decrypted_env_vars
+            )
             return current_config
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
             for key, value in db_param_value.items():
@@ -2769,13 +2799,13 @@ class ProxyConfig:
 
             return current_config
 
-        # For dictionary values, update only non-empty values
+        # For dictionary values, update only non-none values
         if isinstance(current_config[param_name], dict):
             # Only keep non None values from db_param_value
-            non_empty_values = {k: v for k, v in db_param_value.items() if v}
+            non_none_values = {k: v for k, v in db_param_value.items() if v is not None}
 
-            # Update the config with non-empty values
-            current_config[param_name].update(non_empty_values)
+            # Update the config with non-none values
+            current_config[param_name].update(non_none_values)
         else:
             current_config[param_name] = db_param_value
 
@@ -2894,6 +2924,14 @@ class ProxyConfig:
         await self._init_vector_stores_in_db(prisma_client=prisma_client)
         await self._init_mcp_servers_in_db()
         await self._init_pass_through_endpoints_in_db()
+        await self._init_prompts_in_db(prisma_client=prisma_client)
+
+    async def _init_prompts_in_db(self, prisma_client: PrismaClient):
+        from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+        prompts_in_db = await prisma_client.db.litellm_prompttable.find_many()
+        for prompt in prompts_in_db:
+            IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt)
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
@@ -2986,7 +3024,7 @@ class ProxyConfig:
 
         decrypted_credential_values = {}
         for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypt_value_helper(v) or v
+            decrypted_credential_values[k] = decrypt_value_helper(value=v, key=k) or v
 
         credential_object.credential_values = decrypted_credential_values
         return credential_object
@@ -3234,6 +3272,8 @@ async def async_data_generator(
 ):
     verbose_proxy_logger.debug("inside generator")
     try:
+        str_so_far = ""
+        error_message: Optional[str] = None
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -3242,15 +3282,24 @@ async def async_data_generator(
             verbose_proxy_logger.debug(
                 "async_data_generator: received streaming chunk - {}".format(chunk)
             )
+
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=chunk,
                 data=request_data,
+                str_so_far=str_so_far,
             )
+
+            if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                response_str = litellm.get_response_string(response_obj=chunk)
+                str_so_far += response_str
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+            elif isinstance(chunk, str) and chunk.startswith("data: "):
+                error_message = chunk
+                break
 
             try:
                 yield f"data: {chunk}\n\n"
@@ -3258,6 +3307,8 @@ async def async_data_generator(
                 yield f"data: {str(e)}\n\n"
 
         # Streaming is done, yield the [DONE] chunk
+        if error_message is not None:
+            yield error_message
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
@@ -3537,7 +3588,7 @@ class ProxyStartupEvent:
                     timezone=ZoneInfo("America/Los_Angeles"),  # Pacific Time
                 )
                 await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
-        
+
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
         ### SPEND LOG CLEANUP ###
@@ -3586,12 +3637,14 @@ class ProxyStartupEvent:
         scheduler.start()
 
     @classmethod
-    async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
+    async def _initialize_spend_tracking_background_jobs(
+        cls, scheduler: AsyncIOScheduler
+    ):
         """
         Initialize the spend tracking background jobs
         1. CloudZero Background Job
         2. Prometheus Background Job
-        
+
         Args:
             scheduler: The scheduler to add the background jobs to
         """
@@ -3605,7 +3658,7 @@ class ProxyStartupEvent:
 
         if await is_cloudzero_setup_in_db():
             await init_cloudzero_background_job()
-        
+
         ########################################################
         # Prometheus Background Job
         ########################################################
@@ -3616,7 +3669,6 @@ class ProxyStartupEvent:
                 PrometheusLogger.initialize_budget_metrics_cron_job(scheduler=scheduler)
             except Exception:
                 PrometheusLogger = None
-        
 
     @classmethod
     async def _setup_prisma_client(
@@ -4680,15 +4732,22 @@ from litellm import _arealtime
 async def websocket_endpoint(
     websocket: WebSocket,
     model: str,
+    intent: str = fastapi.Query(
+        None, description="The intent of the websocket connection."
+    ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
     import websockets
 
     await websocket.accept()
 
+    # Only use explicit parameters, not all query params
+    query_params: RealtimeQueryParams = {"model": model, "intent": intent}
+
     data = {
         "model": model,
         "websocket": websocket,
+        "query_params": query_params,  # Only explicit params
     }
 
     headers = dict(websocket.headers.items())  # Convert headers to dict first
@@ -6429,18 +6488,18 @@ async def model_metrics_exceptions(
     """
     sql_query = """
         WITH cte AS (
-            SELECT 
+            SELECT
                 CASE WHEN api_base = '' THEN litellm_model_name ELSE CONCAT(litellm_model_name, '-', api_base) END AS combined_model_api_base,
                 exception_type,
                 COUNT(*) AS num_rate_limit_exceptions
             FROM "LiteLLM_ErrorLogs"
-            WHERE 
-                "startTime" >= $1::timestamp 
-                AND "endTime" <= $2::timestamp 
+            WHERE
+                "startTime" >= $1::timestamp
+                AND "endTime" <= $2::timestamp
                 AND model_group = $3
             GROUP BY combined_model_api_base, exception_type
         )
-        SELECT 
+        SELECT
             combined_model_api_base,
             COUNT(*) AS total_exceptions,
             json_object_agg(exception_type, num_rate_limit_exceptions) AS exception_counts
@@ -6671,10 +6730,13 @@ def _get_model_group_info(
     llm_router: Router, all_models_str: List[str], model_group: Optional[str]
 ) -> List[ModelGroupInfoProxy]:
     model_groups: List[ModelGroupInfoProxy] = []
-    # ensure all_models_str is a set
-    all_models_str_set = set(all_models_str)
 
-    for model in all_models_str_set:
+    unique_models = []
+    for model in all_models_str:
+        if model not in unique_models:
+            unique_models.append(model)
+
+    for model in unique_models:
         if model_group is not None and model_group != model:
             continue
 
@@ -7264,7 +7326,7 @@ async def login(request: Request):  # noqa: PLR0915
         get_disabled_non_admin_personal_key_creation()
     )
     """
-    To login to Admin UI, we support the following 
+    To login to Admin UI, we support the following
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
@@ -8091,8 +8153,8 @@ async def update_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
-    - Check if config value is valid type 
+    - Check if param in general settings
+    - Check if config value is valid type
     """
 
     if prisma_client is None:
@@ -8168,7 +8230,7 @@ async def get_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
+    - Check if param in general settings
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8232,7 +8294,7 @@ async def get_config_list(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
+    - Check if param in general settings
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8368,7 +8430,7 @@ async def delete_config_general_settings(
     """
     - Check if prisma_client is None
     - Check if user allowed to call this endpoint (admin-only)
-    - Check if param in general settings 
+    - Check if param in general settings
     """
     if prisma_client is None:
         raise HTTPException(
@@ -8552,7 +8614,7 @@ async def get_config():  # noqa: PLR0915
                 },
             }
         ]
-        
+
         """
         for _callback in _success_callbacks:
             if _callback != "langfuse":
@@ -8586,7 +8648,9 @@ async def get_config():  # noqa: PLR0915
                         env_vars_dict[_var] = None
                     else:
                         # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(value=env_variable)
+                        decrypted_value = decrypt_value_helper(
+                            value=env_variable, key=_var
+                        )
                         env_vars_dict[_var] = decrypted_value
 
                 _data_to_return.append({"name": _callback, "variables": env_vars_dict})
@@ -8603,7 +8667,9 @@ async def get_config():  # noqa: PLR0915
                         _langfuse_env_vars[_var] = None
                     else:
                         # decode + decrypt the value
-                        decrypted_value = decrypt_value_helper(value=env_variable)
+                        decrypted_value = decrypt_value_helper(
+                            value=env_variable, key=_var
+                        )
                         _langfuse_env_vars[_var] = decrypted_value
 
                 _data_to_return.append(
@@ -8625,7 +8691,9 @@ async def get_config():  # noqa: PLR0915
                     _slack_env_vars[_var] = _value
                 else:
                     # decode + decrypt the value
-                    _decrypted_value = decrypt_value_helper(value=env_variable)
+                    _decrypted_value = decrypt_value_helper(
+                        value=env_variable, key=_var
+                    )
                     _slack_env_vars[_var] = _decrypted_value
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
@@ -8661,7 +8729,7 @@ async def get_config():  # noqa: PLR0915
                 _email_env_vars[_var] = None
             else:
                 # decode + decrypt the value
-                _decrypted_value = decrypt_value_helper(value=env_variable)
+                _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
                 _email_env_vars[_var] = _decrypted_value
 
         alerting_data.append(
@@ -8830,6 +8898,7 @@ app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
+app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(ui_crud_endpoints_router)
@@ -8838,6 +8907,7 @@ app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(tag_management_router)
+app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 ########################################################

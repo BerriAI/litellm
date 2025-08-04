@@ -888,6 +888,9 @@ class Usage(CompletionUsage):
 
     server_tool_use: Optional[ServerToolUse] = None
 
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+    """Breakdown of tokens used in a completion."""
+
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
@@ -2093,6 +2096,7 @@ all_litellm_params = [
     "metadata",
     "litellm_metadata",
     "litellm_trace_id",
+    "guardrails",
     "tags",
     "acompletion",
     "aimg_generation",
@@ -2317,6 +2321,8 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    AUTO_ROUTER = "auto_router"
+    DOTPROMPT = "dotprompt"
 
 
 # Create a set of all provider values for quick lookup

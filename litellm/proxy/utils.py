@@ -55,7 +55,11 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.exceptions import RejectedRequestError
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    RejectedRequestError,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -88,10 +92,17 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
+from litellm.types.mcp import (
+    MCPDuringCallResponseObject,
+    MCPPreCallRequestObject,
+    MCPPreCallResponseObject,
+)
 from litellm.types.utils import CallTypes, LLMResponseTypes, LoggedLiteLLMParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     Span = Union[_Span, Any]
 else:
@@ -111,33 +122,6 @@ def print_verbose(print_statement):
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
-
-
-def safe_deep_copy(data):
-    """
-    Safe Deep Copy
-
-    The LiteLLM Request has some object that can-not be pickled / deep copied
-
-    Use this function to safely deep copy the LiteLLM Request
-    """
-    if litellm.safe_memory_mode is True:
-        return data
-
-    litellm_parent_otel_span: Optional[Any] = None
-    # Step 1: Remove the litellm_parent_otel_span
-    litellm_parent_otel_span = None
-    if isinstance(data, dict):
-        # remove litellm_parent_otel_span since this is not picklable
-        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
-            litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
-    new_data = copy.deepcopy(data)
-
-    # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
-    if isinstance(data, dict) and litellm_parent_otel_span is not None:
-        if "metadata" in data:
-            data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
-    return new_data
 
 
 class InternalUsageCache:
@@ -468,6 +452,497 @@ class ProxyLogging:
             litellm_parent_otel_span=None,
         )
 
+    async def async_pre_mcp_tool_call_hook(
+        self,
+        kwargs: dict,
+        request_obj: Any,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Optional[Any]:
+        """
+        Pre MCP Tool Call Hook
+
+        Use this to validate and modify MCP tool calls before execution.
+        Reuses existing LLM guardrail logic by converting MCP calls to message format.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPPreCallRequestObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=getattr(self, "dynamic_success_callbacks", None),
+            global_callbacks=litellm.success_callback,
+        )
+
+        # Create the request object if it's not already one
+        if not isinstance(request_obj, MCPPreCallRequestObject):
+            # Convert UserAPIKeyAuth object to dict if needed
+            user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+                kwargs.get("user_api_key_auth")
+            )
+
+            request_obj = MCPPreCallRequestObject(
+                tool_name=kwargs.get("name", ""),
+                arguments=kwargs.get("arguments", {}),
+                server_name=kwargs.get("server_name"),
+                user_api_key_auth=user_api_key_auth_dict,
+                hidden_params=HiddenParams(),
+            )
+
+        for callback in callbacks:
+            try:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    from typing import cast
+
+                    from litellm import _custom_logger_compatible_callbacks_literal
+
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
+
+                    # Check if guardrail should be run for pre_call hook (reusing existing logic)
+                    if (
+                        _callback.should_run_guardrail(
+                            data=kwargs, event_type=GuardrailEventHooks.pre_mcp_call
+                        )
+                        is not True
+                    ):
+                        continue
+
+                    # Convert MCP tool call to LLM message format for existing guardrail logic
+                    synthetic_llm_data = self._convert_mcp_to_llm_format(
+                        request_obj, kwargs
+                    )
+                    # Reuse existing LLM guardrail logic
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+                        kwargs.get("user_api_key_auth")
+                    )
+
+                    result = await _callback.async_pre_call_hook(
+                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
+                        cache=self.call_details["user_api_key_cache"],
+                        data=synthetic_llm_data,
+                        call_type="mcp_call",
+                    )
+
+                    # Convert result back to MCP response format if blocked/modified
+                    if result is not None:
+                        mcp_response = self._convert_llm_result_to_mcp_response(
+                            result, request_obj
+                        )
+                        if mcp_response is not None:
+                            return self._parse_pre_mcp_call_hook_response(
+                                response=mcp_response, original_request=request_obj
+                            )
+
+            except (
+                BlockedPiiEntityError,
+                GuardrailRaisedException,
+                HTTPException,
+            ) as e:
+                # Re-raise guardrail exceptions so they can be properly handled
+                raise e
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return None
+
+    def _convert_user_api_key_auth_to_dict(self, user_api_key_auth_obj):
+        """
+        Helper function to convert UserAPIKeyAuth object to dictionary.
+        Handles both Pydantic models and regular objects.
+        """
+        if user_api_key_auth_obj is not None:
+            if hasattr(user_api_key_auth_obj, "model_dump"):
+                # If it's a Pydantic model, convert to dict
+                return user_api_key_auth_obj.model_dump()
+            elif hasattr(user_api_key_auth_obj, "__dict__"):
+                # If it's a regular object, convert to dict
+                return user_api_key_auth_obj.__dict__
+        return user_api_key_auth_obj
+
+    def _convert_mcp_to_llm_format(self, request_obj, kwargs: dict) -> dict:
+        """
+        Convert MCP tool call to LLM message format for existing guardrail validation.
+        """
+        from litellm.types.llms.openai import ChatCompletionUserMessage
+
+        # Create a synthetic message that represents the tool call
+        tool_call_content = (
+            f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
+        )
+
+        synthetic_message = ChatCompletionUserMessage(
+            role="user", content=tool_call_content
+        )
+
+        # Create synthetic LLM data that guardrails can process
+        synthetic_data = {
+            "messages": [synthetic_message],
+            "model": kwargs.get("model", "mcp-tool-call"),
+            "user_api_key_user_id": kwargs.get("user_api_key_user_id"),
+            "user_api_key_team_id": kwargs.get("user_api_key_team_id"),
+            "user_api_key_end_user_id": kwargs.get("user_api_key_end_user_id"),
+            "user_api_key_hash": kwargs.get("user_api_key_hash"),
+            "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
+            "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
+            "mcp_arguments": request_obj.arguments,  # Keep original for reference
+        }
+
+        return synthetic_data
+
+    def _convert_llm_result_to_mcp_response(
+        self, llm_result, request_obj
+    ) -> Optional[Any]:
+        """
+        Convert LLM guardrail result back to MCP response format.
+        """
+        from litellm.types.mcp import MCPPreCallResponseObject
+
+        # If result is an exception, it means the guardrail blocked the request
+        if isinstance(llm_result, Exception):
+            return MCPPreCallResponseObject(
+                should_proceed=False,
+                error_message=str(llm_result),
+                modified_arguments=None,
+            )
+
+        # If result is a dict with modified messages, check for content filtering
+        if isinstance(llm_result, dict):
+            modified_messages = llm_result.get("messages")
+            if modified_messages:
+                # Check if content was blocked/modified
+                original_content = (
+                    f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
+                )
+                new_content = (
+                    modified_messages[0].get("content", "") if modified_messages else ""
+                )
+
+                if new_content != original_content:
+                    # Content was modified - could be masking, redaction, or blocking
+                    if (
+                        not new_content
+                        or "blocked" in new_content.lower()
+                        or "violation" in new_content.lower()
+                    ):
+                        # Content was blocked completely
+                        return MCPPreCallResponseObject(
+                            should_proceed=False,
+                            error_message="Content blocked by guardrail",
+                            modified_arguments=None,
+                        )
+                    else:
+                        # Content was masked/redacted - extract the modified arguments
+                        try:
+                            # Try to parse the modified arguments from the masked content
+                            modified_args = (
+                                self._extract_modified_arguments_from_content(
+                                    new_content, request_obj
+                                )
+                            )
+                            if modified_args is not None:
+                                # Return the masked/redacted arguments for the MCP call to use
+                                return MCPPreCallResponseObject(
+                                    should_proceed=True,
+                                    error_message=None,
+                                    modified_arguments=modified_args,
+                                )
+                            else:
+                                # Could not parse modified arguments, allow original call but warn
+                                verbose_proxy_logger.warning(
+                                    f"Could not parse modified arguments from guardrail response: {new_content}"
+                                )
+                                return None
+                        except Exception as e:
+                            verbose_proxy_logger.error(
+                                f"Error parsing modified arguments: {e}"
+                            )
+                            # Fallback: allow original call
+                            return None
+
+        # If result is a string, it's likely an error message
+        if isinstance(llm_result, str):
+            return MCPPreCallResponseObject(
+                should_proceed=False, error_message=llm_result, modified_arguments=None
+            )
+
+        return None
+
+    def _extract_modified_arguments_from_content(
+        self, masked_content: str, request_obj
+    ) -> Optional[dict]:
+        """
+        Extract modified/masked arguments from the guardrail response content.
+        """
+        import json
+
+        verbose_proxy_logger.debug(
+            f"Extracting modified args from content: {masked_content}"
+        )
+
+        try:
+            # The format should be: "Tool: <tool_name>\nArguments: <json_arguments>"
+            # Parse the arguments section
+            lines = masked_content.strip().split("\n")
+            for i, line in enumerate(lines):
+                if line.startswith("Arguments:"):
+                    # Get the arguments part - everything after "Arguments: "
+                    args_text = line[len("Arguments:") :].strip()
+
+                    verbose_proxy_logger.debug(f"Found arguments text: {args_text}")
+
+                    # Try to parse as JSON first
+                    try:
+                        modified_args = json.loads(args_text)
+                        verbose_proxy_logger.debug(
+                            f"Successfully parsed JSON args: {modified_args}"
+                        )
+                        return modified_args
+                    except json.JSONDecodeError as e:
+                        # If JSON parsing fails, try to extract key-value pairs manually
+                        verbose_proxy_logger.debug(
+                            f"Failed to parse JSON arguments: {args_text}, error: {e}"
+                        )
+                        return self._parse_arguments_manually(
+                            args_text, request_obj.arguments
+                        )
+
+            # If we can't find the Arguments: line, return None
+            verbose_proxy_logger.warning(
+                "Could not find 'Arguments:' line in masked content"
+            )
+            return None
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error extracting modified arguments: {e}")
+            return None
+
+    def _parse_arguments_manually(
+        self, args_text: str, original_args: dict
+    ) -> Optional[dict]:
+        """
+        Try to manually parse arguments when JSON parsing fails.
+        This is a fallback for cases where the guardrail modifies the format.
+        """
+        import re
+
+        try:
+            # Start with original arguments and try to apply modifications
+            modified_args = original_args.copy()
+
+            # Look for simple key-value patterns
+            # This is a basic implementation - can be enhanced based on specific guardrail formats
+            for key, original_value in original_args.items():
+                if isinstance(original_value, str):
+                    # Look for the key in the masked content and try to extract its value
+                    pattern = (
+                        rf"['\"]?{re.escape(key)}['\"]?\s*:\s*['\"]?([^,'\"]*)['\"]?"
+                    )
+                    match = re.search(pattern, args_text, re.IGNORECASE)
+                    if match:
+                        new_value = match.group(1).strip()
+                        if new_value:
+                            modified_args[key] = new_value
+
+            return modified_args
+
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error in manual argument parsing: {e}")
+            return None
+
+    def _convert_llm_result_to_mcp_during_response(
+        self, llm_result, request_obj
+    ) -> Optional[Any]:
+        """
+        Convert LLM guardrail result back to MCP during call response format.
+        """
+        from litellm.types.mcp import MCPDuringCallResponseObject
+
+        # If result is an exception, it means the guardrail wants to stop execution
+        if isinstance(llm_result, Exception):
+            return MCPDuringCallResponseObject(
+                should_continue=False, error_message=str(llm_result)
+            )
+
+        # If result is a dict with modified messages, check for content filtering
+        if isinstance(llm_result, dict):
+            modified_messages = llm_result.get("messages")
+            if modified_messages:
+                # Check if content was blocked/modified
+                original_content = (
+                    f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
+                )
+                new_content = (
+                    modified_messages[0].get("content", "") if modified_messages else ""
+                )
+
+                if new_content != original_content:
+                    # Content was modified, could be masking or blocking
+                    if not new_content or "blocked" in new_content.lower():
+                        # Content was blocked
+                        return MCPDuringCallResponseObject(
+                            should_continue=False,
+                            error_message="Content blocked by guardrail during execution",
+                        )
+                    else:
+                        # Content was masked/modified - for now, stop execution
+                        return MCPDuringCallResponseObject(
+                            should_continue=False,
+                            error_message="Content modified by guardrail during execution",
+                        )
+
+        # If result is a string, it's likely an error message
+        if isinstance(llm_result, str):
+            return MCPDuringCallResponseObject(
+                should_continue=False, error_message=llm_result
+            )
+
+        return None
+
+    def get_combined_callback_list(
+        self, dynamic_success_callbacks: Optional[List], global_callbacks: List
+    ) -> List:
+        if dynamic_success_callbacks is None:
+            return global_callbacks
+        return list(set(dynamic_success_callbacks + global_callbacks))
+
+    def _parse_pre_mcp_call_hook_response(
+        self,
+        response: MCPPreCallResponseObject,
+        original_request: MCPPreCallRequestObject,
+    ) -> Dict[str, Any]:
+        """
+        Parse the response from the pre_mcp_tool_call_hook
+
+        1. Check if the call should proceed
+        2. Apply any argument modifications
+        3. Handle validation errors
+        """
+        result = {
+            "should_proceed": response.should_proceed,
+            "modified_arguments": response.modified_arguments
+            or original_request.arguments,
+            "error_message": response.error_message,
+            "hidden_params": response.hidden_params,
+        }
+        return result
+
+    async def async_during_mcp_tool_call_hook(
+        self,
+        kwargs: dict,
+        request_obj: Any,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Optional[Any]:
+        """
+        During MCP Tool Call Hook
+
+        Use this for concurrent monitoring and validation during tool execution.
+        Reuses existing LLM guardrail logic by converting MCP calls to message format.
+        """
+        from litellm.types.llms.base import HiddenParams
+        from litellm.types.mcp import MCPDuringCallRequestObject
+
+        callbacks = self.get_combined_callback_list(
+            dynamic_success_callbacks=getattr(self, "dynamic_success_callbacks", None),
+            global_callbacks=litellm.success_callback,
+        )
+
+        # Create the request object if it's not already one
+        if not isinstance(request_obj, MCPDuringCallRequestObject):
+            request_obj = MCPDuringCallRequestObject(
+                tool_name=kwargs.get("name", ""),
+                arguments=kwargs.get("arguments", {}),
+                server_name=kwargs.get("server_name"),
+                start_time=start_time.timestamp() if start_time else None,
+                hidden_params=HiddenParams(),
+            )
+
+        for callback in callbacks:
+            try:
+                _callback: Optional[CustomLogger] = None
+                if isinstance(callback, str):
+                    from typing import cast
+
+                    from litellm import _custom_logger_compatible_callbacks_literal
+
+                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
+                    )
+                else:
+                    _callback = callback  # type: ignore
+
+                if _callback is not None and isinstance(_callback, CustomGuardrail):
+                    from litellm.types.guardrails import GuardrailEventHooks
+
+                    # Check if guardrail should be run for during_call hook (reusing existing logic)
+                    if (
+                        _callback.should_run_guardrail(
+                            data=kwargs, event_type=GuardrailEventHooks.during_mcp_call
+                        )
+                        is not True
+                    ):
+                        continue
+                    # Convert MCP tool call to LLM message format for existing guardrail logic
+                    synthetic_llm_data = self._convert_mcp_to_llm_format(
+                        request_obj, kwargs
+                    )
+
+                    # Reuse existing LLM guardrail logic for during call
+                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+                        kwargs.get("user_api_key_auth")
+                    )
+
+                    result = await _callback.async_moderation_hook(
+                        data=synthetic_llm_data,
+                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
+                        call_type="mcp_call",
+                    )
+                    # Convert result back to MCP response format if blocked/modified
+                    if result is not None:
+                        mcp_response = self._convert_llm_result_to_mcp_during_response(
+                            result, request_obj
+                        )
+                        if mcp_response is not None:
+                            return self._parse_during_mcp_call_hook_response(
+                                response=mcp_response
+                            )
+
+            except Exception as e:
+                raise e
+                verbose_proxy_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
+                        str(e)
+                    )
+                )
+        return None
+
+    def _parse_during_mcp_call_hook_response(
+        self, response: MCPDuringCallResponseObject
+    ) -> Dict[str, Any]:
+        """
+        Parse the response from the during_mcp_tool_call_hook
+
+        1. Check if execution should continue
+        2. Handle any error messages
+        3. Apply any hidden parameter updates
+        """
+        result = {
+            "should_continue": response.should_continue,
+            "error_message": response.error_message,
+            "hidden_params": response.hidden_params,
+        }
+        return result
+
     async def process_pre_call_hook_response(self, response, data, call_type):
         if isinstance(response, Exception):
             raise response
@@ -545,12 +1020,55 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
+        from litellm.utils import get_non_default_completion_params
+
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
         self._init_response_taking_too_long_task(data=data)
 
         if data is None:
             return None
+
+        litellm_logging_obj = cast(
+            Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None)
+        )
+        prompt_id = data.get("prompt_id", None)
+
+        ## PROMPT TEMPLATE CHECK ##
+        if (
+            litellm_logging_obj is not None
+            and prompt_id is not None
+            and (call_type == "completion" or call_type == "acompletion")
+        ):
+            from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+            custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
+                prompt_id
+            )
+            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+            litellm_prompt_id: Optional[str] = None
+            if prompt_spec is not None:
+                litellm_prompt_id = prompt_spec.litellm_params.prompt_id
+
+            if custom_logger and litellm_prompt_id is not None:
+                (
+                    model,
+                    messages,
+                    optional_params,
+                ) = litellm_logging_obj.get_chat_completion_prompt(
+                    model=data.get("model", ""),
+                    messages=data.get("messages", []),
+                    non_default_params=get_non_default_completion_params(kwargs=data),
+                    prompt_id=litellm_prompt_id,
+                    prompt_management_logger=custom_logger,
+                    prompt_variables=data.get("prompt_variables", None),
+                    prompt_label=data.get("prompt_label", None),
+                    prompt_version=data.get("prompt_version", None),
+                )
+
+                data.update(optional_params)
+                data["model"] = model
+                data["messages"] = messages
 
         try:
             for callback in litellm.callbacks:
@@ -1070,6 +1588,7 @@ class ProxyLogging:
             ModelResponse, EmbeddingResponse, ImageResponse, ModelResponseStream
         ],
         user_api_key_dict: UserAPIKeyAuth,
+        str_so_far: Optional[str] = None,
     ):
         """
         Allow user to modify outgoing streaming data -> per chunk
@@ -1077,6 +1596,8 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        from litellm.proxy.proxy_server import llm_router
+
         response_str: Optional[str] = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
@@ -1088,9 +1609,15 @@ class ProxyLogging:
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
 
+                        ## CHECK FOR MODEL-LEVEL GUARDRAILS
+                        modified_data = _check_and_merge_model_level_guardrails(
+                            data=data, llm_router=llm_router
+                        )
+
                         if (
                             callback.should_run_guardrail(
-                                data=data, event_type=GuardrailEventHooks.post_call
+                                data=modified_data,
+                                event_type=GuardrailEventHooks.post_call,
                             )
                             is not True
                         ):
@@ -1102,9 +1629,20 @@ class ProxyLogging:
                     else:
                         _callback = callback  # type: ignore
                     if _callback is not None and isinstance(_callback, CustomLogger):
-                        await _callback.async_post_call_streaming_hook(
-                            user_api_key_dict=user_api_key_dict, response=response_str
+                        if str_so_far is not None:
+                            complete_response = str_so_far + response_str
+                        else:
+                            complete_response = response_str
+                        potential_error_response = (
+                            await _callback.async_post_call_streaming_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=complete_response,
+                            )
                         )
+                        if isinstance(
+                            potential_error_response, str
+                        ) and potential_error_response.startswith("data: "):
+                            return potential_error_response
                 except Exception as e:
                     raise e
         return response
@@ -1142,27 +1680,6 @@ class ProxyLogging:
                         request_data=request_data,
                     )
         return response
-
-    async def post_call_streaming_hook(
-        self,
-        response: str,
-        user_api_key_dict: UserAPIKeyAuth,
-    ):
-        """
-        - Check outgoing streaming response uptil that point
-        - Run through moderation check
-        - Reject request if it fails moderation check
-        """
-        new_response = copy.deepcopy(response)
-        for callback in litellm.callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    await callback.async_post_call_streaming_hook(
-                        user_api_key_dict=user_api_key_dict, response=new_response
-                    )
-            except Exception as e:
-                raise e
-        return new_response
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
@@ -1220,8 +1737,17 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma  # type: ignore
-        except Exception:
-            raise Exception("Unable to find Prisma binaries.")
+        except Exception as e:
+            verbose_proxy_logger.error(f"Failed to import Prisma client: {e}")
+            verbose_proxy_logger.error(
+                "This usually means 'prisma generate' hasn't been run yet."
+            )
+            verbose_proxy_logger.error(
+                "Please run 'prisma generate' to generate the Prisma client."
+            )
+            raise Exception(
+                "Unable to find Prisma binaries. Please run 'prisma generate' first."
+            )
         if http_client is not None:
             self.db = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
@@ -3012,6 +3538,74 @@ def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
 
+def _check_and_merge_model_level_guardrails(
+    data: dict, llm_router: Optional[Router]
+) -> dict:
+    """
+    Check if the model has guardrails defined and merge them with existing guardrails in the request data.
+
+    Args:
+        data: The request data dict
+        llm_router: The LLM router instance to get deployment info from
+
+    Returns:
+        Modified data dict with merged guardrails (if any model-level guardrails exist)
+    """
+    if llm_router is None:
+        return data
+
+    # Get the model ID from the data
+    metadata = data.get("metadata") or {}
+    model_info = metadata.get("model_info") or {}
+    model_id = model_info.get("id", None)
+
+    if model_id is None:
+        return data
+
+    # Check if the model has guardrails
+    deployment = llm_router.get_deployment(model_id=model_id)
+    if deployment is None:
+        return data
+
+    model_level_guardrails = deployment.litellm_params.get("guardrails")
+
+    if model_level_guardrails is None:
+        return data
+
+    # Merge model-level guardrails with existing ones
+    return _merge_guardrails_with_existing(data, model_level_guardrails)
+
+
+def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> dict:
+    """
+    Merge model-level guardrails with any existing guardrails in the request data.
+
+    Args:
+        data: The request data dict
+        model_level_guardrails: Guardrails defined at the model level
+
+    Returns:
+        Modified data dict with merged guardrails in metadata
+    """
+    modified_data = data.copy()
+    metadata = modified_data.setdefault("metadata", {})
+    existing_guardrails = metadata.get("guardrails", [])
+
+    # Ensure existing_guardrails is a list
+    if not isinstance(existing_guardrails, list):
+        existing_guardrails = [existing_guardrails] if existing_guardrails else []
+
+    # Ensure model_level_guardrails is a list
+    if not isinstance(model_level_guardrails, list):
+        model_level_guardrails = (
+            [model_level_guardrails] if model_level_guardrails else []
+        )
+
+    # Combine existing and model-level guardrails
+    metadata["guardrails"] = list(set(existing_guardrails + model_level_guardrails))
+    return modified_data
+
+
 def get_error_message_str(e: Exception) -> str:
     error_message = ""
     if isinstance(e, HTTPException):
@@ -3184,3 +3778,56 @@ def get_prisma_client_or_throw(message: str):
             detail={"error": message},
         )
     return prisma_client
+
+
+def is_valid_api_key(key: str) -> bool:
+    """
+    Validates API key format:
+    - sk- keys: must match ^sk-[A-Za-z0-9_-]+$
+    - hashed keys: must match ^[a-fA-F0-9]{64}$
+    - Length between 20 and 100 characters
+    """
+    import re
+
+    if not isinstance(key, str):
+        return False
+    if 3 <= len(key) <= 100:
+        if re.match(r"^sk-[A-Za-z0-9_-]+$", key):
+            return True
+        if re.match(r"^[a-fA-F0-9]{64}$", key):
+            return True
+    return False
+
+
+def construct_database_url_from_env_vars() -> Optional[str]:
+    """
+    Construct a DATABASE_URL from individual environment variables.
+
+    Returns:
+        Optional[str]: The constructed DATABASE_URL or None if required variables are missing
+    """
+    import urllib.parse
+
+    # Check if all required variables are provided
+    database_host = os.getenv("DATABASE_HOST")
+    database_username = os.getenv("DATABASE_USERNAME")
+    database_password = os.getenv("DATABASE_PASSWORD")
+    database_name = os.getenv("DATABASE_NAME")
+
+    if database_host and database_username and database_name:
+        # Handle the problem of special character escaping in the database URL
+        database_username_enc = urllib.parse.quote_plus(database_username)
+        database_password_enc = (
+            urllib.parse.quote_plus(database_password) if database_password else ""
+        )
+        database_name_enc = urllib.parse.quote_plus(database_name)
+
+        # Construct DATABASE_URL from the provided variables
+        if database_password:
+            database_url = f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
+        else:
+            database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
+
+        return database_url
+
+    return None

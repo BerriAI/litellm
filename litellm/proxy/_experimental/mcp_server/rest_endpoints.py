@@ -23,6 +23,7 @@ router = APIRouter(
 if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+        _convert_protocol_version_to_enum,
     )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
@@ -140,15 +141,52 @@ if MCP_AVAILABLE:
         REST API to call a specific MCP tool with the provided arguments
         """
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from fastapi import HTTPException
 
-        data = await request.json()
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            user_api_key_dict=user_api_key_dict,
-            proxy_config=proxy_config,
-        )
-        return await call_mcp_tool(**data)
+        try:
+            data = await request.json()
+            data = await add_litellm_data_to_request(
+                data=data,
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=proxy_config,
+            )
+            return await call_mcp_tool(**data)
+        except BlockedPiiEntityError as e:
+            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "blocked_pii_entity",
+                    "message": str(e),
+                    "entity_type": getattr(e, 'entity_type', None),
+                    "guardrail_name": getattr(e, 'guardrail_name', None)
+                }
+            )
+        except GuardrailRaisedException as e:
+            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "guardrail_violation",
+                    "message": str(e),
+                    "guardrail_name": getattr(e, 'guardrail_name', None)
+                }
+            )
+        except HTTPException as e:
+            # Re-raise HTTPException as-is to preserve status code and detail
+            verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+            raise e
+        except Exception as e:
+            verbose_logger.exception(f"Unexpected error in MCP tool call: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "internal_server_error",
+                    "message": f"An unexpected error occurred: {str(e)}"
+                }
+            )
     
     ########################################################
     # MCP Connection testing routes
@@ -171,10 +209,10 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
-                    spec_version=request.spec_version,
+                    spec_version=_convert_protocol_version_to_enum(request.spec_version),
                     auth_type=request.auth_type,
                     mcp_info=request.mcp_info,
                 ),
@@ -200,10 +238,10 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
-                    spec_version=request.spec_version,
+                    spec_version=_convert_protocol_version_to_enum(request.spec_version),
                     auth_type=request.auth_type,
                     mcp_info=request.mcp_info,
                 ),

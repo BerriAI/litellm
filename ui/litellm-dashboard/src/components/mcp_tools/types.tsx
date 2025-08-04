@@ -126,6 +126,7 @@ export interface InputSchemaProperty {
 
 export interface MCPServer {
   server_id: string;
+  server_name?: string | null;
   alias?: string | null;
   description?: string | null;
   url: string;
