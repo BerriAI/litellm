@@ -232,6 +232,7 @@ class BaseResponsesAPITest(ABC):
     
 
     @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode):
         #litellm._turn_on_debug()
@@ -281,6 +282,7 @@ class BaseResponsesAPITest(ABC):
             )
 
     @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_get_endpoint(self, sync_mode):
         litellm._turn_on_debug()
@@ -321,6 +323,7 @@ class BaseResponsesAPITest(ABC):
                 raise ValueError("response is not a ResponsesAPIResponse")
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_list_input_items_endpoint(self):
         """Test that calls the OpenAI List Input Items endpoint"""
         litellm._turn_on_debug()
