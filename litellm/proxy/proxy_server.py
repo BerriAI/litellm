@@ -5678,13 +5678,13 @@ async def token_counter(request: TokenCountRequest, from_anthropic_endpoint: boo
                 # Call Anthropic API directly for more accurate token counting
                 client = anthropic.Anthropic(api_key=anthropic_api_key)
                 
-                anthropic_request = {
-                    "model": model_to_use,
-                    "messages": messages,
-                    "betas": ["token-counting-2024-11-01"]
-                }
-                
-                response = client.beta.messages.count_tokens(**anthropic_request)
+                # Call with explicit parameters to satisfy type checking
+                # Type ignore for now since messages come from generic dict input
+                response = client.beta.messages.count_tokens(
+                    model=model_to_use,
+                    messages=messages,  # type: ignore
+                    betas=["token-counting-2024-11-01"]
+                )
                 total_tokens = response.input_tokens
                 tokenizer_used = "anthropic_api"
                 
