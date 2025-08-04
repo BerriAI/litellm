@@ -1152,6 +1152,7 @@ def _can_object_call_model(
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
+    team_id: Optional[str] = None,
     object_type: Literal["user", "team", "key", "org"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
@@ -1184,6 +1185,7 @@ def _can_object_call_model(
                 llm_router=llm_router,
                 models=models,
                 team_model_aliases=team_model_aliases,
+                team_id=team_id,
                 object_type=object_type,
                 fallback_depth=fallback_depth + 1,
             )
@@ -1202,7 +1204,9 @@ def _can_object_call_model(
     access_groups: Dict[str, List[str]] = defaultdict(list)
 
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model)
+        access_groups = llm_router.get_model_access_groups(
+            model_name=model, team_id=team_id
+        )
 
     if (
         len(access_groups) > 0 and llm_router is not None
@@ -1288,6 +1292,7 @@ async def can_key_call_model(
         llm_router=llm_router,
         models=valid_token.models,
         team_model_aliases=valid_token.team_model_aliases,
+        team_id=valid_token.team_id,
         object_type="key",
     )
 
@@ -1326,6 +1331,7 @@ def can_team_access_model(
         llm_router=llm_router,
         models=team_object.models if team_object else [],
         team_model_aliases=team_model_aliases,
+        team_id=team_object.team_id if team_object else None,
         object_type="team",
     )
 
