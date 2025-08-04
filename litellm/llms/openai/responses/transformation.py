@@ -4,6 +4,9 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    _safe_convert_created_field,
+)
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
@@ -11,7 +14,6 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 
 from ..common_utils import OpenAIError
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import _safe_convert_created_field
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -47,6 +49,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             "top_p",
             "truncation",
             "user",
+            "service_tier",
+            "safety_identifier",
             "extra_headers",
             "extra_query",
             "extra_body",
