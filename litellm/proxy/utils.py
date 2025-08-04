@@ -3887,5 +3887,3 @@ async def count_tokens_with_anthropic_api(
         verbose_proxy_logger.warning("Anthropic library not available, falling back to LiteLLM tokenizer")
     except Exception as e:
         verbose_proxy_logger.warning(f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer")
-    
-    return None
