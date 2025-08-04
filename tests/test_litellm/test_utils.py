@@ -373,6 +373,115 @@ def test_cohere_embedding_optional_params():
     assert optional_params is not None
 
 
+def validate_model_cost_values(model_data, exceptions=None):
+    """
+    Validates that cost values in model data do not exceed 1.
+    
+    Args:
+        model_data (dict): The model data dictionary
+        exceptions (list, optional): List of model IDs that are allowed to have costs > 1
+        
+    Returns:
+        tuple: (is_valid, violations) where is_valid is a boolean and violations is a list of error messages
+    """
+    if exceptions is None:
+        exceptions = []
+    
+    violations = []
+    
+    # Define all cost-related fields to check
+    cost_fields = [
+        "input_cost_per_token",
+        "output_cost_per_token", 
+        "input_cost_per_character",
+        "output_cost_per_character",
+        "input_cost_per_image",
+        "output_cost_per_image",
+        "input_cost_per_pixel",
+        "output_cost_per_pixel",
+        "input_cost_per_second",
+        "output_cost_per_second",
+        "input_cost_per_query",
+        "input_cost_per_request",
+        "input_cost_per_audio_token",
+        "output_cost_per_audio_token",
+        "input_cost_per_audio_per_second",
+        "input_cost_per_video_per_second",
+        "input_cost_per_token_above_128k_tokens",
+        "output_cost_per_token_above_128k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_character_above_128k_tokens",
+        "output_cost_per_character_above_128k_tokens",
+        "input_cost_per_image_above_128k_tokens",
+        "input_cost_per_video_per_second_above_8s_interval",
+        "input_cost_per_video_per_second_above_15s_interval",
+        "input_cost_per_video_per_second_above_128k_tokens",
+        "input_cost_per_token_batch_requests",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches",
+        "input_cost_per_token_cache_hit",
+        "cache_creation_input_token_cost",
+        "cache_creation_input_audio_token_cost",
+        "cache_read_input_token_cost",
+        "cache_read_input_audio_token_cost",
+        "input_dbu_cost_per_token",
+        "output_db_cost_per_token",
+        "output_dbu_cost_per_token",
+        "output_cost_per_reasoning_token",
+        "citation_cost_per_token",
+    ]
+    
+    # Also check nested cost fields
+    nested_cost_fields = [
+        "search_context_cost_per_query",
+    ]
+    
+    for model_id, model_info in model_data.items():
+        # Skip if this model is in exceptions
+        if model_id in exceptions:
+            continue
+            
+        # Check direct cost fields
+        for field in cost_fields:
+            if field in model_info and model_info[field] is not None:
+                cost_value = model_info[field]
+                
+                # Convert string values to float if needed
+                if isinstance(cost_value, str):
+                    try:
+                        cost_value = float(cost_value)
+                    except (ValueError, TypeError):
+                        # Skip if we can't convert to float
+                        continue
+                
+                if isinstance(cost_value, (int, float)) and cost_value > 1:
+                    violations.append(
+                        f"Model '{model_id}' has {field} = {cost_value} which exceeds 1"
+                    )
+        
+        # Check nested cost fields
+        for field in nested_cost_fields:
+            if field in model_info and model_info[field] is not None:
+                nested_costs = model_info[field]
+                if isinstance(nested_costs, dict):
+                    for nested_field, nested_value in nested_costs.items():
+                        # Convert string values to float if needed
+                        if isinstance(nested_value, str):
+                            try:
+                                nested_value = float(nested_value)
+                            except (ValueError, TypeError):
+                                # Skip if we can't convert to float
+                                continue
+                        
+                        if isinstance(nested_value, (int, float)) and nested_value > 1:
+                            violations.append(
+                                f"Model '{model_id}' has {field}.{nested_field} = {nested_value} which exceeds 1"
+                            )
+    
+    return len(violations) == 0, violations
+
+
 def test_aaamodel_prices_and_context_window_json_is_valid():
     """
     Validates the `model_prices_and_context_window.json` file.
@@ -542,7 +651,23 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         "sample_spec", None
     )  # remove the sample, whose schema is inconsistent with the real data
 
+    # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
+    
+    # Validate cost values
+    # Define exceptions for models that are allowed to have costs > 1
+    # Add model IDs here if they legitimately have costs > 1
+    exceptions = [
+        # Add any model IDs that should be exempt from the cost validation
+        # Example: "expensive-model-id",
+    ]
+    
+    is_valid, violations = validate_model_cost_values(actual_json, exceptions)
+    
+    if not is_valid:
+        error_message = "Cost validation failed:\n" + "\n".join(violations)
+        error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
+        raise AssertionError(error_message)
 
 
 def test_get_model_info_gemini():
