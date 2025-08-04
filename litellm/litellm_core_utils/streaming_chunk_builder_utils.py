@@ -527,7 +527,12 @@ class ChunkProcessor:
                 returned_usage, "cache_read_input_tokens", cache_read_input_tokens
             )  # for anthropic
         if completion_tokens_details is not None:
-            returned_usage.completion_tokens_details = completion_tokens_details
+            if isinstance(completion_tokens_details, CompletionTokensDetails):
+                returned_usage.completion_tokens_details = CompletionTokensDetailsWrapper(
+                    **completion_tokens_details.model_dump()
+                )
+            else:
+                returned_usage.completion_tokens_details = completion_tokens_details
 
         if reasoning_tokens is not None:
             if returned_usage.completion_tokens_details is None:

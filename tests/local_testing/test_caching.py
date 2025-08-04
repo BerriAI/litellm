@@ -2155,8 +2155,8 @@ async def test_caching_kwargs_input(sync_mode):
         Message,
         ModelResponse,
         Usage,
-        CompletionTokensDetails,
-        PromptTokensDetails,
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
     )
     from datetime import datetime
 
@@ -2187,10 +2187,10 @@ async def test_caching_kwargs_input(sync_mode):
                 completion_tokens=31,
                 prompt_tokens=16,
                 total_tokens=47,
-                completion_tokens_details=CompletionTokensDetails(
+                completion_tokens_details=CompletionTokensDetailsWrapper(
                     audio_tokens=None, reasoning_tokens=0
                 ),
-                prompt_tokens_details=PromptTokensDetails(
+                prompt_tokens_details=PromptTokensDetailsWrapper(
                     audio_tokens=None, cached_tokens=0
                 ),
             ),
