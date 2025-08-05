@@ -1416,8 +1416,8 @@ class Router:
         dynamic_litellm_params = get_dynamic_litellm_params(
             litellm_params=litellm_params, request_kwargs=kwargs
         )
-        # Use deployment model_name as model_group for generating model_id
-        model_group = deployment["model_name"]
+        metadata = kwargs.get("metadata", {})
+        model_group = cast(str, metadata.get("model_group"))
         _model_id = self._generate_model_id(
             model_group=model_group, litellm_params=dynamic_litellm_params
         )
