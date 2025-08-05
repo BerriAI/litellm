@@ -307,3 +307,16 @@ response = litellm.completion(
 
 print(response.choices[0].message.content))
 ```
+
+## SambaNova - Embeddings
+
+```python
+import litellm
+
+response = litellm.embedding(
+    model="sambanova/E5-Mistral-7B-Instruct",
+    input=["sample text to embed", "another sample text to embed"]
+)
+
+print(response.data)
+```
