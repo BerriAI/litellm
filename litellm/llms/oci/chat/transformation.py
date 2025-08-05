@@ -609,7 +609,7 @@ open_ai_to_generic_oci_role_map: Dict[str, OCIRoles] = {
 
 
 def adapt_messages_to_generic_oci_standard_content_message(
-    role: str, content: str | list
+    role: str, content: Union[str, list]
 ) -> OCIMessage:
     new_content: list[OCIContentPartUnion] = []
     if isinstance(content, str):
