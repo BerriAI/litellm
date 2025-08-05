@@ -1,43 +1,17 @@
-import React, { useEffect, useState, useRef } from "react";
-import { Form, Table, Input } from "antd";
-import { Text, TextInput } from "@tremor/react";
-import { Row, Col } from "antd";
-import { QuestionCircleOutlined } from "@ant-design/icons";
+import React, { useEffect, useState } from "react";
+import { Form, Table } from "antd";
+import { TextInput } from "@tremor/react";
+import { Tooltip } from "../atoms";
 
 const ConditionalPublicModelName: React.FC = () => {
-  // Access the form instance
   const form = Form.useFormInstance();
-  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
-  const [showPublicTooltip, setShowPublicTooltip] = useState(false);
-  const [showLiteLLMTooltip, setShowLiteLLMTooltip] = useState(false);
-  const [tooltipPosition, setTooltipPosition] = useState<'top' | 'bottom'>('top');
-  const [liteLLMTooltipPosition, setLiteLLMTooltipPosition] = useState<'top' | 'bottom'>('top');
-  
-  const publicTooltipRef = useRef<HTMLDivElement>(null);
-  const liteLLMTooltipRef = useRef<HTMLDivElement>(null);
-
-  // Function to check if tooltip would fit above
-  const checkTooltipPosition = (ref: React.RefObject<HTMLDivElement>, setPosition: (pos: 'top' | 'bottom') => void) => {
-    if (ref.current) {
-      const rect = ref.current.getBoundingClientRect();
-      const tooltipHeight = 300; // Approximate height of the tooltip
-      const spaceAbove = rect.top;
-      const spaceBelow = window.innerHeight - rect.bottom;
-      
-      if (spaceAbove < tooltipHeight && spaceBelow > tooltipHeight) {
-        setPosition('bottom');
-      } else {
-        setPosition('top');
-      }
-    }
-  };
+  const [tableKey, setTableKey] = useState(0);
 
   // Watch the 'model' field for changes and ensure it's always an array
   const modelValue = Form.useWatch('model', form) || [];
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
   const customModelName = Form.useWatch('custom_model_name', form);
   const showPublicModelName = !selectedModels.includes('all-wildcard');
-
 
   // Force table to re-render when custom model name changes
   useEffect(() => {
@@ -95,66 +69,36 @@ const ConditionalPublicModelName: React.FC = () => {
 
   if (!showPublicModelName) return null;
 
+  const publicNameTooltipContent = (
+    <>
+      <div className="mb-2 font-normal">
+        The name you specify in your API calls to LiteLLM Proxy
+      </div>
+      <div className="mb-2 font-normal">
+        <strong>Example:</strong> If you choose <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">openai/qwen-plus-latest</code> as the LiteLLM model, and name your public model <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">example-name</code>
+      </div>
+      <div className="mb-2 font-normal">
+        <strong>Usage:</strong> You make an API call to the LiteLLM proxy with <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">model = "example-name"</code>
+      </div>
+      <div className="font-normal">
+        <strong>Result:</strong> LiteLLM sends <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">qwen-plus-latest</code> to the provider
+      </div>
+    </>
+  );
+
+  const liteLLMModelTooltipContent = (
+    <div>The model name LiteLLM will send to the LLM API</div>
+  );
+
   const columns = [
     {
       title: (
-        <span style={{ display: 'flex', alignItems: 'center' }}>
+        <span className="flex items-center">
           Public Model Name
-          <div style={{ position: 'relative', display: 'inline-block' }} ref={publicTooltipRef}>
-            <QuestionCircleOutlined 
-              style={{ marginLeft: '4px', color: '#8c8c8c', cursor: 'help' }}
-              onMouseEnter={() => {
-                checkTooltipPosition(publicTooltipRef, setTooltipPosition);
-                setShowPublicTooltip(true);
-              }}
-              onMouseLeave={() => setShowPublicTooltip(false)}
-            />
-            {showPublicTooltip && (
-              <div style={{
-                position: 'absolute',
-                [tooltipPosition === 'top' ? 'bottom' : 'top']: '100%',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                width: '500px',
-                backgroundColor: 'rgba(0, 0, 0, 0.9)',
-                color: '#ffffff',
-                padding: '12px',
-                borderRadius: '6px',
-                fontSize: '13px',
-                fontWeight: 'normal',
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"',
-                zIndex: 1000,
-                marginBottom: tooltipPosition === 'top' ? '8px' : '0',
-                marginTop: tooltipPosition === 'bottom' ? '8px' : '0',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-                border: '1px solid #333'
-              }}>
-                <div style={{ marginBottom: '8px', fontWeight: 'normal' }}>
-                  The name you specify in your API calls to LiteLLM Proxy
-                </div>
-                <div style={{ marginBottom: '8px', fontWeight: 'normal' }}>
-                  <strong>Example:</strong> If you choose <code style={{ backgroundColor: 'rgba(51, 51, 51, 0.8)', padding: '2px 4px', borderRadius: '2px' }}>openai/qwen-plus-latest</code> as the LiteLLM model, and name your public model <code style={{ backgroundColor: 'rgba(51, 51, 51, 0.8)', padding: '2px 4px', borderRadius: '2px' }}>example-name</code>
-                </div>
-                <div style={{ marginBottom: '8px', fontWeight: 'normal' }}>
-                  <strong>Usage:</strong> You make an API call to the LiteLLM proxy with <code style={{ backgroundColor: 'rgba(51, 51, 51, 0.8)', padding: '2px 4px', borderRadius: '2px' }}>model = "example-name"</code>
-                </div>
-                <div style={{ fontWeight: 'normal' }}>
-                  <strong>Result:</strong> LiteLLM sends <code style={{ backgroundColor: 'rgba(51, 51, 51, 0.8)', padding: '2px 4px', borderRadius: '2px' }}>qwen-plus-latest</code> to the provider
-                </div>
-                <div style={{
-                  position: 'absolute',
-                  [tooltipPosition === 'top' ? 'top' : 'bottom']: '100%',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  width: 0,
-                  height: 0,
-                  borderLeft: '6px solid transparent',
-                  borderRight: '6px solid transparent',
-                  [tooltipPosition === 'top' ? 'borderTop' : 'borderBottom']: '6px solid rgba(0, 0, 0, 0.9)'
-                }} />
-              </div>
-            )}
-          </div>
+          <Tooltip 
+            content={publicNameTooltipContent}
+            width="500px"
+          />
         </span>
       ),
       dataIndex: 'public_name',
@@ -174,52 +118,12 @@ const ConditionalPublicModelName: React.FC = () => {
     },
     {
       title: (
-        <span style={{ display: 'flex', alignItems: 'center' }}>
+        <span className="flex items-center">
           LiteLLM Model Name
-          <div style={{ position: 'relative', display: 'inline-block' }} ref={liteLLMTooltipRef}>
-            <QuestionCircleOutlined 
-              style={{ marginLeft: '4px', color: '#8c8c8c', cursor: 'help' }}
-              onMouseEnter={() => {
-                checkTooltipPosition(liteLLMTooltipRef, setLiteLLMTooltipPosition);
-                setShowLiteLLMTooltip(true);
-              }}
-              onMouseLeave={() => setShowLiteLLMTooltip(false)}
-            />
-            {showLiteLLMTooltip && (
-              <div style={{
-                position: 'absolute',
-                [liteLLMTooltipPosition === 'top' ? 'bottom' : 'top']: '100%',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                backgroundColor: 'rgba(0, 0, 0, 0.9)',
-                color: '#ffffff',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                fontSize: '13px',
-                fontWeight: 'normal',
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji"',
-                zIndex: 1000,
-                marginBottom: liteLLMTooltipPosition === 'top' ? '8px' : '0',
-                marginTop: liteLLMTooltipPosition === 'bottom' ? '8px' : '0',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-                border: '1px solid #333',
-                whiteSpace: 'nowrap'
-              }}>
-                The model name LiteLLM will send to the LLM API
-                <div style={{
-                  position: 'absolute',
-                  [liteLLMTooltipPosition === 'top' ? 'top' : 'bottom']: '100%',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  width: 0,
-                  height: 0,
-                  borderLeft: '6px solid transparent',
-                  borderRight: '6px solid transparent',
-                  [liteLLMTooltipPosition === 'top' ? 'borderTop' : 'borderBottom']: '6px solid rgba(0, 0, 0, 0.9)'
-                }} />
-              </div>
-            )}
-          </div>
+          <Tooltip 
+            content={liteLLMModelTooltipContent}
+            width="360px"
+          />
         </span>
       ),
       dataIndex: 'litellm_model',
