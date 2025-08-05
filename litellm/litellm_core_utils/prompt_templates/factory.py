@@ -2479,7 +2479,9 @@ class BedrockImageProcessor:
         )
 
         if is_document:
-            potential_extensions = mimetypes.guess_all_extensions(mime_type)
+            potential_extensions = mimetypes.guess_all_extensions(
+                mime_type, strict=False
+            )
             valid_extensions = [
                 ext[1:]
                 for ext in potential_extensions
@@ -2950,7 +2952,10 @@ def process_empty_text_blocks(
         ]
 
     modified_message = message.copy()
-    modified_message["content"] = modified_content_block
+    modified_message["content"] = cast(
+        Union[List[ChatCompletionTextObject], List[ChatCompletionThinkingBlock]],
+        modified_content_block,
+    )
     return modified_message
 
 
