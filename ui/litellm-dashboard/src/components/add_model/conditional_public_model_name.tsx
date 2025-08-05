@@ -5,7 +5,7 @@ import { Tooltip } from "../atoms";
 
 const ConditionalPublicModelName: React.FC = () => {
   const form = Form.useFormInstance();
-  const [tableKey, setTableKey] = useState(0);
+  const [tableKey, setTableKey] = useState(0);// Add a key to force table re-render
 
   // Watch the 'model' field for changes and ensure it's always an array
   const modelValue = Form.useWatch('model', form) || [];
