@@ -14,6 +14,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchRequest,
     VectorStoreSearchResponse,
 )
+from litellm.utils import add_openai_metadata
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -124,7 +125,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             file_ids=vector_store_create_optional_params.get("file_ids", None),
             expires_after=vector_store_create_optional_params.get("expires_after", None),
             chunking_strategy=vector_store_create_optional_params.get("chunking_strategy", None),
-            metadata=vector_store_create_optional_params.get("metadata", None),
+            metadata=add_openai_metadata(vector_store_create_optional_params.get("metadata", None)),
         )
 
         dict_request_body = cast(dict, typed_request_body)
