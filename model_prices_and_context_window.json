@@ -5741,6 +5741,32 @@
         "supports_reasoning": true,
         "supports_computer_use": true
     },
+    "claude-opus-4-1-20250805": {
+        "max_tokens": 32000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 7.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+        },
+        "cache_creation_input_token_cost": 1.875e-05,
+        "cache_read_input_token_cost": 1.5e-06,
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "tool_use_system_prompt_tokens": 159,
+        "supports_assistant_prefill": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_computer_use": true
+    },
     "claude-sonnet-4-20250514": {
         "max_tokens": 64000,
         "max_input_tokens": 200000,
