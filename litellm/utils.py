@@ -6604,6 +6604,17 @@ def validate_and_fix_openai_messages(messages: List):
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
 
+def validate_and_fix_openai_tools(tools: List): 
+    """
+    Ensure tools is List[dict] and not List[BaseModel]
+    """
+    new_tools = []
+    for tool in tools:
+        if isinstance(tool, BaseModel):
+            new_tools.append(tool.model_dump())
+        else:
+            new_tools.append(tool)
+    return new_tools
 
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
