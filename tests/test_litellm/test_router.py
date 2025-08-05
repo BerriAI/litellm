@@ -1357,3 +1357,47 @@ async def test_async_function_with_fallbacks_common_utils():
             args=(),
             kwargs={},  # No model key
         )
+
+
+def test_should_include_deployment():
+    """Test that Router.should_include_deployment returns the correct response"""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_a28a12f9-3e44-4861-bd4f-325f2d309ce8_cd5dc6fb-b046-4e05-ae1d-32ba4d936266",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {
+                    "team_id": "a28a12f9-3e44-4861-bd4f-325f2d309ce8",
+                    "team_public_model_name": "openai/*",
+                },
+            }
+        ],
+    )
+
+    model = {
+        "model_name": "model_name_a28a12f9-3e44-4861-bd4f-325f2d309ce8_cd5dc6fb-b046-4e05-ae1d-32ba4d936266",
+        "litellm_params": {
+            "api_key": "sk-proj-1234567890",
+            "custom_llm_provider": "openai",
+            "use_in_pass_through": False,
+            "use_litellm_proxy": False,
+            "merge_reasoning_content_in_choices": False,
+            "model": "openai/*",
+        },
+        "model_info": {
+            "id": "95f58039-d54a-4d1c-b700-5e32e99a1120",
+            "db_model": True,
+            "updated_by": "64a2f787-0863-4d76-9516-2dc49c1598e8",
+            "created_by": "64a2f787-0863-4d76-9516-2dc49c1598e8",
+            "team_id": "a28a12f9-3e44-4861-bd4f-325f2d309ce8",
+            "team_public_model_name": "openai/*",
+            "mode": "completion",
+            "access_groups": ["restricted-models-openai"],
+        },
+    }
+    model_name = "openai/o4-mini-deep-research"
+    team_id = "a28a12f9-3e44-4861-bd4f-325f2d309ce8"
+    assert router.get_model_list(
+        model_name=model_name,
+        team_id=team_id,
+    )

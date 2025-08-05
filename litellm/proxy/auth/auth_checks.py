@@ -288,9 +288,6 @@ def _is_api_route_allowed(
     if valid_token is None:
         raise Exception("Invalid proxy server token passed. valid_token=None.")
 
-    # Check if management routes are disabled and raise exception if they are
-    RouteChecks.should_call_route(route=route, valid_token=valid_token)
-
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,

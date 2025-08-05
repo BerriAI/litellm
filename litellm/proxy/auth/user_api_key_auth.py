@@ -49,6 +49,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import check_oauth2_token
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -259,6 +260,7 @@ def get_api_key(
     from litellm.proxy.common_utils.http_parsing_utils import (
         _safe_get_request_query_params,
     )
+
     api_key = api_key
     passed_in_key: Optional[str] = None
     if isinstance(custom_litellm_key_header, str):
@@ -279,7 +281,11 @@ def get_api_key(
     elif isinstance(azure_apim_header, str):
         passed_in_key = azure_apim_header
         api_key = azure_apim_header
-    elif RouteChecks.is_generate_content_route(route=route) and request is not None and _safe_get_request_query_params(request).get("key"):
+    elif (
+        RouteChecks.is_generate_content_route(route=route)
+        and request is not None
+        and _safe_get_request_query_params(request).get("key")
+    ):
         google_auth_key: str = _safe_get_request_query_params(request).get("key") or ""
         passed_in_key = google_auth_key
         api_key = google_auth_key
@@ -1141,6 +1147,8 @@ async def user_api_key_auth(
     request_data = await _read_request_body(request=request)
     route: str = get_request_route(request=request)
 
+    ## CHECK IF ROUTE IS ALLOWED
+
     user_api_key_auth_obj = await _user_api_key_auth_builder(
         request=request,
         api_key=api_key,
@@ -1151,6 +1159,9 @@ async def user_api_key_auth(
         request_data=request_data,
         custom_litellm_key_header=custom_litellm_key_header,
     )
+
+    ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
+    RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
 
     end_user_id = get_end_user_id_from_request_body(
         request_data, _safe_get_request_headers(request)
