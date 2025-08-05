@@ -406,6 +406,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
+        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
+            {}
+        )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         if model_list is not None:
@@ -1207,7 +1210,7 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
-                    raise fallback_error 
+                    raise fallback_error
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
@@ -5109,6 +5112,19 @@ class Router:
             if deployment.model_info.id:
                 self.provider_default_deployment_ids.append(deployment.model_info.id)
 
+        _team_id = deployment.model_info.get("team_id")
+        _team_public_model_name = deployment.model_info.get("team_public_model_name")
+        if (
+            _team_id is not None
+            and _team_public_model_name is not None
+            and "*" in _team_public_model_name
+        ):
+            if _team_id not in self.team_pattern_routers:
+                self.team_pattern_routers[_team_id] = PatternMatchRouter()
+            self.team_pattern_routers[_team_id].add_pattern(
+                _team_public_model_name, deployment.to_json(exclude_none=True)
+            )
+
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources = deployment.litellm_params.get("dataSources", []) or []
 
@@ -6073,6 +6089,7 @@ class Router:
 
         if team_id specified, returns matching team-specific models
         """
+
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
@@ -6087,7 +6104,17 @@ class Router:
                 )
 
             if len(returned_models) == 0:  # check if wildcard route
-                potential_wildcard_models = self.pattern_router.route(model_name)
+                potential_wildcard_models = self.pattern_router.route(model_name) or []
+
+                ## check for team-specific wildcard models
+                if team_id is not None and team_id in self.team_pattern_routers:
+                    potential_team_only_wildcard_models = (
+                        self.team_pattern_routers[team_id].route(model_name) or []
+                    )
+                    potential_wildcard_models.extend(
+                        potential_team_only_wildcard_models
+                    )
+
                 if model_name is not None and potential_wildcard_models is not None:
                     for m in potential_wildcard_models:
                         deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
