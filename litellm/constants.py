@@ -414,6 +414,7 @@ openai_compatible_endpoints: List = [
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "api.inference.wandb.ai/v1",
 ]
 
 

@@ -2291,6 +2291,7 @@ class LlmProviders(str, Enum):
     FIREWORKS_AI = "fireworks_ai"
     FRIENDLIAI = "friendliai"
     FEATHERLESS_AI = "featherless_ai"
+    WANDB_HUB = "wandb_hub"
     WATSONX = "watsonx"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"

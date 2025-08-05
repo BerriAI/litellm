@@ -17445,5 +17445,20 @@
         "supports_vision": false,
         "supports_system_messages": true,
         "supports_tool_choice": false
+    },
+    "wandb_hub/moonshotai/Kimi-K2-Instruct": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.35e-06,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "wandb_hub",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_web_search": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true
     }
 }

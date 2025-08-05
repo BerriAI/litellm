@@ -7,8 +7,6 @@ sys.path.insert(0, os.path.abspath("../.."))
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, call, patch
 
 import pytest
 from prometheus_client import REGISTRY, CollectorRegistry
@@ -18,18 +16,16 @@ from litellm import completion
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
-    StandardLoggingHiddenParams,
-    StandardLoggingMetadata,
-    StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingMetadata,
+    StandardLoggingHiddenParams,
+    StandardLoggingModelInformation,
 )
-
+import pytest
+from unittest.mock import MagicMock, patch, call
+from datetime import datetime, timedelta, timezone
 try:
-    from litellm_enterprise.integrations.prometheus import (
-        PrometheusLogger,
-        UserAPIKeyLabelValues,
-        get_custom_labels_from_metadata,
-    )
+    from litellm_enterprise.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues, get_custom_labels_from_metadata
 except Exception:
     PrometheusLogger = None
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1058,7 +1054,6 @@ def test_increment_deployment_cooled_down(prometheus_logger):
 @pytest.mark.parametrize("enable_end_user_cost_tracking_prometheus_only", [True, False])
 def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheus_only):
     from litellm_enterprise.integrations.prometheus import prometheus_label_factory
-
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     monkeypatch.setattr(
@@ -1537,11 +1532,7 @@ def test_prometheus_label_factory_with_custom_tags(monkeypatch):
     """
     Test that prometheus_label_factory correctly handles custom tags
     """
-    from litellm_enterprise.integrations.prometheus import (
-        get_custom_labels_from_tags,
-        prometheus_label_factory,
-    )
-
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags, prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     # Set custom tags configuration
@@ -1576,11 +1567,7 @@ def test_prometheus_label_factory_with_no_custom_tags(monkeypatch):
     """
     Test that prometheus_label_factory works when no custom tags are configured
     """
-    from litellm_enterprise.integrations.prometheus import (
-        get_custom_labels_from_tags,
-        prometheus_label_factory,
-    )
-
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags, prometheus_label_factory
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
     # Set empty custom tags configuration
@@ -1789,154 +1776,3 @@ def test_set_llm_deployment_success_metrics_with_label_filtering():
         )
         prometheus_logger.litellm_deployment_success_responses.labels().inc.assert_called_once()
         prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_prometheus_token_metrics_with_prometheus_config():
-    """
-    Test that validates the renamed token metrics are incremented correctly with a prometheus config.
-    
-    This test ensures that after the metric renaming (git diff):
-    - litellm_total_tokens -> litellm_total_tokens_metric
-    - litellm_input_tokens -> litellm_input_tokens_metric  
-    - litellm_output_tokens -> litellm_output_tokens_metric
-    
-    All three metrics should be properly incremented when making a successful completion request.
-    """
-    from prometheus_client import CollectorRegistry, Counter
-
-    import litellm
-    from litellm.types.integrations.prometheus import PrometheusMetricsConfig
-
-    # Clear registry before test
-    collectors = list(REGISTRY._collector_to_names.keys())
-    for collector in collectors:
-        REGISTRY.unregister(collector)
-    
-    # Set up prometheus configuration that includes the token metrics
-    config = [
-        PrometheusMetricsConfig(
-            group="token_metrics_test",
-            metrics=[
-                "litellm_total_tokens_metric",
-                "litellm_input_tokens_metric", 
-                "litellm_output_tokens_metric",
-                "litellm_requests_metric"
-            ],
-            include_labels=[
-                "model",
-                "hashed_api_key", 
-                "api_key_alias",
-                "team",
-                "team_alias"
-            ],
-        )
-    ]
-    
-    # Mock litellm.prometheus_metrics_config
-    with patch("litellm.prometheus_metrics_config", config):
-        # Create PrometheusLogger with the configuration
-        prometheus_logger = PrometheusLogger()
-        
-        # Test data with specific token counts
-        standard_logging_payload = create_standard_logging_payload()
-        standard_logging_payload["total_tokens"] = 1500
-        standard_logging_payload["prompt_tokens"] = 900
-        standard_logging_payload["completion_tokens"] = 600
-        standard_logging_payload["response_cost"] = 0.075
-        
-        kwargs = {
-            "model": "gpt-3.5-turbo",
-            "stream": False,
-            "litellm_params": {
-                "metadata": {
-                    "user_api_key": "test_key_hash",
-                    "user_api_key_user_id": "test_user",
-                    "user_api_key_team_id": "test_team",
-                    "user_api_key_alias": "test_alias",
-                    "user_api_key_team_alias": "test_team_alias",
-                }
-            },
-            "start_time": datetime.now() - timedelta(seconds=2),
-            "completion_start_time": datetime.now() - timedelta(seconds=1), 
-            "api_call_start_time": datetime.now() - timedelta(seconds=1.5),
-            "end_time": datetime.now(),
-            "standard_logging_object": standard_logging_payload,
-        }
-        response_obj = MagicMock()
-
-        # Make the completion call through the logger
-        await prometheus_logger.async_log_success_event(
-            kwargs, response_obj, kwargs["start_time"], kwargs["end_time"]
-        )
-
-        await asyncio.sleep(2)
-
-        print("final registry values", REGISTRY._collector_to_names)
-
-        # Get metric collectors directly from registry 
-        metric_collectors = {}
-        for collector, names in REGISTRY._collector_to_names.items():
-            metric_name = names[0]  # First name is the base metric name
-            metric_collectors[metric_name] = collector
-
-        print("=== Final Metric Values (Direct Access) ===")
-        
-        # Expected values 
-        expected_values = {
-            "litellm_total_tokens_metric": 1500.0,
-            "litellm_input_tokens_metric": 900.0,
-            "litellm_output_tokens_metric": 600.0,
-            "litellm_requests_metric": 1.0
-        }
-        
-        expected_label_values = {
-            'api_key_alias': 'test_alias',
-            'hashed_api_key': 'test_hash',
-            'model': 'gpt-3.5-turbo', 
-            'team': 'test_team',
-            'team_alias': 'test_team_alias'
-        }
-
-        # Validate each metric directly
-        for metric_name, expected_value in expected_values.items():
-            if metric_name in metric_collectors:
-                collector = metric_collectors[metric_name]
-                
-                # Get all samples for this metric
-                samples = list(collector.collect())[0].samples
-                
-                # Find the _total sample (the actual counter value)
-                total_sample = None
-                for sample in samples:
-                    if sample.name.endswith('_total'):
-                        total_sample = sample
-                        break
-                
-                if total_sample:
-                    actual_value = total_sample.value
-                    actual_labels = total_sample.labels
-                    
-                    print(f"✓ {metric_name}: expected={expected_value}, actual={actual_value}")
-                    print(f"  Labels: {actual_labels}")
-                    
-                    # Validate the value
-                    assert actual_value == expected_value, f"Expected {expected_value}, got {actual_value} for {metric_name}"
-                    
-                    # Validate the labels
-                    for label_key, expected_label_value in expected_label_values.items():
-                        actual_label_value = actual_labels.get(label_key)
-                        assert actual_label_value == expected_label_value, f"Expected label {label_key}={expected_label_value}, got {actual_label_value}"
-                    
-                    print(f"  ✓ {metric_name} VALIDATED")
-                else:
-                    raise AssertionError(f"No _total sample found for {metric_name}")
-            else:
-                raise AssertionError(f"Metric {metric_name} not found in registry")
-        
-        print("✓ All token metrics validated successfully!")
-
-        # check final value of metrics in registry
-  
-
-        

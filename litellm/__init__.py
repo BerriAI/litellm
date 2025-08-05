@@ -528,6 +528,7 @@ v0_models: List = []
 morph_models: List = []
 lambda_ai_models: List = []
 hyperbolic_models: List = []
+wandb_hub_models: List = []
 recraft_models: List = []
 
 
@@ -716,6 +717,8 @@ def add_known_models():
             lambda_ai_models.append(key)
         elif value.get("litellm_provider") == "hyperbolic":
             hyperbolic_models.append(key)
+        elif value.get("litellm_provider") == "wandb_hub":
+            wandb_hub_models.append(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
 
@@ -805,6 +808,7 @@ model_list = (
     + v0_models
     + morph_models
     + lambda_ai_models
+    + wandb_hub_models
     + recraft_models
 )
 
@@ -878,6 +882,7 @@ models_by_provider: dict = {
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
     "hyperbolic": hyperbolic_models,
+    "wandb_hub": wandb_hub_models,
     "recraft": recraft_models,
 }
 
@@ -1203,6 +1208,7 @@ from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
+from .llms.wandb_hub.chat.transformation import WandbHubChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients

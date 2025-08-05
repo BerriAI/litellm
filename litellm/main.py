@@ -1843,6 +1843,52 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "wandb_hub":
+            from litellm.llms.wandb_hub.chat.handler import WandbHubChatHandler
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("WANDB_BASE_URL")
+                or "https://api.inference.wandb.ai/v1"
+            )
+
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret("WANDB_API_KEY")
+            )
+
+            headers = headers or litellm.headers
+
+            # Validate project_id is provided
+            if "project_id" not in optional_params and "project" not in optional_params:
+                raise ValueError(
+                    "project_id is required for Wandb Hub. "
+                    "Please provide it in optional_params as 'project_id' or 'project'."
+                )
+
+            wandb_hub_handler = WandbHubChatHandler()
+            response = wandb_hub_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                custom_prompt_dict={},
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                optional_params=optional_params,
+                acompletion=acompletion,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=headers,
+                timeout=timeout,
+                client=client,
+            )
         elif custom_llm_provider == "aiohttp_openai":
             # NEW aiohttp provider for 10-100x higher RPS
             api_base = (
