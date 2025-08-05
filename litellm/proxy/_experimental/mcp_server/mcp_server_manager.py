@@ -492,7 +492,10 @@ class MCPServerManager:
             )
 
             tools = await self._fetch_tools_with_timeout(client, server.name)
-            return self._create_prefixed_tools(tools, server)
+            
+            prefixed_tools = self._create_prefixed_tools(tools, server)
+            
+            return prefixed_tools
 
         except Exception as e:
             verbose_logger.warning(
@@ -523,6 +526,7 @@ class MCPServerManager:
         async def _list_tools_task():
             try:
                 await client.connect()
+                
                 tools = await client.list_tools()
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
@@ -809,20 +813,28 @@ class MCPServerManager:
             get_prisma_client_or_throw,
         )
 
+        verbose_logger.info("Loading MCP servers from database into registry...")
+        
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
         db_mcp_servers = await get_all_mcp_servers(prisma_client)
+        verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
+        
         # ensure the global_mcp_server_manager is up to date with the db
         for server in db_mcp_servers:
+            verbose_logger.debug(f"Adding server to registry: {server.server_id} ({server.server_name})")
             self.add_update_server(server)
+        
+        verbose_logger.info(f"Registry now contains {len(self.get_registry())} servers")
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """
         Get the MCP Server from the server id
         """
-        for server in self.get_registry().values():
+        registry = self.get_registry()
+        for server in registry.values():
             if server.server_id == server_id:
                 return server
         return None
@@ -1095,6 +1107,13 @@ class MCPServerManager:
             )
             for server in list_mcp_servers
         ]
+
+    async def reload_servers_from_database(self):
+        """
+        Public method to reload all MCP servers from database into registry.
+        This can be called from management endpoints to ensure registry is up to date.
+        """
+        await self._add_mcp_servers_from_db_to_in_memory_registry()
 
 
 global_mcp_server_manager: MCPServerManager = MCPServerManager()

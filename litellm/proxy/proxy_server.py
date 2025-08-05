@@ -2672,7 +2672,7 @@ class ProxyConfig:
             proxy_logging_obj: ProxyLogging
         """
         _general_settings = config_data.get("general_settings", {})
-        if "alerting" in _general_settings:
+        if _general_settings is not None and "alerting" in _general_settings:
             if (
                 general_settings is not None
                 and general_settings.get("alerting", None) is not None
@@ -2704,14 +2704,14 @@ class ProxyConfig:
                     "alerting"
                 ]
 
-        if "alert_types" in _general_settings:
+        if _general_settings is not None and "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
             proxy_logging_obj.alert_types = general_settings["alert_types"]
             proxy_logging_obj.slack_alerting_instance.update_values(
                 alert_types=general_settings["alert_types"], llm_router=llm_router
             )
 
-        if "alert_to_webhook_url" in _general_settings:
+        if _general_settings is not None and "alert_to_webhook_url" in _general_settings:
             general_settings["alert_to_webhook_url"] = _general_settings[
                 "alert_to_webhook_url"
             ]
