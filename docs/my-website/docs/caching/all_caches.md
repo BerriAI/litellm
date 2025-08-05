@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Caching - In-Memory, Redis, s3, Redis Semantic Cache, Disk
+# Caching - In-Memory, Redis, s3, gcs, Redis Semantic Cache, Disk
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching/caching.py)
 
@@ -14,7 +14,7 @@ import TabItem from '@theme/TabItem';
 
 :::
 
-## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic, Disk Cache, Qdrant Semantic
+## Initialize Cache - In Memory, Redis, s3 Bucket, gcs Bucket, Redis Semantic, Disk Cache, Qdrant Semantic
 
 
 <Tabs>
@@ -119,6 +119,36 @@ Then simply initialize:
 
 ```python
 litellm.cache = Cache(type="redis")
+```
+
+</TabItem>
+
+<TabItem value="gcs" label="gcs-cache">
+
+Set environment variables
+
+```shell
+GCS_BUCKET_NAME="my-cache-bucket"
+GCS_PATH_SERVICE_ACCOUNT="/path/to/service_account.json"
+```
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching.caching import Cache
+
+litellm.cache = Cache(type="gcs", gcs_bucket_name="my-cache-bucket", gcs_path_service_account="/path/to/service_account.json")
+
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+
+# response1 == response2, response 1 is cached
 ```
 
 </TabItem>
@@ -478,7 +508,7 @@ Advanced Params
 
 ```python
 litellm.enable_cache(
-    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "gcs", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
@@ -502,7 +532,7 @@ Update the Cache params
 
 ```python
 litellm.update_cache(
-    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "gcs", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
@@ -563,7 +593,7 @@ cache.get_cache = get_cache
 ```python
 def __init__(
     self,
-    type: Optional[Literal["local", "redis", "redis-semantic", "s3", "disk"]] = "local",
+    type: Optional[Literal["local", "redis", "redis-semantic", "s3", "gcs", "disk"]] = "local",
     supported_call_types: Optional[
         List[Literal["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"]]
     ] = ["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"],
