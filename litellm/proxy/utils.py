@@ -55,11 +55,7 @@ from litellm import (
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
-from litellm.exceptions import (
-    BlockedPiiEntityError,
-    GuardrailRaisedException,
-    RejectedRequestError,
-)
+from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -452,108 +448,6 @@ class ProxyLogging:
             litellm_parent_otel_span=None,
         )
 
-    async def async_pre_mcp_tool_call_hook(
-        self,
-        kwargs: dict,
-        request_obj: Any,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> Optional[Any]:
-        """
-        Pre MCP Tool Call Hook
-
-        Use this to validate and modify MCP tool calls before execution.
-        Reuses existing LLM guardrail logic by converting MCP calls to message format.
-        """
-        from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPPreCallRequestObject
-
-        callbacks = self.get_combined_callback_list(
-            dynamic_success_callbacks=getattr(self, "dynamic_success_callbacks", None),
-            global_callbacks=litellm.success_callback,
-        )
-
-        # Create the request object if it's not already one
-        if not isinstance(request_obj, MCPPreCallRequestObject):
-            # Convert UserAPIKeyAuth object to dict if needed
-            user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
-                kwargs.get("user_api_key_auth")
-            )
-
-            request_obj = MCPPreCallRequestObject(
-                tool_name=kwargs.get("name", ""),
-                arguments=kwargs.get("arguments", {}),
-                server_name=kwargs.get("server_name"),
-                user_api_key_auth=user_api_key_auth_dict,
-                hidden_params=HiddenParams(),
-            )
-
-        for callback in callbacks:
-            try:
-                _callback: Optional[CustomLogger] = None
-                if isinstance(callback, str):
-                    from typing import cast
-
-                    from litellm import _custom_logger_compatible_callbacks_literal
-
-                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
-                    )
-                else:
-                    _callback = callback  # type: ignore
-
-                if _callback is not None and isinstance(_callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    # Check if guardrail should be run for pre_call hook (reusing existing logic)
-                    if (
-                        _callback.should_run_guardrail(
-                            data=kwargs, event_type=GuardrailEventHooks.pre_mcp_call
-                        )
-                        is not True
-                    ):
-                        continue
-
-                    # Convert MCP tool call to LLM message format for existing guardrail logic
-                    synthetic_llm_data = self._convert_mcp_to_llm_format(
-                        request_obj, kwargs
-                    )
-                    # Reuse existing LLM guardrail logic
-                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
-                        kwargs.get("user_api_key_auth")
-                    )
-
-                    result = await _callback.async_pre_call_hook(
-                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
-                        cache=self.call_details["user_api_key_cache"],
-                        data=synthetic_llm_data,
-                        call_type="mcp_call",
-                    )
-
-                    # Convert result back to MCP response format if blocked/modified
-                    if result is not None:
-                        mcp_response = self._convert_llm_result_to_mcp_response(
-                            result, request_obj
-                        )
-                        if mcp_response is not None:
-                            return self._parse_pre_mcp_call_hook_response(
-                                response=mcp_response, original_request=request_obj
-                            )
-
-            except (
-                BlockedPiiEntityError,
-                GuardrailRaisedException,
-                HTTPException,
-            ) as e:
-                # Re-raise guardrail exceptions so they can be properly handled
-                raise e
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
-                        str(e)
-                    )
-                )
-        return None
 
     def _convert_user_api_key_auth_to_dict(self, user_api_key_auth_obj):
         """
@@ -567,7 +461,7 @@ class ProxyLogging:
             elif hasattr(user_api_key_auth_obj, "__dict__"):
                 # If it's a regular object, convert to dict
                 return user_api_key_auth_obj.__dict__
-        return user_api_key_auth_obj
+        return {}
 
     def _convert_mcp_to_llm_format(self, request_obj, kwargs: dict) -> dict:
         """
@@ -765,8 +659,6 @@ class ProxyLogging:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
-        from litellm.types.mcp import MCPDuringCallResponseObject
-
         # If result is an exception, it means the guardrail wants to stop execution
         if isinstance(llm_result, Exception):
             return MCPDuringCallResponseObject(
@@ -836,112 +728,39 @@ class ProxyLogging:
         }
         return result
 
-    async def async_during_mcp_tool_call_hook(
-        self,
-        kwargs: dict,
-        request_obj: Any,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> Optional[Any]:
+    def _create_mcp_request_object_from_kwargs(self, kwargs: dict) -> "MCPPreCallRequestObject":
         """
-        During MCP Tool Call Hook
-
-        Use this for concurrent monitoring and validation during tool execution.
-        Reuses existing LLM guardrail logic by converting MCP calls to message format.
+        Helper function to create MCPPreCallRequestObject from kwargs for standard pre_call_hook.
         """
         from litellm.types.llms.base import HiddenParams
-        from litellm.types.mcp import MCPDuringCallRequestObject
+        from litellm.types.mcp import MCPPreCallRequestObject
 
-        callbacks = self.get_combined_callback_list(
-            dynamic_success_callbacks=getattr(self, "dynamic_success_callbacks", None),
-            global_callbacks=litellm.success_callback,
+        user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(kwargs.get("user_api_key_auth"))
+        
+        return MCPPreCallRequestObject(
+            tool_name=kwargs.get("name", ""),
+            arguments=kwargs.get("arguments", {}),
+            server_name=kwargs.get("server_name"),
+            user_api_key_auth=user_api_key_auth_dict,
+            hidden_params=HiddenParams(),
         )
 
-        # Create the request object if it's not already one
-        if not isinstance(request_obj, MCPDuringCallRequestObject):
-            request_obj = MCPDuringCallRequestObject(
-                tool_name=kwargs.get("name", ""),
-                arguments=kwargs.get("arguments", {}),
-                server_name=kwargs.get("server_name"),
-                start_time=start_time.timestamp() if start_time else None,
-                hidden_params=HiddenParams(),
-            )
-
-        for callback in callbacks:
-            try:
-                _callback: Optional[CustomLogger] = None
-                if isinstance(callback, str):
-                    from typing import cast
-
-                    from litellm import _custom_logger_compatible_callbacks_literal
-
-                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
-                    )
-                else:
-                    _callback = callback  # type: ignore
-
-                if _callback is not None and isinstance(_callback, CustomGuardrail):
-                    from litellm.types.guardrails import GuardrailEventHooks
-
-                    # Check if guardrail should be run for during_call hook (reusing existing logic)
-                    if (
-                        _callback.should_run_guardrail(
-                            data=kwargs, event_type=GuardrailEventHooks.during_mcp_call
-                        )
-                        is not True
-                    ):
-                        continue
-                    # Convert MCP tool call to LLM message format for existing guardrail logic
-                    synthetic_llm_data = self._convert_mcp_to_llm_format(
-                        request_obj, kwargs
-                    )
-
-                    # Reuse existing LLM guardrail logic for during call
-                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
-                        kwargs.get("user_api_key_auth")
-                    )
-
-                    result = await _callback.async_moderation_hook(
-                        data=synthetic_llm_data,
-                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
-                        call_type="mcp_call",
-                    )
-                    # Convert result back to MCP response format if blocked/modified
-                    if result is not None:
-                        mcp_response = self._convert_llm_result_to_mcp_during_response(
-                            result, request_obj
-                        )
-                        if mcp_response is not None:
-                            return self._parse_during_mcp_call_hook_response(
-                                response=mcp_response
-                            )
-
-            except Exception as e:
-                raise e
-                verbose_proxy_logger.exception(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {}".format(
-                        str(e)
-                    )
-                )
-        return None
-
-    def _parse_during_mcp_call_hook_response(
-        self, response: MCPDuringCallResponseObject
-    ) -> Dict[str, Any]:
+    def _convert_mcp_hook_response_to_kwargs(self, response_data: Optional[dict], original_kwargs: dict) -> dict:
         """
-        Parse the response from the during_mcp_tool_call_hook
-
-        1. Check if execution should continue
-        2. Handle any error messages
-        3. Apply any hidden parameter updates
+        Helper function to convert pre_call_hook response back to kwargs for MCP usage.
         """
-        result = {
-            "should_continue": response.should_continue,
-            "error_message": response.error_message,
-            "hidden_params": response.hidden_params,
-        }
-        return result
+        if not response_data:
+            return original_kwargs
+        
+        # Apply any argument modifications from the hook response
+        modified_kwargs = original_kwargs.copy()
+        
+        # If the response contains modified arguments, apply them
+        if response_data.get("modified_arguments"):
+            modified_kwargs["arguments"] = response_data["modified_arguments"]
+        
+        return modified_kwargs
+
 
     async def process_pre_call_hook_response(self, response, data, call_type):
         if isinstance(response, Exception):
@@ -975,6 +794,7 @@ class ProxyLogging:
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> None:
         pass
@@ -993,6 +813,7 @@ class ProxyLogging:
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> dict:
         pass
@@ -1010,6 +831,7 @@ class ProxyLogging:
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[dict]:
         """
@@ -1081,10 +903,14 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
-
+                    
+                    event_type = GuardrailEventHooks.pre_call
+                    if call_type == "mcp_call":
+                        event_type = GuardrailEventHooks.pre_mcp_call
+                        
                     if (
                         _callback.should_run_guardrail(
-                            data=data, event_type=GuardrailEventHooks.pre_call
+                            data=data, event_type=event_type
                         )
                         is not True
                     ):
@@ -1108,6 +934,9 @@ class ProxyLogging:
                     and _callback.__class__.async_pre_call_hook
                     != CustomLogger.async_pre_call_hook
                 ):
+                    if call_type == "mcp_call" and user_api_key_dict is None:
+                        continue
+                        
                     response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
@@ -1126,7 +955,7 @@ class ProxyLogging:
     async def during_call_hook(
         self,
         data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: Literal[
             "completion",
             "responses",
@@ -1134,6 +963,7 @@ class ProxyLogging:
             "image_generation",
             "moderation",
             "audio_transcription",
+            "mcp_call",
         ],
     ):
         """
@@ -1156,16 +986,26 @@ class ProxyLogging:
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
 
+                        event_type = GuardrailEventHooks.during_call
+                        if call_type == "mcp_call":
+                            event_type = GuardrailEventHooks.during_mcp_call
+
                         if (
                             callback.should_run_guardrail(
-                                data=data, event_type=GuardrailEventHooks.during_call
+                                data=data, event_type=event_type
                             )
                             is not True
                         ):
                             continue
+                    # Convert user_api_key_dict to proper format for async_moderation_hook
+                    if call_type == "mcp_call":
+                        user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(user_api_key_dict)
+                    else:
+                        user_api_key_auth_dict = user_api_key_dict
+
                     await callback.async_moderation_hook(
                         data=data,
-                        user_api_key_dict=user_api_key_dict,
+                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
                         call_type=call_type,
                     )
             except Exception as e:
