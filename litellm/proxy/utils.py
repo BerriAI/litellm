@@ -22,7 +22,7 @@ from typing import (
     overload,
 )
 
-from litellm.constants import MAX_TEAM_LIST_LIMIT
+from litellm.constants import MAX_TEAM_LIST_LIMIT, DEFAULT_MODEL_CREATED_AT_TIME
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
@@ -3802,7 +3802,6 @@ def is_valid_api_key(key: str) -> bool:
 def construct_database_url_from_env_vars() -> Optional[str]:
     """
     Construct a DATABASE_URL from individual environment variables.
-
     Returns:
         Optional[str]: The constructed DATABASE_URL or None if required variables are missing
     """
@@ -3829,5 +3828,234 @@ def construct_database_url_from_env_vars() -> Optional[str]:
             database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
 
         return database_url
-
+    
     return None
+
+async def count_tokens_with_anthropic_api(
+    model_to_use: str,
+    messages: Optional[List[Dict[str, Any]]],
+    deployment: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Helper function to count tokens using Anthropic API directly.
+
+    Args:
+        model_to_use: The model name to use for token counting
+        messages: The messages to count tokens for
+        deployment: Optional deployment configuration containing API key
+
+    Returns:
+        Optional dict with token count and tokenizer info, or None if failed
+    """
+    if not messages:
+        return None
+
+    try:
+        import anthropic
+        import os
+
+        # Get Anthropic API key from deployment config
+        anthropic_api_key = None
+        if deployment is not None:
+            anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
+
+        # Fallback to environment variable
+        if not anthropic_api_key:
+            anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+
+        if anthropic_api_key and messages:
+            # Call Anthropic API directly for more accurate token counting
+            client = anthropic.Anthropic(api_key=anthropic_api_key)
+
+            # Call with explicit parameters to satisfy type checking
+            # Type ignore for now since messages come from generic dict input
+            response = client.beta.messages.count_tokens(
+                model=model_to_use,
+                messages=messages,  # type: ignore
+                betas=["token-counting-2024-11-01"]
+            )
+            total_tokens = response.input_tokens
+            tokenizer_used = "anthropic_api"
+
+            return {
+                "total_tokens": total_tokens,
+                "tokenizer_used": tokenizer_used,
+            }
+
+    except ImportError:
+        verbose_proxy_logger.warning("Anthropic library not available, falling back to LiteLLM tokenizer")
+    except Exception as e:
+        verbose_proxy_logger.warning(f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer")
+    return None
+
+async def get_available_models_for_user(
+    user_api_key_dict: "UserAPIKeyAuth",
+    llm_router: Optional["Router"],
+    general_settings: dict,
+    user_model: Optional[str],
+    prisma_client: Optional["PrismaClient"] = None,
+    proxy_logging_obj: Optional["ProxyLogging"] = None,
+    team_id: Optional[str] = None,
+    include_model_access_groups: bool = False,
+    only_model_access_groups: bool = False,
+    return_wildcard_routes: bool = False,
+    user_api_key_cache: Optional["DualCache"] = None,
+) -> List[str]:
+    """
+    Get the list of models available to a user based on their API key and team permissions.
+    
+    Args:
+        user_api_key_dict: User API key authentication object
+        llm_router: LiteLLM router instance
+        general_settings: General settings from config
+        user_model: User-specific model
+        prisma_client: Prisma client for database operations
+        proxy_logging_obj: Proxy logging object
+        team_id: Specific team ID to check (optional)
+        include_model_access_groups: Whether to include model access groups
+        only_model_access_groups: Whether to only return model access groups
+        return_wildcard_routes: Whether to return wildcard routes
+        
+    Returns:
+        List of model names available to the user
+    """
+    from litellm.proxy.auth.model_checks import (
+        get_key_models,
+        get_team_models,
+        get_complete_model_list,
+    )
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
+    
+    # Get proxy model list and access groups
+    if llm_router is None:
+        proxy_model_list = []
+        model_access_groups = {}
+    else:
+        proxy_model_list = llm_router.get_model_names()
+        model_access_groups = llm_router.get_model_access_groups()
+
+    # Get key models
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
+    )
+
+    # Get team models
+    team_models: List[str] = user_api_key_dict.team_models
+
+    # If specific team_id is provided, validate and get team models
+    if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
+        key_models = []
+        team_object = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+        team_models = team_object.models
+
+    team_models = get_team_models(
+        team_models=team_models,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
+    )
+
+    # Get complete model list
+    all_models = get_complete_model_list(
+        key_models=key_models,
+        team_models=team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=user_model,
+        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+        return_wildcard_routes=return_wildcard_routes,
+        llm_router=llm_router,
+        model_access_groups=model_access_groups,
+        include_model_access_groups=include_model_access_groups,
+        only_model_access_groups=only_model_access_groups,
+    )
+
+    return all_models
+
+
+def create_model_info_response(
+    model_id: str,
+    provider: str,
+    include_metadata: bool = False,
+    fallback_type: Optional[str] = None,
+    llm_router: Optional["Router"] = None,
+) -> dict:
+    """
+    Create a standardized model info response.
+    
+    Args:
+        model_id: The model ID
+        provider: The model provider
+        include_metadata: Whether to include metadata
+        fallback_type: Type of fallbacks to include
+        llm_router: LiteLLM router instance
+        
+    Returns:
+        Dictionary containing model information
+    """
+    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    
+    model_info = {
+        "id": model_id,
+        "object": "model",
+        "created": DEFAULT_MODEL_CREATED_AT_TIME,
+        "owned_by": provider,
+    }
+
+    # Add metadata if requested
+    if include_metadata:
+        metadata = {}
+
+        # Default fallback_type to "general" if include_metadata is true
+        effective_fallback_type = (
+            fallback_type if fallback_type is not None else "general"
+        )
+
+        # Validate fallback_type
+        valid_fallback_types = ["general", "context_window", "content_policy"]
+        if effective_fallback_type not in valid_fallback_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
+            )
+
+        fallbacks = get_all_fallbacks(
+            model=model_id,
+            llm_router=llm_router,
+            fallback_type=effective_fallback_type,
+        )
+        metadata["fallbacks"] = fallbacks
+
+        model_info["metadata"] = metadata
+
+    return model_info
+
+
+def validate_model_access(
+    model_id: str,
+    available_models: List[str],
+) -> None:
+    """
+    Validate that a model is accessible to the user.
+    
+    Args:
+        model_id: The model ID to validate
+        available_models: List of models available to the user
+        
+    Raises:
+        HTTPException: If the model is not accessible
+    """
+    if model_id not in available_models:
+        raise HTTPException(
+            status_code=404,
+            detail="The model `{}` does not exist or is not accessible".format(model_id)
+        )
