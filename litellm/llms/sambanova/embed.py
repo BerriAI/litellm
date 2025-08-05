@@ -13,9 +13,10 @@ class SambaNovaEmbeddingConfig:
         return []
 
     def map_openai_params(
-        self, non_default_params: dict,
-        optional_params: dict, 
-        model: str, 
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
         drop_params: bool,
     ):
         """
