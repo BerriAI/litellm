@@ -134,6 +134,12 @@ class WandbHubChatHandler(OpenAILikeBase):
         streaming_decoder: Optional[CustomStreamingDecoder] = None,
         fake_stream: bool = False,
     ) -> CustomStreamWrapper:
+        # Ensure OpenAI-Project header is set
+        if optional_params:
+            project_id = optional_params.get("project_id") or optional_params.get("project")
+            if project_id:
+                headers["OpenAI-Project"] = project_id
+        
         data["stream"] = True
         completion_stream = await make_call(
             client=client,
@@ -177,6 +183,11 @@ class WandbHubChatHandler(OpenAILikeBase):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         json_mode: bool = False,
     ) -> ModelResponse:
+        # Ensure OpenAI-Project header is set
+        project_id = optional_params.get("project_id") or optional_params.get("project")
+        if project_id:
+            headers["OpenAI-Project"] = project_id
+            
         if timeout is None:
             timeout = httpx.Timeout(timeout=600.0, connect=5.0)
 
@@ -252,6 +263,7 @@ class WandbHubChatHandler(OpenAILikeBase):
             custom_endpoint=custom_endpoint,
             headers=headers,
         )
+        headers["OpenAI-Project"] = optional_params.get("project_id") or optional_params.get("project")
 
         stream: bool = optional_params.pop("stream", None) or False
         extra_body = optional_params.pop("extra_body", {})
