@@ -246,7 +246,7 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
-                    elif endpoint == "api.inference.wandb.ai/v1":
+                    elif endpoint == "api.inference.wandb.ai/v1" or endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb_hub"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
 

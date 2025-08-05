@@ -398,7 +398,7 @@ class WandbHubChatHandler(OpenAILikeBase):
                 except Exception as e:
                     raise OpenAILikeError(status_code=500, message=str(e))
                     
-        return config.transform_response(
+                return config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,

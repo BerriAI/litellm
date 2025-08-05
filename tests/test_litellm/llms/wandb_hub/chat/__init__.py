@@ -1,0 +1,1 @@
+# Wandb Hub chat completion tests
