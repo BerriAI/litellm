@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from enum import Enum
+from typing import Any, List, Literal, Optional, Union
 
 from pydantic import BaseModel
-from enum import Enum
 
 OCIRoles = Literal["SYSTEM", "USER", "ASSISTANT", "TOOL"]
 
@@ -24,7 +24,7 @@ class OCIVendors(Enum):
 class OCIContentPart(BaseModel):
     """Base model for content parts in an OCI message."""
 
-    type: str
+    pass
 
 
 class OCITextContentPart(OCIContentPart):
@@ -59,9 +59,9 @@ class OCIToolDefinition(BaseModel):
     """Defines a tool that can be used by the model."""
 
     type: Literal["FUNCTION"] = "FUNCTION"
-    name: str | None = None
-    description: str | None = None
-    parameters: dict | None = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    parameters: Optional[dict] = None
 
 
 # --- Message Models (Request and Response) ---
@@ -71,9 +71,9 @@ class OCIMessage(BaseModel):
     """Model for a single message in the request/response payload."""
 
     role: OCIRoles
-    content: list[OCIContentPartUnion] | None = None
-    toolCalls: list[OCIToolCall] | None = None
-    toolCallId: str | None = None
+    content: Optional[List[OCIContentPartUnion]] = None
+    toolCalls: Optional[List[OCIToolCall]] = None
+    toolCallId: Optional[str] = None
 
 
 # --- Request Payload Models ---
@@ -84,16 +84,16 @@ class OCIChatRequestPayload(BaseModel):
 
     apiFormat: str
     messages: list[OCIMessage]
-    tools: list[OCIToolDefinition] | None = None
+    tools: Optional[List[OCIToolDefinition]] = None
     isStream: bool = False
-    numGenerations: int | None = None
-    maxTokens: int | None = None
-    temperature: float | None = None
-    topP: float | None = None
-    stop: list[str] | None = None
-    seed: int | None = None
-    frequencyPenalty: float | None = None
-    presencePenalty: float | None = None
+    numGenerations: Optional[int] = None
+    maxTokens: Optional[int] = None
+    temperature: Optional[float] = None
+    topP: Optional[float] = None
+    stop: Optional[List[str]] = None
+    seed: Optional[int] = None
+    frequencyPenalty: Optional[float] = None
+    presencePenalty: Optional[float] = None
 
 
 class OCIServingMode(BaseModel):
@@ -142,8 +142,8 @@ class OCIResponseChoice(BaseModel):
 
     index: int
     message: OCIMessage
-    finishReason: str | None
-    logprobs: dict[str, Any] | None = None
+    finishReason: Optional[str] = None
+    logprobs: Optional[dict[str, Any]] = None
 
 
 class OCIChatResponse(BaseModel):
@@ -151,7 +151,7 @@ class OCIChatResponse(BaseModel):
 
     apiFormat: str
     timeCreated: str
-    choices: list[OCIResponseChoice]
+    choices: List[OCIResponseChoice]
     usage: OCIResponseUsage
 
 
@@ -169,15 +169,15 @@ class OCICompletionResponse(BaseModel):
 class OCIStreamDelta(BaseModel):
     """The content delta in a streaming chunk."""
 
-    content: list[OCIContentPartUnion] | None = None
-    role: str | None = None
-    toolCalls: list[OCIToolCall] | None = None
+    content: Optional[List[OCIContentPartUnion]] = None
+    role: Optional[str] = None
+    toolCalls: Optional[List[OCIToolCall]] = None
 
 
 class OCIStreamChunk(BaseModel):
     """Model for a single SSE event chunk from OCI."""
 
-    finishReason: str | None = None
-    message: OCIStreamDelta | None = None
-    pad: str | None = None
-    index: int | None = None
+    finishReason: Optional[str] = None
+    message: Optional[OCIStreamDelta] = None
+    pad: Optional[str] = None
+    index: Optional[int] = None
