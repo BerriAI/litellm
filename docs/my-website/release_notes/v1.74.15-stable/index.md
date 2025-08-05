@@ -28,7 +28,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.15-stable
+ghcr.io/berriai/litellm:1.74.15.rc.1
 ```
 </TabItem>
 
@@ -54,8 +54,18 @@ pip install litellm==1.74.15.post1
 
 ## User Agent Activity Tracking
 
+<Image 
+  img={require('../../img/agent_1.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
-[Read More](../../docs/proxy/user_analytics)
+<br/>
+
+This release brings support for tracking usage and costs for AI-powered coding tools like Claude Code, Roo Code, Gemini CLI through LiteLLM. You can now track LLM cost, total tokens used, and DAU/WAU/MAU for each coding tool.
+
+This is great to central AI Platform teams looking to track how they are helping developer productivity. 
+
+[Read More](https://docs.litellm.ai/docs/tutorials/cost_tracking_coding)
 
 ---
 

@@ -455,10 +455,10 @@ class ProxyLogging:
         Handles both Pydantic models and regular objects.
         """
         if user_api_key_auth_obj is not None:
-            if hasattr(user_api_key_auth_obj, 'model_dump'):
+            if hasattr(user_api_key_auth_obj, "model_dump"):
                 # If it's a Pydantic model, convert to dict
                 return user_api_key_auth_obj.model_dump()
-            elif hasattr(user_api_key_auth_obj, '__dict__'):
+            elif hasattr(user_api_key_auth_obj, "__dict__"):
                 # If it's a regular object, convert to dict
                 return user_api_key_auth_obj.__dict__
         return {}
@@ -468,15 +468,16 @@ class ProxyLogging:
         Convert MCP tool call to LLM message format for existing guardrail validation.
         """
         from litellm.types.llms.openai import ChatCompletionUserMessage
-        
+
         # Create a synthetic message that represents the tool call
-        tool_call_content = f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
-        
-        synthetic_message = ChatCompletionUserMessage(
-            role="user",
-            content=tool_call_content
+        tool_call_content = (
+            f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
         )
-        
+
+        synthetic_message = ChatCompletionUserMessage(
+            role="user", content=tool_call_content
+        )
+
         # Create synthetic LLM data that guardrails can process
         synthetic_data = {
             "messages": [synthetic_message],
@@ -489,51 +490,65 @@ class ProxyLogging:
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
         }
-        
+
         return synthetic_data
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_response(
+        self, llm_result, request_obj
+    ) -> Optional[Any]:
         """
         Convert LLM guardrail result back to MCP response format.
         """
         from litellm.types.mcp import MCPPreCallResponseObject
-        
+
         # If result is an exception, it means the guardrail blocked the request
         if isinstance(llm_result, Exception):
             return MCPPreCallResponseObject(
                 should_proceed=False,
                 error_message=str(llm_result),
-                modified_arguments=None
+                modified_arguments=None,
             )
-        
+
         # If result is a dict with modified messages, check for content filtering
         if isinstance(llm_result, dict):
             modified_messages = llm_result.get("messages")
             if modified_messages:
                 # Check if content was blocked/modified
-                original_content = f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
-                new_content = modified_messages[0].get("content", "") if modified_messages else ""
-                
+                original_content = (
+                    f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
+                )
+                new_content = (
+                    modified_messages[0].get("content", "") if modified_messages else ""
+                )
+
                 if new_content != original_content:
                     # Content was modified - could be masking, redaction, or blocking
-                    if not new_content or "blocked" in new_content.lower() or "violation" in new_content.lower():
+                    if (
+                        not new_content
+                        or "blocked" in new_content.lower()
+                        or "violation" in new_content.lower()
+                    ):
                         # Content was blocked completely
                         return MCPPreCallResponseObject(
                             should_proceed=False,
                             error_message="Content blocked by guardrail",
-                            modified_arguments=None
+                            modified_arguments=None,
                         )
                     else:
                         # Content was masked/redacted - extract the modified arguments
                         try:
                             # Try to parse the modified arguments from the masked content
-                            modified_args = self._extract_modified_arguments_from_content(new_content, request_obj)
+                            modified_args = (
+                                self._extract_modified_arguments_from_content(
+                                    new_content, request_obj
+                                )
+                            )
                             if modified_args is not None:
                                 # Return the masked/redacted arguments for the MCP call to use
                                 return MCPPreCallResponseObject(
                                     should_proceed=True,
                                     error_message=None,
-                                    modified_arguments=modified_args
+                                    modified_arguments=modified_args,
                                 )
                             else:
                                 # Could not parse modified arguments, allow original call but warn
@@ -542,128 +557,147 @@ class ProxyLogging:
                                 )
                                 return None
                         except Exception as e:
-                            verbose_proxy_logger.error(f"Error parsing modified arguments: {e}")
+                            verbose_proxy_logger.error(
+                                f"Error parsing modified arguments: {e}"
+                            )
                             # Fallback: allow original call
                             return None
-        
+
         # If result is a string, it's likely an error message
         if isinstance(llm_result, str):
             return MCPPreCallResponseObject(
-                should_proceed=False,
-                error_message=llm_result,
-                modified_arguments=None
+                should_proceed=False, error_message=llm_result, modified_arguments=None
             )
-        
+
         return None
 
-    def _extract_modified_arguments_from_content(self, masked_content: str, request_obj) -> Optional[dict]:
+    def _extract_modified_arguments_from_content(
+        self, masked_content: str, request_obj
+    ) -> Optional[dict]:
         """
         Extract modified/masked arguments from the guardrail response content.
         """
         import json
-        
-        verbose_proxy_logger.debug(f"Extracting modified args from content: {masked_content}")
-        
+
+        verbose_proxy_logger.debug(
+            f"Extracting modified args from content: {masked_content}"
+        )
+
         try:
             # The format should be: "Tool: <tool_name>\nArguments: <json_arguments>"
             # Parse the arguments section
-            lines = masked_content.strip().split('\n')
+            lines = masked_content.strip().split("\n")
             for i, line in enumerate(lines):
                 if line.startswith("Arguments:"):
                     # Get the arguments part - everything after "Arguments: "
-                    args_text = line[len("Arguments:"):].strip()
-                    
+                    args_text = line[len("Arguments:") :].strip()
+
                     verbose_proxy_logger.debug(f"Found arguments text: {args_text}")
-                    
+
                     # Try to parse as JSON first
                     try:
                         modified_args = json.loads(args_text)
-                        verbose_proxy_logger.debug(f"Successfully parsed JSON args: {modified_args}")
+                        verbose_proxy_logger.debug(
+                            f"Successfully parsed JSON args: {modified_args}"
+                        )
                         return modified_args
                     except json.JSONDecodeError as e:
                         # If JSON parsing fails, try to extract key-value pairs manually
-                        verbose_proxy_logger.debug(f"Failed to parse JSON arguments: {args_text}, error: {e}")
-                        return self._parse_arguments_manually(args_text, request_obj.arguments)
-            
+                        verbose_proxy_logger.debug(
+                            f"Failed to parse JSON arguments: {args_text}, error: {e}"
+                        )
+                        return self._parse_arguments_manually(
+                            args_text, request_obj.arguments
+                        )
+
             # If we can't find the Arguments: line, return None
-            verbose_proxy_logger.warning("Could not find 'Arguments:' line in masked content")
+            verbose_proxy_logger.warning(
+                "Could not find 'Arguments:' line in masked content"
+            )
             return None
-            
+
         except Exception as e:
             verbose_proxy_logger.error(f"Error extracting modified arguments: {e}")
             return None
 
-    def _parse_arguments_manually(self, args_text: str, original_args: dict) -> Optional[dict]:
+    def _parse_arguments_manually(
+        self, args_text: str, original_args: dict
+    ) -> Optional[dict]:
         """
         Try to manually parse arguments when JSON parsing fails.
         This is a fallback for cases where the guardrail modifies the format.
         """
         import re
-        
+
         try:
             # Start with original arguments and try to apply modifications
             modified_args = original_args.copy()
-            
+
             # Look for simple key-value patterns
             # This is a basic implementation - can be enhanced based on specific guardrail formats
             for key, original_value in original_args.items():
                 if isinstance(original_value, str):
                     # Look for the key in the masked content and try to extract its value
-                    pattern = rf"['\"]?{re.escape(key)}['\"]?\s*:\s*['\"]?([^,'\"]*)['\"]?"
+                    pattern = (
+                        rf"['\"]?{re.escape(key)}['\"]?\s*:\s*['\"]?([^,'\"]*)['\"]?"
+                    )
                     match = re.search(pattern, args_text, re.IGNORECASE)
                     if match:
                         new_value = match.group(1).strip()
                         if new_value:
                             modified_args[key] = new_value
-            
+
             return modified_args
-            
+
         except Exception as e:
             verbose_proxy_logger.error(f"Error in manual argument parsing: {e}")
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Optional[Any]:
+    def _convert_llm_result_to_mcp_during_response(
+        self, llm_result, request_obj
+    ) -> Optional[Any]:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
-        
         # If result is an exception, it means the guardrail wants to stop execution
         if isinstance(llm_result, Exception):
             return MCPDuringCallResponseObject(
-                should_continue=False,
-                error_message=str(llm_result)
+                should_continue=False, error_message=str(llm_result)
             )
-        
+
         # If result is a dict with modified messages, check for content filtering
         if isinstance(llm_result, dict):
             modified_messages = llm_result.get("messages")
             if modified_messages:
                 # Check if content was blocked/modified
-                original_content = f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
-                new_content = modified_messages[0].get("content", "") if modified_messages else ""
-                
+                original_content = (
+                    f"Tool: {request_obj.tool_name}\nArguments: {request_obj.arguments}"
+                )
+                new_content = (
+                    modified_messages[0].get("content", "") if modified_messages else ""
+                )
+
                 if new_content != original_content:
                     # Content was modified, could be masking or blocking
                     if not new_content or "blocked" in new_content.lower():
                         # Content was blocked
                         return MCPDuringCallResponseObject(
                             should_continue=False,
-                            error_message="Content blocked by guardrail during execution"
+                            error_message="Content blocked by guardrail during execution",
                         )
                     else:
-                        # Content was masked/modified - for now, stop execution 
+                        # Content was masked/modified - for now, stop execution
                         return MCPDuringCallResponseObject(
                             should_continue=False,
-                            error_message="Content modified by guardrail during execution"
+                            error_message="Content modified by guardrail during execution",
                         )
-        
+
         # If result is a string, it's likely an error message
         if isinstance(llm_result, str):
             return MCPDuringCallResponseObject(
-                should_continue=False,
-                error_message=llm_result
+                should_continue=False, error_message=llm_result
             )
-        
+
         return None
 
     def get_combined_callback_list(
@@ -833,8 +867,12 @@ class ProxyLogging:
             custom_logger = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(
                 prompt_id
             )
+            prompt_spec = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(prompt_id)
+            litellm_prompt_id: Optional[str] = None
+            if prompt_spec is not None:
+                litellm_prompt_id = prompt_spec.litellm_params.prompt_id
 
-            if custom_logger:
+            if custom_logger and litellm_prompt_id is not None:
                 (
                     model,
                     messages,
@@ -843,15 +881,16 @@ class ProxyLogging:
                     model=data.get("model", ""),
                     messages=data.get("messages", []),
                     non_default_params=get_non_default_completion_params(kwargs=data),
-                    prompt_id=prompt_id,
+                    prompt_id=litellm_prompt_id,
                     prompt_management_logger=custom_logger,
                     prompt_variables=data.get("prompt_variables", None),
                     prompt_label=data.get("prompt_label", None),
                     prompt_version=data.get("prompt_version", None),
                 )
+
+                data.update(optional_params)
                 data["model"] = model
                 data["messages"] = messages
-                data.update(optional_params)
 
         try:
             for callback in litellm.callbacks:
