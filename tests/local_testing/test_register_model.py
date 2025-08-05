@@ -1,8 +1,10 @@
 #### What this tests ####
 #    This tests calling batch_completions by running 100 messages together
 
-import sys, os
+import os
+import sys
 import traceback
+
 import pytest
 
 sys.path.insert(
@@ -24,7 +26,7 @@ def test_update_model_cost():
                 },
             }
         )
-        assert litellm.model_cost["gpt-4"]["input_cost_per_token"] == 0.00002
+        assert litellm.model_cost()["gpt-4"]["input_cost_per_token"] == 0.00002
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 
@@ -37,7 +39,7 @@ def test_update_model_cost_map_url():
         litellm.register_model(
             model_cost="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
         )
-        assert litellm.model_cost["gpt-4"]["input_cost_per_token"] == 0.00003
+        assert litellm.model_cost()["gpt-4"]["input_cost_per_token"] == 0.00003
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 
@@ -54,10 +56,10 @@ def test_update_model_cost_via_completion():
             output_cost_per_token=0.4,
         )
         print(
-            f"litellm.model_cost for gpt-3.5-turbo: {litellm.model_cost['gpt-3.5-turbo']}"
+            f"litellm.model_cost() for gpt-3.5-turbo: {litellm.model_cost()['gpt-3.5-turbo']}"
         )
-        assert litellm.model_cost["gpt-3.5-turbo"]["input_cost_per_token"] == 0.3
-        assert litellm.model_cost["gpt-3.5-turbo"]["output_cost_per_token"] == 0.4
+        assert litellm.model_cost()["gpt-3.5-turbo"]["input_cost_per_token"] == 0.3
+        assert litellm.model_cost()["gpt-3.5-turbo"]["output_cost_per_token"] == 0.4
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 

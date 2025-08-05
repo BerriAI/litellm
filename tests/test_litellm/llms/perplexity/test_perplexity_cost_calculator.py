@@ -36,10 +36,10 @@ class TestPerplexityCostCalculator:
         try:
             with open("model_prices_and_context_window.json", "r") as f:
                 model_cost_map = json.load(f)
-            litellm.model_cost = model_cost_map
+            litellm._model_cost = model_cost_map
         except FileNotFoundError:
             # Fallback to ensure we have the Perplexity model configuration
-            litellm.model_cost = {
+            litellm._model_cost = {
                 "perplexity/sonar-deep-research": {
                     "max_tokens": 128000,
                     "max_input_tokens": 128000,

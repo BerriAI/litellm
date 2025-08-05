@@ -115,7 +115,7 @@ class SearchContextCostPerQuery(TypedDict, total=False):
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
-    key: Required[str]  # the key in litellm.model_cost which is returned
+    key: Required[str]  # the key in litellm._model_cost which is returned
 
     max_tokens: Required[Optional[int]]
     max_input_tokens: Required[Optional[int]]

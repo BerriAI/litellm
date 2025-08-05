@@ -1038,10 +1038,10 @@ class SlackAlerting(CustomBatchLogger):
         model_info = {}
         base_model = ""
         if base_model_from_user is not None:
-            model_info = litellm.model_cost.get(base_model_from_user, {})
+            model_info = litellm.model_cost().get(base_model_from_user, {})
             base_model = f"Base Model: `{base_model_from_user}`\n"
         else:
-            model_info = litellm.model_cost.get(litellm_model_name, {})
+            model_info = litellm.model_cost().get(litellm_model_name, {})
         model_info_str = ""
         for k, v in model_info.items():
             if k == "input_cost_per_token" or k == "output_cost_per_token":
