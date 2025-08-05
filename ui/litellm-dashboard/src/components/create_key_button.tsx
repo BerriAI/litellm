@@ -573,6 +573,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="team_id"
               initialValue={team ? team.team_id : null}
               className="mt-4"
+              rules={[
+                { 
+                  required: keyOwner === "service_account", 
+                  message: "Please select a team for the service account" 
+                }
+              ]}
+              help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown 
                 teams={teams} 
