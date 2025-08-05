@@ -16059,6 +16059,15 @@
         "supports_reasoning": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
+    "sambanova/E5-Mistral-7B-Instruct": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "input_cost_per_token": 1.3e-07,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "sambanova-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.sambanova.ai/plans/pricing"
+    },
     "assemblyai/nano": {
         "mode": "audio_transcription",
         "input_cost_per_second": 0.00010278,

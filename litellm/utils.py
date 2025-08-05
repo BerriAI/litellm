@@ -2828,6 +2828,16 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.FireworksAIEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}, model=model
         )
+    elif custom_llm_provider == "sambanova":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="sambanova",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.SambaNovaEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params, optional_params={}, model=model
+        )
 
     elif (
         custom_llm_provider != "openai"
@@ -6948,6 +6958,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
+        elif litellm.LlmProviders.SAMBANOVA == provider:
+            return litellm.SambaNovaEmbeddingConfig()
         elif (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
