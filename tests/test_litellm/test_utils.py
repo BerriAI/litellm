@@ -2225,6 +2225,67 @@ def test_block_key_hashing_logic():
     print("✅ All block_key hashing logic tests passed!")
 
 
+def test_generate_gcp_iam_access_token():
+    """
+    Test the _generate_gcp_iam_access_token function with mocked GCP IAM client.
+    """
+    from unittest.mock import Mock, patch
+    
+    service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
+    expected_token = "test-access-token-12345"
+    
+    # Mock the GCP IAM client and its response
+    mock_response = Mock()
+    mock_response.access_token = expected_token
+    
+    mock_client = Mock()
+    mock_client.generate_access_token.return_value = mock_response
+    
+    # Mock the iam_credentials_v1 module
+    mock_iam_credentials_v1 = Mock()
+    mock_iam_credentials_v1.IAMCredentialsClient = Mock(return_value=mock_client)
+    mock_iam_credentials_v1.GenerateAccessTokenRequest = Mock()
+    
+    # Test successful token generation by mocking sys.modules
+    with patch.dict('sys.modules', {'google.cloud.iam_credentials_v1': mock_iam_credentials_v1}):
+        from litellm._redis import _generate_gcp_iam_access_token
+        
+        result = _generate_gcp_iam_access_token(service_account)
+        
+        assert result == expected_token
+        mock_iam_credentials_v1.IAMCredentialsClient.assert_called_once()
+        mock_client.generate_access_token.assert_called_once()
+        
+        # Verify the request was created with correct parameters
+        mock_iam_credentials_v1.GenerateAccessTokenRequest.assert_called_once_with(
+            name=service_account,
+            scope=['https://www.googleapis.com/auth/cloud-platform']
+        )
+
+
+def test_generate_gcp_iam_access_token_import_error():
+    """
+    Test that _generate_gcp_iam_access_token raises ImportError when google-cloud-iam is not available.
+    """
+    # Import the function first, before mocking
+    from litellm._redis import _generate_gcp_iam_access_token
+    
+    # Mock the import to fail when the function tries to import google.cloud.iam_credentials_v1
+    original_import = __builtins__['__import__']
+    
+    def mock_import(name, *args, **kwargs):
+        if name == 'google.cloud.iam_credentials_v1':
+            raise ImportError("No module named 'google.cloud.iam_credentials_v1'")
+        return original_import(name, *args, **kwargs)
+    
+    with patch('builtins.__import__', side_effect=mock_import):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_gcp_iam_access_token("test-service-account")
+        
+        assert "google-cloud-iam is required" in str(exc_info.value)
+        assert "pip install google-cloud-iam" in str(exc_info.value)
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
