@@ -210,6 +210,10 @@ but we **don't** recommend using REDIS_URL in prod. We've noticed a performance 
 
 For GCP Memorystore Redis with IAM authentication, install the required dependency:
 
+:::info
+IAM authentication for redis is only supported via GCP and only on Redis Clusters for now.
+:::
+
 ```shell
 pip install google-cloud-iam
 ```
