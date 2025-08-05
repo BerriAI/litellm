@@ -31,12 +31,20 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
 
 
-@pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
+@pytest.mark.parametrize(
+    "customer_spend, customer_budget, check_budget",
+    [
+        (0, 10, True),
+        (10, 0, True),
+        (10, 0, False),
+    ],
+)
 @pytest.mark.asyncio
-async def test_get_end_user_object(customer_spend, customer_budget):
+async def test_get_end_user_object(customer_spend, customer_budget, check_budget):
     """
     Scenario 1: normal
     Scenario 2: user over budget
+    Scenario 3: user over budget but we allow it
     """
     end_user_id = "my-test-customer"
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
@@ -54,8 +62,9 @@ async def test_get_end_user_object(customer_spend, customer_budget):
             end_user_id=end_user_id,
             prisma_client="RANDOM VALUE",  # type: ignore
             user_api_key_cache=_cache,
+            check_budget=check_budget,
         )
-        if customer_spend > customer_budget:
+        if customer_spend > customer_budget and check_budget:
             pytest.fail(
                 "Expected call to fail. Customer Spend={}, Customer Budget={}".format(
                     customer_spend, customer_budget
@@ -65,6 +74,7 @@ async def test_get_end_user_object(customer_spend, customer_budget):
         if (
             isinstance(e, litellm.BudgetExceededError)
             and customer_spend > customer_budget
+            and check_budget
         ):
             pass
         else:

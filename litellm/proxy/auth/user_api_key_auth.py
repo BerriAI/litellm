@@ -608,6 +608,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             try:
                 end_user_params["end_user_id"] = end_user_id
 
+                # Decide if we need to check the end-user budget
+                check_budget = route != "/v1/models" and route != "/models"
+
                 # get end-user object
                 _end_user_object = await get_end_user_object(
                     end_user_id=end_user_id,
@@ -615,6 +618,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    check_budget=check_budget,
                 )
                 if _end_user_object is not None:
                     end_user_params["allowed_model_region"] = (

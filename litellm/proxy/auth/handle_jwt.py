@@ -844,6 +844,7 @@ class JWTAuthManager:
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        check_budget: bool,
     ) -> Tuple[
         Optional[LiteLLM_UserTable],
         Optional[LiteLLM_OrganizationTable],
@@ -892,6 +893,7 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    check_budget=check_budget,
                 )
                 if end_user_id
                 else None
@@ -1121,6 +1123,9 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
             )
 
+        # Decide if we need to check the end-user budget
+        check_budget = route != "/v1/models" and route != "/models"
+
         # Get other objects
         user_object, org_object, end_user_object = await JWTAuthManager.get_objects(
             user_id=user_id,
@@ -1133,6 +1138,7 @@ class JWTAuthManager:
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_budget=check_budget,
         )
 
         await JWTAuthManager.sync_user_role_and_teams(

@@ -439,6 +439,7 @@ async def get_end_user_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
+    check_budget=True,
 ) -> Optional[LiteLLM_EndUserTable]:
     """
     Returns end user object, if in db.
@@ -453,6 +454,8 @@ async def get_end_user_object(
     _key = "end_user_id:{}".format(end_user_id)
 
     def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
+        if not check_budget:
+            return
         if end_user_obj.litellm_budget_table is None:
             return
         end_user_budget = end_user_obj.litellm_budget_table.max_budget
