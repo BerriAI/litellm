@@ -125,7 +125,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             file_ids=vector_store_create_optional_params.get("file_ids", None),
             expires_after=vector_store_create_optional_params.get("expires_after", None),
             chunking_strategy=vector_store_create_optional_params.get("chunking_strategy", None),
-            metadata=add_openai_metadata(vector_store_create_optional_params.get("metadata", None)),
+            metadata=add_openai_metadata(vector_store_create_optional_params.get("metadata") or {}),
         )
 
         dict_request_body = cast(dict, typed_request_body)
