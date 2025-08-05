@@ -204,7 +204,96 @@ For quick testing, you can also use REDIS_URL, eg.:
 REDIS_URL="rediss://.."
 ```
 
-but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between using it vs. redis_host, port, etc. 
+but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between using it vs. redis_host, port, etc.
+
+#### GCP IAM Authentication
+
+For GCP Memorystore Redis with IAM authentication, install the required dependency:
+
+```shell
+pip install google-cloud-iam
+```
+
+<Tabs>
+
+<TabItem value="gcp-iam-config" label="Set on config.yaml">
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    host: "10.128.0.2"  # Your GCP Redis IP
+    port: 6379
+    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+    gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate
+    ssl: true  
+    ssl_cert_reqs: null  # For self-signed certificates
+    ssl_check_hostname: false  # For self-signed certificates
+```
+
+For Redis Cluster with GCP IAM:
+
+```yaml
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    redis_startup_nodes: [{"host": "10.128.0.2", "port": 6379}, {"host": "10.128.0.2", "port": 11008}]
+    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+    gcp_ssl_ca_certs: "./server-ca.pem"
+    ssl: true
+    ssl_cert_reqs: null
+    ssl_check_hostname: false
+```
+
+</TabItem>
+
+<TabItem value="gcp-iam-env" label="Set on .env">
+
+You can configure GCP IAM Redis authentication in your .env:
+
+```env
+REDIS_HOST="10.128.0.2"
+REDIS_PORT="6379"
+REDIS_GCP_SERVICE_ACCOUNT="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+REDIS_GCP_SSL_CA_CERTS="./server-ca.pem"
+REDIS_SSL="True"
+REDIS_SSL_CERT_REQS="None"
+REDIS_SSL_CHECK_HOSTNAME="False"
+```
+
+For Redis Cluster:
+
+```env
+REDIS_CLUSTER_NODES='[{"host": "10.128.0.2", "port": 6379}, {"host": "10.128.0.2", "port": 11008}]'
+REDIS_GCP_SERVICE_ACCOUNT="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+REDIS_GCP_SSL_CA_CERTS="./server-ca.pem"
+REDIS_SSL="True"
+REDIS_SSL_CERT_REQS="None"
+REDIS_SSL_CHECK_HOSTNAME="False"
+```
+
+**GCP Authentication Setup**
+
+Make sure your GCP credentials are configured:
+
+```shell
+# Option 1: Service account key file
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+
+# Option 2: If running on GCP compute instance with service account attached
+# No additional setup needed
+```
+
+</TabItem>
+
+</Tabs> 
 #### Step 2: Add Redis Credentials to .env
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
@@ -916,6 +1005,13 @@ cache_params:
   port: "6379"  # Redis server port (as a string)
   password: secret_password  # Redis server password
   namespace: Optional[str] = None,
+  
+  # GCP IAM Authentication for Redis
+  gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"  # GCP service account for IAM authentication
+  gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate file for GCP Memorystore Redis
+  ssl: true  # Enable SSL for secure connections  
+  ssl_cert_reqs: null  # Set to null for self-signed certificates
+  ssl_check_hostname: false  # Set to false for self-signed certificates
   
 
   # S3 cache parameters
