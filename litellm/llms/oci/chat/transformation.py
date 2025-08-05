@@ -609,9 +609,9 @@ open_ai_to_generic_oci_role_map: Dict[str, OCIRoles] = {
 
 
 def adapt_messages_to_generic_oci_standard_content_message(
-    role: str, content: str | list
+    role: str, content: Union[str, list]
 ) -> OCIMessage:
-    new_content: list[OCIContentPartUnion] = []
+    new_content: List[OCIContentPartUnion] = []
     if isinstance(content, str):
         return OCIMessage(
             role=open_ai_to_generic_oci_role_map[role],
@@ -787,8 +787,8 @@ def adapt_tool_definition_to_oci_standard(tools: List[Dict], vendor: OCIVendors)
 
 
 def adapt_tools_to_openai_standard(
-    tools: list[OCIToolCall],
-) -> list[ChatCompletionMessageToolCall]:
+    tools: List[OCIToolCall],
+) -> List[ChatCompletionMessageToolCall]:
     new_tools = []
     for tool in tools:
         new_tool = ChatCompletionMessageToolCall(
