@@ -101,10 +101,9 @@ def transform_vercel_ai_gateway_data(data):
             if "input_cache_write" in row["pricing"] and row["pricing"]["input_cache_write"] is not None:
                 obj['cache_creation_input_token_cost'] = float(f"{float(row['pricing']['input_cache_write']):e}")
 
-        obj.update({
-            "litellm_provider": "vercel_ai_gateway",
-            "mode": "chat"
-        })
+        mode = "embedding" if "embedding" in row["id"].lower() else "chat"
+        
+        obj.update({"litellm_provider": "vercel_ai_gateway", "mode": mode})
 
         transformed[f'vercel_ai_gateway/{row["id"]}'] = obj
 
