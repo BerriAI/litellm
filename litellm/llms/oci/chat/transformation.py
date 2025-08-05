@@ -1,15 +1,13 @@
 import base64
 import datetime
 import hashlib
-from urllib.parse import urlparse
-import litellm
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from urllib.parse import urlparse
 
 import httpx
 
+import litellm
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -19,14 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     version,
 )
-from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import LlmProviders
-from litellm.utils import (
-    ChatCompletionMessageToolCall,
-    CustomStreamWrapper,
-    ModelResponse,
-    Usage,
-)
+from litellm.llms.oci.common_utils import OCIError
 from litellm.types.llms.oci import (
     OCIChatRequestPayload,
     OCICompletionPayload,
@@ -42,11 +33,18 @@ from litellm.types.llms.oci import (
     OCIToolDefinition,
     OCIVendors,
 )
-from litellm.llms.oci.common_utils import OCIError
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     Delta,
+    LlmProviders,
     ModelResponseStream,
     StreamingChoices,
+)
+from litellm.utils import (
+    ChatCompletionMessageToolCall,
+    CustomStreamWrapper,
+    ModelResponse,
+    Usage,
 )
 
 if TYPE_CHECKING:
@@ -74,6 +72,15 @@ def build_signature_string(method, path, headers, signed_headers):
 
 
 def load_private_key_from_str(key_str: str):
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+    except ImportError as e:
+        raise ImportError(
+            "cryptography package is required for OCI authentication. "
+            "Please install it with: pip install cryptography"
+        ) from e
+
     key = serialization.load_pem_private_key(
         key_str.encode("utf-8"),
         password=None,
@@ -266,6 +273,15 @@ class OCIChatConfig(BaseConfig):
         signing_string = build_signature_string(
             method, path, headers_to_sign, signed_headers
         )
+
+        try:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
+        except ImportError as e:
+            raise ImportError(
+                "cryptography package is required for OCI authentication. "
+                "Please install it with: pip install cryptography"
+            ) from e
 
         private_key = load_private_key_from_str(oci_key)
         signature = private_key.sign(
@@ -837,9 +853,11 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     index=typed_chunk.index if typed_chunk.index else 0,
                     delta=Delta(
                         content=text,
-                        tool_calls=[tool.model_dump() for tool in tool_calls]
-                        if tool_calls
-                        else None,
+                        tool_calls=(
+                            [tool.model_dump() for tool in tool_calls]
+                            if tool_calls
+                            else None
+                        ),
                         provider_specific_fields=None,  # OCI does not have provider specific fields in the response
                         thinking_blocks=None,  # OCI does not have thinking blocks in the response
                         reasoning_content=None,  # OCI does not have reasoning content in the response
