@@ -58,6 +58,13 @@ litellm_settings:
     service_name: "mymaster"
     sentinel_nodes: [["localhost", 26379]]
 
+    # Optional - GCP IAM Authentication for Redis
+    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"  # GCP service account for IAM authentication
+    gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate file for GCP Memorystore Redis
+    ssl: true  # Enable SSL for secure connections
+    ssl_cert_reqs: null  # Set to null for self-signed certificates
+    ssl_check_hostname: false  # Set to false for self-signed certificates
+
     # Optional - Qdrant Semantic Cache Settings
     qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
     qdrant_collection_name: test_collection
@@ -649,6 +656,8 @@ router_settings:
 | REDIS_PASSWORD | Password for Redis service
 | REDIS_PORT | Port number for Redis server
 | REDIS_SOCKET_TIMEOUT | Timeout in seconds for Redis socket operations. Default is 0.1
+| REDIS_GCP_SERVICE_ACCOUNT | GCP service account for IAM authentication with Redis. Format: "projects/-/serviceAccounts/name@project.iam.gserviceaccount.com"
+| REDIS_GCP_SSL_CA_CERTS | Path to SSL CA certificate file for secure GCP Memorystore Redis connections
 | REDOC_URL | The path to the Redoc Fast API documentation. **By default this is "/redoc"**
 | REPEATED_STREAMING_CHUNK_LIMIT | Limit for repeated streaming chunks to detect looping. Default is 100
 | REPLICATE_MODEL_NAME_WITH_ID_LENGTH | Length of Replicate model names with ID. Default is 64

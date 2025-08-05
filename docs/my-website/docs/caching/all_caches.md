@@ -28,6 +28,8 @@ pip install redis
 
 For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
 
+**Basic Redis Cache**
+
 ```python
 import litellm
 from litellm import completion
@@ -46,6 +48,77 @@ response2 = completion(
 )
 
 # response1 == response2, response 1 is cached
+```
+
+**GCP IAM Redis Authentication**
+
+For GCP Memorystore Redis with IAM authentication:
+
+```shell
+pip install google-cloud-iam
+```
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching.caching import Cache
+
+# Using Redis Cache with GCP IAM Authentication
+litellm.cache = Cache(
+    type="redis",
+    host="10.128.0.2",  # Your GCP Redis IP
+    port=6379,
+    gcp_service_account="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com",
+    gcp_ssl_ca_certs="./server-ca.pem",  # Path to SSL CA certificate
+    ssl=True,
+    ssl_cert_reqs=None,  # For self-signed certificates
+    ssl_check_hostname=False,  # For self-signed certificates
+)
+
+# For Redis Cluster with GCP IAM
+from litellm.caching.redis_cluster_cache import RedisClusterCache
+
+litellm.cache = RedisClusterCache(
+    startup_nodes=[
+        {"host": "10.128.0.2", "port": 6379},
+        {"host": "10.128.0.2", "port": 11008},
+    ],
+    gcp_service_account="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com",
+    gcp_ssl_ca_certs="./server-ca.pem",
+    ssl=True,
+    ssl_cert_reqs=None,
+    ssl_check_hostname=False,
+)
+
+# Make completion calls
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+
+# response1 == response2, response 1 is cached
+```
+
+**Environment Variables for GCP IAM Redis**
+
+You can also set these as environment variables:
+
+```shell
+export REDIS_HOST="10.128.0.2"
+export REDIS_PORT="6379"
+export REDIS_GCP_SERVICE_ACCOUNT="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+export REDIS_GCP_SSL_CA_CERTS="./server-ca.pem"
+export REDIS_SSL="True"
+```
+
+Then simply initialize:
+
+```python
+litellm.cache = Cache(type="redis")
 ```
 
 </TabItem>
@@ -534,6 +607,13 @@ def __init__(
     namespace: Optional[str] = None,
     default_in_redis_ttl: Optional[float] = None,
     redis_flush_size=None,
+    
+    # GCP IAM Redis authentication params
+    gcp_service_account: Optional[str] = None,
+    gcp_ssl_ca_certs: Optional[str] = None,
+    ssl: Optional[bool] = None,
+    ssl_cert_reqs: Optional[Union[str, None]] = None,
+    ssl_check_hostname: Optional[bool] = None,
 
     # redis semantic cache params
     similarity_threshold: Optional[float] = None,
