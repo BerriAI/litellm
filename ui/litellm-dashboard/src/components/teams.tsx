@@ -446,7 +446,7 @@ const Teams: React.FC<TeamProps> = ({
         
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
-          formValues.model_aliases = modelAliases;
+          formValues.model_aliases = JSON.stringify(modelAliases);
         }
         
         const response: any = await teamCreateCall(accessToken, formValues);

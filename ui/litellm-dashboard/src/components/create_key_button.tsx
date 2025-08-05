@@ -378,7 +378,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       
       // Add model_aliases if any are defined
       if (Object.keys(modelAliases).length > 0) {
-        formValues.aliases = modelAliases;
+        formValues.aliases = JSON.stringify(modelAliases);
       }
       
       let response;
