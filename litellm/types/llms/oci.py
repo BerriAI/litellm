@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -143,7 +143,7 @@ class OCIResponseChoice(BaseModel):
     index: int
     message: OCIMessage
     finishReason: Optional[str] = None
-    logprobs: Optional[dict[str, Any]] = None
+    logprobs: Optional[Dict[str, Any]] = None
 
 
 class OCIChatResponse(BaseModel):
