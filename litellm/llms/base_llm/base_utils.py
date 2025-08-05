@@ -70,6 +70,16 @@ class BaseLLMModelInfo(ABC):
         """
         pass
 
+    def get_token_counter(self):
+        """
+        Factory method to create a token counter for this provider.
+        
+        Returns:
+            Optional TokenCounterInterface implementation for this provider,
+            or None if token counting is not supported.
+        """
+        return None
+
 
 def _convert_tool_response_to_message(
     tool_calls: List[ChatCompletionToolCallChunk],
