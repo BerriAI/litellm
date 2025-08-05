@@ -74,6 +74,7 @@ import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import { AlertTriangleIcon, XIcon } from 'lucide-react';
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import ModelAliasManager from "./common_components/ModelAliasManager";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -205,6 +206,7 @@ const Teams: React.FC<TeamProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
+  const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
 
   useEffect(() => {
     console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
@@ -278,6 +280,7 @@ const Teams: React.FC<TeamProps> = ({
     setIsTeamModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
+    setModelAliases({});
   };
 
   const handleMemberOk = () => {
@@ -290,6 +293,7 @@ const Teams: React.FC<TeamProps> = ({
     setIsTeamModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
+    setModelAliases({});
   };
 
   const handleMemberCancel = () => {
@@ -439,6 +443,12 @@ const Teams: React.FC<TeamProps> = ({
             formValues.allowed_mcp_access_groups;
           delete formValues.allowed_mcp_access_groups;
         }
+        
+        // Add model_aliases if any are defined
+        if (Object.keys(modelAliases).length > 0) {
+          formValues.model_aliases = modelAliases;
+        }
+        
         const response: any = await teamCreateCall(accessToken, formValues);
         if (teams !== null) {
           setTeams([...teams, response]);
@@ -449,6 +459,7 @@ const Teams: React.FC<TeamProps> = ({
         message.success("Team created");
         form.resetFields();
         setLoggingSettings([]);
+        setModelAliases({});
         setIsTeamModalVisible(false);
       }
     } catch (error) {
@@ -1466,6 +1477,7 @@ const Teams: React.FC<TeamProps> = ({
                           placeholder="Select MCP servers or access groups (optional)"
                         />
                       </Form.Item>
+
                     </AccordionBody>
                   </Accordion>
 
@@ -1479,6 +1491,26 @@ const Teams: React.FC<TeamProps> = ({
                           value={loggingSettings}
                           onChange={setLoggingSettings}
                           premiumUser={premiumUser}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                                        
+                  <Accordion className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Model Aliases</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <Text className="text-sm text-gray-600 mb-4">
+                          Create custom aliases for models that can be used by team members in API calls. This allows you to create shortcuts for specific models.
+                        </Text>
+                        <ModelAliasManager
+                          accessToken={accessToken || ""}
+                          initialModelAliases={modelAliases}
+                          onAliasUpdate={setModelAliases}
+                          showExampleConfig={false}
                         />
                       </div>
                     </AccordionBody>
