@@ -603,3 +603,54 @@ def test_openai_deepresearch_model_bridge():
     )
 
     print("response: ", response)
+
+
+def test_openai_tool_calling():
+    from pydantic import BaseModel
+    from typing import Any, Literal
+
+    class OpenAIFunction(BaseModel):
+        description: Optional[str] = None
+        name: str
+        parameters: Optional[dict[str, Any]] = None
+
+    class OpenAITool(BaseModel):
+        type: Literal["function"]
+        function: OpenAIFunction
+
+    completion_params = {
+        "model": "openai/gpt-4.1",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is TSLA stock price at today?"}
+                ],
+            }
+        ],
+        "stream": False,
+        "temperature": 0.5,
+        "stop": None,
+        "max_tokens": 1600,
+        "tools": [
+            OpenAITool(
+                type="function",
+                function=OpenAIFunction(
+                    description="Get the current stock price for a given ticker symbol.",
+                    name="get_stock_price",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "ticker": {
+                                "type": "string",
+                                "description": "The stock ticker symbol, e.g. AAPL for Apple Inc.",
+                            }
+                        },
+                        "required": ["ticker"],
+                    },
+                ),
+            )
+        ],
+    }
+
+    response = litellm.completion(**completion_params)
