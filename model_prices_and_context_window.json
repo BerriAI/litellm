@@ -10466,12 +10466,12 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-r1-0528": {
-        "max_tokens": 163840,
+        "max_tokens": 8192,
         "max_input_tokens": 65336,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 2.72e-07,
+        "input_cost_per_token": 5e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
-        "output_cost_per_token": 2.72e-07,
+        "output_cost_per_token": 2.15e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
@@ -10495,7 +10495,7 @@
         "supports_web_search": true
     },
     "openrouter/bytedance/ui-tars-1.5-7b": {
-        "max_tokens": 128000,
+        "max_tokens": 2048,
         "max_input_tokens": 131072,
         "max_output_tokens": 2048,
         "input_cost_per_token": 1e-07,
@@ -10506,12 +10506,12 @@
         "supports_tool_choice": true
     },
     "openrouter/deepseek/deepseek-r1": {
-        "max_tokens": 163840,
+        "max_tokens": 8192,
         "max_input_tokens": 65336,
-        "max_output_tokens": 163840,
-        "input_cost_per_token": 4e-07,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 5.5e-07,
         "input_cost_per_token_cache_hit": 1.4e-07,
-        "output_cost_per_token": 2e-06,
+        "output_cost_per_token": 2.19e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
@@ -10521,11 +10521,11 @@
         "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-chat": {
-        "max_tokens": 163840,
+        "max_tokens": 8192,
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 2.72e-07,
-        "output_cost_per_token": 2.72e-07,
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
         "litellm_provider": "openrouter",
         "supports_prompt_caching": true,
         "mode": "chat",
@@ -10551,9 +10551,9 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-2.5-pro": {
-        "max_tokens": 1048576,
+        "max_tokens": 8192,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
+        "max_output_tokens": 8192,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -10570,16 +10570,15 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.00516
+        "supports_tool_choice": true
     },
     "openrouter/google/gemini-pro-1.5": {
-        "max_tokens": 2000000,
+        "max_tokens": 8192,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 1.25e-06,
-        "output_cost_per_token": 5e-06,
-        "input_cost_per_image": 0.0006575,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "input_cost_per_image": 0.00265,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
@@ -10587,7 +10586,7 @@
         "supports_tool_choice": true
     },
     "openrouter/google/gemini-2.0-flash-001": {
-        "max_tokens": 1048576,
+        "max_tokens": 8192,
         "max_input_tokens": 1048576,
         "max_output_tokens": 8192,
         "max_images_per_prompt": 3000,
@@ -10606,13 +10605,12 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 2.58e-05
+        "supports_tool_choice": true
     },
     "openrouter/google/gemini-2.5-flash": {
-        "max_tokens": 1048576,
+        "max_tokens": 8192,
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
+        "max_output_tokens": 8192,
         "max_images_per_prompt": 3000,
         "max_videos_per_prompt": 10,
         "max_video_length": 1,
@@ -10629,13 +10627,12 @@
         "supports_vision": true,
         "supports_response_schema": true,
         "supports_audio_output": true,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.001238
+        "supports_tool_choice": true
     },
     "openrouter/mistralai/mixtral-8x22b-instruct": {
         "max_tokens": 65536,
-        "input_cost_per_token": 9e-07,
-        "output_cost_per_token": 9e-07,
+        "input_cost_per_token": 6.5e-07,
+        "output_cost_per_token": 6.5e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
@@ -10646,8 +10643,7 @@
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 4000
+        "supports_tool_choice": true
     },
     "openrouter/databricks/dbrx-instruct": {
         "max_tokens": 32768,
@@ -10666,8 +10662,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "supports_tool_choice": true
     },
     "openrouter/anthropic/claude-3-5-haiku": {
         "max_tokens": 200000,
@@ -10705,7 +10700,7 @@
     },
     "openrouter/anthropic/claude-3.5-sonnet": {
         "supports_computer_use": true,
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3e-06,
@@ -10716,12 +10711,11 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
         "supports_assistant_prefill": true,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.0048
+        "supports_tool_choice": true
     },
     "openrouter/anthropic/claude-3.5-sonnet:beta": {
         "supports_computer_use": true,
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "input_cost_per_token": 3e-06,
@@ -10731,14 +10725,13 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.0048
+        "supports_tool_choice": true
     },
     "openrouter/anthropic/claude-3.7-sonnet": {
         "supports_computer_use": true,
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
-        "max_output_tokens": 64000,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "input_cost_per_image": 0.0048,
@@ -10753,9 +10746,9 @@
     },
     "openrouter/anthropic/claude-3.7-sonnet:beta": {
         "supports_computer_use": true,
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "input_cost_per_image": 0.0048,
@@ -10776,14 +10769,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "supports_tool_choice": true
     },
     "openrouter/anthropic/claude-sonnet-4": {
         "supports_computer_use": true,
-        "max_tokens": 200000,
+        "max_tokens": 8192,
         "max_input_tokens": 200000,
-        "max_output_tokens": 64000,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "input_cost_per_image": 0.0048,
@@ -10797,26 +10789,25 @@
         "supports_tool_choice": true
     },
     "openrouter/mistralai/mistral-large": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 6e-06,
+        "max_tokens": 32000,
+        "input_cost_per_token": 8e-06,
+        "output_cost_per_token": 2.4e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
     },
     "openrouter/mistralai/mistral-small-3.1-24b-instruct": {
-        "max_tokens": 96000,
-        "input_cost_per_token": 2.7e-08,
-        "output_cost_per_token": 2.7e-08,
+        "max_tokens": 32000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 96000
+        "supports_tool_choice": true
     },
     "openrouter/mistralai/mistral-small-3.2-24b-instruct": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 5e-08,
-        "output_cost_per_token": 1e-07,
+        "max_tokens": 32000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
@@ -10874,15 +10865,14 @@
     },
     "openrouter/meta-llama/llama-3-70b-instruct": {
         "max_tokens": 8192,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 4e-07,
+        "input_cost_per_token": 5.9e-07,
+        "output_cost_per_token": 7.9e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 16384
+        "supports_tool_choice": true
     },
     "openrouter/openai/o1": {
-        "max_tokens": 200000,
+        "max_tokens": 100000,
         "max_input_tokens": 200000,
         "max_output_tokens": 100000,
         "input_cost_per_token": 1.5e-05,
@@ -10896,15 +10886,14 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.021675
+        "supports_tool_choice": true
     },
     "openrouter/openai/o1-mini": {
-        "max_tokens": 128000,
+        "max_tokens": 65536,
         "max_input_tokens": 128000,
         "max_output_tokens": 65536,
-        "input_cost_per_token": 1.1e-06,
-        "output_cost_per_token": 4.4e-06,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.2e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
@@ -10913,11 +10902,11 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/o1-mini-2024-09-12": {
-        "max_tokens": 128000,
+        "max_tokens": 65536,
         "max_input_tokens": 128000,
         "max_output_tokens": 65536,
-        "input_cost_per_token": 1.1e-06,
-        "output_cost_per_token": 4.4e-06,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.2e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_function_calling": true,
@@ -10926,7 +10915,7 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/o1-preview": {
-        "max_tokens": 128000,
+        "max_tokens": 32768,
         "max_input_tokens": 128000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 1.5e-05,
@@ -10939,7 +10928,7 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/o1-preview-2024-09-12": {
-        "max_tokens": 128000,
+        "max_tokens": 32768,
         "max_input_tokens": 128000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 1.5e-05,
@@ -10952,9 +10941,9 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/o3-mini": {
-        "max_tokens": 200000,
+        "max_tokens": 65536,
         "max_input_tokens": 128000,
-        "max_output_tokens": 100000,
+        "max_output_tokens": 65536,
         "input_cost_per_token": 1.1e-06,
         "output_cost_per_token": 4.4e-06,
         "litellm_provider": "openrouter",
@@ -10966,9 +10955,9 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/o3-mini-high": {
-        "max_tokens": 200000,
+        "max_tokens": 65536,
         "max_input_tokens": 128000,
-        "max_output_tokens": 100000,
+        "max_output_tokens": 65536,
         "input_cost_per_token": 1.1e-06,
         "output_cost_per_token": 4.4e-06,
         "litellm_provider": "openrouter",
@@ -10980,9 +10969,9 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4o": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1e-05,
         "litellm_provider": "openrouter",
@@ -10990,11 +10979,10 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.003613
+        "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4o-2024-05-13": {
-        "max_tokens": 128000,
+        "max_tokens": 4096,
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 5e-06,
@@ -11004,8 +10992,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.007225
+        "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4-vision-preview": {
         "max_tokens": 130000,
@@ -11019,31 +11006,28 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-3.5-turbo": {
-        "max_tokens": 16385,
-        "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 1.5e-06,
+        "max_tokens": 4095,
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 2e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "supports_tool_choice": true
     },
     "openrouter/openai/gpt-3.5-turbo-16k": {
-        "max_tokens": 16385,
+        "max_tokens": 16383,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 4e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "supports_tool_choice": true
     },
     "openrouter/openai/gpt-4": {
-        "max_tokens": 8191,
+        "max_tokens": 8192,
         "input_cost_per_token": 3e-05,
         "output_cost_per_token": 6e-05,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "supports_tool_choice": true
     },
     "openrouter/anthropic/claude-instant-v1": {
         "max_tokens": 100000,
@@ -11064,7 +11048,7 @@
         "supports_tool_choice": true
     },
     "openrouter/anthropic/claude-3-opus": {
-        "max_tokens": 200000,
+        "max_tokens": 4096,
         "max_input_tokens": 200000,
         "max_output_tokens": 4096,
         "input_cost_per_token": 1.5e-05,
@@ -11074,8 +11058,7 @@
         "supports_function_calling": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 395,
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.024
+        "supports_tool_choice": true
     },
     "openrouter/google/palm-2-chat-bison": {
         "max_tokens": 25804,
@@ -11127,17 +11110,16 @@
     },
     "openrouter/mancer/weaver": {
         "max_tokens": 8000,
-        "input_cost_per_token": 1.5e-06,
-        "output_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 5.625e-06,
+        "output_cost_per_token": 5.625e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 1000
+        "supports_tool_choice": true
     },
     "openrouter/gryphe/mythomax-l2-13b": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 6e-08,
-        "output_cost_per_token": 6e-08,
+        "max_tokens": 8192,
+        "input_cost_per_token": 1.875e-06,
+        "output_cost_per_token": 1.875e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
@@ -11152,66 +11134,62 @@
     },
     "openrouter/undi95/remm-slerp-l2-13b": {
         "max_tokens": 6144,
-        "input_cost_per_token": 7e-07,
-        "output_cost_per_token": 1e-06,
+        "input_cost_per_token": 1.875e-06,
+        "output_cost_per_token": 1.875e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
     },
     "openrouter/pygmalionai/mythalion-13b": {
         "max_tokens": 4096,
-        "input_cost_per_token": 8e-07,
-        "output_cost_per_token": 1.2e-06,
+        "input_cost_per_token": 1.875e-06,
+        "output_cost_per_token": 1.875e-06,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 4096
+        "supports_tool_choice": true
     },
     "openrouter/mistralai/mistral-7b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2.8e-08,
-        "output_cost_per_token": 5.4e-08,
+        "max_tokens": 8192,
+        "input_cost_per_token": 1.3e-07,
+        "output_cost_per_token": 1.3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 16384
+        "supports_tool_choice": true
     },
     "openrouter/mistralai/mistral-7b-instruct:free": {
-        "max_tokens": 32768,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "max_output_tokens": 16384
+        "supports_tool_choice": true
     },
     "openrouter/qwen/qwen-2.5-coder-32b-instruct": {
-        "max_tokens": 32768,
+        "max_tokens": 33792,
         "max_input_tokens": 33792,
-        "max_output_tokens": 16384,
-        "input_cost_per_token": 6e-08,
-        "output_cost_per_token": 1.5e-07,
+        "max_output_tokens": 33792,
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 1.8e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
     },
     "openrouter/qwen/qwen-vl-plus": {
-        "max_tokens": 7500,
+        "max_tokens": 8192,
         "max_input_tokens": 8192,
-        "max_output_tokens": 1500,
+        "max_output_tokens": 2048,
         "input_cost_per_token": 2.1e-07,
         "output_cost_per_token": 6.3e-07,
         "litellm_provider": "openrouter",
         "mode": "chat",
-        "supports_tool_choice": true,
-        "input_cost_per_image": 0.0002688
+        "supports_tool_choice": true
     },
     "openrouter/qwen/qwen3-coder": {
-        "max_tokens": 262144,
+        "max_tokens": 1000000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
         "litellm_provider": "openrouter",
         "source": "https://openrouter.ai/qwen/qwen3-coder",
         "mode": "chat",
@@ -17468,2847 +17446,846 @@
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
-    "openrouter/mistralai/mixtral-8x7b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 8e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 2.4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/amazon/nova-lite": {
-        "max_tokens": 300000,
-        "input_cost_per_token": 6e-08,
-        "output_cost_per_token": 2.4e-07,
-        "max_input_tokens": 300000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/openai/gpt-4-turbo-preview": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-05,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 3e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/anthropic/claude-3.5-sonnet-20240620": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 3e-06,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 1.5e-05,
-        "input_cost_per_image": 0.0048,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/anthracite-org/magnum-v4-72b": {
-        "max_tokens": 16384,
-        "input_cost_per_token": 2.5e-06,
-        "max_output_tokens": 1024,
-        "output_cost_per_token": 3e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/neversleep/llama-3.1-lumimaid-8b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1.8e-07,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-medium-3": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 4e-07,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nousresearch/hermes-2-pro-llama-3-8b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2.5e-08,
-        "max_output_tokens": 131072,
-        "output_cost_per_token": 4e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cognitivecomputations/dolphin3.0-r1-mistral-24b:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cohere/command-r-08-2024": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "max_output_tokens": 4000,
-        "output_cost_per_token": 6e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-small-24b-instruct-2501:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen-turbo": {
-        "max_tokens": 1000000,
-        "input_cost_per_token": 5e-08,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/inflection/inflection-3-productivity": {
-        "max_tokens": 8000,
-        "input_cost_per_token": 2.5e-06,
-        "max_output_tokens": 1024,
-        "output_cost_per_token": 1e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/google/gemini-2.5-flash": {
-        "max_tokens": 1000000,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 2.5e-06,
-        "max_input_tokens": 1000000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 65536
-    },
-    "openrouter/meta-llama/llama-3.1-405b-instruct:free": {
-        "max_tokens": 65536,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/vercel/v0-1.5-md": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32768
-    },
-    "vercel_ai_gateway/openai/o3": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 100000
-    },
-    "openrouter/google/gemini-2.5-pro-preview-05-06": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 1.25e-06,
-        "max_output_tokens": 65535,
-        "output_cost_per_token": 1e-05,
-        "input_cost_per_image": 0.00516,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/inception/mercury-coder-small": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 2.5e-07,
-        "output_cost_per_token": 1e-06,
-        "max_input_tokens": 32000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/meta-llama/llama-3.2-3b-instruct": {
-        "max_tokens": 20000,
-        "input_cost_per_token": 3e-09,
-        "max_output_tokens": 20000,
-        "output_cost_per_token": 6e-09,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/sao10k/fimbulvetr-11b-v2": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/deepseek/deepseek-r1-distill-llama-70b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 7.5e-07,
-        "output_cost_per_token": 9.9e-07,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 131072
-    },
-    "vercel_ai_gateway/mistral/pixtral-12b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 1.5e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
-    },
-    "openrouter/infermatic/mn-inferor-12b": {
-        "max_tokens": 16384,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/sao10k/l3.3-euryale-70b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 6.5e-07,
-        "output_cost_per_token": 7.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-nemo:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 128000,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-small-3.2-24b-instruct:free": {
-        "max_tokens": 96000,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-guard-4-12b": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 5e-08,
-        "output_cost_per_token": 5e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/microsoft/phi-4": {
-        "max_tokens": 16384,
-        "input_cost_per_token": 6e-08,
-        "output_cost_per_token": 1.4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/z-ai/glm-4.5": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/microsoft/phi-3.5-mini-128k-instruct": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 1e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-14b:free": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/scb10x/llama3.1-typhoon2-70b-instruct": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 8.8e-07,
-        "output_cost_per_token": 8.8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/alpindale/goliath-120b": {
-        "max_tokens": 6144,
-        "input_cost_per_token": 9e-06,
-        "output_cost_per_token": 1.1e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/moonshotai/kimi-k2:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nvidia/llama-3.3-nemotron-super-49b-v1": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1.3e-07,
-        "output_cost_per_token": 4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/deepseek/deepseek-r1": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 5.5e-07,
-        "output_cost_per_token": 2.19e-06,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/arcee-ai/virtuoso-large": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 7.5e-07,
-        "max_output_tokens": 64000,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/magistral-small-2506": {
-        "max_tokens": 40000,
-        "input_cost_per_token": 5e-07,
-        "max_output_tokens": 40000,
-        "output_cost_per_token": 1.5e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/moonshotai/kimi-k2": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 8.78e-08,
-        "output_cost_per_token": 8.78e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-30b-a3b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 8e-08,
-        "max_output_tokens": 40960,
-        "output_cost_per_token": 2.9e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-4.1": {
-        "max_tokens": 1047576,
-        "input_cost_per_token": 2e-06,
-        "max_output_tokens": 32768,
-        "output_cost_per_token": 8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/aion-labs/aion-1.0-mini": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 7e-07,
-        "max_output_tokens": 32768,
-        "output_cost_per_token": 1.4e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-coder:free": {
+    "vercel_ai_gateway/alibaba/qwen3-coder": {
         "max_tokens": 262144,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/liquid/lfm-3b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-08,
-        "output_cost_per_token": 2e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/anthropic/claude-4-opus": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.5e-05,
-        "output_cost_per_token": 7.5e-05,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32000,
-        "cache_read_input_token_cost": 1.5e-06,
-        "cache_creation_input_token_cost": 1.875e-05
-    },
-    "openrouter/google/gemma-3n-e4b-it:free": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 2048,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3-8b": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 5e-08,
-        "output_cost_per_token": 8e-08,
-        "max_input_tokens": 8192,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/deepseek/deepseek-r1-0528-qwen3-8b:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemini-flash-1.5-8b": {
-        "max_tokens": 1000000,
-        "input_cost_per_token": 3.75e-08,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 1.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cohere/command-r-03-2024": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 5e-07,
-        "max_output_tokens": 4000,
-        "output_cost_per_token": 1.5e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemini-2.0-flash-lite-001": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 7.5e-08,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 3e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.2-3b-instruct:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/arcee-ai/maestro-reasoning": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 9e-07,
-        "max_output_tokens": 32000,
-        "output_cost_per_token": 3.3e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/mistral/ministral-3b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 4e-08,
-        "output_cost_per_token": 4e-08,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
-    },
-    "openrouter/google/gemini-2.5-flash-lite-preview-06-17": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 1e-07,
-        "max_output_tokens": 65535,
-        "output_cost_per_token": 4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/sao10k/l3-lunaris-8b": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 2e-08,
-        "output_cost_per_token": 5e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-4-maverick": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 6e-07,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/microsoft/mai-ds-r1": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 3.02e-07,
-        "output_cost_per_token": 3.02e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/morph/morph-v3-large": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 1.2e-06,
-        "max_output_tokens": 16000,
-        "output_cost_per_token": 2.7e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/deepseek/deepseek-v3": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 9e-07,
-        "output_cost_per_token": 9e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/qwen/qwen3-8b:free": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 40960,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen-2.5-72b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1.01e-07,
-        "output_cost_per_token": 1.01e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thedrummer/unslopnemo-12b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 4e-07,
-        "output_cost_per_token": 4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen2.5-vl-32b-instruct": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 6e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen-2-72b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 9e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 9e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-4.1-mini": {
-        "max_tokens": 1047576,
-        "input_cost_per_token": 4e-07,
-        "max_output_tokens": 32768,
-        "output_cost_per_token": 1.6e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nousresearch/nous-hermes-2-mixtral-8x7b-dpo": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 6e-07,
-        "max_output_tokens": 2048,
-        "output_cost_per_token": 6e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/rekaai/reka-flash-3": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1.3e-08,
-        "output_cost_per_token": 1.3e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen-2.5-7b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 4e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/ai21/jamba-1.6-large": {
-        "max_tokens": 256000,
-        "input_cost_per_token": 2e-06,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.1-405b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/devstral-small-2505": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 3e-08,
-        "output_cost_per_token": 3e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-4-0314": {
-        "max_tokens": 8191,
-        "input_cost_per_token": 3e-05,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 6e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/shisa-ai/shisa-v2-llama3.3-70b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 3e-08,
-        "output_cost_per_token": 3e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3.1-8b": {
-        "max_tokens": 131000,
-        "input_cost_per_token": 5e-08,
-        "output_cost_per_token": 8e-08,
-        "max_input_tokens": 131000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 131072
-    },
-    "openrouter/openai/gpt-4o-mini-search-preview": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 6e-07,
-        "input_cost_per_image": 0.000217,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.2-11b-vision-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 4.9e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 4.9e-08,
-        "input_cost_per_image": 7.948e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-chat-v3-0324:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/minimax/minimax-m1": {
-        "max_tokens": 1000000,
-        "input_cost_per_token": 3e-07,
-        "max_output_tokens": 40000,
-        "output_cost_per_token": 1.65e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-3-12b-it:free": {
-        "max_tokens": 96000,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-3.5-turbo-instruct": {
-        "max_tokens": 4095,
-        "input_cost_per_token": 1.5e-06,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/sao10k/l3-euryale-70b": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 1.48e-06,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 1.48e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-guard-2-8b": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-4o-mini": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 6e-07,
-        "input_cost_per_image": 0.000217,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-v3-base": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 3.02e-07,
-        "output_cost_per_token": 3.02e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-0528:free": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/moonshotai/kimi-vl-a3b-thinking:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-30b-a3b:free": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/devstral-medium": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 4e-07,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-235b-a22b-thinking-2507": {
-        "max_tokens": 262144,
-        "input_cost_per_token": 1.179e-07,
-        "output_cost_per_token": 1.179e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.1-70b-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1e-07,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 2.8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nvidia/llama-3.1-nemotron-70b-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1.2e-07,
-        "max_output_tokens": 131072,
-        "output_cost_per_token": 3e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-4o-search-preview": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2.5e-06,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1e-05,
-        "input_cost_per_image": 0.003613,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/microsoft/wizardlm-2-8x22b": {
-        "max_tokens": 65536,
-        "input_cost_per_token": 4.8e-07,
-        "max_output_tokens": 65536,
-        "output_cost_per_token": 4.8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/perplexity/sonar-reasoning-pro": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/anthropic/claude-3.7-sonnet:thinking": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 3e-06,
-        "max_output_tokens": 64000,
-        "output_cost_per_token": 1.5e-05,
-        "input_cost_per_image": 0.0048,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen2.5-vl-72b-instruct:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-3-27b-it:free": {
-        "max_tokens": 96000,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-saba": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 6e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/cohere/command-a": {
-        "max_tokens": 256000,
-        "input_cost_per_token": 2.5e-06,
-        "output_cost_per_token": 1e-05,
-        "max_input_tokens": 256000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8000
-    },
-    "openrouter/nvidia/llama-3.1-nemotron-ultra-253b-v1": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 6e-07,
-        "output_cost_per_token": 1.8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/x-ai/grok-2-1212": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 1e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/x-ai/grok-2-vision-1212": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 1e-05,
-        "input_cost_per_image": 0.0036,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-large-2407": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 6e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cognitivecomputations/dolphin3.0-r1-mistral-24b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1.3e-08,
-        "output_cost_per_token": 1.3e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/gpt-4o-mini": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 6e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/openai/o4-mini": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.1e-06,
-        "max_output_tokens": 100000,
-        "output_cost_per_token": 4.4e-06,
-        "input_cost_per_image": 0.0008415,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-4b:free": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwq-32b:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/amazon/nova-micro": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 3.5e-08,
-        "output_cost_per_token": 1.4e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/qwen/qwen-2.5-72b-instruct:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nousresearch/hermes-3-llama-3.1-405b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 7e-07,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/neversleep/noromaid-20b": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 1e-06,
-        "max_output_tokens": 2048,
-        "output_cost_per_token": 1.75e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thudm/glm-z1-32b:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-large-2411": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 6e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/arcee-ai/coder-large": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cohere/command-r7b-12-2024": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 3.75e-08,
-        "max_output_tokens": 4000,
-        "output_cost_per_token": 1.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thedrummer/anubis-pro-105b-v1": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 5e-07,
-        "max_output_tokens": 131072,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/inception/mercury-coder": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 2.5e-07,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-distill-qwen-14b": {
-        "max_tokens": 64000,
-        "input_cost_per_token": 1.5e-07,
-        "max_output_tokens": 32000,
-        "output_cost_per_token": 1.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/aion-labs/aion-rp-llama-3.1-8b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-07,
-        "max_output_tokens": 32768,
-        "output_cost_per_token": 2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/z-ai/glm-4.5-air:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nvidia/llama-3.1-nemotron-ultra-253b-v1:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3.3-70b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 7.2e-07,
-        "output_cost_per_token": 7.2e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/deepseek/deepseek-r1-distill-qwen-14b:free": {
-        "max_tokens": 64000,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/arliai/qwq-32b-arliai-rpr-v1:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/perplexity/sonar-reasoning": {
-        "max_tokens": 127000,
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 5e-06,
-        "max_input_tokens": 127000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8000
-    },
-    "openrouter/agentica-org/deepcoder-14b-preview:free": {
-        "max_tokens": 96000,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/devstral-small-2505:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/perplexity/sonar-pro": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 3e-06,
-        "max_output_tokens": 8000,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/gpt-3.5-turbo": {
-        "max_tokens": 16385,
-        "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 1.5e-06,
-        "max_input_tokens": 16385,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4096
-    },
-    "openrouter/arliai/qwq-32b-arliai-rpr-v1": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1.5e-08,
-        "output_cost_per_token": 1.5e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-3n-e4b-it": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-08,
-        "output_cost_per_token": 4e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/anthropic/claude-3-haiku": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 2.5e-07,
-        "output_cost_per_token": 1.25e-06,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4096,
-        "cache_read_input_token_cost": 3e-08,
-        "cache_creation_input_token_cost": 3e-07
-    },
-    "openrouter/eleutherai/llemma_7b": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-3-4b-it:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-small-3.1-24b-instruct:free": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1:free": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-14b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 6e-08,
-        "output_cost_per_token": 2.4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen2.5-vl-72b-instruct": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 2.5e-07,
-        "output_cost_per_token": 7.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/perplexity/sonar": {
-        "max_tokens": 127072,
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-2-9b-it:free": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/o3-mini": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.1e-06,
-        "output_cost_per_token": 4.4e-06,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 100000
-    },
-    "openrouter/mistralai/codestral-2501": {
-        "max_tokens": 262144,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 9e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/anthropic/claude-3.5-haiku-20241022": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 4e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/gpt-4-turbo": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-05,
-        "output_cost_per_token": 3e-05,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4096
-    },
-    "openrouter/neversleep/llama-3-lumimaid-70b": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 4e-06,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 6e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thedrummer/anubis-70b-v1.1": {
-        "max_tokens": 16384,
-        "input_cost_per_token": 4e-07,
-        "max_output_tokens": 131072,
-        "output_cost_per_token": 7e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3.2-3b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 1.5e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "vercel_ai_gateway/xai/grok-2": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 1e-05,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
-    },
-    "vercel_ai_gateway/google/gemini-2.0-flash": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 6e-07,
-        "max_input_tokens": 1048576,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "vercel_ai_gateway/mistral/mistral-saba-24b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 7.9e-07,
-        "output_cost_per_token": 7.9e-07,
-        "max_input_tokens": 32768,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32768
-    },
-    "openrouter/openai/gpt-4o-2024-11-20": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2.5e-06,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1e-05,
-        "input_cost_per_image": 0.003613,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-8b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 3.5e-08,
-        "max_output_tokens": 20000,
-        "output_cost_per_token": 1.38e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-distill-qwen-1.5b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1.8e-07,
-        "max_output_tokens": 32768,
-        "output_cost_per_token": 1.8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-0528-qwen3-8b": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 1e-08,
-        "output_cost_per_token": 2e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/perplexity/sonar": {
-        "max_tokens": 127000,
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 1e-06,
-        "max_input_tokens": 127000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8000
-    },
-    "openrouter/x-ai/grok-3-mini-beta": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/gpt-4.1": {
-        "max_tokens": 1047576,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-        "max_input_tokens": 1047576,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32768
-    },
-    "vercel_ai_gateway/meta/llama-3.1-70b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 7.2e-07,
-        "output_cost_per_token": 7.2e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "vercel_ai_gateway/xai/grok-2-vision": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 1e-05,
-        "max_input_tokens": 32768,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32768
-    },
-    "vercel_ai_gateway/perplexity/sonar-pro": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8000
-    },
-    "openrouter/google/gemma-3n-e2b-it:free": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 2048,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/o1": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.5e-05,
-        "output_cost_per_token": 6e-05,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 100000
-    },
-    "openrouter/anthracite-org/magnum-v2-72b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 3e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-235b-a22b:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-235b-a22b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 1.3e-07,
-        "max_output_tokens": 40960,
-        "output_cost_per_token": 6e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/anthropic/claude-4-sonnet": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 64000,
-        "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
-    },
-    "vercel_ai_gateway/mistral/magistral-small": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 1.5e-06,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 64000
-    },
-    "openrouter/moonshotai/kimi-dev-72b:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thudm/glm-4.1v-9b-thinking": {
-        "max_tokens": 65536,
-        "input_cost_per_token": 3.5e-08,
-        "max_output_tokens": 8000,
-        "output_cost_per_token": 1.38e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/perplexity/sonar-reasoning-pro": {
-        "max_tokens": 127000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-        "max_input_tokens": 127000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8000
-    },
-    "openrouter/cohere/command": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 1e-06,
-        "max_output_tokens": 4000,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/perplexity/r1-1776": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/o1-pro": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 0.00015,
-        "max_output_tokens": 100000,
-        "output_cost_per_token": 0.0006,
-        "input_cost_per_image": 0.21675,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/google/gemma-2-9b": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 2e-07,
-        "max_input_tokens": 8192,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/qwen/qwen-max": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1.6e-06,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 6.4e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/rekaai/reka-flash-3:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen-plus": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 4e-07,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3.2-1b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 1e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/qwen/qwen-2.5-vl-7b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 2e-07,
-        "input_cost_per_image": 0.0001445,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thedrummer/skyfall-36b-v2": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 7.28e-08,
-        "output_cost_per_token": 7.28e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/x-ai/grok-3-beta": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/liquid/lfm-7b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1e-08,
-        "output_cost_per_token": 1e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-nemo": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 7.5e-09,
-        "output_cost_per_token": 5e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/ministral-3b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 4e-08,
-        "output_cost_per_token": 4e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/mistral/mistral-large": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 6e-06,
-        "max_input_tokens": 32000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
-    },
-    "openrouter/baidu/ernie-4.5-300b-a47b": {
-        "max_tokens": 123000,
-        "input_cost_per_token": 2.8e-07,
-        "max_output_tokens": 12000,
-        "output_cost_per_token": 1.1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cognitivecomputations/dolphin-mixtral-8x22b": {
-        "max_tokens": 16000,
-        "input_cost_per_token": 9e-07,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 9e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-distill-llama-70b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 5e-08,
-        "output_cost_per_token": 5e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thudm/glm-4-32b:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-2-27b-it": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 6.5e-07,
-        "output_cost_per_token": 6.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/microsoft/phi-3-medium-128k-instruct": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3-70b": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 5.9e-07,
-        "output_cost_per_token": 7.9e-07,
-        "max_input_tokens": 8192,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "vercel_ai_gateway/openai/gpt-4.1-nano": {
-        "max_tokens": 1047576,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 4e-07,
-        "max_input_tokens": 1047576,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32768
-    },
-    "openrouter/tencent/hunyuan-a13b-instruct:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.2-11b-vision-instruct:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 2048,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/undi95/toppy-m-7b": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/microsoft/phi-4-reasoning-plus": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 7e-08,
-        "output_cost_per_token": 3.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-3.5-turbo-0613": {
-        "max_tokens": 4095,
-        "input_cost_per_token": 1e-06,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3.2-90b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 7.2e-07,
-        "output_cost_per_token": 7.2e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/openai/gpt-4.1-nano": {
-        "max_tokens": 1047576,
-        "input_cost_per_token": 1e-07,
-        "max_output_tokens": 32768,
-        "output_cost_per_token": 4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-distill-qwen-32b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 7.5e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/tencent/hunyuan-a13b-instruct": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 3e-08,
-        "output_cost_per_token": 3e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/alibaba/qwen-3-235b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 6e-07,
-        "max_input_tokens": 40960,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/cohere/command-r-plus-08-2024": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2.5e-06,
-        "max_output_tokens": 4000,
-        "output_cost_per_token": 1e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/gpt-4.1-mini": {
-        "max_tokens": 1047576,
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 1.6e-06,
-        "max_input_tokens": 1047576,
+        "max_output_tokens": 66536,
+        "max_input_tokens": 262144,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32768
-    },
-    "openrouter/sophosympatheia/midnight-rose-70b": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 2048,
-        "output_cost_per_token": 8e-07,
-        "litellm_provider": "openrouter",
         "mode": "chat"
     },
-    "openrouter/inception/mercury": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 2.5e-07,
-        "max_output_tokens": 16000,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.2-1b-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 5e-09,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/mistral/ministral-8b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 1e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
-    },
-    "openrouter/openai/gpt-4o-2024-08-06": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2.5e-06,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1e-05,
-        "input_cost_per_image": 0.003613,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/featherless/qwerky-72b:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/inflection/inflection-3-pi": {
-        "max_tokens": 8000,
-        "input_cost_per_token": 2.5e-06,
-        "max_output_tokens": 1024,
-        "output_cost_per_token": 1e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cognitivecomputations/dolphin3.0-mistral-24b:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/anthropic/claude-3.5-haiku:beta": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 4e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cohere/command-r": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 5e-07,
-        "max_output_tokens": 4000,
-        "output_cost_per_token": 1.5e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nousresearch/deephermes-3-mistral-24b-preview": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 1.41e-07,
-        "output_cost_per_token": 1.41e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.1-8b-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1.5e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 2e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-4o:extended": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 6e-06,
-        "max_output_tokens": 64000,
-        "output_cost_per_token": 1.8e-05,
-        "input_cost_per_image": 0.007225,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/o3-pro": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 2e-05,
-        "max_output_tokens": 100000,
-        "output_cost_per_token": 8e-05,
-        "input_cost_per_image": 0.0153,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thedrummer/rocinante-12b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/x-ai/grok-3": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/cohere/command-r-plus": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2.5e-06,
-        "output_cost_per_token": 1e-05,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4096
-    },
-    "openrouter/z-ai/glm-4.5-air": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-07,
-        "max_output_tokens": 96000,
-        "output_cost_per_token": 1.1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-3-27b-it": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 9e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1.7e-07,
-        "input_cost_per_image": 2.56e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/mistral/devstral-small": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 7e-08,
-        "output_cost_per_token": 2.8e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 128000
-    },
-    "openrouter/meta-llama/llama-3.2-90b-vision-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1.2e-06,
-        "max_output_tokens": 2048,
-        "output_cost_per_token": 1.2e-06,
-        "input_cost_per_image": 0.001734,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/mistral/codestral": {
-        "max_tokens": 256000,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 9e-07,
-        "max_input_tokens": 256000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
-    },
-    "openrouter/qwen/qwen2.5-vl-32b-instruct:free": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/sarvamai/sarvam-m:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/alibaba/qwen-3-30b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3e-07,
-        "max_input_tokens": 40960,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "vercel_ai_gateway/amazon/nova-pro": {
-        "max_tokens": 300000,
-        "input_cost_per_token": 8e-07,
-        "output_cost_per_token": 3.2e-06,
-        "max_input_tokens": 300000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/openai/o3": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 2e-06,
-        "max_output_tokens": 100000,
-        "output_cost_per_token": 8e-06,
-        "input_cost_per_image": 0.00153,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/perplexity/sonar-reasoning": {
-        "max_tokens": 127000,
-        "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 5e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/mistral/magistral-medium": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 5e-06,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 64000
-    },
-    "openrouter/opengvlab/internvl3-14b": {
-        "max_tokens": 12288,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/magistral-medium-2506:thinking": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 2e-06,
-        "max_output_tokens": 40000,
-        "output_cost_per_token": 5e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-distill-llama-8b": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 4e-08,
-        "max_output_tokens": 32000,
-        "output_cost_per_token": 4e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": {
-        "max_tokens": 65536,
-        "input_cost_per_token": 1.2e-06,
-        "output_cost_per_token": 1.2e-06,
-        "max_input_tokens": 65536,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 2048
-    },
-    "vercel_ai_gateway/meta/llama-4-scout": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3e-07,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/amazon/nova-micro-v1": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 3.5e-08,
-        "max_output_tokens": 5120,
-        "output_cost_per_token": 1.4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thudm/glm-4-32b": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 2.4e-07,
-        "max_output_tokens": 32000,
-        "output_cost_per_token": 2.4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-235b-a22b-2507:free": {
-        "max_tokens": 262144,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/nousresearch/hermes-3-llama-3.1-70b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 2.8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/microsoft/phi-3-mini-128k-instruct": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 1e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/gpt-4o": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2.5e-06,
-        "output_cost_per_token": 1e-05,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/anthropic/claude-3.5-haiku": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 4e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/anthropic/claude-opus-4": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.5e-05,
-        "max_output_tokens": 32000,
-        "output_cost_per_token": 7.5e-05,
-        "input_cost_per_image": 0.024,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemini-2.5-pro-preview": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 1.25e-06,
-        "max_output_tokens": 65536,
-        "output_cost_per_token": 1e-05,
-        "input_cost_per_image": 0.00516,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/anthropic/claude-3-opus": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.5e-05,
-        "output_cost_per_token": 7.5e-05,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4096,
-        "cache_read_input_token_cost": 1.5e-06,
-        "cache_creation_input_token_cost": 1.875e-05
-    },
-    "openrouter/moonshotai/kimi-vl-a3b-thinking": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3.8e-08,
-        "output_cost_per_token": 3.8e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/morph/morph-v3-large": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 9e-07,
-        "output_cost_per_token": 1.9e-06,
-        "max_input_tokens": 32768,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/meta-llama/llama-3-8b-instruct": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 3e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 6e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-2-9b-it": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 4e-09,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 4e-09,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen-vl-max": {
-        "max_tokens": 7500,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 1500,
-        "output_cost_per_token": 3.2e-06,
-        "input_cost_per_image": 0.001024,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/ai21/jamba-1.6-mini": {
-        "max_tokens": 256000,
-        "input_cost_per_token": 2e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/morph/morph-v3-fast": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 8e-07,
-        "output_cost_per_token": 1.2e-06,
-        "max_input_tokens": 32768,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/google/gemini-2.5-pro-exp-03-25": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 65535,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/sarvamai/sarvam-m": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2.2e-08,
-        "output_cost_per_token": 2.2e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/o4-mini-high": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.1e-06,
-        "max_output_tokens": 100000,
-        "output_cost_per_token": 4.4e-06,
-        "input_cost_per_image": 0.0008415,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-4-maverick": {
-        "max_tokens": 1048576,
+    "vercel_ai_gateway/mistral/codestral-embed": {
+        "max_tokens": 0,
         "input_cost_per_token": 1.5e-07,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 6e-07,
-        "input_cost_per_image": 0.0006684,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/xai/grok-3-fast": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 5e-06,
-        "output_cost_per_token": 2.5e-05,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 131072
-    },
-    "vercel_ai_gateway/xai/grok-3": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 131072
-    },
-    "openrouter/anthropic/claude-3-haiku:beta": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 2.5e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 1.25e-06,
-        "input_cost_per_image": 0.0004,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cohere/command-r-plus-04-2024": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 3e-06,
-        "max_output_tokens": 4000,
-        "output_cost_per_token": 1.5e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-235b-a22b-2507": {
-        "max_tokens": 262144,
-        "input_cost_per_token": 1.179e-07,
-        "max_output_tokens": 262144,
-        "output_cost_per_token": 1.179e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/anthropic/claude-3.5-haiku": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 8e-07,
-        "output_cost_per_token": 4e-06,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192,
-        "cache_read_input_token_cost": 8e-08,
-        "cache_creation_input_token_cost": 1e-06
-    },
-    "vercel_ai_gateway/openai/o4-mini": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.1e-06,
-        "output_cost_per_token": 4.4e-06,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 100000
-    },
-    "openrouter/google/gemini-flash-1.5": {
-        "max_tokens": 1000000,
-        "input_cost_per_token": 7.5e-08,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 3e-07,
-        "input_cost_per_image": 4e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-chat-v3-0324": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 2.5e-07,
-        "max_output_tokens": 163840,
-        "output_cost_per_token": 8.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/tngtech/deepseek-r1t2-chimera": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 3.02e-07,
-        "output_cost_per_token": 3.02e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/minimax/minimax-01": {
-        "max_tokens": 1000192,
-        "input_cost_per_token": 2e-07,
-        "max_output_tokens": 1000192,
-        "output_cost_per_token": 1.1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/thedrummer/valkyrie-49b-v1": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 6.5e-07,
-        "max_output_tokens": 131072,
-        "output_cost_per_token": 1e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-7b-instruct-v0.3": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2.8e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 5.4e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.3-70b-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3.8e-08,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1.2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/magistral-medium-2506": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 2e-06,
-        "max_output_tokens": 40000,
-        "output_cost_per_token": 5e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/alibaba/qwen-3-32b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3e-07,
-        "max_input_tokens": 40960,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/microsoft/mai-ds-r1:free": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/x-ai/grok-vision-beta": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 5e-06,
-        "output_cost_per_token": 1.5e-05,
-        "input_cost_per_image": 0.009,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-small-24b-instruct-2501": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 3e-08,
-        "output_cost_per_token": 3e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/aion-labs/aion-1.0": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 4e-06,
-        "max_output_tokens": 32768,
-        "output_cost_per_token": 8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/x-ai/grok-3-mini": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-3-4b-it": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-08,
-        "output_cost_per_token": 4e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/amazon/nova-lite-v1": {
-        "max_tokens": 300000,
-        "input_cost_per_token": 6e-08,
-        "max_output_tokens": 5120,
-        "output_cost_per_token": 2.4e-07,
-        "input_cost_per_image": 9e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/pixtral-large-2411": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 6e-06,
-        "input_cost_per_image": 0.002888,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/cohere/command-a": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/sao10k/l3.1-euryale-70b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 6.5e-07,
-        "output_cost_per_token": 7.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-tiny": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2.5e-07,
-        "output_cost_per_token": 2.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/cohere/command-r": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 6e-07,
-        "max_input_tokens": 128000,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4096
-    },
-    "openrouter/liquid/lfm-40b": {
-        "max_tokens": 65536,
-        "input_cost_per_token": 1.5e-07,
-        "max_output_tokens": 65536,
-        "output_cost_per_token": 1.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/z-ai/glm-4-32b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 1e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/google/gemini-2.0-flash-lite": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 7.5e-08,
-        "output_cost_per_token": 3e-07,
-        "max_input_tokens": 1048576,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/alfredpros/codellama-7b-instruct-solidity": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/xai/grok-3-mini": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 5e-07,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 131072
-    },
-    "openrouter/openai/gpt-4o-mini-2024-07-18": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.5e-07,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 6e-07,
-        "input_cost_per_image": 0.007225,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/perplexity/sonar-deep-research": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-7b-instruct-v0.1": {
-        "max_tokens": 2824,
-        "input_cost_per_token": 1.1e-07,
-        "output_cost_per_token": 1.9e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 1.5e-06,
-        "output_cost_per_token": 2e-06,
-        "max_input_tokens": 8192,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4096
-    },
-    "openrouter/deepseek/deepseek-r1-distill-qwen-7b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/meta/llama-3.2-11b": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1.6e-07,
-        "output_cost_per_token": 1.6e-07,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 8192
-    },
-    "openrouter/mistralai/mistral-small": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 6e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openai/gpt-4-1106-preview": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-05,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 3e-05,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/tngtech/deepseek-r1t2-chimera:free": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
         "mode": "chat"
     },
     "vercel_ai_gateway/google/gemini-2.5-pro": {
         "max_tokens": 1048576,
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1e-05,
+        "max_output_tokens": 65536,
         "max_input_tokens": 1048576,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 65536
+        "mode": "chat"
     },
-    "vercel_ai_gateway/mistral/pixtral-large": {
+    "vercel_ai_gateway/deepseek/deepseek-v3": {
         "max_tokens": 128000,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 6e-06,
+        "input_cost_per_token": 9e-07,
+        "output_cost_per_token": 9e-07,
+        "max_output_tokens": 8192,
         "max_input_tokens": 128000,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
-    },
-    "vercel_ai_gateway/xai/grok-4": {
-        "max_tokens": 256000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 256000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 256000
-    },
-    "openrouter/thudm/glm-z1-32b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 3e-08,
-        "output_cost_per_token": 3e-08,
-        "litellm_provider": "openrouter",
         "mode": "chat"
     },
-    "openrouter/anthropic/claude-3.5-sonnet-20240620:beta": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 3e-06,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 1.5e-05,
-        "input_cost_per_image": 0.0048,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/devstral-small": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 7e-08,
-        "output_cost_per_token": 2.8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/arcee-ai/spotlight": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 1.8e-07,
-        "max_output_tokens": 65537,
-        "output_cost_per_token": 1.8e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/alibaba/qwen-3-14b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 8e-08,
+    "vercel_ai_gateway/amazon/nova-lite": {
+        "max_tokens": 300000,
+        "input_cost_per_token": 6e-08,
         "output_cost_per_token": 2.4e-07,
-        "max_input_tokens": 40960,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/openai/codex-mini": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.5e-06,
-        "max_output_tokens": 100000,
-        "output_cost_per_token": 6e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/raifle/sorcererlm-8x22b": {
-        "max_tokens": 16000,
-        "input_cost_per_token": 4.5e-06,
-        "output_cost_per_token": 4.5e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwq-32b": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 7.5e-08,
-        "output_cost_per_token": 1.5e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemini-2.5-flash-lite": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 1e-07,
-        "max_output_tokens": 65535,
-        "output_cost_per_token": 4e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/alibaba/qwen3-coder": {
-        "max_tokens": 262144,
-        "input_cost_per_token": 4e-07,
-        "output_cost_per_token": 1.6e-06,
-        "max_input_tokens": 262144,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 66536
-    },
-    "openrouter/nousresearch/deephermes-3-llama-3-8b-preview:free": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/google/gemma-3-12b-it": {
-        "max_tokens": 96000,
-        "input_cost_per_token": 3e-08,
         "max_output_tokens": 8192,
-        "output_cost_per_token": 3e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openrouter/auto": {
-        "max_tokens": 2000000,
-        "input_cost_per_token": -1.0,
-        "output_cost_per_token": -1.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/anthropic/claude-3-opus:beta": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 1.5e-05,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 7.5e-05,
-        "input_cost_per_image": 0.024,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen-2.5-coder-32b-instruct:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/zai/glm-4.5-air": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 1.1e-06,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 300000,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 96000
-    },
-    "openrouter/deepseek/deepseek-prover-v2": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 5e-07,
-        "output_cost_per_token": 2.18e-06,
-        "litellm_provider": "openrouter",
         "mode": "chat"
     },
-    "openrouter/meta-llama/llama-guard-3-8b": {
+    "vercel_ai_gateway/meta/llama-4-scout": {
         "max_tokens": 131072,
-        "input_cost_per_token": 2e-08,
-        "output_cost_per_token": 6e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/pixtral-12b": {
-        "max_tokens": 32768,
         "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 1e-07,
-        "input_cost_per_image": 0.0001445,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.1-405b": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/vercel/v0-1.0-md": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 32000
-    },
-    "vercel_ai_gateway/zai/glm-4.5": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 6e-07,
-        "output_cost_per_token": 2.2e-06,
-        "max_input_tokens": 128000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 96000
-    },
-    "vercel_ai_gateway/xai/grok-3-mini-fast": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 6e-07,
-        "output_cost_per_token": 4e-06,
-        "max_input_tokens": 131072,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 131072
-    },
-    "openrouter/nothingiisreal/mn-celeste-12b": {
-        "max_tokens": 16384,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/tngtech/deepseek-r1t-chimera:free": {
-        "max_tokens": 163840,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-32b": {
-        "max_tokens": 40960,
-        "input_cost_per_token": 2.7e-08,
-        "output_cost_per_token": 2.7e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-4-scout": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 8e-08,
-        "max_output_tokens": 1048576,
         "output_cost_per_token": 3e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/meta-llama/llama-3.3-70b-instruct:free": {
-        "max_tokens": 65536,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/microsoft/phi-4-multimodal-instruct": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 5e-08,
-        "output_cost_per_token": 1e-07,
-        "input_cost_per_image": 0.00017685,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/deepseek/deepseek-r1-distill-llama-70b:free": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "vercel_ai_gateway/anthropic/claude-3.5-sonnet": {
-        "max_tokens": 200000,
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
         "max_output_tokens": 8192,
-        "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
-    },
-    "vercel_ai_gateway/moonshotai/kimi-k2": {
-        "max_tokens": 131072,
-        "input_cost_per_token": 5.5e-07,
-        "output_cost_per_token": 2.2e-06,
         "max_input_tokens": 131072,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 16384
-    },
-    "openrouter/google/gemini-2.0-flash-exp:free": {
-        "max_tokens": 1048576,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 8192,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
         "mode": "chat"
     },
-    "openrouter/openai/gpt-4-turbo": {
-        "max_tokens": 128000,
-        "input_cost_per_token": 1e-05,
-        "max_output_tokens": 4096,
-        "output_cost_per_token": 3e-05,
-        "input_cost_per_image": 0.01445,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwq-32b-preview": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/agentica-org/deepcoder-14b-preview": {
-        "max_tokens": 96000,
-        "input_cost_per_token": 1.5e-08,
-        "output_cost_per_token": 1.5e-08,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/mistral-7b-instruct-v0.2": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 2e-07,
-        "output_cost_per_token": 2e-07,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/morph/morph-v2": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 1.2e-06,
-        "max_output_tokens": 16000,
-        "output_cost_per_token": 2.7e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/shisa-ai/shisa-v2-llama3.3-70b:free": {
-        "max_tokens": 32768,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/mistralai/ministral-8b": {
+    "vercel_ai_gateway/meta/llama-3.2-1b": {
         "max_tokens": 128000,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1e-07,
-        "litellm_provider": "openrouter",
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
     "vercel_ai_gateway/mistral/mistral-small": {
         "max_tokens": 32000,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
+        "max_output_tokens": 4000,
         "max_input_tokens": 32000,
         "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
-        "max_output_tokens": 4000
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemini-2.5-flash": {
+        "max_tokens": 1000000,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 2.5e-06,
+        "max_output_tokens": 65536,
+        "max_input_tokens": 1000000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/inception/mercury-coder-small": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 1e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 32000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/text-embedding-3-small": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/xai/grok-2-vision": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-2": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/deepseek/deepseek-r1-distill-llama-70b": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 7.5e-07,
+        "output_cost_per_token": 9.9e-07,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.1-70b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7.2e-07,
+        "output_cost_per_token": 7.2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-3": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-235b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-3-fast": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 2.5e-05,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/vercel/v0-1.5-md": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o4-mini": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.1e-06,
+        "output_cost_per_token": 4.4e-06,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 2.75e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/magistral-medium": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 5e-06,
+        "max_output_tokens": 64000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/amazon/titan-embed-text-v2": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-30b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/zai/glm-4.5-air": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 1.1e-06,
+        "max_output_tokens": 96000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4-turbo": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1e-05,
+        "output_cost_per_token": 3e-05,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mistral-large": {
+        "max_tokens": 32000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 32000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar-pro": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 200000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.2-90b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7.2e-07,
+        "output_cost_per_token": 7.2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3-8b": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 8e-08,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/text-embedding-005": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2.5e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/mistral/pixtral-large": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-3.5-sonnet": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/amazon/nova-micro": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 3.5e-08,
+        "output_cost_per_token": 1.4e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/command-r": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/morph/morph-v3-large": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 9e-07,
+        "output_cost_per_token": 1.9e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mixtral-8x22b-instruct": {
+        "max_tokens": 65536,
+        "input_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 1.2e-06,
+        "max_output_tokens": 2048,
+        "max_input_tokens": 65536,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-4": {
+        "max_tokens": 256000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 256000,
+        "max_input_tokens": 256000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.1-8b": {
+        "max_tokens": 131000,
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 8e-08,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-3-opus": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 7.5e-05,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/zai/glm-4.5": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.2e-06,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4o": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 128000,
+        "cache_read_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o3-mini": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.1e-06,
+        "output_cost_per_token": 4.4e-06,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 5.5e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/ministral-8b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 1e-07,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o3": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/vercel/v0-1.0-md": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 32000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/text-multilingual-embedding-002": {
+        "max_tokens": 0,
+        "input_cost_per_token": 2.5e-08,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/amazon/nova-pro": {
+        "max_tokens": 300000,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 3.2e-06,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 300000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/morph/morph-v3-fast": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 1.2e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-3.5-turbo": {
+        "max_tokens": 16385,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 16385,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/codestral": {
+        "max_tokens": 256000,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 9e-07,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 256000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.2-11b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.6e-07,
+        "output_cost_per_token": 1.6e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3-70b": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 5.9e-07,
+        "output_cost_per_token": 7.9e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/xai/grok-3-mini-fast": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 4e-06,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/text-embedding-3-large": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1.3e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/google/gemini-2.0-flash-lite": {
+        "max_tokens": 1048576,
+        "input_cost_per_token": 7.5e-08,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/ministral-3b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 4e-08,
+        "output_cost_per_token": 4e-08,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar-reasoning-pro": {
+        "max_tokens": 127000,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 127000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemini-embedding-001": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/anthropic/claude-3-haiku": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 1.25e-06,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 3e-08,
+        "cache_creation_input_token_cost": 3e-07,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/o1": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 6e-05,
+        "max_output_tokens": 100000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 7.5e-06,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/deepseek/deepseek-r1": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 5.5e-07,
+        "output_cost_per_token": 2.19e-06,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mistral-embed": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4.1-mini": {
+        "max_tokens": 1047576,
+        "input_cost_per_token": 4e-07,
+        "output_cost_per_token": 1.6e-06,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 1047576,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4o-mini": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 128000,
+        "cache_read_input_token_cost": 7.5e-08,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-14b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 8e-08,
+        "output_cost_per_token": 2.4e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-4-opus": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 7.5e-05,
+        "max_output_tokens": 32000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 1.5e-06,
+        "cache_creation_input_token_cost": 1.875e-05,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/mistral-saba-24b": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 7.9e-07,
+        "output_cost_per_token": 7.9e-07,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 32768,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar-reasoning": {
+        "max_tokens": 127000,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 127000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-3.5-haiku": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 4e-06,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 8e-08,
+        "cache_creation_input_token_cost": 1e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/command-a": {
+        "max_tokens": 256000,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 256000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/google/gemma-2-9b": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.2-3b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.5e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4.1-nano": {
+        "max_tokens": 1047576,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 4e-07,
+        "max_output_tokens": 32768,
+        "max_input_tokens": 1047576,
+        "cache_read_input_token_cost": 2.5e-08,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/anthropic/claude-4-sonnet": {
+        "max_tokens": 200000,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "max_output_tokens": 64000,
+        "max_input_tokens": 200000,
+        "cache_read_input_token_cost": 3e-07,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/perplexity/sonar": {
+        "max_tokens": 127000,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 1e-06,
+        "max_output_tokens": 8000,
+        "max_input_tokens": 127000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-4-maverick": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/text-embedding-ada-002": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "embedding"
+    },
+    "vercel_ai_gateway/xai/grok-3-mini": {
+        "max_tokens": 131072,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 5e-07,
+        "max_output_tokens": 131072,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/embed-v4.0": {
+        "max_tokens": 0,
+        "input_cost_per_token": 1.2e-07,
+        "output_cost_per_token": 0.0,
+        "max_output_tokens": 0,
+        "max_input_tokens": 0,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/meta/llama-3.3-70b": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7.2e-07,
+        "output_cost_per_token": 7.2e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/cohere/command-r-plus": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-3.5-turbo-instruct": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 2e-06,
+        "max_output_tokens": 4096,
+        "max_input_tokens": 8192,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/devstral-small": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 2.8e-07,
+        "max_output_tokens": 128000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
     },
     "vercel_ai_gateway/anthropic/claude-3.7-sonnet": {
         "max_tokens": 200000,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
-        "max_input_tokens": 200000,
-        "litellm_provider": "vercel_ai_gateway",
-        "mode": "chat",
         "max_output_tokens": 64000,
+        "max_input_tokens": 200000,
         "cache_read_input_token_cost": 3e-07,
-        "cache_creation_input_token_cost": 3.75e-06
+        "cache_creation_input_token_cost": 3.75e-06,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
     },
-    "openrouter/openai/chatgpt-4o-latest": {
+    "vercel_ai_gateway/google/gemini-2.0-flash": {
+        "max_tokens": 1048576,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "max_output_tokens": 8192,
+        "max_input_tokens": 1048576,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/mistral/pixtral-12b": {
         "max_tokens": 128000,
-        "input_cost_per_token": 5e-06,
-        "max_output_tokens": 16384,
-        "output_cost_per_token": 1.5e-05,
-        "input_cost_per_image": 0.007225,
-        "litellm_provider": "openrouter",
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.5e-07,
+        "max_output_tokens": 4000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
-    "openrouter/amazon/nova-pro-v1": {
-        "max_tokens": 300000,
-        "input_cost_per_token": 8e-07,
-        "max_output_tokens": 5120,
-        "output_cost_per_token": 3.2e-06,
-        "input_cost_per_image": 0.0012,
-        "litellm_provider": "openrouter",
+    "vercel_ai_gateway/mistral/magistral-small": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
+        "max_output_tokens": 64000,
+        "max_input_tokens": 128000,
+        "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     },
-    "openrouter/morph/morph-v3-fast": {
-        "max_tokens": 32000,
-        "input_cost_per_token": 1.2e-06,
-        "max_output_tokens": 16000,
-        "output_cost_per_token": 2.7e-06,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/openrouter/horizon-alpha": {
-        "max_tokens": 256000,
-        "input_cost_per_token": 0.0,
-        "max_output_tokens": 128000,
-        "output_cost_per_token": 0.0,
-        "litellm_provider": "openrouter",
-        "mode": "chat"
-    },
-    "openrouter/qwen/qwen3-30b-a3b-instruct-2507": {
+    "vercel_ai_gateway/moonshotai/kimi-k2": {
         "max_tokens": 131072,
-        "input_cost_per_token": 2e-07,
+        "input_cost_per_token": 5.5e-07,
+        "output_cost_per_token": 2.2e-06,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 131072,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/alibaba/qwen-3-32b": {
+        "max_tokens": 40960,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "max_output_tokens": 16384,
+        "max_input_tokens": 40960,
+        "litellm_provider": "vercel_ai_gateway",
+        "mode": "chat"
+    },
+    "vercel_ai_gateway/openai/gpt-4.1": {
+        "max_tokens": 1047576,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
         "max_output_tokens": 32768,
-        "output_cost_per_token": 8e-07,
-        "litellm_provider": "openrouter",
+        "max_input_tokens": 1047576,
+        "cache_read_input_token_cost": 5e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "vercel_ai_gateway",
         "mode": "chat"
     }
 }
