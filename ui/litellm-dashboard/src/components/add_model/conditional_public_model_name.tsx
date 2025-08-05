@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Form, Table } from "antd";
 import { TextInput } from "@tremor/react";
-import { Tooltip } from "../atoms";
+import { Tooltip } from "../atoms/index";
 
 const ConditionalPublicModelName: React.FC = () => {
   const form = Form.useFormInstance();
