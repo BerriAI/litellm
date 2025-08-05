@@ -122,19 +122,19 @@ class PrometheusLogger(CustomLogger):
 
             # Counter for total_output_tokens
             self.litellm_tokens_metric = self._counter_factory(
-                "litellm_total_tokens",
+                "litellm_total_tokens_metric",
                 "Total number of input + output tokens from LLM requests",
                 labelnames=self.get_labels_for_metric("litellm_total_tokens_metric"),
             )
 
             self.litellm_input_tokens_metric = self._counter_factory(
-                "litellm_input_tokens",
+                "litellm_input_tokens_metric",
                 "Total number of input tokens from LLM requests",
                 labelnames=self.get_labels_for_metric("litellm_input_tokens_metric"),
             )
 
             self.litellm_output_tokens_metric = self._counter_factory(
-                "litellm_output_tokens",
+                "litellm_output_tokens_metric",
                 "Total number of output tokens from LLM requests",
                 labelnames=self.get_labels_for_metric("litellm_output_tokens_metric"),
             )
