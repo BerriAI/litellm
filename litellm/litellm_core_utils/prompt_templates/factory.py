@@ -1,5 +1,6 @@
 import copy
 import json
+import mimetypes
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -13,6 +14,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -2479,6 +2481,7 @@ class BedrockImageProcessor:
         )
 
         if is_document:
+            valid_extensions: Optional[List[str]] = None
             potential_extensions = mimetypes.guess_all_extensions(
                 mime_type, strict=False
             )
@@ -2487,6 +2490,20 @@ class BedrockImageProcessor:
                 for ext in potential_extensions
                 if ext[1:] in supported_doc_formats
             ]
+
+            # Fallback to types/files.py if mimetypes doesn't return valid extensions
+            #################
+            # litellm runs on docker containers and `mimetypes` depends on the installed mimetypes of the OS
+            # we fallback to well known mime types in types/files.py if mimetypes doesn't return valid extensions
+            if not valid_extensions:
+                try:
+                    fallback_extension = get_file_extension_from_mime_type(mime_type)
+                    if fallback_extension in supported_doc_formats:
+                        valid_extensions = [fallback_extension]
+                except ValueError:
+                    # Neither mimetypes nor files.py could handle this MIME type
+                    # get_file_extension_from_mime_type raises ValueError if the mime type is not supported
+                    pass
 
             if not valid_extensions:
                 raise ValueError(
