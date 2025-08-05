@@ -137,13 +137,9 @@ def get_supported_openai_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "sambanova":
         if request_type == "embeddings":
-            litellm.SambaNovaEmbeddingConfig().get_supported_openai_params(
-                model=model
-            )
+            litellm.SambaNovaEmbeddingConfig().get_supported_openai_params(model=model)
         else:
-            return litellm.SambanovaConfig().get_supported_openai_params(
-                model=model
-            )
+            return litellm.SambanovaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nebius":
         if request_type == "chat_completion":
             return litellm.NebiusConfig().get_supported_openai_params(model=model)
