@@ -49,6 +49,7 @@ import BudgetDurationDropdown from "./common_components/budget_duration_dropdown
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import ModelAliasManager from "./common_components/ModelAliasManager";
 
 
 const { Option } = Select;
@@ -184,6 +185,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("default");
+  const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -191,6 +193,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setLoggingSettings([]);
     setDisabledCallbacks([]);
     setKeyType("default");
+    setModelAliases({});
   };
 
   const handleCancel = () => {
@@ -201,6 +204,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setLoggingSettings([]);
     setDisabledCallbacks([]);
     setKeyType("default");
+    setModelAliases({});
   };
 
   useEffect(() => {
@@ -371,6 +375,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_access_groups;
       }
+      
+      // Add model_aliases if any are defined
+      if (Object.keys(modelAliases).length > 0) {
+        formValues.aliases = JSON.stringify(modelAliases);
+      }
+      
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -1004,6 +1014,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           premiumUser={premiumUser}
                           disabledCallbacks={disabledCallbacks}
                           onDisabledCallbacksChange={setDisabledCallbacks}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Model Aliases</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <Text className="text-sm text-gray-600 mb-4">
+                          Create custom aliases for models that can be used in API calls. This allows you to create shortcuts for specific models.
+                        </Text>
+                        <ModelAliasManager
+                          accessToken={accessToken}
+                          initialModelAliases={modelAliases}
+                          onAliasUpdate={setModelAliases}
+                          showExampleConfig={false}
                         />
                       </div>
                     </AccordionBody>
