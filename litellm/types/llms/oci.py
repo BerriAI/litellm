@@ -83,7 +83,7 @@ class OCIChatRequestPayload(BaseModel):
     """Internal 'chatRequest' payload for the OCI API."""
 
     apiFormat: str
-    messages: list[OCIMessage]
+    messages: List[OCIMessage]
     tools: Optional[List[OCIToolDefinition]] = None
     isStream: bool = False
     numGenerations: Optional[int] = None
