@@ -152,7 +152,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.75.0"
+version = "1.75.1"
 version_files = [
     "pyproject.toml:^version"
 ]
