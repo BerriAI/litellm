@@ -1728,7 +1728,7 @@ class ProxyConfig:
         self._load_environment_variables(config=config)
 
         ## Callback settings
-        callback_settings = config.get("callback_settings", None)
+        callback_settings = config.get("callback_settings", {})
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
@@ -3778,9 +3778,10 @@ async def model_list(
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
         team_id=team_id,
-        include_model_access_groups=include_model_access_groups,
-        only_model_access_groups=only_model_access_groups,
-        return_wildcard_routes=return_wildcard_routes,
+        include_model_access_groups=include_model_access_groups or False,
+        only_model_access_groups=only_model_access_groups or False,
+        return_wildcard_routes=return_wildcard_routes or False,
+        user_api_key_cache=user_api_key_cache,
     )
 
     # Build response data
@@ -3789,7 +3790,7 @@ async def model_list(
         model_info = create_model_info_response(
             model_id=model,
             provider="openai",
-            include_metadata=include_metadata,
+            include_metadata=include_metadata or False,
             fallback_type=fallback_type,
             llm_router=llm_router,
         )
@@ -3836,6 +3837,7 @@ async def model_info(
         include_model_access_groups=False,
         only_model_access_groups=False,
         return_wildcard_routes=False,
+        user_api_key_cache=user_api_key_cache,
     )
 
     # Validate that the requested model is accessible
@@ -6930,6 +6932,7 @@ async def model_group_info(
         include_model_access_groups=False,
         only_model_access_groups=False,
         return_wildcard_routes=False,
+        user_api_key_cache=user_api_key_cache,
     )
     model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group

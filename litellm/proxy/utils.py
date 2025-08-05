@@ -3844,6 +3844,7 @@ async def get_available_models_for_user(
     include_model_access_groups: bool = False,
     only_model_access_groups: bool = False,
     return_wildcard_routes: bool = False,
+    user_api_key_cache: Optional["DualCache"] = None,
 ) -> List[str]:
     """
     Get the list of models available to a user based on their API key and team permissions.
@@ -3868,7 +3869,8 @@ async def get_available_models_for_user(
         get_team_models,
         get_complete_model_list,
     )
-    from litellm.proxy.auth.route_checks import get_team_object, validate_membership
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
     
     # Get proxy model list and access groups
     if llm_router is None:
@@ -3890,12 +3892,12 @@ async def get_available_models_for_user(
     team_models: List[str] = user_api_key_dict.team_models
 
     # If specific team_id is provided, validate and get team models
-    if team_id and prisma_client and proxy_logging_obj:
+    if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
         key_models = []
         team_object = await get_team_object(
             team_id=team_id,
             prisma_client=prisma_client,
-            user_api_key_cache=None,  # Will be handled by the calling function
+            user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
         validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
