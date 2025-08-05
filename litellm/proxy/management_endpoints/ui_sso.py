@@ -145,6 +145,12 @@ async def serve_login_page(
 
     sso_button = ""
     if sso_available:
+        sso_login_url = base_url_to_redirect_to
+        if sso_login_url.endswith("/"):
+            sso_login_url += "sso/login"
+        else:
+            sso_login_url += "/sso/login"
+        
         sso_button = f"""
         <div style="
             margin-top: 20px;
@@ -157,7 +163,7 @@ async def serve_login_page(
                 font-size: 14px;
                 margin-bottom: 16px;
             ">or</p>
-            <a href="{base_url_to_redirect_to}/sso/login" style="
+            <a href="{sso_login_url}" style="
                 display: inline-block;
                 background-color: #f8fafc;
                 border: 1px solid #e2e8f0;
@@ -175,8 +181,11 @@ async def serve_login_page(
         </div>
         """
 
-    # Get the base URL for form action using proper URL construction
-    url_to_redirect_to = f"{base_url_to_redirect_to}/login"
+    if base_url_to_redirect_to.endswith("/"):
+        url_to_redirect_to = base_url_to_redirect_to + "login"
+    else:
+        url_to_redirect_to = base_url_to_redirect_to + "/login"
+
     unified_login_html = f"""
 <!DOCTYPE html>
 <html lang="en">
