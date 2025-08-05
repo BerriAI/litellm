@@ -210,6 +210,10 @@ but we **don't** recommend using REDIS_URL in prod. We've noticed a performance 
 
 For GCP Memorystore Redis with IAM authentication, install the required dependency:
 
+:::info
+IAM authentication for redis is only supported via GCP and only on Redis Clusters for now.
+:::
+
 ```shell
 pip install google-cloud-iam
 ```
@@ -217,25 +221,6 @@ pip install google-cloud-iam
 <Tabs>
 
 <TabItem value="gcp-iam-config" label="Set on config.yaml">
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-
-litellm_settings:
-  cache: True
-  cache_params:
-    type: redis
-    host: "10.128.0.2"  # Your GCP Redis IP
-    port: 6379
-    gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
-    gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate
-    ssl: true  
-    ssl_cert_reqs: null  # For self-signed certificates
-    ssl_check_hostname: false  # For self-signed certificates
-```
 
 For Redis Cluster with GCP IAM:
 
@@ -246,7 +231,6 @@ litellm_settings:
     type: redis
     redis_startup_nodes: [{"host": "10.128.0.2", "port": 6379}, {"host": "10.128.0.2", "port": 11008}]
     gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
-    gcp_ssl_ca_certs: "./server-ca.pem"
     ssl: true
     ssl_cert_reqs: null
     ssl_check_hostname: false
@@ -258,15 +242,6 @@ litellm_settings:
 
 You can configure GCP IAM Redis authentication in your .env:
 
-```env
-REDIS_HOST="10.128.0.2"
-REDIS_PORT="6379"
-REDIS_GCP_SERVICE_ACCOUNT="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
-REDIS_GCP_SSL_CA_CERTS="./server-ca.pem"
-REDIS_SSL="True"
-REDIS_SSL_CERT_REQS="None"
-REDIS_SSL_CHECK_HOSTNAME="False"
-```
 
 For Redis Cluster:
 
