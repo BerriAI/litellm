@@ -2481,37 +2481,11 @@ class BedrockImageProcessor:
         )
 
         if is_document:
-            valid_extensions: Optional[List[str]] = None
-            potential_extensions = mimetypes.guess_all_extensions(
-                mime_type, strict=False
+            return BedrockImageProcessor._get_document_format(
+                mime_type=mime_type,
+                supported_doc_formats=supported_doc_formats
             )
-            valid_extensions = [
-                ext[1:]
-                for ext in potential_extensions
-                if ext[1:] in supported_doc_formats
-            ]
 
-            # Fallback to types/files.py if mimetypes doesn't return valid extensions
-            #################
-            # litellm runs on docker containers and `mimetypes` depends on the installed mimetypes of the OS
-            # we fallback to well known mime types in types/files.py if mimetypes doesn't return valid extensions
-            if not valid_extensions:
-                try:
-                    fallback_extension = get_file_extension_from_mime_type(mime_type)
-                    if fallback_extension in supported_doc_formats:
-                        valid_extensions = [fallback_extension]
-                except ValueError:
-                    # Neither mimetypes nor files.py could handle this MIME type
-                    # get_file_extension_from_mime_type raises ValueError if the mime type is not supported
-                    pass
-
-            if not valid_extensions:
-                raise ValueError(
-                    f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
-                )
-
-            # Use first valid extension instead of provided image_format
-            return valid_extensions[0]
         else:
             #########################################################
             # Check if image_format is an image or video
@@ -2521,6 +2495,60 @@ class BedrockImageProcessor:
                     f"Unsupported image format: {image_format}. Supported formats: {supported_image_and_video_formats}"
                 )
             return image_format
+    
+    @staticmethod
+    def _get_document_format(
+        mime_type: str,
+        supported_doc_formats: List[str]
+        ) -> str:
+        """
+        Get the document format from the mime type
+
+        - Primary method - uses `mimetypes.guess_all_extensions`
+        - Fallback method - uses `get_file_extension_from_mime_type`
+
+        Relevant Issue: https://github.com/BerriAI/litellm/issues/12260
+
+        `mimetypes` is not available in docker containers, so we fallback to `get_file_extension_from_mime_type`
+
+        Args:
+            mime_type: The mime type of the document
+            supported_doc_formats: The supported document formats for the current model
+
+        Returns:
+            The document format
+        """
+        valid_extensions: Optional[List[str]] = None
+        potential_extensions = mimetypes.guess_all_extensions(
+            mime_type, strict=False
+        )
+        valid_extensions = [
+            ext[1:]
+            for ext in potential_extensions
+            if ext[1:] in supported_doc_formats
+        ]
+
+        # Fallback to types/files.py if mimetypes doesn't return valid extensions
+        #################
+        # litellm runs on docker containers and `mimetypes` depends on the installed mimetypes of the OS
+        # we fallback to well known mime types in types/files.py if mimetypes doesn't return valid extensions
+        if not valid_extensions:
+            try:
+                fallback_extension = get_file_extension_from_mime_type(mime_type)
+                if fallback_extension in supported_doc_formats:
+                    valid_extensions = [fallback_extension]
+            except ValueError:
+                # Neither mimetypes nor files.py could handle this MIME type
+                # get_file_extension_from_mime_type raises ValueError if the mime type is not supported
+                pass
+
+        if not valid_extensions:
+            raise ValueError(
+                f"No supported extensions for MIME type: {mime_type}. Supported formats: {supported_doc_formats}"
+            )
+
+        # Use first valid extension instead of provided image_format
+        return valid_extensions[0]
 
     @staticmethod
     def _create_bedrock_block(
