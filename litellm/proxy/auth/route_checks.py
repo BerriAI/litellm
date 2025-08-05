@@ -25,6 +25,8 @@ class RouteChecks:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
             EnterpriseRouteChecks.should_call_route(route=route)
+        except HTTPException as e:
+            raise e
         except Exception:
             pass
 
@@ -386,7 +388,7 @@ class RouteChecks:
         if "thread" in request.url.path or "assistant" in request.url.path:
             return True
         return False
-    
+
     @staticmethod
     def is_generate_content_route(route: str) -> bool:
         """
