@@ -61,20 +61,6 @@ pip install google-cloud-iam
 ```python
 import litellm
 from litellm import completion
-from litellm.caching.caching import Cache
-
-# Using Redis Cache with GCP IAM Authentication
-litellm.cache = Cache(
-    type="redis",
-    host="10.128.0.2",  # Your GCP Redis IP
-    port=6379,
-    gcp_service_account="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com",
-    gcp_ssl_ca_certs="./server-ca.pem",  # Path to SSL CA certificate
-    ssl=True,
-    ssl_cert_reqs=None,  # For self-signed certificates
-    ssl_check_hostname=False,  # For self-signed certificates
-)
-
 # For Redis Cluster with GCP IAM
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 
@@ -84,7 +70,6 @@ litellm.cache = RedisClusterCache(
         {"host": "10.128.0.2", "port": 11008},
     ],
     gcp_service_account="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com",
-    gcp_ssl_ca_certs="./server-ca.pem",
     ssl=True,
     ssl_cert_reqs=None,
     ssl_check_hostname=False,
@@ -111,8 +96,7 @@ You can also set these as environment variables:
 export REDIS_HOST="10.128.0.2"
 export REDIS_PORT="6379"
 export REDIS_GCP_SERVICE_ACCOUNT="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
-export REDIS_GCP_SSL_CA_CERTS="./server-ca.pem"
-export REDIS_SSL="True"
+export REDIS_SSL="False"
 ```
 
 Then simply initialize:
