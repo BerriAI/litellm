@@ -106,6 +106,9 @@ class Cache:
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
         qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        # GCP IAM authentication parameters
+        gcp_service_account: Optional[str] = None,
+        gcp_ssl_ca_certs: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -161,14 +164,21 @@ class Cache:
         """
         if type == LiteLLMCacheType.REDIS:
             if redis_startup_nodes:
-                self.cache: BaseCache = RedisClusterCache(
-                    host=host,
-                    port=port,
-                    password=password,
-                    redis_flush_size=redis_flush_size,
-                    startup_nodes=redis_startup_nodes,
+                # Only pass GCP parameters if they are provided
+                cluster_kwargs = {
+                    "host": host,
+                    "port": port,
+                    "password": password,
+                    "redis_flush_size": redis_flush_size,
+                    "startup_nodes": redis_startup_nodes,
                     **kwargs,
-                )
+                }
+                if gcp_service_account is not None:
+                    cluster_kwargs["gcp_service_account"] = gcp_service_account
+                if gcp_ssl_ca_certs is not None:
+                    cluster_kwargs["gcp_ssl_ca_certs"] = gcp_ssl_ca_certs
+                
+                self.cache: BaseCache = RedisClusterCache(**cluster_kwargs)
             else:
                 self.cache = RedisCache(
                     host=host,
