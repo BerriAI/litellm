@@ -406,6 +406,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
+        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
+            {}
+        )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         if model_list is not None:
@@ -1207,7 +1210,7 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
-                    raise fallback_error 
+                    raise fallback_error
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
@@ -5109,6 +5112,19 @@ class Router:
             if deployment.model_info.id:
                 self.provider_default_deployment_ids.append(deployment.model_info.id)
 
+        _team_id = deployment.model_info.get("team_id")
+        _team_public_model_name = deployment.model_info.get("team_public_model_name")
+        if (
+            _team_id is not None
+            and _team_public_model_name is not None
+            and "*" in _team_public_model_name
+        ):
+            if _team_id not in self.team_pattern_routers:
+                self.team_pattern_routers[_team_id] = PatternMatchRouter()
+            self.team_pattern_routers[_team_id].add_pattern(
+                _team_public_model_name, deployment.to_json(exclude_none=True)
+            )
+
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources = deployment.litellm_params.get("dataSources", []) or []
 
@@ -5920,19 +5936,17 @@ class Router:
         Map a team model name to a team-specific model name.
 
         Returns:
-        - team_model_name: str - the team-specific model name
+        - deployment id: str - the deployment id of the team-specific model
         - None: if no team-specific model name is found
         """
-        for model in self.model_list:
-            model_team_id = model["model_info"].get("team_id")
-            model_team_public_model_name = model["model_info"].get(
-                "team_public_model_name"
-            )
-            if (
-                model_team_id == team_id
-                and model_team_public_model_name == team_model_name
-            ):
-                return model["model_name"]
+        models = self.get_model_list(model_name=team_model_name, team_id=team_id)
+        if not models:
+            return None
+        for model in models:
+            if model.get("model_info", {}).get("team_id") == team_id:
+                return model.get("model_name")
+
+        ## wildcard models
         return None
 
     def should_include_deployment(
@@ -6073,6 +6087,7 @@ class Router:
 
         if team_id specified, returns matching team-specific models
         """
+
         if hasattr(self, "model_list"):
             returned_models: List[DeploymentTypedDict] = []
 
@@ -6087,7 +6102,17 @@ class Router:
                 )
 
             if len(returned_models) == 0:  # check if wildcard route
-                potential_wildcard_models = self.pattern_router.route(model_name)
+                potential_wildcard_models = self.pattern_router.route(model_name) or []
+
+                ## check for team-specific wildcard models
+                if team_id is not None and team_id in self.team_pattern_routers:
+                    potential_team_only_wildcard_models = (
+                        self.team_pattern_routers[team_id].route(model_name) or []
+                    )
+                    potential_wildcard_models.extend(
+                        potential_team_only_wildcard_models
+                    )
+
                 if model_name is not None and potential_wildcard_models is not None:
                     for m in potential_wildcard_models:
                         deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
@@ -6519,6 +6544,7 @@ class Router:
         messages: Optional[List[Dict[str, str]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
+        request_kwargs: Optional[Dict] = None,
     ) -> Tuple[str, Union[List, Dict]]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
@@ -6530,6 +6556,14 @@ class Router:
         - List, if multiple models chosen
         - Dict, if specific model chosen
         """
+
+        request_team_id: Optional[str] = None
+        if request_kwargs is not None:
+            metadata = request_kwargs.get("metadata") or {}
+            litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+            request_team_id = metadata.get(
+                "user_api_key_team_id"
+            ) or litellm_metadata.get("user_api_key_team_id")
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
             return model, self._get_deployment_by_litellm_model(model=model)
@@ -6552,8 +6586,21 @@ class Router:
             pattern_deployments = self.pattern_router.get_deployments_by_pattern(
                 model=model,
             )
+
             if pattern_deployments:
                 return model, pattern_deployments
+
+            if (
+                request_team_id is not None
+                and request_team_id in self.team_pattern_routers
+            ):
+                pattern_deployments = self.team_pattern_routers[
+                    request_team_id
+                ].get_deployments_by_pattern(
+                    model=model,
+                )
+                if pattern_deployments:
+                    return model, pattern_deployments
 
             # check if default deployment is set
             if self.default_deployment is not None:
@@ -6622,6 +6669,7 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
         )  # type: ignore
 
         # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
