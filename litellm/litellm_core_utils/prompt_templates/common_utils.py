@@ -519,25 +519,25 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     }
 
     # Use iterative approach with queue to avoid recursion
-    # Each item in queue is (node, parent_container, key/index, active_defs, seen_ids)
+    # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
     queue: deque[
         tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]
     ] = deque([(schema, None, None, root_defs, set())])
 
     while queue:
-        node, parent, key, active_defs, seen = queue.popleft()
-
-        # Avoid infinite loops on self-referential schemas
-        if id(node) in seen:
-            continue
-        seen = seen.copy()  # Create new set for this branch
-        seen.add(id(node))
+        node, parent, key, active_defs, ref_chain = queue.popleft()
 
         # ----------------------------- dict -----------------------------
         if isinstance(node, dict):
             # --- Case 1: this node *is* a reference ---
             if "$ref" in node:
                 ref_name = node["$ref"].split("/")[-1]
+
+                # Check for circular reference in the resolution chain
+                if ref_name in ref_chain:
+                    # Circular reference detected - leave as-is to prevent infinite recursion
+                    continue
+
                 target_schema = active_defs.get(ref_name)
                 # Unknown reference – leave untouched
                 if target_schema is None:
@@ -563,8 +563,12 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                     schema.update(resolved)
                     resolved = schema
 
+                # Add to ref chain to track circular references
+                new_ref_chain = ref_chain.copy()
+                new_ref_chain.add(ref_name)
+
                 # Add resolved node to queue for further processing
-                queue.append((resolved, parent, key, child_defs, seen))
+                queue.append((resolved, parent, key, child_defs, new_ref_chain))
                 continue
 
             # --- Case 2: regular dict – process its values ---
@@ -577,13 +581,13 @@ def unpack_defs(schema: dict, defs: dict) -> None:
 
             # Add all dict values to queue
             for k, v in node.items():
-                queue.append((v, node, k, current_defs, seen))
+                queue.append((v, node, k, current_defs, ref_chain))
 
         # ---------------------------- list ------------------------------
         elif isinstance(node, list):
             # Add all list items to queue
             for idx, item in enumerate(node):
-                queue.append((item, node, idx, active_defs, seen))
+                queue.append((item, node, idx, active_defs, ref_chain))
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:

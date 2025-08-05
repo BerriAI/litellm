@@ -435,3 +435,73 @@ def test_convert_gemini_messages():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
+
+
+def test_bedrock_tools_unpack_defs():
+    """
+    Test that the unpack_defs method handles nested $ref inside anyOf items correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    circularRefSchema = {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["doc"]},
+            "content": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+        },
+        "required": ["type", "content"],
+        "additionalProperties": False,
+        "$defs": {
+            "node": {
+                "type": "object",
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["bulletList"]},
+                            "content": {
+                                "type": "array",
+                                "items": {"$ref": "#/$defs/listItem"},
+                            },
+                        },
+                        "required": ["type"],
+                        "additionalProperties": True,
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["orderedList"]},
+                            "content": {
+                                "type": "array",
+                                "items": {"$ref": "#/$defs/listItem"},
+                            },
+                        },
+                        "required": ["type"],
+                        "additionalProperties": True,
+                    },
+                ],
+            },
+            "listItem": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["listItem"]},
+                    "content": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+                },
+                "required": ["type"],
+                "additionalProperties": True,
+            },
+        },
+    }
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "json_schema",
+                "description": "Process the content using json schema validation",
+                "parameters": circularRefSchema,
+            },
+        }
+    ]
+
+    _bedrock_tools_pt(tools=tools)
