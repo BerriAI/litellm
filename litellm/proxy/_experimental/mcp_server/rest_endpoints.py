@@ -39,11 +39,15 @@ if MCP_AVAILABLE:
         if mcp_server_auth_headers and server.alias:
             normalized_server_alias = server.alias.lower()
             normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
-            return normalized_headers.get(normalized_server_alias)
+            server_auth = normalized_headers.get(normalized_server_alias)
+            if server_auth is not None:
+                return server_auth
         elif mcp_server_auth_headers and server.server_name:
             normalized_server_name = server.server_name.lower()
             normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
-            return normalized_headers.get(normalized_server_name)
+            server_auth = normalized_headers.get(normalized_server_name)
+            if server_auth is not None:
+                return server_auth
         return mcp_auth_header
 
     def _create_tool_response_objects(tools, server_mcp_info):
