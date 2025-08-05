@@ -139,6 +139,20 @@ def test_bedrock_validate_format_image_or_video():
         result = BedrockImageProcessor._validate_format(f"video/{format}", format)
         assert result == format, f"Expected {format}, got {result}"
 
+    # Test valid document formats
+    valid_document_formats = {
+        "application/pdf": "pdf",
+        "text/csv": "csv",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    }
+    for mime, expected in valid_document_formats.items():
+        print("testing mime", mime, "expected", expected)
+        result = BedrockImageProcessor._validate_format(
+            mime, mime.split("/")[1]
+        )
+        assert result == expected, f"Expected {expected}, got {result}"
+
 
 # def test_ollama_pt_consecutive_system_messages():
 #     """Test handling consecutive system messages"""
