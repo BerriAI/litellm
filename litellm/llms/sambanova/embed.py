@@ -3,8 +3,6 @@ This is OpenAI compatible - no transformation is applied
 
 """
 
-import litellm
-
 
 class SambaNovaEmbeddingConfig:
     def get_supported_openai_params(self, model: str):
