@@ -1649,11 +1649,11 @@ def test_handle_clientside_credential_with_responses_function(model_list):
         }
     }
     
-    # Call the function with responses function name
+    # Call the function with _ageneric_api_call_with_fallbacks function name (which handles responses)
     result_deployment = router._handle_clientside_credential(
         deployment=deployment,
         kwargs=kwargs,
-        function_name="responses"
+        function_name="_ageneric_api_call_with_fallbacks"
     )
     
     # Verify the result
@@ -1667,5 +1667,5 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     # Verify the deployment was added to the router
     assert len(router.model_list) == len(model_list) + 1
     
-    print("✓ Success with responses function name and litellm_metadata")
+    print("✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata")
 
