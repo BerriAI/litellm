@@ -161,9 +161,15 @@ const MCPToolsViewer = ({
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
-    mutationFn: (args: { tool: MCPTool; arguments: Record<string, any>, authValue: string }) => {
+    mutationFn: async (args: { tool: MCPTool; arguments: Record<string, any>, authValue: string }) => {
       if (!accessToken) throw new Error("Access Token required");
-      return callMCPTool(accessToken, args.tool.name, args.arguments, args.authValue);
+      
+      try {
+        const result = await callMCPTool(accessToken, args.tool.name, args.arguments, args.authValue);
+        return result;
+      } catch (error) {
+        throw error;
+      }
     },
     onSuccess: (data) => {
       setToolResult(data);

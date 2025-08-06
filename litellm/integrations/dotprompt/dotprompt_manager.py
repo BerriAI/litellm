@@ -3,20 +3,18 @@ Dotprompt manager that integrates with LiteLLM's prompt management system.
 Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
-from typing import List, Optional
+import json
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.prompt_management_base import (
-    PromptManagementBase,
-    PromptManagementClient,
-)
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .prompt_manager import PromptManager, PromptTemplate
 
 
-class DotpromptManager(PromptManagementBase, CustomLogger):
+class DotpromptManager(CustomPromptManagement):
     """
     Dotprompt manager that integrates with LiteLLM's prompt management system.
 
@@ -36,12 +34,25 @@ class DotpromptManager(PromptManagementBase, CustomLogger):
         )
     """
 
-    def __init__(self, prompt_directory: Optional[str] = None):
+    def __init__(
+        self,
+        prompt_directory: Optional[str] = None,
+        prompt_file: Optional[str] = None,
+        prompt_data: Optional[Union[dict, str]] = None,
+        prompt_id: Optional[str] = None,
+    ):
         import litellm
 
         self.prompt_directory = prompt_directory or litellm.global_prompt_directory
+        # Support for JSON-based prompts stored in memory/database
+        if isinstance(prompt_data, str):
+            self.prompt_data = json.loads(prompt_data)
+        else:
+            self.prompt_data = prompt_data or {}
 
         self._prompt_manager: Optional[PromptManager] = None
+        self.prompt_file = prompt_file
+        self.prompt_id = prompt_id
 
     @property
     def integration_name(self) -> str:
@@ -52,12 +63,21 @@ class DotpromptManager(PromptManagementBase, CustomLogger):
     def prompt_manager(self) -> PromptManager:
         """Lazy-load the prompt manager."""
         if self._prompt_manager is None:
-            if self.prompt_directory is None:
+            if (
+                self.prompt_directory is None
+                and not self.prompt_data
+                and not self.prompt_file
+            ):
                 raise ValueError(
-                    "prompt_directory must be set before using dotprompt manager. "
-                    "Set litellm.global_prompt_directory or initialize with prompt_directory parameter."
+                    "Either prompt_directory or prompt_data must be set before using dotprompt manager. "
+                    "Set litellm.global_prompt_directory, initialize with prompt_directory parameter, or provide prompt_data."
                 )
-            self._prompt_manager = PromptManager(self.prompt_directory)
+            self._prompt_manager = PromptManager(
+                prompt_directory=self.prompt_directory,
+                prompt_data=self.prompt_data,
+                prompt_file=self.prompt_file,
+                prompt_id=self.prompt_id,
+            )
         return self._prompt_manager
 
     def should_run_prompt_management(
@@ -93,7 +113,9 @@ class DotpromptManager(PromptManagementBase, CustomLogger):
         3. Converts the rendered text into chat messages
         4. Extracts model and optional parameters from metadata
         """
+
         try:
+
             # Get the prompt template
             template = self.prompt_manager.get_prompt(prompt_id)
             if template is None:
@@ -121,6 +143,32 @@ class DotpromptManager(PromptManagementBase, CustomLogger):
 
         except Exception as e:
             raise ValueError(f"Error compiling prompt '{prompt_id}': {e}")
+
+    def get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+
+        from litellm.integrations.prompt_management_base import PromptManagementBase
+
+        return PromptManagementBase.get_chat_completion_prompt(
+            self,
+            model,
+            messages,
+            non_default_params,
+            prompt_id,
+            prompt_variables,
+            dynamic_callback_params,
+            prompt_label,
+            prompt_version,
+        )
 
     def _convert_to_messages(self, rendered_content: str) -> List[AllMessageValues]:
         """
@@ -223,3 +271,21 @@ class DotpromptManager(PromptManagementBase, CustomLogger):
         """Reload all prompts from the directory."""
         if self._prompt_manager:
             self._prompt_manager.reload_prompts()
+
+    def add_prompt_from_json(self, prompt_id: str, json_data: Dict[str, Any]) -> None:
+        """Add a prompt from JSON data."""
+        content = json_data.get("content", "")
+        metadata = json_data.get("metadata", {})
+        self.prompt_manager.add_prompt(prompt_id, content, metadata)
+
+    def load_prompts_from_json(self, prompts_data: Dict[str, Dict[str, Any]]) -> None:
+        """Load multiple prompts from JSON data."""
+        self.prompt_manager.load_prompts_from_json_data(prompts_data)
+
+    def get_prompts_as_json(self) -> Dict[str, Dict[str, Any]]:
+        """Get all prompts in JSON format."""
+        return self.prompt_manager.get_all_prompts_as_json()
+
+    def convert_prompt_file_to_json(self, file_path: str) -> Dict[str, Any]:
+        """Convert a .prompt file to JSON format."""
+        return self.prompt_manager.prompt_file_to_json(file_path)

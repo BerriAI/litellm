@@ -76,6 +76,7 @@ class AimGuardrail(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
@@ -95,6 +96,7 @@ class AimGuardrail(CustomGuardrail):
             "moderation",
             "audio_transcription",
             "responses",
+            "mcp_call",
         ],
     ) -> Union[Exception, str, dict, None]:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")

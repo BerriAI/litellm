@@ -491,6 +491,8 @@ class GuardrailEventHooks(str, Enum):
     post_call = "post_call"
     during_call = "during_call"
     logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
 
 
 class DynamicGuardrailParams(TypedDict):
