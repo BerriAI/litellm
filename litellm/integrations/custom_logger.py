@@ -541,3 +541,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
         return model_call_details_copy
+    
+
+    async def get_proxy_server_request_from_cold_storage(
+        self,
+        request_id: str,
+        start_time: str,
+    ) -> Optional[dict]:
+        """
+        Get the proxy server request from cold storage
+
+        Allows fetching a dict of the proxy server request from s3 or GCS bucket.
+        """
+        pass
