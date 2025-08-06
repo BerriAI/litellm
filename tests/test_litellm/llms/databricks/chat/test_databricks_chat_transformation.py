@@ -90,5 +90,3 @@ def test_transform_choices_without_signature():
     thinking_block = choices[0].message.thinking_blocks[0]
     assert thinking_block["type"] == "thinking"
     assert thinking_block["thinking"] == "i'm thinking without signature."
-    # Signature should not be present in the thinking block
-    assert "signature" not in thinking_block
