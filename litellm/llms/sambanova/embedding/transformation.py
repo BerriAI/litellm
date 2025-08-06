@@ -17,10 +17,9 @@ from ..common_utils import SambaNovaError
 
 
 class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
-    
     def __init__(self) -> None:
         pass
-    
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -37,7 +36,7 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
         if not api_base.endswith("/embeddings"):
             api_base = f"{api_base}/embeddings"
         return api_base
-    
+
     def validate_environment(
         self,
         headers: dict,
@@ -63,7 +62,7 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
 
         # Merge other headers, overriding any default ones except Authorization
         return {**default_headers, **headers}
-    
+
     def get_supported_openai_params(self, model: str):
         """
         Non additional params supported, placeholder method for future supported params
@@ -99,7 +98,7 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
             "model": model,
             **optional_params,
         }
-    
+
     def transform_embedding_response(
         self,
         model: str,
@@ -117,7 +116,7 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
             raise SambaNovaError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-            
+
         model_response.model = raw_response_json.get("model")
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
@@ -126,11 +125,10 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
             prompt_tokens=raw_response_json.get("usage", {}).get("prompt_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )
-        
+
         model_response.usage = usage
         return model_response
-    
-    
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
