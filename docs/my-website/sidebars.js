@@ -78,6 +78,7 @@ const sidebars = {
         "tutorials/litellm_qwen_code_cli",
         "tutorials/github_copilot_integration",
         "tutorials/claude_responses_api",
+        "tutorials/cost_tracking_coding",
       ]
     },
     
@@ -468,7 +469,8 @@ const sidebars = {
         "providers/featherless_ai",
         "providers/nebius",
         "providers/dashscope",
-        "providers/bytez"
+        "providers/bytez",
+        "providers/oci",
       ],
     },
     {
@@ -485,6 +487,7 @@ const sidebars = {
         "completion/vision",
         "completion/json_mode",
         "reasoning_content",
+        "completion/computer_use",
         "completion/prompt_caching",
         "completion/predict_outputs",
         "completion/knowledgebase",

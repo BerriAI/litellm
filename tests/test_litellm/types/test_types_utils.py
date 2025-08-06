@@ -74,7 +74,6 @@ def test_usage_dump():
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
 
-
 def test_message_handle_initialize_tool_call_fields_function_call_none():
     """
     Test that Message._handle_initialize_tool_call_fields properly handles function_call=None
@@ -122,3 +121,55 @@ def test_message_handle_initialize_tool_call_fields_tool_calls_empty():
     # Verify that tool_calls is set to empty list when None
     assert message.tool_calls == []
     assert message.function_call == {}
+
+def test_usage_completion_tokens_details_text_tokens():
+    from litellm.types.utils import Usage
+
+    # Test data from the reported issue
+    usage_data = {
+        'completion_tokens': 77,
+        'prompt_tokens': 11937,
+        'total_tokens': 12014,
+        'completion_tokens_details': {
+            'accepted_prediction_tokens': None,
+            'audio_tokens': None,
+            'reasoning_tokens': 65,
+            'rejected_prediction_tokens': None,
+            'text_tokens': 12
+        },
+        'prompt_tokens_details': {
+            'audio_tokens': None,
+            'cached_tokens': None,
+            'text_tokens': 11937,
+            'image_tokens': None
+        }
+    }
+
+    # Create Usage object
+    u = Usage(**usage_data)
+    
+    # Verify the object has the text_tokens field
+    assert hasattr(u.completion_tokens_details, 'text_tokens')
+    assert u.completion_tokens_details.text_tokens == 12
+    
+    # Get model_dump output
+    dump_result = u.model_dump()
+    
+    # Verify text_tokens is present in the model_dump output
+    assert 'completion_tokens_details' in dump_result
+    assert 'text_tokens' in dump_result['completion_tokens_details']
+    assert dump_result['completion_tokens_details']['text_tokens'] == 12
+    
+    # Verify the full completion_tokens_details structure
+    expected_completion_details = {
+        'accepted_prediction_tokens': None,
+        'audio_tokens': None,
+        'reasoning_tokens': 65,
+        'rejected_prediction_tokens': None,
+        'text_tokens': 12
+    }
+    assert dump_result['completion_tokens_details'] == expected_completion_details
+    
+    # Verify round-trip serialization works
+    new_usage = Usage(**dump_result)
+    assert new_usage.completion_tokens_details.text_tokens == 12

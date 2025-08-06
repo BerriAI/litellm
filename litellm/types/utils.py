@@ -911,6 +911,9 @@ class Usage(CompletionUsage):
 
     server_tool_use: Optional[ServerToolUse] = None
 
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+    """Breakdown of tokens used in a completion."""
+
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
@@ -2341,7 +2344,9 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    OCI = "oci"
     AUTO_ROUTER = "auto_router"
+    DOTPROMPT = "dotprompt"
 
 
 # Create a set of all provider values for quick lookup
