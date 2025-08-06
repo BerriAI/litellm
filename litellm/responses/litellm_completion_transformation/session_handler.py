@@ -59,7 +59,7 @@ class ResponsesSessionHandler:
             ]
         ] = []
         for spend_log in all_spend_logs:
-            chat_completion_message_history = ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+            chat_completion_message_history = await ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
                 spend_log=spend_log,
                 chat_completion_message_history=chat_completion_message_history,
             )
@@ -74,7 +74,7 @@ class ResponsesSessionHandler:
         )
     
     @staticmethod
-    def extend_chat_completion_message_with_spend_log_payload(
+    async def extend_chat_completion_message_with_spend_log_payload(
         spend_log: SpendLogsPayload,
         chat_completion_message_history: List[
             Union[
@@ -94,7 +94,7 @@ class ResponsesSessionHandler:
             LiteLLMCompletionResponsesConfig,
         )
 
-        proxy_server_request_dict = ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
+        proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
             spend_log=spend_log,
         )
         response_input_param: Optional[Union[str, ResponseInputParam]] = None
@@ -133,7 +133,7 @@ class ResponsesSessionHandler:
         return chat_completion_message_history
     
     @staticmethod
-    def get_proxy_server_request_from_spend_log(
+    async def get_proxy_server_request_from_spend_log(
         spend_log: SpendLogsPayload,
     ) -> Optional[dict]:
         """
@@ -148,7 +148,48 @@ class ResponsesSessionHandler:
         else:
             proxy_server_request_dict = json.loads(proxy_server_request)
         
+
+        ############################################################
+        # Check if user has setup cold storage for session handling
+        ############################################################
+        if proxy_server_request_dict and ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
+            proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage(
+                proxy_server_request_dict,
+            )
+            
+        
         return proxy_server_request_dict
+    
+    @staticmethod
+    async def get_proxy_server_request_from_cold_storage(
+        proxy_server_request_dict: Optional[dict],
+    ) -> Optional[dict]:
+        """
+        Get the proxy server request from cold storage
+        """
+        pass
+    
+
+    @staticmethod
+    def _should_check_cold_storage_for_full_payload(
+        proxy_server_request_dict: Optional[dict],
+    ) -> bool:
+        """
+        Only check cold storage when both are true 
+        1. `LITELLM_TRUNCATED_PAYLOAD_FIELD` is in the proxy server request dict
+        2. `general_settings.get("store_prompts_in_cold_storage")` is True
+        """
+        from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+        from litellm.proxy.proxy_server import general_settings
+        from litellm.secret_managers.main import get_secret_bool
+
+        if proxy_server_request_dict and LITELLM_TRUNCATED_PAYLOAD_FIELD in proxy_server_request_dict:
+            return (
+                general_settings.get("store_prompts_in_cold_storage") is True
+                or get_secret_bool("STORE_PROMPTS_IN_COLD_STORAGE") is True
+            )
+        
+        return False
 
 
     @staticmethod
