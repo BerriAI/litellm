@@ -1406,7 +1406,7 @@ class Router:
         kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
 
     def _handle_clientside_credential(
-        self, deployment: dict, kwargs: dict
+        self, deployment: dict, kwargs: dict, function_name: Optional[str] = None
     ) -> Deployment:
         """
         Handle clientside credential
@@ -1417,7 +1417,10 @@ class Router:
             litellm_params=litellm_params, request_kwargs=kwargs
         )
         # Use deployment model_name as model_group for generating model_id
-        model_group = deployment["model_name"]
+        metadata_variable_name = _get_router_metadata_variable_name(
+            function_name=function_name,
+        )
+        model_group = kwargs.get(metadata_variable_name, {}).get("model_group")
         _model_id = self._generate_model_id(
             model_group=model_group, litellm_params=dynamic_litellm_params
         )
@@ -1451,7 +1454,7 @@ class Router:
         deployment_model_name = deployment["model_name"]
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj = self._handle_clientside_credential(
-                deployment=deployment, kwargs=kwargs
+                deployment=deployment, kwargs=kwargs, function_name=function_name
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
