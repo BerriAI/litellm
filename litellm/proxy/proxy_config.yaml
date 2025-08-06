@@ -1,6 +1,6 @@
 model_list:
-  - model_name: vertex_ai/*
+  - model_name: anthropic/*
     litellm_params:
-      model: vertex_ai/*
+      model: anthropic/*
 
 
