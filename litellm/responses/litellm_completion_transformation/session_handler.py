@@ -93,15 +93,11 @@ class ResponsesSessionHandler:
             ChatCompletionSession,
             LiteLLMCompletionResponsesConfig,
         )
-        proxy_server_request: Union[str, dict] = (
-            spend_log.get("proxy_server_request") or "{}"
+
+        proxy_server_request_dict = ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
+            spend_log=spend_log,
         )
-        proxy_server_request_dict: Optional[dict] = None
         response_input_param: Optional[Union[str, ResponseInputParam]] = None
-        if isinstance(proxy_server_request, dict):
-            proxy_server_request_dict = proxy_server_request
-        else:
-            proxy_server_request_dict = json.loads(proxy_server_request)
 
         ############################################################
         # Add Input messages for this Spend Log
@@ -135,6 +131,24 @@ class ResponsesSessionHandler:
                         getattr(choice, "message")
                     )
         return chat_completion_message_history
+    
+    @staticmethod
+    def get_proxy_server_request_from_spend_log(
+        spend_log: SpendLogsPayload,
+    ) -> Optional[dict]:
+        """
+        Get the parsed proxy server request from the spend log
+        """
+        proxy_server_request: Union[str, dict] = (
+            spend_log.get("proxy_server_request") or "{}"
+        )
+        proxy_server_request_dict: Optional[dict] = None
+        if isinstance(proxy_server_request, dict):
+            proxy_server_request_dict = proxy_server_request
+        else:
+            proxy_server_request_dict = json.loads(proxy_server_request)
+        
+        return proxy_server_request_dict
 
 
     @staticmethod
