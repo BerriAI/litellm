@@ -309,6 +309,8 @@ def _transform_request_body(
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
     cached_content: Optional[str],
+    api_base: Optional[str] = None,
+    vertex_project: Optional[str] = None,
 ) -> RequestBody:
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
@@ -365,19 +367,48 @@ def _transform_request_body(
         generation_config: Optional[GenerationConfig] = GenerationConfig(
             **filtered_params
         )
-        data = RequestBody(contents=content)
-        if system_instructions is not None:
-            data["system_instruction"] = system_instructions
-        if tools is not None:
-            data["tools"] = tools
-        if tool_choice is not None:
-            data["toolConfig"] = tool_choice
-        if safety_settings is not None:
-            data["safetySettings"] = safety_settings
-        if generation_config is not None:
-            data["generationConfig"] = generation_config
-        if cached_content is not None:
-            data["cachedContent"] = cached_content
+
+        # For Gemini Code Assist, create the special request format
+        if api_base == "https://cloudcode-pa.googleapis.com/v1internal":
+            # Use the vertex_project parameter
+            project = vertex_project
+
+            # Build the inner request object
+            request_obj: dict[str, Any] = {"contents": content}
+            if system_instructions is not None:
+                request_obj["system_instruction"] = system_instructions
+            if tools is not None:
+                request_obj["tools"] = tools
+            if tool_choice is not None:
+                request_obj["toolConfig"] = tool_choice
+            if safety_settings is not None:
+                request_obj["safetySettings"] = safety_settings
+            if generation_config is not None:
+                request_obj["generationConfig"] = generation_config
+            if cached_content is not None:
+                request_obj["cachedContent"] = cached_content
+
+            # Create the Gemini Code Assist specific format
+            data = {
+                "model": model,
+                "project": project,
+                "request": request_obj
+            }
+        else:
+            # Standard format for other providers
+            data = RequestBody(contents=content)
+            if system_instructions is not None:
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if safety_settings is not None:
+                data["safetySettings"] = safety_settings
+            if generation_config is not None:
+                data["generationConfig"] = generation_config
+            if cached_content is not None:
+                data["cachedContent"] = cached_content
     except Exception as e:
         raise e
 
@@ -396,6 +427,7 @@ def sync_transform_request_body(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str] = None,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -426,6 +458,8 @@ def sync_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
+        api_base=api_base,
+        vertex_project=vertex_project,
     )
 
 
@@ -441,6 +475,7 @@ async def async_transform_request_body(
     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str] = None,
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
@@ -473,6 +508,8 @@ async def async_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
+        api_base=api_base,
+        vertex_project=vertex_project,
     )
 
 

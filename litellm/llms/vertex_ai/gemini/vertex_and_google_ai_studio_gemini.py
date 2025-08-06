@@ -1752,6 +1752,7 @@ class VertexLLM(VertexBase):
             "logging_obj": logging_obj,
             "custom_llm_provider": custom_llm_provider,
             "litellm_params": litellm_params,
+            "vertex_project": vertex_project,
         }
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
@@ -1936,6 +1937,10 @@ class ModelResponseIterator:
         try:
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
             from litellm.types.utils import ModelResponseStream
+
+            # Unwrap the response if need
+            if "response" in chunk and isinstance(chunk["response"], dict):
+                chunk = chunk["response"]  # Unwrap the response
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
             response_id = processed_chunk.get("responseId")
