@@ -2350,7 +2350,7 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 
     configured_tags = litellm.custom_prometheus_tags
-    if not configured_tags:
+    if configured_tags is None or len(configured_tags) == 0:
         return {}
 
     result: Dict[str, str] = {}
