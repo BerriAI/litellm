@@ -11,9 +11,8 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-
-from enterprise.litellm_enterprise.enterprise_callbacks.session_handler import (
-    _ENTERPRISE_ResponsesSessionHandler,
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    ResponsesSessionHandler,
 )
 
 
@@ -111,7 +110,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
 
     # Mock the get_all_spend_logs_for_previous_response_id method
     with patch.object(
-        _ENTERPRISE_ResponsesSessionHandler,
+        ResponsesSessionHandler,
         "get_all_spend_logs_for_previous_response_id",
         new_callable=AsyncMock,
     ) as mock_get_spend_logs:
@@ -119,7 +118,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
 
         # Test the function
         previous_response_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
-        result = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             previous_response_id
         )
 
@@ -166,14 +165,14 @@ async def test_get_chat_completion_message_history_empty_spend_logs():
     Test get_chat_completion_message_history_for_previous_response_id with empty spend logs
     """
     with patch.object(
-        _ENTERPRISE_ResponsesSessionHandler,
+        ResponsesSessionHandler,
         "get_all_spend_logs_for_previous_response_id",
         new_callable=AsyncMock,
     ) as mock_get_spend_logs:
         mock_get_spend_logs.return_value = []
 
         previous_response_id = "non-existent-id"
-        result = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             previous_response_id
         )
 
