@@ -380,6 +380,8 @@ class LiteLLMRoutes(enum.Enum):
         "/health",
         "/key/list",
         "/user/filter/ui",
+        "/models",
+        "/v1/models",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -492,6 +494,8 @@ class LiteLLMRoutes(enum.Enum):
             "/global/spend/end_users",
             "/global/activity",
             "/global/activity/model",
+            "/v1/models/{model_id}",
+            "/models/{model_id}",
         ]
         + spend_tracking_routes
         + key_management_routes

@@ -153,6 +153,8 @@ async def route_request(
                 "aget_responses",
                 "adelete_responses",
                 "alist_input_items",
+                "avector_store_create",
+                "avector_store_search",
             ]:
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
