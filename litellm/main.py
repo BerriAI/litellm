@@ -4224,9 +4224,10 @@ def embedding(  # noqa: PLR0915
             )
         elif custom_llm_provider == "sambanova":
             api_key = api_key or litellm.api_key or get_secret_str("SAMBANOVA_API_KEY")
-            response = openai_chat_completions.embedding(
+            response =  base_llm_http_handler.embedding(
                 model=model,
                 input=input,
+                custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=api_key,
                 logging_obj=logging,
@@ -4235,6 +4236,7 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                litellm_params={},
             )
         elif custom_llm_provider == "voyage":
             response = base_llm_http_handler.embedding(

@@ -6961,6 +6961,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
+        elif litellm.LlmProviders.SAMBANOVA == provider:
+            return litellm.SambaNovaEmbeddingConfig()
         elif (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
