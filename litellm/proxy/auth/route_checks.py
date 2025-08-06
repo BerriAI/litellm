@@ -212,6 +212,8 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/"):
             pass  # authN/authZ handled by api itself
+        elif route.startswith("/mcp-rest/"):
+            pass  # authN/authZ handled by api itself - MCP REST endpoints
         else:
             user_role = "unknown"
             user_id = "unknown"
