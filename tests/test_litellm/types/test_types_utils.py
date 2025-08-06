@@ -122,6 +122,32 @@ def test_message_handle_initialize_tool_call_fields_tool_calls_empty():
     assert message.tool_calls == []
     assert message.function_call == {}
 
+def test_message_handle_initialize_tool_call_fields_function_call_empty_dict():
+    """
+    Test that Message._handle_initialize_tool_call_fields properly handles function_call={}
+    by setting function_call to empty dict.
+    
+    This tests the scenario where function_call is passed as an empty dictionary,
+    which should be treated the same as None.
+    """
+    from litellm.types.utils import Message
+
+    # Create a Message with function_call as empty dict
+    message = Message(
+        content="Hello, world!",
+        role="assistant",
+        function_call={},  # Empty dictionary
+        tool_calls=[]
+    )
+    
+    # Verify that function_call is set to empty dict when passed as {}
+    assert message.function_call == {}
+    
+    # Test direct call to _handle_initialize_tool_call_fields with empty dict
+    message._handle_initialize_tool_call_fields(function_call={}, tool_calls=[])
+    assert message.function_call == {}
+
+
 def test_usage_completion_tokens_details_text_tokens():
     from litellm.types.utils import Usage
 

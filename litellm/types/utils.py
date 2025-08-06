@@ -602,7 +602,9 @@ class Message(OpenAIObject):
             "content": content,
             "role": role or "assistant",  # handle null input
             "function_call": (
-                FunctionCall(**function_call) if function_call is not None else None
+                FunctionCall(**function_call) 
+                if function_call is not None and (not isinstance(function_call, dict) or len(function_call) > 0)
+                else None
             ),
             "tool_calls": (
                 [
@@ -666,7 +668,7 @@ class Message(OpenAIObject):
         tool_calls: Optional[list] = None,
     ):
         """
-        Delete `tool_calls` and `function_call` fields if they are None.
+        Delete `tool_calls` and `function_call` fields if they are None or empty.
         This is to ensure default response matches OpenAI spec.
         
         Relevant issue: https://github.com/BerriAI/litellm/issues/13055
@@ -676,7 +678,8 @@ class Message(OpenAIObject):
             if hasattr(self, "tool_calls"):
                 self.tool_calls = []
         
-        if function_call is None:
+        # Handle function_call that is None or an empty dictionary
+        if function_call is None or (isinstance(function_call, dict) and len(function_call) == 0):
             if hasattr(self, "function_call"):
                 default_function_call: Dict[str, Any] = {}
                 self.function_call = cast(FunctionCall, default_function_call)
