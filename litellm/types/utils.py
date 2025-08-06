@@ -602,8 +602,9 @@ class Message(OpenAIObject):
             "content": content,
             "role": role or "assistant",  # handle null input
             "function_call": (
-                FunctionCall(**function_call) 
-                if function_call is not None and (not isinstance(function_call, dict) or len(function_call) > 0)
+                FunctionCall(**function_call)
+                if function_call is not None
+                and (not isinstance(function_call, dict) or len(function_call) > 0)
                 else None
             ),
             "tool_calls": (
@@ -658,10 +659,10 @@ class Message(OpenAIObject):
             # ensure default response matches OpenAI spec
             if hasattr(self, "thinking_blocks"):
                 del self.thinking_blocks
-        
+
         self._handle_initialize_tool_call_fields(function_call, tool_calls)
         add_provider_specific_fields(self, provider_specific_fields)
-    
+
     def _handle_initialize_tool_call_fields(
         self,
         function_call: Optional[Any] = None,
@@ -670,20 +671,22 @@ class Message(OpenAIObject):
         """
         Delete `tool_calls` and `function_call` fields if they are None or empty.
         This is to ensure default response matches OpenAI spec.
-        
+
         Relevant issue: https://github.com/BerriAI/litellm/issues/13055
         """
         from typing import cast
+
         if tool_calls is None:
             if hasattr(self, "tool_calls"):
                 self.tool_calls = []
-        
+
         # Handle function_call that is None or an empty dictionary
-        if function_call is None or (isinstance(function_call, dict) and len(function_call) == 0):
+        if function_call is None or (
+            isinstance(function_call, dict) and len(function_call) == 0
+        ):
             if hasattr(self, "function_call"):
                 default_function_call: Dict[str, Any] = {}
                 self.function_call = cast(FunctionCall, default_function_call)
-
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -756,7 +759,11 @@ class Delta(OpenAIObject):
         else:
             del self.annotations
 
-        if function_call is not None and isinstance(function_call, dict):
+        if (
+            function_call is not None
+            and isinstance(function_call, dict)
+            and len(function_call) > 0
+        ):
             self.function_call = FunctionCall(**function_call)
         else:
             self.function_call = function_call

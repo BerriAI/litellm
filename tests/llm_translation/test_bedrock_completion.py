@@ -741,7 +741,7 @@ def test_bedrock_stop_value(stop, model):
 )
 def test_bedrock_system_prompt(system, model):
     try:
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
         data = {
             "max_tokens": 100,
             "stream": False,
@@ -756,6 +756,8 @@ def test_bedrock_system_prompt(system, model):
             model="bedrock/{}".format(model),
             **data,
         )  # type: ignore
+
+        print(f"response: {response}")
         # Add any assertions here to check the response
         assert len(response.choices) > 0
         assert len(response.choices[0].message.content) > 0

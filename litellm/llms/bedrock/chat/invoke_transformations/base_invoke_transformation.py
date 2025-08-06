@@ -185,9 +185,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
             return litellm.AmazonAnthropicClaude3Config().transform_request(
@@ -325,7 +325,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = completion_response["generation"]
             elif provider == "mistral":
-                outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
+                outputText = litellm.AmazonMistralConfig.get_outputText(
+                    completion_response, model_response
+                )
             else:  # amazon titan
                 outputText = completion_response.get("results")[0].get("outputText")
         except Exception as e:
@@ -336,19 +338,19 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 status_code=422,
             )
 
+        tool_calls = getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
+        is_empty_tool_calls = tool_calls is None or len(tool_calls) == 0
         try:
             if (
                 outputText is not None
                 and len(outputText) > 0
                 and hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
-                is None
+                and is_empty_tool_calls
             ):
                 model_response.choices[0].message.content = outputText  # type: ignore
             elif (
                 hasattr(model_response.choices[0], "message")
-                and getattr(model_response.choices[0].message, "tool_calls", None)  # type: ignore
-                is not None
+                and not is_empty_tool_calls
             ):
                 pass
             else:
