@@ -4,6 +4,7 @@ Translate from OpenAI's `/v1/chat/completions` to Parasail's `/v1/chat/completio
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
 import httpx
+from pydantic import BaseModel
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
@@ -86,14 +87,12 @@ class ParasailChatConfig(OpenAILikeChatConfig):
     ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         for idx, message in enumerate(messages):
             """
-            Clean up assistant messages to ensure proper format
+            1. Don't pass 'null' function_call assistant message to parasail
             """
-            if hasattr(message, 'model_dump'):
+            if isinstance(message, BaseModel):
                 _message = message.model_dump()
-            elif isinstance(message, dict):
-                _message = message
             else:
-                _message = dict(message)
+                _message = message
             assistant_message = _message.get("role") == "assistant"
             if assistant_message:
                 new_message = ChatCompletionAssistantMessage(role="assistant")
