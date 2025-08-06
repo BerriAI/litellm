@@ -2293,10 +2293,60 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
     return result
 
 
+def _tag_matches_wildcard_configured_pattern(tags: List[str], configured_tag: str) -> bool:
+    """
+    Check if any of the request tags matches a wildcard configured pattern
+
+    Args:
+        tags: List[str] - The request tags
+        configured_tag: str - The configured tag
+
+    Returns:
+        bool - True if any of the request tags matches the configured tag, False otherwise
+
+    e.g.
+    tags = ["User-Agent: curl/7.68.0", "User-Agent: python-requests/2.28.1", "prod"]
+    configured_tag = "User-Agent: curl/*"
+    _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag) # True
+
+    configured_tag = "User-Agent: python-requests/*"
+    _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag) # True
+
+    configured_tag = "gm"
+    _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag) # False
+    """
+    import re
+
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    pattern_router = PatternMatchRouter()
+    regex_pattern = pattern_router._pattern_to_regex(configured_tag)
+    return any(re.match(pattern=regex_pattern, string=tag) for tag in tags)
+
+
 def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
     """
-    Get custom labels from tags based on admin configuration
+    Get custom labels from tags based on admin configuration.
+    
+    Supports both exact matches and wildcard patterns:
+    - Exact match: "prod" matches "prod" exactly
+    - Wildcard pattern: "User-Agent: curl/*" matches "User-Agent: curl/7.68.0" 
+    
+    Reuses PatternMatchRouter for wildcard pattern matching.
+
+    Returns dict of label_name: "true" if the tag matches the configured tag, "false" otherwise
+
+    {
+        "tag_User-Agent_curl": "true",
+        "tag_User-Agent_python_requests": "false",
+        "tag_Environment_prod": "true",
+        "tag_Environment_dev": "false",
+        "tag_Service_api_gateway_v2": "true",
+        "tag_Service_web_app_v1": "false",
+    }
     """
+    import re
+
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
     from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 
     configured_tags = litellm.custom_prometheus_tags
@@ -2304,16 +2354,22 @@ def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
         return {}
 
     result: Dict[str, str] = {}
+    pattern_router = PatternMatchRouter()
 
-    # Map each configured tag to its presence in the request tags
     for configured_tag in configured_tags:
-        # Create a safe prometheus label name
         label_name = _sanitize_prometheus_label_name(f"tag_{configured_tag}")
-
-        # Check if this tag is present in the request tags
+        
+        # Check for exact match first (backwards compatibility)
         if configured_tag in tags:
             result[label_name] = "true"
-        else:
-            result[label_name] = "false"
+            continue
+            
+        # Use PatternMatchRouter for wildcard pattern matching
+        if "*" in configured_tag and _tag_matches_wildcard_configured_pattern(tags=tags, configured_tag=configured_tag):
+            result[label_name] = "true"
+            continue
+        
+        # No match found
+        result[label_name] = "false"
 
     return result

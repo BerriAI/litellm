@@ -1135,6 +1135,119 @@ def test_get_custom_labels_from_tags_no_tags(monkeypatch):
     }
 
 
+def test_get_custom_labels_from_tags_wildcard_patterns(monkeypatch):
+    """Test wildcard pattern matching for custom labels from tags."""
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags
+
+    # Configure tags with wildcard patterns
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_tags", 
+        ["User-Agent: curl/*", "User-Agent: python-requests/*", "Environment: prod*", "Service: api-gateway*", "exact-match"]
+    )
+    
+    # Test tags that should match the wildcard patterns
+    tags = [
+        "User-Agent: curl/7.68.0", 
+        "User-Agent: python-requests/2.28.1", 
+        "Environment: production",
+        "Service: api-gateway-v2",
+        "exact-match",
+        "other-tag"
+    ]
+    
+    result = get_custom_labels_from_tags(tags)
+    
+    expected = {
+        "tag_User_Agent__curl__": "true",  # matches "User-Agent: curl/*"
+        "tag_User_Agent__python_requests__": "true",  # matches "User-Agent: python-requests/*"
+        "tag_Environment__prod_": "true",  # matches "Environment: prod*"
+        "tag_Service__api_gateway_": "true",  # matches "Service: api-gateway*"
+        "tag_exact_match": "true",  # exact match
+    }
+    
+    assert result == expected
+
+
+def test_get_custom_labels_from_tags_wildcard_no_matches(monkeypatch):
+    """Test wildcard patterns that don't match any tags."""
+    from litellm_enterprise.integrations.prometheus import get_custom_labels_from_tags
+
+    # Configure tags with wildcard patterns
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_tags", 
+        ["User-Agent: firefox/*", "Environment: dev*", "Service: web-app*"]
+    )
+    
+    # Test tags that should NOT match the wildcard patterns
+    tags = [
+        "User-Agent: curl/7.68.0",  # doesn't match "User-Agent: firefox/*"
+        "Environment: production",  # doesn't match "Environment: dev*" 
+        "Service: api-gateway-v2",  # doesn't match "Service: web-app*"
+        "other-tag"
+    ]
+    
+    result = get_custom_labels_from_tags(tags)
+    
+    expected = {
+        "tag_User_Agent__firefox__": "false",  # no match for "User-Agent: firefox/*"
+        "tag_Environment__dev_": "false",  # no match for "Environment: dev*"
+        "tag_Service__web_app_": "false",  # no match for "Service: web-app*"
+    }
+    
+    assert result == expected
+
+
+def test_tag_matches_wildcard_configured_pattern():
+    """Test the helper function for wildcard pattern matching."""
+    from litellm_enterprise.integrations.prometheus import (
+        _tag_matches_wildcard_configured_pattern,
+    )
+
+    # Test cases that should match
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=["User-Agent: curl/7.68.0", "prod", "other"], 
+        configured_tag="User-Agent: curl/*"
+    ) is True
+    
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=["User-Agent: python-requests/2.28.1", "test"], 
+        configured_tag="User-Agent: python-requests/*"
+    ) is True
+    
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=["Environment: production", "debug"], 
+        configured_tag="Environment: prod*"
+    ) is True
+    
+    # Test exact match (no wildcard)
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=["prod", "test"], 
+        configured_tag="prod"
+    ) is True
+    
+    # Test cases that should NOT match
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=["User-Agent: firefox/98.0", "prod"], 
+        configured_tag="User-Agent: curl/*"
+    ) is False
+    
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=["Environment: development", "test"], 
+        configured_tag="Environment: prod*"
+    ) is False
+    
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=["staging", "test"], 
+        configured_tag="prod"
+    ) is False
+    
+    # Test with empty tags
+    assert _tag_matches_wildcard_configured_pattern(
+        tags=[], 
+        configured_tag="User-Agent: curl/*"
+    ) is False
+
+
 @pytest.mark.asyncio(scope="session")
 async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
