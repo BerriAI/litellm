@@ -60,4 +60,4 @@ websockets==13.1.0 # for realtime API
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.18
+litellm-enterprise==0.1.19
