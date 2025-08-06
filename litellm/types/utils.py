@@ -887,6 +887,10 @@ class Usage(CompletionUsage):
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
 
     server_tool_use: Optional[ServerToolUse] = None
+    cost: Optional[float] = None
+
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+    """Breakdown of tokens used in a completion."""
 
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
@@ -904,6 +908,7 @@ class Usage(CompletionUsage):
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
         server_tool_use: Optional[ServerToolUse] = None,
+        cost: Optional[float] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -974,6 +979,11 @@ class Usage(CompletionUsage):
             self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
+
+        if cost is not None:
+            self.cost = cost
+        else:
+            del self.cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
@@ -2319,6 +2329,7 @@ class LlmProviders(str, Enum):
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
     HEROKU = "heroku"
+    OCI = "oci"
     AUTO_ROUTER = "auto_router"
     DOTPROMPT = "dotprompt"
 

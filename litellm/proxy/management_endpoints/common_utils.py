@@ -1,7 +1,7 @@
-from typing import Any, Union, Optional
+from typing import Any, Optional, Union
 
 from litellm.proxy._types import (
-    GenerateKeyRequest,
+    KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_TeamTable,
     LitellmUserRoles,
@@ -30,7 +30,7 @@ def _is_user_team_admin(
 
 
 def _set_object_metadata_field(
-    object_data: Union[LiteLLM_TeamTable, GenerateKeyRequest],
+    object_data: Union[LiteLLM_TeamTable, KeyRequestBase],
     field_name: str,
     value: Any,
 ) -> None:

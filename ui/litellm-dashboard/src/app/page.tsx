@@ -6,6 +6,7 @@ import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
@@ -32,12 +33,14 @@ import {
 } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import PromptsPanel from "@/components/prompts";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
+import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 
@@ -231,8 +234,9 @@ export default function CreateKeyPage() {
   return (
     <Suspense fallback={<LoadingScreen />}>
       <QueryClientProvider client={queryClient}>
-        {invitation_id ? (
-          <UserDashboard
+        <ThemeProvider accessToken={accessToken}>
+          {invitation_id ? (
+            <UserDashboard
             userID={userID}
             userRole={userRole}
             premiumUser={premiumUser}
@@ -361,6 +365,11 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userRole={userRole}
                 />
+              ) : page == "prompts" ? (
+                <PromptsPanel
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
               ) : page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
@@ -369,6 +378,12 @@ export default function CreateKeyPage() {
                   userRole={userRole}
                   accessToken={accessToken}
                   modelData={modelData}
+                />
+              ) : page == "ui-theme" ? (
+                <UIThemeSettings
+                  userID={userID}
+                  userRole={userRole}
+                  accessToken={accessToken}
                 />
               ) : page == "model-hub-table" ? (
                 <ModelHubTable
@@ -440,6 +455,7 @@ export default function CreateKeyPage() {
             </div>
           </div>
         )}
+        </ThemeProvider>
       </QueryClientProvider>
     </Suspense>
   );
