@@ -437,6 +437,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    route: str,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
@@ -453,6 +454,8 @@ async def get_end_user_object(
     _key = "end_user_id:{}".format(end_user_id)
 
     def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
+        if route in LiteLLMRoutes.info_routes.value:  # allow calling info routes
+            return
         if end_user_obj.litellm_budget_table is None:
             return
         end_user_budget = end_user_obj.litellm_budget_table.max_budget
