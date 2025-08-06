@@ -78,13 +78,11 @@
 2. **Start LiteLLM with config**
 
     ```bash
-    docker run -d \
-        --name litellm \
-        --restart unless-stopped \
-        -p 4000:4000 \
-        -v ./config.yaml:/app/config.yaml \
-        ghcr.io/josheplibra/litellm-database:main-stable \
-        --config /app/config.yaml --detailed_debug
+    docker run \
+      -v $(pwd)/config.yaml:/app/config.yaml \
+      -p 4000:4000 \
+      ghcr.io/berriai/litellm:main-latest \
+      --config /app/config.yaml --detailed_debug
     ```
 
 ## Make Call
