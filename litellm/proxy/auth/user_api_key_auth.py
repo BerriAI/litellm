@@ -615,6 +615,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    route=route,
                 )
                 if _end_user_object is not None:
                     end_user_params["allowed_model_region"] = (
