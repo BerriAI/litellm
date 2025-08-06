@@ -13,7 +13,7 @@
 
 1. **Install Gemini CLI**:
 
-    <https://github.com/google-gemini/gemini-cli>
+    [https://github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli)
 
 2. **Authenticate with Google**:
 
@@ -41,12 +41,12 @@
 
     ```json
     {
-        "access_token": "ya29.a0AS3H6Nx...",
-        "refresh_token": "1//09FtpJYpxOd...",
+        "access_token": "string",
+        "refresh_token": "string",
         "scope": "https://www.googleapis.com/auth/cloud-platform ...",
         "token_type": "Bearer",
-        "id_token": "eyJhbGciOiJSUzI1NiIs...",
-        "expiry_date": 1750927763467
+        "id_token": "string",
+        "expiry_date": 1753710424847
     }
     ```
 
@@ -59,21 +59,18 @@
     - model_name: your-custom-model-name
       litellm_params:
         model: gemini-2.5-pro
-        api_base: https://cloudcode-pa.googleapis.com/v1internal
+        api_base: https://cloudcode-pa.googleapis.com/v1internal # This is fixed for Gemini CLI, do not change
         vertex_project: your-google-cloud-project-id # you can get project id from https://aistudio.google.com/apikey
         vertex_credentials: | # put credentials from above step here
         {
-            "access_token": "ya29.a0AS3H6Nx...",
-            "refresh_token": "1//09FtpJYpxOd...",
+            "access_token": "string",
+            "refresh_token": "string",
             "scope": "https://www.googleapis.com/auth/cloud-platform ...",
             "token_type": "Bearer",
-            "id_token": "eyJhbGciOiJSUzI1NiIs...",
-            "expiry_date": 1750927763467
+            "id_token": "string",
+            "expiry_date": 1753710424847
         }
 
-    litellm_settings:
-      drop_params: true
-    
     general_settings:
       master_key: sk-1234 # change to any key you want
     ```
@@ -116,11 +113,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ### Expected Response
 
 ```text
-data: {"id":"kM6SaLeqJM7lpfgPq4HBmQ0","created":1754451617,"model":"gemini-2.5-pro","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"My name is gemini-2.5-pro. I am a large language model.","role":"assistant"}}],"vertex_ai_grounding_metadata":[],"vertex_ai_url_context_metadata":[],"vertex_ai_safety_ratings":[],"vertex_ai_citation_metadata":[]}
-
-data: {"id":"kM6SaLeqJM7lpfgPq4HBmQ0","created":1754451617,"model":"gemini-2.5-pro","object":"chat.completion.chunk","choices":[{"finish_reason":"stop","index":0,"delta":{}}]}
-
-data: [DONE]
+{"id":"yiGTaDnOKP-048AE6IiisOo","created":1754472905,"model":"gemini-2.5-pro","object":"chat.completion","system_fingerprint":null,"choices":[{"finish_reason":"stop","index":0,"message":{"content":"I am a large language model, trained by Google.","role":"assistant","tool_calls":null,"function_call":null}}],"usage":{"completion_tokens":755,"prompt_tokens":19,"total_tokens":774,"completion_tokens_details":{"accepted_prediction_tokens":null,"audio_tokens":null,"reasoning_tokens":744,"rejected_prediction_tokens":null,"text_tokens":11},"prompt_tokens_details":{"audio_tokens":null,"cached_tokens":null,"text_tokens":19,"image_tokens":null}},"vertex_ai_grounding_metadata":[],"vertex_ai_url_context_metadata":[],"vertex_ai_safety_results":[],"vertex_ai_citation_metadata":[]}
 ```
 
 ## Next Steps
@@ -130,7 +123,7 @@ data: [DONE]
 1. Go to Roo Code Settings
 2. Select or create new Profile
 3. API Provider: OpenAI Compatible
-4. Base URL: <http://0.0.0.0:4000> (This is URL of LiteLLM Proxy Server)
+4. Base URL: `http://0.0.0.0:4000` (This is URL of LiteLLM Proxy Server)
 5. API Key: `sk-1234` (This is key you set on `config.yaml`)
 6. Model: `your-custom-model-name` (This is model name you set on `config.yaml`)
 7. Context Window Size: 1000000
@@ -178,4 +171,4 @@ model_list:
       your-credentials-2
 ```
 
-For more information, please refer to [LiteLLM Routing, Loadbalancing & Fallbacks](https://docs.litellm.ai/docs/routing-load-balancing)
+For more information about routing, please refer to [LiteLLM Routing, Loadbalancing & Fallbacks](https://docs.litellm.ai/docs/routing-load-balancing)
