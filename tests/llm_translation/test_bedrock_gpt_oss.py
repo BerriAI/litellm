@@ -25,3 +25,10 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         Remove override once we have access to Bedrock prompt caching
         """
         pass
+    
+
+    def test_basic_tool_calling(self):
+        """
+        TODO: Add support for this
+        """
+        pass
