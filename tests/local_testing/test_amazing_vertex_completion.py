@@ -58,10 +58,10 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-1.5-pro-preview-0215",
     "gemini-pro-experimental",
     "gemini-flash-experimental",
-    "gemini-1.5-flash-exp-0827",
+    "gemini-2.5-flash-lite-exp-0827",
     "gemini-2.0-pro-exp-02-05",
     "gemini-pro-flash",
-    "gemini-1.5-flash-exp-0827",
+    "gemini-2.5-flash-lite-exp-0827",
     "gemini-2.0-flash-exp",
     "gemini-2.0-flash-thinking-exp",
     "gemini-2.0-flash-thinking-exp-01-21",
@@ -149,7 +149,7 @@ async def test_get_response():
     prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
     try:
         response = await acompletion(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash-lite",
             messages=[
                 {
                     "role": "system",
@@ -518,7 +518,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
         litellm.num_retries = 3
         if sync_mode:
             resp = litellm.completion(
-                model="{}/gemini-1.5-flash-preview-0514".format(provider),
+                model="{}/gemini-2.5-flash-lite-preview-0514".format(provider),
                 messages=[
                     {"role": "system", "content": "Be a good bot"},
                     {
@@ -537,7 +537,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
             )
         else:
             resp = await litellm.acompletion(
-                model="{}/gemini-1.5-flash-preview-0514".format(provider),
+                model="{}/gemini-2.5-flash-lite-preview-0514".format(provider),
                 messages=[
                     {"role": "system", "content": "Be a good bot"},
                     {
@@ -605,7 +605,7 @@ def test_completion_function_plus_pdf(load_pdf):
         image_message = {"role": "user", "content": image_content}
 
         response = completion(
-            model="vertex_ai_beta/gemini-1.5-flash-preview-0514",
+            model="vertex_ai_beta/gemini-2.5-flash-lite-preview-0514",
             messages=[image_message],
             stream=False,
         )
@@ -1194,7 +1194,7 @@ Using this JSON schema:
 
     with patch.object(client, "post", side_effect=_side_effect) as mock_call:
         response = completion(
-            model="vertex_ai_beta/gemini-1.5-flash",
+            model="vertex_ai_beta/gemini-2.5-flash-lite",
             messages=messages,
             response_format={"type": "json_object"},
             client=client,
@@ -1383,7 +1383,7 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
+        ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -1572,7 +1572,7 @@ async def test_anthropic_message_via_anthropic_messages():
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
+        ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -1680,7 +1680,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
 
 @pytest.mark.parametrize(
-    "model", ["gemini-1.5-flash", "claude-3-5-sonnet@20240620"]
+    "model", ["gemini-2.5-flash-lite", "claude-3-5-sonnet@20240620"]
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_gemini_pro_httpx_custom_api_base(model):
@@ -1820,7 +1820,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     data = {
-        "model": "vertex_ai/gemini-1.5-flash",
+        "model": "vertex_ai/gemini-2.5-flash-lite",
         "messages": [
             {
                 "role": "user",
@@ -2541,7 +2541,7 @@ def mock_gemini_request(*args, **kwargs):
     if "cachedContents" in kwargs["url"]:
         mock_response.json.return_value = {
             "name": "cachedContents/4d2kd477o3pg",
-            "model": "models/gemini-1.5-flash-001",
+            "model": "models/gemini-2.5-flash-lite-001",
             "createTime": "2024-08-26T22:31:16.147190Z",
             "updateTime": "2024-08-26T22:31:16.147190Z",
             "expireTime": "2024-08-26T22:36:15.548934784Z",
@@ -2671,7 +2671,7 @@ async def test_gemini_context_caching_anthropic_format(sync_mode):
         try:
             if sync_mode:
                 response = litellm.completion(
-                    model="gemini/gemini-1.5-flash-001",
+                    model="gemini/gemini-2.5-flash-lite-001",
                     messages=gemini_context_caching_messages,
                     temperature=0.2,
                     max_tokens=10,
@@ -2679,7 +2679,7 @@ async def test_gemini_context_caching_anthropic_format(sync_mode):
                 )
             else:
                 response = await litellm.acompletion(
-                    model="gemini/gemini-1.5-flash-001",
+                    model="gemini/gemini-2.5-flash-lite-001",
                     messages=gemini_context_caching_messages,
                     temperature=0.2,
                     max_tokens=10,
