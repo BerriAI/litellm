@@ -4,6 +4,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "litellm.fullname" . }}-migrations
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
   annotations:
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
     argocd.argoproj.io/hook: PreSync
@@ -18,6 +20,8 @@ metadata:
 spec:
   template:
     metadata:
+      labels:
+        {{- include "litellm.labels" . | nindent 8 }}
       annotations:
         {{- with .Values.migrationJob.annotations }}
         {{- toYaml . | nindent 8 }}
