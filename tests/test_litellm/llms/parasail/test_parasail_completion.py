@@ -129,34 +129,3 @@ def test_constants_registration():
     except Exception as e:
         print(f"✗ Constants registration test failed: {e}")
         return False
-
-def main():
-    """Run all tests"""
-    print("Parasail Provider Integration Test")
-    print("=" * 40)
-    
-    tests = [
-        test_provider_detection,
-        test_config_functionality,
-        test_constants_registration,
-        test_completion_integration,
-    ]
-    
-    results = []
-    for test in tests:
-        results.append(test())
-    
-    print("=" * 40)
-    passed = sum(results)
-    total = len(results)
-    
-    if passed == total:
-        print(f"✅ All {total} tests passed! Parasail integration is working.")
-        return True
-    else:
-        print(f"❌ {total - passed} out of {total} tests failed.")
-        return False
-
-if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
