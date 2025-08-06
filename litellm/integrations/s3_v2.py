@@ -304,7 +304,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
+                aws_region_name=self.s3_region_name
+            )
+            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
@@ -444,7 +447,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
+                aws_region_name=self.s3_region_name
+            )
+            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
