@@ -75,13 +75,19 @@ export interface Model {
   model_info: Object | null;
 }
 
-interface PromptSpec {
-  prompt_id: string;
-  litellm_params: Object;
-  prompt_info: Object;
+interface PromptInfo {
+  prompt_type: string;
 }
 
-interface ListPromptsResponse {
+export interface PromptSpec {
+  prompt_id: string;
+  litellm_params: Object;
+  prompt_info: PromptInfo;
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ListPromptsResponse {
   prompts: PromptSpec[];
 }
 
@@ -4913,6 +4919,31 @@ export const getPromptsList = async (accessToken: String) : Promise<ListPromptsR
     return data;
   } catch (error) {
     console.error("Failed to get prompts list:", error);
+    throw error;
+  }
+};
+
+export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptSpec> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompt/info?prompt_id=${promptId}` : `/prompt/info?prompt_id=${promptId}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompt info:", error);
     throw error;
   }
 };
