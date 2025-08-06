@@ -226,6 +226,23 @@ response = completion(
 
 </TabItem>
 
+<TabItem value="parasail" label="Parasail">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["PARASAIL_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="parasail/your-model",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
 </Tabs>
 
 ### Response Format (OpenAI Format)
