@@ -474,6 +474,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than 1000 characters and handles nested dictionaries.
     """
+    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
     MAX_STRING_LENGTH = 1000
 
     if visited is None:
@@ -492,7 +493,7 @@ def _sanitize_request_body_for_spend_logs_payload(
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
             if len(value) > MAX_STRING_LENGTH:
-                return f"{value[:MAX_STRING_LENGTH]}... (truncated {len(value) - MAX_STRING_LENGTH} chars)"
+                return f"{value[:MAX_STRING_LENGTH]}... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} {len(value) - MAX_STRING_LENGTH} chars)"
             return value
         return value
 
