@@ -114,7 +114,9 @@ class SambaNovaEmbeddingConfig(BaseEmbeddingConfig):
             raw_response_json = raw_response.json()
         except Exception:
             raise SambaNovaError(
-                message=raw_response.text, status_code=raw_response.status_code
+                message=raw_response.text, 
+                status_code=raw_response.status_code,
+                headers=raw_response.headers
             )
 
         model_response.model = raw_response_json.get("model")
