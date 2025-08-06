@@ -20,7 +20,7 @@ else:
     ChatCompletionSession = Any
 
 
-class _ENTERPRISE_ResponsesSessionHandler:
+class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
@@ -38,7 +38,7 @@ class _ENTERPRISE_ResponsesSessionHandler:
         )
         all_spend_logs: List[
             SpendLogsPayload
-        ] = await _ENTERPRISE_ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+        ] = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
             previous_response_id
         )
         verbose_proxy_logger.debug(
