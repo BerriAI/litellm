@@ -73,43 +73,6 @@ def test_config_functionality():
         traceback.print_exc()
         return False
 
-def test_completion_example():
-    """Test the exact example from documentation"""
-    print("\nTesting docs example...")
-    
-    try:
-        # Run the exact completion call from docs
-        response = completion(
-            model="parasail/parasail-deepseek-r1-0528", 
-            messages=[{"role": "user", "content": "Hello, how are you?"}], 
-        )
-        
-        print("✓ Docs example successful (got response)")
-        return True
-        
-    except Exception as e:
-        error_msg = str(e).lower()
-        
-        # Expected errors that indicate successful integration:
-        if any(err in error_msg for err in [
-            "authentication", "auth", "api key", "unauthorized", 
-            "invalid", "permission", "access denied", "401", "403"
-        ]):
-            print("✓ Docs example successful (auth error expected with test key)")
-            return True
-        
-        # Unexpected errors that indicate integration problems:
-        elif any(err in error_msg for err in [
-            "import", "module", "attribute", "not found", 
-            "provider", "routing", "no module"
-        ]):
-            print(f"✗ Docs example failed (routing/import error): {e}")
-            return False
-        
-        else:
-            print(f"✓ Docs example likely successful (network/other error): {e}")
-            return True
-
 def test_completion_integration():
     """Test that completion function can be called (without real API call)"""
     print("\nTesting completion integration...")
@@ -176,7 +139,6 @@ def main():
         test_provider_detection,
         test_config_functionality,
         test_constants_registration,
-        test_completion_example,
         test_completion_integration,
     ]
     

@@ -19,7 +19,7 @@ documentation = "https://docs.litellm.ai"
 Documentation = "https://docs.litellm.ai"
 
 [tool.poetry.dependencies]
-python = ">=3.8.1,<4.0, !=3.9.7"
+python = ">=3.9.0,<4.0, !=3.9.7"
 httpx = ">=0.23.0"
 openai = ">=1.68.2"
 python-dotenv = ">=0.2.0"
@@ -65,6 +65,7 @@ diskcache = {version = "^5.6.1", optional = true}
 polars = {version = "^1.31.0", optional = true, python = ">=3.10"}
 semantic-router = {version = "*", optional = true, python = ">=3.9"}
 mlflow = {version = ">3.1.4", optional = true, python = ">=3.10"}
+google-genai = "^1.28.0"
 
 [tool.poetry.extras]
 proxy = [
