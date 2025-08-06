@@ -1,10 +1,9 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Parasail's `/v1/chat/completions`
 """
-from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
 import httpx
-from pydantic import BaseModel
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.secret_managers.main import get_secret_str
