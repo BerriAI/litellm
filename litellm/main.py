@@ -3902,7 +3902,6 @@ def embedding(  # noqa: PLR0915
             )
         elif (
             custom_llm_provider == "openai_like"
-            or custom_llm_provider == "jina_ai"
             or custom_llm_provider == "hosted_vllm"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
@@ -4326,6 +4325,25 @@ def embedding(  # noqa: PLR0915
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
                 optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "jina_ai":
+            if isinstance(input, str):
+                transformed_input = [input]
+            else:
+                transformed_input = input
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=transformed_input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
                 client=client,
                 aembedding=aembedding,
             )
