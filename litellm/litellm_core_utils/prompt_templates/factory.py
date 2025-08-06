@@ -3716,8 +3716,7 @@ def function_call_prompt(messages: list, functions: list):
             else:
                 message["content"].append({
                     "type": "text",
-                    "text": f""" {function_prompt}""",
-                    "cache_control": {"type": "ephemeral"}
+                    "text": f""" {function_prompt}"""
                 })
             function_added_to_prompt = True
 
