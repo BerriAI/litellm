@@ -11951,6 +11951,34 @@
         "supports_pdf_input": true,
         "supports_tool_choice": true
     },
+    "openai.gpt-oss-20b-1:0": {
+        "max_tokens": 128000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
+    "openai.gpt-oss-120b-1:0": {
+        "max_tokens": 128000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true
+    },
     "anthropic.claude-opus-4-1-20250805-v1:0": {
         "max_tokens": 32000,
         "max_input_tokens": 200000,
