@@ -1,0 +1,36 @@
+# LiteLLM Responses API Test Configuration
+# This config includes multiple providers for testing the Responses API
+
+model_list:
+  # Anthropic Claude
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: claude-3-5-sonnet-20241022
+      api_key: YOUR_ANTHROPIC_API_KEY  # Replace with your key
+  
+  # DeepSeek
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek-chat
+      api_key: YOUR_DEEPSEEK_API_KEY  # Replace with your key
+      api_base: https://api.deepseek.com
+  
+  # Google Gemini
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash-exp
+      api_key: YOUR_GOOGLE_API_KEY  # Replace with your key
+
+# LiteLLM settings
+litellm_settings:
+  set_verbose: false  # Set to true for debugging
+  cache: true  # REQUIRED for Responses API session management
+  cache_params:
+    type: "redis"
+    host: "localhost"
+    port: 6379
+    # password: ""  # Uncomment if Redis requires password
+
+# General settings
+general_settings:
+  master_key: sk-test-key-1234  # API key for accessing the proxy
