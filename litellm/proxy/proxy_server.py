@@ -679,7 +679,6 @@ app = FastAPI(
 )
 
 
-
 ### CUSTOM API DOCS [ENTERPRISE FEATURE] ###
 # Custom OpenAPI schema generator to include only selected routes
 from fastapi.routing import APIWebSocketRoute
@@ -1593,7 +1592,9 @@ class ProxyConfig:
 
         litellm.cache = Cache(**cache_params)
 
-        if litellm.cache is not None and isinstance(litellm.cache.cache, (RedisCache, RedisClusterCache)):
+        if litellm.cache is not None and isinstance(
+            litellm.cache.cache, (RedisCache, RedisClusterCache)
+        ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
@@ -3768,9 +3769,12 @@ async def model_list(
                     Defaults to "general" when include_metadata=true
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
-    
-    from litellm.proxy.utils import get_available_models_for_user, create_model_info_response
-    
+
+    from litellm.proxy.utils import (
+        create_model_info_response,
+        get_available_models_for_user,
+    )
+
     # Get available models for the user
     all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
@@ -3805,10 +3809,14 @@ async def model_list(
 
 
 @router.get(
-    "/v1/models/{model_id}", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
+    "/v1/models/{model_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["model management"],
 )
 @router.get(
-    "/models/{model_id}", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
+    "/models/{model_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["model management"],
 )
 async def model_info(
     model_id: str,
@@ -3816,17 +3824,21 @@ async def model_info(
 ):
     """
     Retrieve information about a specific model accessible to your API key.
-    
+
     Returns model details only if the model is available to your API key/team.
     Returns 404 if the model doesn't exist or is not accessible.
-    
+
     Follows OpenAI API specification for individual model retrieval.
     https://platform.openai.com/docs/api-reference/models/retrieve
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
-    
-    from litellm.proxy.utils import get_available_models_for_user, validate_model_access, create_model_info_response
-    
+
+    from litellm.proxy.utils import (
+        create_model_info_response,
+        get_available_models_for_user,
+        validate_model_access,
+    )
+
     # Get available models for the user
     all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
@@ -3847,7 +3859,7 @@ async def model_info(
 
     # Get provider information
     _, provider, _, _ = litellm.get_llm_provider(model=model_id)
-    
+
     # Return the model information in the same format as the list endpoint
     return create_model_info_response(
         model_id=model_id,
@@ -3913,7 +3925,7 @@ async def chat_completion(  # noqa: PLR0915
     data = await _read_request_body(request=request)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await base_llm_response_processor.base_process_llm_request(
+        result = await base_llm_response_processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -3931,6 +3943,10 @@ async def chat_completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
+        if isinstance(result, BaseModel):
+            return result.model_dump(exclude_none=True, exclude_unset=True)
+        else:
+            return result
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -5611,40 +5627,45 @@ def _get_provider_token_counter(deployment: dict, model_to_use: str):
     """
     if deployment is None:
         return None
-        
+
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    
+
     full_model = deployment.get("litellm_params", {}).get("model", "")
-    
+
     try:
         # Use existing LiteLLM logic to determine provider
         model, provider, dynamic_api_key, api_base = get_llm_provider(
             model=full_model,
-            custom_llm_provider=deployment.get("litellm_params", {}).get("custom_llm_provider"),
+            custom_llm_provider=deployment.get("litellm_params", {}).get(
+                "custom_llm_provider"
+            ),
             api_base=deployment.get("litellm_params", {}).get("api_base"),
-            api_key=deployment.get("litellm_params", {}).get("api_key")
+            api_key=deployment.get("litellm_params", {}).get("api_key"),
         )
-        
+
         # Switch case pattern using existing get_provider_model_info
-        from litellm.utils import ProviderConfigManager
         from litellm.types.utils import LlmProviders
-        
+        from litellm.utils import ProviderConfigManager
+
         # Convert string provider to LlmProviders enum
         llm_provider_enum = LlmProviders(provider)
         # Add more provider mappings as needed
-        
+
         if llm_provider_enum:
-            provider_model_info = ProviderConfigManager.get_provider_model_info(model=full_model, provider=llm_provider_enum)
+            provider_model_info = ProviderConfigManager.get_provider_model_info(
+                model=full_model, provider=llm_provider_enum
+            )
             if provider_model_info is not None:
                 return provider_model_info.get_token_counter()
-            
+
     except Exception:
         # If provider detection fails, fall back to manual checks
         if full_model.startswith("anthropic/") or "anthropic" in full_model.lower():
             from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
             anthropic_model_info = AnthropicModelInfo()
             return anthropic_model_info.get_token_counter()
-    
+
     return None
 
 
@@ -5679,7 +5700,7 @@ async def token_counter(request: TokenCountRequest, is_direct_request: bool = Tr
                 break
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
-        # remove the custom_llm_provider_prefix in the litellm_model_name  
+        # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
             litellm_model_name = litellm_model_name.split("/", 1)[1]
 
@@ -5692,15 +5713,17 @@ async def token_counter(request: TokenCountRequest, is_direct_request: bool = Tr
     if deployment is not None and not is_direct_request:
         # Auto-route to the correct provider based on model
         provider_counter = _get_provider_token_counter(deployment, model_to_use)
-    
-    if provider_counter is not None and provider_counter.supports_provider(deployment=deployment, from_endpoint=not is_direct_request):
+
+    if provider_counter is not None and provider_counter.supports_provider(
+        deployment=deployment, from_endpoint=not is_direct_request
+    ):
         result = await provider_counter.count_tokens(
             model_to_use=model_to_use,
-            messages=messages, # type: ignore
+            messages=messages,  # type: ignore
             deployment=deployment,
             request_model=request.model,
         )
-        
+
         if result is not None:
             return TokenCountResponse(
                 total_tokens=result["total_tokens"],
