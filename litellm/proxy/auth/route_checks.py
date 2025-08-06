@@ -210,10 +210,8 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         ):  # routes that manage their own allowed/disallowed logic
             pass
-        elif route.startswith("/v1/mcp/"):
+        elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        elif route.startswith("/mcp-rest/"):
-            pass  # authN/authZ handled by api itself - MCP REST endpoints
         else:
             user_role = "unknown"
             user_id = "unknown"
