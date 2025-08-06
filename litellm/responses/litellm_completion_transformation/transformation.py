@@ -22,6 +22,7 @@ from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -73,13 +74,6 @@ class ChatCompletionSession(TypedDict, total=False):
         ]
     ]
     litellm_session_id: Optional[str]
-
-
-class ChatCompletionImageItem(TypedDict):
-    """TypedDict for image items in chat completion content"""
-
-    type: Literal["image"]
-    image_url: ChatCompletionImageUrlObject
 
 
 ########### End of Initialize Classes used for Responses API  ###########
@@ -485,7 +479,7 @@ class LiteLLMCompletionResponsesConfig:
         return new_item
 
     @staticmethod
-    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageItem:
+    def _transform_input_image_item_to_image_item(item: Dict[str, Any]) -> ChatCompletionImageObject:
         """
         Transform a Responses API input_image item to a Chat Completion image item
         """
@@ -494,8 +488,8 @@ class LiteLLMCompletionResponsesConfig:
             detail=item.get("detail") or "auto"
         )
 
-        return ChatCompletionImageItem(
-            type="image",
+        return ChatCompletionImageObject(
+            type="image_url",
             image_url=image_url_obj
         )
 
@@ -506,7 +500,6 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API content into a Chat Completion content
         """
-
         if isinstance(content, str):
             return content
         elif isinstance(content, list):
