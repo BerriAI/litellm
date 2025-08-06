@@ -268,6 +268,12 @@ class RequestBody(TypedDict, total=False):
     speechConfig: SpeechConfig
 
 
+class GeminiCodeAssistRequestBody(TypedDict, total=False):
+    model: Required[str]
+    project: Required[str]
+    request: RequestBody
+
+
 class CachedContentRequestBody(TypedDict, total=False):
     contents: Required[List[ContentType]]
     system_instruction: SystemInstructions
