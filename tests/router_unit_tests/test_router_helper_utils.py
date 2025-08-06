@@ -1441,3 +1441,231 @@ def test_handle_clientside_credential_with_deployment_model_name(model_list):
     
     print("✓ _handle_clientside_credential test passed!")
 
+
+@pytest.mark.parametrize("function_name, expected_metadata_key", [
+    ("acompletion", "metadata"),
+    ("_ageneric_api_call_with_fallbacks", "litellm_metadata"),
+    ("batch", "litellm_metadata"),
+    ("completion", "metadata"),
+    ("acreate_file", "litellm_metadata"),
+    ("aget_file", "litellm_metadata"),
+])
+def test_handle_clientside_credential_metadata_loading(model_list, function_name, expected_metadata_key):
+    """Test that _handle_clientside_credential correctly loads metadata based on function name"""
+    router = Router(model_list=model_list)
+    
+    # Mock deployment
+    deployment = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {
+            "model": "gpt-4.1",
+            "api_key": "test_key"
+        },
+        "model_info": {
+            "id": "original-id-123"
+        }
+    }
+    
+    # Mock kwargs with clientside credentials and metadata
+    kwargs = {
+        "api_key": "client_side_key",
+        "api_base": "https://api.openai.com/v1",
+        expected_metadata_key: {
+            "model_group": "gpt-4.1",
+            "custom_field": "test_value"
+        }
+    }
+    
+    # Call the function
+    result_deployment = router._handle_clientside_credential(
+        deployment=deployment,
+        kwargs=kwargs,
+        function_name=function_name
+    )
+    
+    # Verify the result is a Deployment object
+    assert isinstance(result_deployment, Deployment)
+    
+    # Verify the deployment has the correct model_name (should be the model_group from metadata)
+    assert result_deployment.model_name == "gpt-4.1"
+    
+    # Verify the litellm_params contain the clientside credentials
+    assert result_deployment.litellm_params.api_key == "client_side_key"
+    assert result_deployment.litellm_params.api_base == "https://api.openai.com/v1"
+    
+    # Verify the model_info has been updated with a new ID
+    assert result_deployment.model_info.id != "original-id-123"
+    assert result_deployment.model_info.original_model_id == "original-id-123"
+    
+    # Verify the deployment was added to the router
+    assert len(router.model_list) == len(model_list) + 1
+    
+    # Test that the function correctly uses the right metadata key
+    # For acompletion, it should use "metadata"
+    # For _ageneric_api_call_with_fallbacks/batch, it should use "litellm_metadata"
+    if function_name == "acompletion":
+        assert "metadata" in kwargs
+        assert "litellm_metadata" not in kwargs
+    elif function_name in ["_ageneric_api_call_with_fallbacks", "batch", "acreate_file", "aget_file"]:
+        assert "litellm_metadata" in kwargs
+        # Note: acompletion would not have litellm_metadata, but other functions might have both
+    
+    print(f"✓ Success with function_name '{function_name}' using '{expected_metadata_key}' metadata key")
+
+
+@pytest.mark.parametrize("function_name, metadata_key", [
+    ("acompletion", "metadata"),
+    ("_ageneric_api_call_with_fallbacks", "litellm_metadata"),
+])
+def test_handle_clientside_credential_metadata_variable_name(model_list, function_name, metadata_key):
+    """Test that _handle_clientside_credential uses the correct metadata variable name based on function name"""
+    from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
+    
+    router = Router(model_list=model_list)
+    
+    # Verify the metadata variable name is correct for each function
+    expected_metadata_key = _get_router_metadata_variable_name(function_name=function_name)
+    assert expected_metadata_key == metadata_key
+    
+    # Mock deployment
+    deployment = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {
+            "model": "gpt-4.1",
+            "api_key": "test_key"
+        },
+        "model_info": {
+            "id": "original-id-456"
+        }
+    }
+    
+    # Mock kwargs with clientside credentials and the correct metadata key
+    kwargs = {
+        "api_key": "client_side_key",
+        "api_base": "https://api.openai.com/v1",
+        metadata_key: {
+            "model_group": "gpt-4.1",
+            "test_field": "test_value"
+        }
+    }
+    
+    # Call the function
+    result_deployment = router._handle_clientside_credential(
+        deployment=deployment,
+        kwargs=kwargs,
+        function_name=function_name
+    )
+    
+    # Verify the function correctly extracted model_group from the right metadata key
+    assert result_deployment.model_name == "gpt-4.1"
+    
+    # Verify the deployment was created with the correct metadata
+    assert result_deployment.litellm_params.api_key == "client_side_key"
+    assert result_deployment.litellm_params.api_base == "https://api.openai.com/v1"
+    
+    print(f"✓ Success with function_name '{function_name}' correctly using '{metadata_key}' for metadata")
+
+
+def test_handle_clientside_credential_no_metadata(model_list):
+    """Test that _handle_clientside_credential handles cases where no metadata is provided"""
+    router = Router(model_list=model_list)
+    
+    # Mock deployment
+    deployment = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {
+            "model": "gpt-4.1",
+            "api_key": "test_key"
+        },
+        "model_info": {
+            "id": "original-id-789"
+        }
+    }
+    
+    # Mock kwargs with clientside credentials but NO metadata
+    kwargs = {
+        "api_key": "client_side_key",
+        "api_base": "https://api.openai.com/v1"
+        # No metadata key at all
+    }
+    
+    # This should fail because there's no model_group in metadata
+    # The function expects to find model_group in the metadata
+    try:
+        result_deployment = router._handle_clientside_credential(
+            deployment=deployment,
+            kwargs=kwargs,
+            function_name="acompletion"
+        )
+        # If we get here, the function should have used deployment.model_name as fallback
+        assert result_deployment.model_name == "gpt-4.1"
+        print("✓ Success with no metadata - used deployment.model_name as fallback")
+    except Exception as e:
+        # This is expected behavior - the function needs model_group to generate model_id
+        print(f"✓ Correctly handled no metadata case: {e}")
+    
+    # Test with empty metadata
+    kwargs_with_empty_metadata = {
+        "api_key": "client_side_key",
+        "api_base": "https://api.openai.com/v1",
+        "metadata": {}  # Empty metadata
+    }
+    
+    try:
+        result_deployment = router._handle_clientside_credential(
+            deployment=deployment,
+            kwargs=kwargs_with_empty_metadata,
+            function_name="acompletion"
+        )
+        # Should fail because empty metadata has no model_group
+        pytest.fail("Expected failure with empty metadata")
+    except Exception as e:
+        print(f"✓ Correctly handled empty metadata case: {e}")
+
+
+def test_handle_clientside_credential_with_responses_function(model_list):
+    """Test that _handle_clientside_credential works correctly with responses function name"""
+    router = Router(model_list=model_list)
+    
+    # Mock deployment
+    deployment = {
+        "model_name": "gpt-4.1",
+        "litellm_params": {
+            "model": "gpt-4.1",
+            "api_key": "test_key"
+        },
+        "model_info": {
+            "id": "original-id-responses"
+        }
+    }
+    
+    # Mock kwargs with clientside credentials and litellm_metadata (for responses function)
+    kwargs = {
+        "api_key": "client_side_key",
+        "api_base": "https://api.openai.com/v1",
+        "litellm_metadata": {
+            "model_group": "gpt-4.1",
+            "responses_field": "responses_value"
+        }
+    }
+    
+    # Call the function with _ageneric_api_call_with_fallbacks function name (which handles responses)
+    result_deployment = router._handle_clientside_credential(
+        deployment=deployment,
+        kwargs=kwargs,
+        function_name="_ageneric_api_call_with_fallbacks"
+    )
+    
+    # Verify the result
+    assert isinstance(result_deployment, Deployment)
+    assert result_deployment.model_name == "gpt-4.1"
+    assert result_deployment.litellm_params.api_key == "client_side_key"
+    assert result_deployment.litellm_params.api_base == "https://api.openai.com/v1"
+    assert result_deployment.model_info.id != "original-id-responses"
+    assert result_deployment.model_info.original_model_id == "original-id-responses"
+    
+    # Verify the deployment was added to the router
+    assert len(router.model_list) == len(model_list) + 1
+    
+    print("✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata")
+

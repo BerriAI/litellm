@@ -414,6 +414,7 @@ def test_router_handle_clientside_credential():
             "api_key": "123",
             "metadata": {"model_group": "gemini/gemini-1.5-flash"},
         },
+        function_name="acompletion",
     )
 
     assert new_deployment.litellm_params.api_key == "123"
