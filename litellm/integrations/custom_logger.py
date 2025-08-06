@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import traceback
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -546,7 +547,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def get_proxy_server_request_from_cold_storage(
         self,
         request_id: str,
-        start_time: str,
+        start_time: Union[datetime, str],
     ) -> Optional[dict]:
         """
         Get the proxy server request from cold storage

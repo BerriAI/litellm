@@ -1,8 +1,10 @@
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -19,6 +21,11 @@ if TYPE_CHECKING:
 else:
     ChatCompletionSession = Any
 
+########################################################
+# Cold Storage Handler
+########################################################
+COLD_STORAGE_HANDLER = ColdStorageHandler()
+########################################################
 
 class ResponsesSessionHandler:
     @staticmethod
@@ -153,21 +160,31 @@ class ResponsesSessionHandler:
         # Check if user has setup cold storage for session handling
         ############################################################
         if proxy_server_request_dict and ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
-            proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage(
-                proxy_server_request_dict,
+            _proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage(
+                request_id=spend_log["request_id"],
+                start_time=spend_log["startTime"],
             )
-            
+            if _proxy_server_request_dict:
+                proxy_server_request_dict = _proxy_server_request_dict
         
         return proxy_server_request_dict
     
     @staticmethod
     async def get_proxy_server_request_from_cold_storage(
-        proxy_server_request_dict: Optional[dict],
+        request_id: str,
+        start_time: Union[datetime, str],
     ) -> Optional[dict]:
         """
         Get the proxy server request from cold storage
         """
-        pass
+        verbose_proxy_logger.debug("inside get_proxy_server_request_from_cold_storage...")
+
+        proxy_server_request_dict = await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage(
+            request_id=request_id,
+            start_time=start_time,
+        )
+
+        return proxy_server_request_dict
     
 
     @staticmethod
