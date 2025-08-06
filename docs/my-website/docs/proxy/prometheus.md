@@ -302,21 +302,19 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 ```
 
 **How Custom Tags Work:**
-- Each configured tag becomes a boolean label in prometheus metrics
-- If a tag is present in the request, the label value is `"true"`
-- If a tag is not present in the request, the label value is `"false"`
+- Each configured tag becomes a boolean label in prometheus metrics  
+- If a tag matches (exact or wildcard), the label value is `"true"`, otherwise `"false"`
 - Tag names are sanitized for prometheus compatibility (e.g., `"batch-job"` becomes `"tag_batch_job"`)
-- **Wildcard patterns** are supported using `*` for pattern matching
+- **Wildcard patterns** supported using `*` (e.g., `"User-Agent: RooCode/*"` matches `"User-Agent: RooCode/1.0.0"`)
 
-**Wildcard Pattern Examples:**
+**Example with wildcards:**
 ```yaml
 litellm_settings:
   callbacks: ["prometheus"]
+  custom_prometheus_tags:
     - "User-Agent: RooCode/*"
     - "User-Agent: claude-cli/*"
-```
-
-Any request with tags patching the pattern "User-Agent: RooCode/*" (e.g. "User-Agent: RooCode/1.0.0") will be tracked. 
+``` 
 
 **Use Cases:**
 - Environment tracking (`prod`, `staging`, `dev`)
