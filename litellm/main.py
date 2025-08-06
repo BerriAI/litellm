@@ -4224,7 +4224,7 @@ def embedding(  # noqa: PLR0915
             )
         elif custom_llm_provider == "sambanova":
             api_key = api_key or litellm.api_key or get_secret_str("SAMBANOVA_API_KEY")
-            response =  base_llm_http_handler.embedding(
+            response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
                 custom_llm_provider=custom_llm_provider,
