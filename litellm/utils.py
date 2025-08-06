@@ -6604,7 +6604,8 @@ def validate_and_fix_openai_messages(messages: List):
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
 
-def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]: 
+
+def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
@@ -6618,6 +6619,7 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
             new_tools.append(tool)
     return new_tools
 
+
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
     Cleans up the message by removing the none field.
@@ -6625,6 +6627,13 @@ def cleanup_none_field_in_message(message: AllMessageValues):
     remove None fields in the message - e.g. {"function": None} - some providers raise validation errors
     """
     new_message = message.copy()
+    _function_call = new_message.get("function_call")
+    if (
+        _function_call is not None
+        and isinstance(_function_call, dict)
+        and len(_function_call) == 0
+    ):
+        new_message["function_call"] = None  # type: ignore
     return {k: v for k, v in new_message.items() if v is not None}
 
 
