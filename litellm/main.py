@@ -5704,7 +5704,11 @@ def stream_chunk_builder_text_completion(
 
 
 def stream_chunk_builder(  # noqa: PLR0915
-    chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
+    chunks: list,
+    messages: Optional[list] = None,
+    start_time=None,
+    end_time=None,
+    logging_obj: Optional[Logging] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:
@@ -5828,6 +5832,12 @@ def stream_chunk_builder(  # noqa: PLR0915
         )
 
         setattr(response, "usage", usage)
+
+        # Add cost to usage object if include_cost_in_streaming_usage is True
+        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+            setattr(
+                usage, "cost", logging_obj._response_cost_calculator(result=response)
+            )
 
         return response
     except Exception as e:
