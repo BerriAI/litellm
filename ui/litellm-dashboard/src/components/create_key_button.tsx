@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
+import { Button, TextInput, Grid, Col, Select as TremorSelect, SelectItem } from "@tremor/react";
 import {
   Card,
   Metric,
@@ -34,10 +34,9 @@ import {
   userFilterUICall,
   keyCreateServiceAccountCall,
   fetchMCPAccessGroups,
+  getPromptsList,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
-import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -49,6 +48,8 @@ import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import ModelAliasManager from "./common_components/ModelAliasManager";
 
 
 const { Option } = Select;
@@ -170,6 +171,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
@@ -182,12 +184,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
+  const [keyType, setKeyType] = useState<string>("default");
+  const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
+    setModelAliases({});
   };
 
   const handleCancel = () => {
@@ -197,6 +203,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
+    setKeyType("default");
+    setModelAliases({});
   };
 
   useEffect(() => {
@@ -235,7 +243,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       }
     };
 
+    const fetchPrompts = async () => {
+      try {
+        const response = await getPromptsList(accessToken);
+        setPromptsList(response.prompts.map(prompt => prompt.prompt_id));
+      } catch (error) {
+        console.error("Failed to fetch prompts:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPrompts();
   }, [accessToken]);
 
   // Fetch possible user roles when component mounts
@@ -357,6 +375,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_access_groups;
       }
+      
+      // Add model_aliases if any are defined
+      if (Object.keys(modelAliases).length > 0) {
+        formValues.aliases = JSON.stringify(modelAliases);
+      }
+      
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -549,6 +573,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="team_id"
               initialValue={team ? team.team_id : null}
               className="mt-4"
+              rules={[
+                { 
+                  required: keyOwner === "service_account", 
+                  message: "Please select a team for the service account" 
+                }
+              ]}
+              help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown 
                 teams={teams} 
@@ -591,31 +622,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             >
               <TextInput placeholder="" />
             </Form.Item>
-            
-            <Form.Item
-              label={
-                <span>
-                  Models{' '}
-                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              }
-              name="models"
-              rules={[{ required: true, message: "Please select a model" }]}
-              help="required"
-              className="mt-4"
-            >
-              <Select
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
-                onChange={(values) => {
-                  if (values.includes("all-team-models")) {
-                    form.setFieldsValue({ models: ["all-team-models"] });
-                  }
-                }}
-              >
+
+                         <Form.Item
+               label={
+                 <span>
+                   Models{' '}
+                   <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                     <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                   </Tooltip>
+                 </span>
+               }
+               name="models"
+               rules={
+                 keyType === "management" || keyType === "read_only" 
+                   ? []
+                   : [{ required: true, message: "Please select a model" }]
+               }
+               help={
+                 keyType === "management" || keyType === "read_only"
+                   ? "Models field is disabled for this key type"
+                   : "required"
+               }
+               className="mt-4"
+             >
+               <Select
+                 mode="multiple"
+                 placeholder="Select models"
+                 style={{ width: "100%" }}
+                 disabled={keyType === "management" || keyType === "read_only"}
+                 onChange={(values) => {
+                   if (values.includes("all-team-models")) {
+                     form.setFieldsValue({ models: ["all-team-models"] });
+                   }
+                 }}
+               >
                 <Option key="all-team-models" value="all-team-models">
                   All Team Models
                 </Option>
@@ -626,6 +666,61 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 ))}
               </Select>
             </Form.Item>
+
+
+            <Form.Item
+              label={
+                <span>
+                  Key Type{' '}
+                  <Tooltip title="Select the type of key to determine what routes and operations this key can access">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
+              name="key_type"
+              initialValue="default"
+              className="mt-4"
+            >
+              <Select 
+                defaultValue="default" 
+                placeholder="Select key type" 
+                style={{ width: "100%" }}
+                optionLabelProp="label"
+                onChange={(value) => {
+                  setKeyType(value);
+                  // Clear models field and disable if management or read_only
+                  if (value === "management" || value === "read_only") {
+                    form.setFieldsValue({ models: [] });
+                  }
+                }}
+              >
+                <Option value="default" label="Default">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call LLM API + Management routes
+                    </div>
+                  </div>
+                </Option>
+                <Option value="llm_api" label="LLM API">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>LLM API</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only LLM API routes (chat/completions, embeddings, etc.)
+                    </div>
+                  </div>
+                </Option>
+                <Option value="management" label="Management">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Management</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only management routes (user/team/key management)
+                    </div>
+                  </div>
+                </Option>
+              </Select>
+            </Form.Item>
+            
           </div>
           )}
 
@@ -777,14 +872,61 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     }
                     name="guardrails" 
                     className="mt-4"
-                    help="Select existing guardrails or enter new ones"
+                    help={premiumUser ? "Select existing guardrails or enter new ones" : "Premium feature - Upgrade to set guardrails by key"}
                   >
-                    <Select
-                      mode="tags"
-                      style={{ width: '100%' }}
-                      placeholder="Select or enter guardrails"
-                      options={guardrailsList.map(name => ({ value: name, label: name }))}
-                    />
+                    <Tooltip 
+                      title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set guardrails by key"
+                            : "Select or enter guardrails"
+                        }
+                        options={guardrailsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Tooltip>
+                  </Form.Item>
+                  <Form.Item 
+                    label={
+                      <span>
+                        Prompts{' '}
+                        <Tooltip title="Allow this key to use specific prompt templates">
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/prompt_management" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="prompts" 
+                    className="mt-4"
+                    help={premiumUser ? "Select existing prompts or enter new ones" : "Premium feature - Upgrade to set prompts by key"}
+                  >
+                    <Tooltip 
+                      title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set prompts by key"
+                            : "Select or enter prompts"
+                        }
+                        options={promptsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Tooltip>
                   </Form.Item>
                   <Form.Item 
                         label={
@@ -799,12 +941,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         className="mt-4"
                         help="Select vector stores this key can access. Leave empty for access to all vector stores"
                       >
-                        <PremiumVectorStoreSelector
-                          onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
+                        <VectorStoreSelector
+                          onChange={(values: string[]) => form.setFieldValue('allowed_vector_store_ids', values)}
                           value={form.getFieldValue('allowed_vector_store_ids')}
                           accessToken={accessToken}
                           placeholder="Select vector stores (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
 
@@ -821,12 +962,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         className="mt-4"
                         help="Select MCP servers or access groups this key can access. "
                       >
-                        <PremiumMCPSelector
-                          onChange={val => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
+                        <MCPServerSelector
+                          onChange={(val: any) => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
                           value={form.getFieldValue('allowed_mcp_servers_and_groups')}
                           accessToken={accessToken}
                           placeholder="Select MCP servers or access groups (optional)"
-                          premiumUser={premiumUser}
                         />
                       </Form.Item>
 
@@ -881,6 +1021,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                           premiumUser={premiumUser}
                           disabledCallbacks={disabledCallbacks}
                           onDisabledCallbacksChange={setDisabledCallbacks}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Model Aliases</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <Text className="text-sm text-gray-600 mb-4">
+                          Create custom aliases for models that can be used in API calls. This allows you to create shortcuts for specific models.
+                        </Text>
+                        <ModelAliasManager
+                          accessToken={accessToken}
+                          initialModelAliases={modelAliases}
+                          onAliasUpdate={setModelAliases}
+                          showExampleConfig={false}
                         />
                       </div>
                     </AccordionBody>

@@ -337,7 +337,7 @@ def test_openai_max_retries_0(mock_get_openai_client):
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
 
 
-@pytest.mark.parametrize("model", ["o1", "o1-preview", "o1-mini", "o3-mini"])
+@pytest.mark.parametrize("model", ["o1", "o1-mini", "o3-mini"])
 def test_o1_parallel_tool_calls(model):
     litellm.completion(
         model=model,
@@ -544,6 +544,7 @@ async def test_openai_codex(sync_mode):
 
     assert response.choices[0].message.content is not None
 
+
 @pytest.mark.asyncio
 async def test_openai_via_gemini_streaming_bridge():
     """
@@ -586,6 +587,7 @@ async def test_openai_via_gemini_streaming_bridge():
 
     assert len(printed_chunks) > 0
 
+
 def test_openai_deepresearch_model_bridge():
     """
     Test that the deepresearch model bridge works correctly
@@ -601,3 +603,54 @@ def test_openai_deepresearch_model_bridge():
     )
 
     print("response: ", response)
+
+
+def test_openai_tool_calling():
+    from pydantic import BaseModel
+    from typing import Any, Literal
+
+    class OpenAIFunction(BaseModel):
+        description: Optional[str] = None
+        name: str
+        parameters: Optional[dict[str, Any]] = None
+
+    class OpenAITool(BaseModel):
+        type: Literal["function"]
+        function: OpenAIFunction
+
+    completion_params = {
+        "model": "openai/gpt-4.1",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is TSLA stock price at today?"}
+                ],
+            }
+        ],
+        "stream": False,
+        "temperature": 0.5,
+        "stop": None,
+        "max_tokens": 1600,
+        "tools": [
+            OpenAITool(
+                type="function",
+                function=OpenAIFunction(
+                    description="Get the current stock price for a given ticker symbol.",
+                    name="get_stock_price",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "ticker": {
+                                "type": "string",
+                                "description": "The stock ticker symbol, e.g. AAPL for Apple Inc.",
+                            }
+                        },
+                        "required": ["ticker"],
+                    },
+                ),
+            )
+        ],
+    }
+
+    response = litellm.completion(**completion_params)

@@ -1,5 +1,5 @@
 import importlib
-from typing import Optional
+from typing import Optional, Dict
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -23,6 +23,7 @@ router = APIRouter(
 if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+        _convert_protocol_version_to_enum,
     )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
@@ -31,9 +32,49 @@ if MCP_AVAILABLE:
 
     ########################################################
     ############ MCP Server REST API Routes #################
+    def _get_server_auth_header(
+        server, mcp_server_auth_headers: Optional[Dict[str, str]], mcp_auth_header: Optional[str]
+    ) -> Optional[str]:
+        """Helper function to get server-specific auth header with case-insensitive matching."""
+        if mcp_server_auth_headers and server.alias:
+            normalized_server_alias = server.alias.lower()
+            normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
+            server_auth = normalized_headers.get(normalized_server_alias)
+            if server_auth is not None:
+                return server_auth
+        elif mcp_server_auth_headers and server.server_name:
+            normalized_server_name = server.server_name.lower()
+            normalized_headers = {k.lower(): v for k, v in mcp_server_auth_headers.items()}
+            server_auth = normalized_headers.get(normalized_server_name)
+            if server_auth is not None:
+                return server_auth
+        return mcp_auth_header
+
+    def _create_tool_response_objects(tools, server_mcp_info):
+        """Helper function to create tool response objects."""
+        return [
+            ListMCPToolsRestAPIResponseObject(
+                name=tool.name,
+                description=tool.description,
+                inputSchema=tool.inputSchema,
+                mcp_info=server_mcp_info,
+            )
+            for tool in tools
+        ]
+
+    async def _get_tools_for_single_server(server, server_auth_header, mcp_protocol_version):
+        """Helper function to get tools for a single server."""
+        tools = await global_mcp_server_manager._get_tools_from_server(
+            server=server,
+            mcp_auth_header=server_auth_header,
+            mcp_protocol_version=mcp_protocol_version,
+        )
+        return _create_tool_response_objects(tools, server.mcp_info)
+
     ########################################################
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     async def list_tool_rest_api(
+        request: Request,
         server_id: Optional[str] = Query(
             None, description="The server id to list tools for"
         ),
@@ -59,7 +100,15 @@ if MCP_AVAILABLE:
             "message": "Successfully retrieved tools"
         }
         """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        
         try:
+            # Extract auth headers from request
+            headers = request.headers
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
+            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+            mcp_protocol_version = headers.get(MCPRequestHandler.MCP_PROTOCOL_VERSION_HEADER_NAME)
+            
             list_tools_result = []
             error_message = None
             
@@ -72,19 +121,11 @@ if MCP_AVAILABLE:
                         "error": "server_not_found",
                         "message": f"Server with id {server_id} not found"
                     }
+                
+                server_auth_header = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
+                
                 try:
-                    tools = await global_mcp_server_manager._get_tools_from_server(
-                        server=server,
-                    )
-                    for tool in tools:
-                        list_tools_result.append(
-                            ListMCPToolsRestAPIResponseObject(
-                                name=tool.name,
-                                description=tool.description,
-                                inputSchema=tool.inputSchema,
-                                mcp_info=server.mcp_info,
-                            )
-                        )
+                    list_tools_result = await _get_tools_for_single_server(server, server_auth_header, mcp_protocol_version)
                 except Exception as e:
                     verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
                     return {
@@ -96,19 +137,11 @@ if MCP_AVAILABLE:
                 # Query all servers
                 errors = []
                 for server in global_mcp_server_manager.get_registry().values():
+                    server_auth_header = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
+                    
                     try:
-                        tools = await global_mcp_server_manager._get_tools_from_server(
-                            server=server,
-                        )
-                        for tool in tools:
-                            list_tools_result.append(
-                                ListMCPToolsRestAPIResponseObject(
-                                    name=tool.name,
-                                    description=tool.description,
-                                    inputSchema=tool.inputSchema,
-                                    mcp_info=server.mcp_info,
-                                )
-                            )
+                        tools_result = await _get_tools_for_single_server(server, server_auth_header, mcp_protocol_version)
+                        list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
                         errors.append(f"{server.name}: {str(e)}")
@@ -140,15 +173,52 @@ if MCP_AVAILABLE:
         REST API to call a specific MCP tool with the provided arguments
         """
         from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
+        from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+        from fastapi import HTTPException
 
-        data = await request.json()
-        data = await add_litellm_data_to_request(
-            data=data,
-            request=request,
-            user_api_key_dict=user_api_key_dict,
-            proxy_config=proxy_config,
-        )
-        return await call_mcp_tool(**data)
+        try:
+            data = await request.json()
+            data = await add_litellm_data_to_request(
+                data=data,
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=proxy_config,
+            )
+            return await call_mcp_tool(**data)
+        except BlockedPiiEntityError as e:
+            verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "blocked_pii_entity",
+                    "message": str(e),
+                    "entity_type": getattr(e, 'entity_type', None),
+                    "guardrail_name": getattr(e, 'guardrail_name', None)
+                }
+            )
+        except GuardrailRaisedException as e:
+            verbose_logger.error(f"GuardrailRaisedException in MCP tool call: {str(e)}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "guardrail_violation",
+                    "message": str(e),
+                    "guardrail_name": getattr(e, 'guardrail_name', None)
+                }
+            )
+        except HTTPException as e:
+            # Re-raise HTTPException as-is to preserve status code and detail
+            verbose_logger.error(f"HTTPException in MCP tool call: {str(e)}")
+            raise e
+        except Exception as e:
+            verbose_logger.exception(f"Unexpected error in MCP tool call: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "internal_server_error",
+                    "message": f"An unexpected error occurred: {str(e)}"
+                }
+            )
     
     ########################################################
     # MCP Connection testing routes
@@ -171,10 +241,10 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
-                    spec_version=request.spec_version,
+                    spec_version=_convert_protocol_version_to_enum(request.spec_version),
                     auth_type=request.auth_type,
                     mcp_info=request.mcp_info,
                 ),
@@ -200,10 +270,10 @@ if MCP_AVAILABLE:
             client = global_mcp_server_manager._create_mcp_client(
                 server=MCPServer(
                     server_id=request.server_id or "",
-                    name=request.alias or "",
+                    name=request.alias or request.server_name or "",
                     url=request.url,
                     transport=request.transport,
-                    spec_version=request.spec_version,
+                    spec_version=_convert_protocol_version_to_enum(request.spec_version),
                     auth_type=request.auth_type,
                     mcp_info=request.mcp_info,
                 ),

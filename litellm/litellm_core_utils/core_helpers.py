@@ -18,24 +18,22 @@ else:
 
 
 def safe_divide_seconds(
-    seconds: float, 
-    denominator: float,
-    default: Optional[float] = None
+    seconds: float, denominator: float, default: Optional[float] = None
 ) -> Optional[float]:
     """
     Safely divide seconds by denominator, handling zero division.
-    
+
     Args:
         seconds: Time duration in seconds
         denominator: The divisor (e.g., number of tokens)
         default: Value to return if division by zero (defaults to None)
-        
+
     Returns:
         The result of the division as a float (seconds per unit), or default if denominator is zero
     """
     if denominator <= 0:
         return default
-        
+
     return float(seconds / denominator)
 
 
@@ -203,3 +201,50 @@ def preserve_upstream_non_openai_attributes(
     for key, value in original_chunk.model_dump().items():
         if key not in expected_keys:
             setattr(model_response, key, value)
+
+
+def safe_deep_copy(data):
+    """
+    Safe Deep Copy
+
+    The LiteLLM Request has some object that can-not be pickled / deep copied
+
+    Use this function to safely deep copy the LiteLLM Request
+    """
+    import copy
+
+    import litellm
+
+    if litellm.safe_memory_mode is True:
+        return data
+
+    litellm_parent_otel_span: Optional[Any] = None
+    # Step 1: Remove the litellm_parent_otel_span
+    litellm_parent_otel_span = None
+    if isinstance(data, dict):
+        # remove litellm_parent_otel_span since this is not picklable
+        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
+            litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
+            data["metadata"]["litellm_parent_otel_span"] = "placeholder"
+        if (
+            "litellm_metadata" in data
+            and "litellm_parent_otel_span" in data["litellm_metadata"]
+        ):
+            litellm_parent_otel_span = data["litellm_metadata"].pop(
+                "litellm_parent_otel_span"
+            )
+            data["litellm_metadata"]["litellm_parent_otel_span"] = "placeholder"
+    new_data = copy.deepcopy(data)
+
+    # Step 2: re-add the litellm_parent_otel_span after doing a deep copy
+    if isinstance(data, dict) and litellm_parent_otel_span is not None:
+        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
+            data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
+        if (
+            "litellm_metadata" in data
+            and "litellm_parent_otel_span" in data["litellm_metadata"]
+        ):
+            data["litellm_metadata"][
+                "litellm_parent_otel_span"
+            ] = litellm_parent_otel_span
+    return new_data

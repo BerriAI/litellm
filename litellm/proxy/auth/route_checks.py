@@ -25,6 +25,8 @@ class RouteChecks:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
             EnterpriseRouteChecks.should_call_route(route=route)
+        except HTTPException as e:
+            raise e
         except Exception:
             pass
 
@@ -54,6 +56,19 @@ class RouteChecks:
         if route in valid_token.allowed_routes:
             return True
 
+        ## check if 'allowed_route' is a field name in LiteLLMRoutes
+        if any(
+            allowed_route in LiteLLMRoutes._member_names_
+            for allowed_route in valid_token.allowed_routes
+        ):
+            for allowed_route in valid_token.allowed_routes:
+                if allowed_route in LiteLLMRoutes._member_names_:
+                    if RouteChecks.check_route_access(
+                        route=route,
+                        allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                    ):
+                        return True
+
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
             if RouteChecks._route_matches_wildcard_pattern(
@@ -64,6 +79,27 @@ class RouteChecks:
         raise Exception(
             f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
         )
+
+    @staticmethod
+    def _mask_user_id(user_id: str) -> str:
+        """
+        Mask user_id to prevent leaking sensitive information in error messages
+
+        Args:
+            user_id (str): The user_id to mask
+
+        Returns:
+            str: Masked user_id showing only first 2 and last 2 characters
+        """
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+        if not user_id or len(user_id) <= 4:
+            return "***"
+
+        # Use SensitiveDataMasker with custom configuration for user_id
+        masker = SensitiveDataMasker(visible_prefix=6, visible_suffix=2, mask_char="*")
+
+        return masker._mask_value(user_id)
 
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
@@ -182,8 +218,10 @@ class RouteChecks:
             if user_obj is not None:
                 user_role = user_obj.user_role or "unknown"
                 user_id = user_obj.user_id or "unknown"
+
+            masked_user_id = RouteChecks._mask_user_id(user_id)
             raise Exception(
-                f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={user_id}"
+                f"Only proxy admin can be used to generate, delete, update info for new keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
             )
 
     @staticmethod
@@ -348,5 +386,18 @@ class RouteChecks:
             bool: True if `thread` or `assistant` is in the request path, False otherwise
         """
         if "thread" in request.url.path or "assistant" in request.url.path:
+            return True
+        return False
+
+    @staticmethod
+    def is_generate_content_route(route: str) -> bool:
+        """
+        Returns True if this is a google generateContent or streamGenerateContent route
+
+        These routes from google allow passing key=api_key in the query params
+        """
+        if "generateContent" in route:
+            return True
+        if "streamGenerateContent" in route:
             return True
         return False

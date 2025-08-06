@@ -16,6 +16,7 @@ class AnthropicInputSchema(TypedDict, total=False):
     type: Optional[str]
     properties: Optional[dict]
     additionalProperties: Optional[bool]
+    required: Optional[List[str]]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):

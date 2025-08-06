@@ -328,10 +328,6 @@ class ProxyBaseLLMRequestProcessing:
         )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
-        self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
-            user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
-        )
-
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
         ## IMPORTANT Note: - initialize this before running pre-call checks. Ensures we log rejected requests to langfuse.
         logging_obj, self.data = litellm.utils.function_setup(
@@ -342,6 +338,13 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
+            user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
+        )
+
+        if "messages" in self.data and self.data["messages"]:
+            logging_obj.update_messages(self.data["messages"])
 
         return self.data, logging_obj
 
@@ -730,8 +733,11 @@ class ProxyBaseLLMRequestProcessing:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events
         """
+        from litellm.types.utils import ModelResponse, ModelResponseStream
+
         verbose_proxy_logger.debug("inside generator")
         try:
+            str_so_far = ""
             async for chunk in response:
                 verbose_proxy_logger.debug(
                     "async_data_generator: received streaming chunk - {}".format(chunk)
@@ -741,7 +747,12 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict=user_api_key_dict,
                     response=chunk,
                     data=request_data,
+                    str_so_far=str_so_far,
                 )
+
+                if isinstance(chunk, (ModelResponse, ModelResponseStream)):
+                    response_str = litellm.get_response_string(response_obj=chunk)
+                    str_so_far += response_str
 
                 # Format chunk using helper function
                 yield ProxyBaseLLMRequestProcessing.return_sse_chunk(chunk)

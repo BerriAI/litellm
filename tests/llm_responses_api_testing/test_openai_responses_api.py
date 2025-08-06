@@ -1128,36 +1128,47 @@ def test_mcp_tools_with_responses_api():
     USER_QUERY = "how does tiktoken work?"
     #########################################################
     # Step 1: OpenAI will use MCP LIST, and return a list of MCP calls for our approval 
-    response = litellm.responses(
-        model=MODEL,
-        tools=MCP_TOOLS,
-        input=USER_QUERY
-    )
-    print(response)
-
-    response = cast(ResponsesAPIResponse, response)
-
-    mcp_approval_id: Optional[str] = None
-    for output in response.output:
-        if output.type == "mcp_approval_request":
-            mcp_approval_id = output.id
-            break
-
-    # Step 2: Send followup with approval for the MCP call
-    if mcp_approval_id:
-        response_with_mcp_call = litellm.responses(
+    try:
+        response = litellm.responses(
             model=MODEL,
             tools=MCP_TOOLS,
-            input=[
-                {
-                    "type": "mcp_approval_response",
-                    "approve": True,
-                    "approval_request_id": mcp_approval_id
-                }
-            ],
-            previous_response_id=response.id,
+            input=USER_QUERY
         )
-        print(response_with_mcp_call)
+        print(response)
+
+        response = cast(ResponsesAPIResponse, response)
+
+        mcp_approval_id: Optional[str] = None
+        for output in response.output:
+            if output.type == "mcp_approval_request":
+                mcp_approval_id = output.id
+                break
+
+        # Step 2: Send followup with approval for the MCP call
+        if mcp_approval_id:
+            response_with_mcp_call = litellm.responses(
+                model=MODEL,
+                tools=MCP_TOOLS,
+                input=[
+                    {
+                        "type": "mcp_approval_response",
+                        "approve": True,
+                        "approval_request_id": mcp_approval_id
+                    }
+                ],
+                previous_response_id=response.id,
+            )
+            print(response_with_mcp_call)
+    except litellm.APIError as e:
+        if "424" in str(e) or "Failed Dependency" in str(e) or "external_connector_error" in str(e):
+            pytest.skip(f"Skipping test due to external MCP server error: {e}")
+        else:
+            raise e
+    except litellm.InternalServerError as e:
+        if "500" in str(e) or "server_error" in str(e):
+            pytest.skip(f"Skipping test due to OpenAI server error (likely MCP server unavailable): {e}")
+        else:
+            raise e
 
 
 @pytest.mark.asyncio
@@ -1295,5 +1306,92 @@ async def test_store_field_transformation():
     # Verify created_at is always converted to integer
     assert isinstance(response.created_at, int), "created_at should always be converted to integer"
     assert response.created_at == 1751443898, "created_at should maintain the same value after conversion"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_service_tier_and_safety_identifier():
+    """
+    Test that service_tier and safety_identifier parameters are correctly sent in the request body
+    when using litellm.aresponses.
+    """
+    mock_response = {
+        "id": "resp_01234567890abcdef",
+        "object": "response",
+        "created_at": 1753060947,
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": None,
+        "model": "gpt-4o-2024-05-13",
+        "output": [
+            {
+                "type": "text",
+                "id": "out_01234567890abcdef",
+                "text": "This is a test response with service tier and safety identifier.",
+            }
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": None,
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 25,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 40,
+        },
+        "user": None,
+        "metadata": {},
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        # Configure the mock to return our response
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+
+        # Call aresponses with service_tier and safety_identifier
+        response = await litellm.aresponses(
+            model="openai/gpt-4o",
+            input="Test with service tier and safety identifier",
+            service_tier="flex",
+            safety_identifier="123",
+        )
+
+        # Verify the request was made correctly
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs["json"]
+        print("request_body=", json.dumps(request_body, indent=4, default=str))
+        
+        # Validate that both parameters are present in the request body
+        assert request_body["service_tier"] == "flex", "service_tier should be 'flex' in request body"
+        assert request_body["safety_identifier"] == "123", "safety_identifier should be '123' in request body"
+        assert request_body["model"] == "gpt-4o"
+        assert request_body["input"] == "Test with service tier and safety identifier"
+
+        # Validate the response
+        print("Response:", json.dumps(response, indent=4, default=str))
+
 
 
