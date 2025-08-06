@@ -3948,3 +3948,45 @@ def test_is_delta_empty():
             audio=None,
         )
     )
+
+
+def test_streaming_with_cost_calculation():
+    from litellm.types.utils import Usage
+    from typing import Optional
+
+    litellm.include_cost_in_streaming_usage = True
+
+    ## Test 1: check if usage object can handle 'cost' field
+    usage_object = Usage(
+        prompt_tokens=100,
+        completion_tokens=100,
+        total_tokens=200,
+        cost=1.0,
+    )
+    assert usage_object.cost is not None
+
+    print(f"usage_object: {usage_object}")
+
+    ## Test 2: check if usage object has 'cost' field when streaming
+
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+
+    usage_object: Optional[Usage] = None
+    for chunk in response:
+        _usage_obj = getattr(chunk, "usage", None)
+        if _usage_obj is not None:
+            usage_object = _usage_obj
+            break
+
+    assert usage_object is not None
+    assert usage_object.total_tokens is not None
+    assert usage_object.total_tokens > 0
+    assert usage_object.prompt_tokens is not None
+    assert usage_object.prompt_tokens > 0
+    assert usage_object.cost is not None
+    assert usage_object.cost > 0
