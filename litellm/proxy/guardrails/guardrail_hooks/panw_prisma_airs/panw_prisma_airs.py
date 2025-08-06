@@ -245,6 +245,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[Dict[str, Any]]:
         """
@@ -293,7 +294,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return None
 
     @log_guardrail_information
-    async def async_post_call_hook(
+    async def async_post_call_success_hook(
         self,
         data: Dict[str, Any],
         user_api_key_dict: UserAPIKeyAuth,

@@ -681,7 +681,9 @@ def function_setup(  # noqa: PLR0915
 
         if add_breadcrumb:
             try:
-                details_to_log = copy.deepcopy(kwargs)
+                from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+                details_to_log = safe_deep_copy(kwargs)
             except Exception:
                 details_to_log = kwargs
 
@@ -2788,7 +2790,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.JinaAIEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params={}
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "voyage":
         supported_params = get_supported_openai_params(
@@ -6602,6 +6607,19 @@ def validate_and_fix_openai_messages(messages: List):
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
 
+def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]: 
+    """
+    Ensure tools is List[dict] and not List[BaseModel]
+    """
+    new_tools = []
+    if tools is None:
+        return tools
+    for tool in tools:
+        if isinstance(tool, BaseModel):
+            new_tools.append(tool.model_dump())
+        elif isinstance(tool, dict):
+            new_tools.append(tool)
+    return new_tools
 
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
@@ -6914,6 +6932,8 @@ class ProviderConfigManager:
             return litellm.OpenAIGPTConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
+        elif litellm.LlmProviders.OCI == provider:
+            return litellm.OCIChatConfig()
         elif litellm.LlmProviders.HYPERBOLIC == provider:
             return litellm.HyperbolicChatConfig()
         return None
@@ -6938,6 +6958,12 @@ class ProviderConfigManager:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
+        elif litellm.LlmProviders.JINA_AI == provider:
+            from litellm.llms.jina_ai.embedding.transformation import (
+                JinaAIEmbeddingConfig,
+            )
+
+            return JinaAIEmbeddingConfig()
         return None
 
     @staticmethod

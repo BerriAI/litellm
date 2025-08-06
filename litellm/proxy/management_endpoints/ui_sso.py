@@ -156,6 +156,14 @@ async def serve_login_page(
     missing_env_vars = show_missing_vars_in_env()
     if missing_env_vars is not None:
         return missing_env_vars
+    #########################################################
+    # Construct Redirect URL
+    base_url_to_redirect_to: Optional[str] = None
+    base_url_to_redirect_to = os.getenv("PROXY_BASE_URL", "")
+    server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+    if server_root_path != "":
+        base_url_to_redirect_to += server_root_path
+    #########################################################
 
     # Build the unified login page HTML
     error_message = ""
@@ -177,7 +185,13 @@ async def serve_login_page(
 
     sso_button = ""
     if sso_available:
-        sso_button = """
+        sso_login_url = base_url_to_redirect_to
+        if sso_login_url.endswith("/"):
+            sso_login_url += "sso/login"
+        else:
+            sso_login_url += "/sso/login"
+        
+        sso_button = f"""
         <div style="
             margin-top: 20px;
             padding-top: 20px;
@@ -189,7 +203,7 @@ async def serve_login_page(
                 font-size: 14px;
                 margin-bottom: 16px;
             ">or</p>
-            <a href="/sso/login" style="
+            <a href="{sso_login_url}" style="
                 display: inline-block;
                 background-color: #f8fafc;
                 border: 1px solid #e2e8f0;
@@ -207,8 +221,10 @@ async def serve_login_page(
         </div>
         """
 
-    # Get the base URL for form action using proper URL construction
-    form_action = get_custom_url(request_base_url=str(request.base_url), route="login")
+    if base_url_to_redirect_to.endswith("/"):
+        url_to_redirect_to = base_url_to_redirect_to + "login"
+    else:
+        url_to_redirect_to = base_url_to_redirect_to + "/login"
 
     unified_login_html = f"""
 <!DOCTYPE html>
@@ -386,7 +402,7 @@ async def serve_login_page(
     </style>
 </head>
 <body>
-    <form action="{form_action}" method="post">
+    <form action="{url_to_redirect_to}" method="post">
         <div class="logo-container">
             <div class="logo">
                 🚅 LiteLLM
@@ -1568,7 +1584,7 @@ class SSOAuthenticationHandler:
             user_api_key_cache,
             user_custom_sso,
         )
-        from litellm.proxy.utils import get_custom_url, get_prisma_client_or_throw
+        from litellm.proxy.utils import get_prisma_client_or_throw
         from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
         prisma_client = get_prisma_client_or_throw(

@@ -198,7 +198,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     # make a streaming gemini call
     try:
         response = completion(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash-lite",
             messages=messages,
             stream=True,
             complete_response=True,

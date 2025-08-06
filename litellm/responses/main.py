@@ -243,6 +243,8 @@ async def aresponses(
     top_p: Optional[float] = None,
     truncation: Optional[Literal["auto", "disabled"]] = None,
     user: Optional[str] = None,
+    service_tier: Optional[str] = None,
+    safety_identifier: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -294,6 +296,8 @@ async def aresponses(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
+            service_tier=service_tier,
+            safety_identifier=safety_identifier,
             **kwargs,
         )
 
@@ -350,6 +354,8 @@ def responses(
     top_p: Optional[float] = None,
     truncation: Optional[Literal["auto", "disabled"]] = None,
     user: Optional[str] = None,
+    service_tier: Optional[str] = None,
+    safety_identifier: Optional[str] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,

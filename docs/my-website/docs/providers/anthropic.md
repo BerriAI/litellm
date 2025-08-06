@@ -4,6 +4,7 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-opus-4-1-20250805`
 - `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
 - `claude-3.7` (`claude-3-7-sonnet-20250219`)
 - `claude-3.5` (`claude-3-5-sonnet-20240620`)

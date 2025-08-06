@@ -143,6 +143,7 @@ const MCPToolsViewer = ({
   auth_type,
   userRole,
   userID,
+  serverAlias, // Add serverAlias prop
 }: MCPToolsViewerProps) => {
   const [mcpAuthValue, setMcpAuthValue] = useState("");
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
@@ -151,19 +152,26 @@ const MCPToolsViewer = ({
 
   // Query to fetch MCP tools
   const { data: mcpToolsResponse, isLoading: isLoadingTools, error: mcpToolsError } = useQuery({
-    queryKey: ["mcpTools"],
+    queryKey: ["mcpTools", serverId, mcpAuthValue, serverAlias],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
-      return listMCPTools(accessToken, serverId);
+      return listMCPTools(accessToken, serverId, mcpAuthValue, serverAlias || undefined);
     },
     enabled: !!accessToken,
+    staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
   // Mutation for calling a tool
   const { mutate: executeTool, isPending: isCallingTool } = useMutation({
-    mutationFn: (args: { tool: MCPTool; arguments: Record<string, any>, authValue: string }) => {
+    mutationFn: async (args: { tool: MCPTool; arguments: Record<string, any>, authValue: string }) => {
       if (!accessToken) throw new Error("Access Token required");
-      return callMCPTool(accessToken, args.tool.name, args.arguments, args.authValue);
+      
+      try {
+        const result = await callMCPTool(accessToken, args.tool.name, args.arguments, args.authValue, serverAlias || undefined);
+        return result;
+      } catch (error) {
+        throw error;
+      }
     },
     onSuccess: (data) => {
       setToolResult(data);
@@ -210,7 +218,7 @@ const MCPToolsViewer = ({
                 )}
 
                 {/* Error State */}
-                {mcpToolsResponse?.error && (
+                {mcpToolsResponse?.error && !isLoadingTools && !toolsData.length && (
                   <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
                     <p className="font-medium">Error: {mcpToolsResponse.message}</p>
                   </div>
