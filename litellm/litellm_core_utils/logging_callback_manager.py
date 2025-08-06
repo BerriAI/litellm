@@ -1,11 +1,15 @@
-from typing import Callable, List, Optional, Set, Type, Union
+from typing import TYPE_CHECKING, Callable, List, Optional, Set, Type, Union
 
 import litellm
-from litellm import _custom_logger_compatible_callbacks_literal
 from litellm._logging import verbose_logger
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import CallbacksByType
+
+if TYPE_CHECKING:
+    from litellm import _custom_logger_compatible_callbacks_literal
+else:
+    _custom_logger_compatible_callbacks_literal = str
 
 
 class LoggingCallbackManager:

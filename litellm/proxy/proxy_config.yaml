@@ -1,6 +1,12 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: bedrock/*
     litellm_params:
-      model: anthropic/*
+      model: bedrock/*
 
 
+litellm_settings:
+  callbacks: ["s3_v2"]
+
+general_settings:
+  cold_storage_custom_logger: s3_v2
+  store_prompts_in_cold_storage: true
