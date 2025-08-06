@@ -8,7 +8,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 
 import asyncio
 from datetime import datetime
-from typing import List, Optional, cast
+from typing import List, Optional, Union, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -455,3 +455,166 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+
+
+    def _convert_start_time_to_datetime(self, start_time: Union[datetime, str]) -> datetime:
+        """
+        Convert start_time to datetime object if it's a string.
+        
+        Args:
+            start_time: Either a datetime object or ISO format string
+            
+        Returns:
+            datetime: The datetime object
+        """
+        if isinstance(start_time, str):
+            from datetime import datetime
+            return datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        return start_time
+
+    def _generate_s3_object_key_for_request(
+        self, 
+        request_id: str, 
+        start_time: datetime
+    ) -> str:
+        """
+        Generate the S3 object key for a request using the same pattern as logging.
+        
+        Args:
+            request_id: The request ID to search for
+            start_time: The start time of the request
+            
+        Returns:
+            str: The S3 object key
+        """
+        # Generate the file name using the same pattern as create_s3_batch_logging_element
+        s3_file_name = f"time-{start_time.strftime('%H-%M-%S-%f')}_{request_id}"
+        
+        # Use empty team alias prefix for now - this could be enhanced to support team prefixes
+        team_alias_prefix = ""
+        if (
+            litellm.enable_preview_features
+            and self.s3_use_team_prefix
+        ):
+            # For retrieval, we might need to iterate through possible team prefixes
+            # For now, assume no team prefix
+            team_alias_prefix = ""
+
+        s3_object_key = get_s3_object_key(
+            s3_path=cast(Optional[str], self.s3_path) or "",
+            team_alias_prefix=team_alias_prefix,
+            start_time=start_time,
+            s3_file_name=s3_file_name,
+        )
+        
+        return s3_object_key
+
+    async def _download_object_from_s3(self, s3_object_key: str) -> Optional[dict]:
+        """
+        Download and parse JSON object from S3.
+        
+        Args:
+            s3_object_key: The S3 object key to download
+            
+        Returns:
+            Optional[dict]: The parsed JSON object or None if not found/error
+        """
+        try:
+            import json
+
+            import requests
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+        except ImportError:
+            raise ImportError("Missing boto3 to call S3. Run 'pip install boto3'.")
+            
+        try:
+            from litellm.litellm_core_utils.asyncify import asyncify
+
+            # Get AWS credentials
+            asyncified_get_credentials = asyncify(self.get_credentials)
+            credentials = await asyncified_get_credentials(
+                aws_access_key_id=self.s3_aws_access_key_id,
+                aws_secret_access_key=self.s3_aws_secret_access_key,
+                aws_session_token=self.s3_aws_session_token,
+                aws_region_name=self.s3_region_name,
+                aws_session_name=self.s3_aws_session_name,
+                aws_profile_name=self.s3_aws_profile_name,
+                aws_role_name=self.s3_aws_role_name,
+                aws_web_identity_token=self.s3_aws_web_identity_token,
+                aws_sts_endpoint=self.s3_aws_sts_endpoint,
+            )
+
+            verbose_logger.debug(
+                f"s3_v2 logger - downloading data from s3 - {s3_object_key}"
+            )
+
+            # Prepare the URL
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{s3_object_key}"
+
+            if self.s3_endpoint_url:
+                url = self.s3_endpoint_url + "/" + s3_object_key
+
+            # Prepare the request for GET operation
+            headers = {
+                "Content-Type": "application/json",
+            }
+            req = requests.Request("GET", url, headers=headers)
+            prepped = req.prepare()
+
+            # Sign the request
+            aws_request = AWSRequest(
+                method=prepped.method,
+                url=prepped.url,
+                headers=prepped.headers,
+            )
+            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+
+            # Prepare the signed headers
+            signed_headers = dict(aws_request.headers.items())
+
+            # Make the request
+            response = await self.async_httpx_client.get(url, headers=signed_headers)
+            
+            if response.status_code == 404:
+                verbose_logger.debug(f"S3 object not found: {s3_object_key}")
+                return None
+                
+            response.raise_for_status()
+            
+            # Parse JSON response
+            return response.json()
+            
+        except Exception as e:
+            verbose_logger.exception(f"Error downloading from S3: {str(e)}")
+            return None
+
+    async def get_proxy_server_request_from_cold_storage(
+        self,
+        request_id: str,
+        start_time: Union[datetime, str],
+    ) -> Optional[dict]:
+        """
+        Get the proxy server request from cold storage
+
+        Allows fetching a dict of the proxy server request from s3 or GCS bucket.
+        
+        Args:
+            request_id: The unique request ID to search for
+            start_time: The start time of the request (datetime or ISO string)
+            
+        Returns:
+            Optional[dict]: The request data dictionary or None if not found
+        """
+        try:
+            # Convert start_time to datetime if it's a string
+            start_time_dt = self._convert_start_time_to_datetime(start_time)
+            
+            # Generate the S3 object key using the same pattern as logging
+            s3_object_key = self._generate_s3_object_key_for_request(request_id, start_time_dt)
+            
+            # Download and return the object from S3
+            return await self._download_object_from_s3(s3_object_key)
+        except Exception as e:
+            verbose_logger.exception(f"Error retrieving request {request_id} from cold storage: {str(e)}")
+            return None
