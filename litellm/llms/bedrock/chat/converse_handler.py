@@ -276,8 +276,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             modelId = self.encode_model_id(model_id=model)
 
-        if stream is True and "ai21" in modelId:
-            fake_stream = True
+
+        fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
+            model=model,
+            stream=stream,
+            custom_llm_provider="bedrock",
+        )
+
 
         ### SET REGION NAME ###
         aws_region_name = self._get_aws_region_name(
