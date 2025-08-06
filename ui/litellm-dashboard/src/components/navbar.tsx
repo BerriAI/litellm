@@ -1,9 +1,9 @@
-import Link from "next/link";
-import React, { useState, useEffect } from "react";
-import type { MenuProps } from "antd";
-import { Dropdown, Tooltip } from "antd";
-import { getProxyBaseUrl, Organization } from "@/components/networking";
-import { defaultOrg } from "@/components/common_components/default_org";
+import Link from "next/link"
+import React, { useState, useEffect } from "react"
+import type { MenuProps } from "antd"
+import { Dropdown, Tooltip } from "antd"
+import { getProxyBaseUrl, Organization } from "@/components/networking"
+import { defaultOrg } from "@/components/common_components/default_org"
 import { 
   UserOutlined,
   LogoutOutlined,
@@ -12,9 +12,10 @@ import {
   CrownOutlined,
   MailOutlined,
   SafetyOutlined
-} from '@ant-design/icons';
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
+} from '@ant-design/icons'
+import { clearTokenCookies } from "@/utils/cookieUtils"
+import { fetchProxySettings } from "@/utils/proxyUtils"
+import { useTheme } from "@/contexts/ThemeContext"
 
 interface NavbarProps {
   userID: string | null;
@@ -38,8 +39,11 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const imageUrl = baseUrl + "/get_image";
   const [logoutUrl, setLogoutUrl] = useState("");
+  const { logoUrl } = useTheme();
+  
+  // Simple logo URL: use custom logo if available, otherwise default
+  const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
   useEffect(() => {
     const initializeProxySettings = async () => {

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, Select, Button as AntdButton } from "antd";
+import { Form, Input, Select, Button as AntdButton, Tooltip } from "antd";
 import { Button as TremorButton, TextInput } from "@tremor/react";
 import { KeyResponse } from "./key_team_helpers/key_list";
 import { fetchTeamModels } from "../components/create_key_button";
-import { modelAvailableCall } from "./networking";
+import { modelAvailableCall, getPromptsList } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
@@ -54,6 +54,7 @@ export function KeyEditView({
 }: KeyEditViewProps) {
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [promptsList, setPromptsList] = useState<string[]>([]);
   const team = teams?.find(team => team.team_id === keyData.team_id);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
@@ -102,6 +103,17 @@ export function KeyEditView({
       }
     };
 
+    const fetchPrompts = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await getPromptsList(accessToken);
+        setPromptsList(response.prompts.map(prompt => prompt.prompt_id));
+      } catch (error) {
+        console.error("Failed to fetch prompts:", error);
+      }
+    };
+
+    fetchPrompts();
     fetchModels();
   }, [userID, userRole, accessToken, team, keyData.team_id]);
 
@@ -127,6 +139,7 @@ export function KeyEditView({
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: formatMetadataForDisplay(keyData.metadata),
     guardrails: keyData.metadata?.guardrails || [],
+    prompts: keyData.metadata?.prompts || [],
     vector_stores: keyData.object_permission?.vector_stores || [],
     mcp_servers_and_groups: {
       servers: keyData.object_permission?.mcp_servers || [],
@@ -137,6 +150,8 @@ export function KeyEditView({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : []
   };
+
+  console.log("premiumUser:", premiumUser);
 
   return (
     <Form
@@ -200,12 +215,46 @@ export function KeyEditView({
         <Input.TextArea rows={4}  placeholder='{"gpt-4": 100, "claude-v1": 200}'/>
       </Form.Item>
 
+      
       <Form.Item label="Guardrails" name="guardrails">
-        <Select
-          mode="tags"
-          style={{ width: "100%" }}
-          placeholder="Select or enter guardrails"
-        />
+        <Tooltip 
+          title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
+          placement="top"
+        >
+          <Select
+            mode="tags"
+            style={{ width: "100%" }}
+            disabled={!premiumUser}
+            placeholder={
+              !premiumUser
+                ? "Premium feature - Upgrade to set guardrails by key"
+                : Array.isArray(keyData.metadata?.guardrails) && keyData.metadata.guardrails.length > 0
+                  ? `Current: ${keyData.metadata.guardrails.join(', ')}`
+                  : "Select or enter guardrails"
+            }
+          />
+        </Tooltip>
+      </Form.Item>
+
+      <Form.Item label="Prompts" name="prompts">
+        <Tooltip 
+          title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
+          placement="top"
+        >
+          <Select
+            mode="tags"
+            style={{ width: "100%" }}
+            disabled={!premiumUser}
+            placeholder={
+              !premiumUser
+                ? "Premium feature - Upgrade to set prompts by key"
+                : Array.isArray(keyData.metadata?.prompts) && keyData.metadata.prompts.length > 0
+                  ? `Current: ${keyData.metadata.prompts.join(', ')}`
+                  : "Select or enter prompts"
+            }
+            options={promptsList.map(name => ({ value: name, label: name }))}
+          />
+        </Tooltip>
       </Form.Item>
 
       <Form.Item label="Vector Stores" name="vector_stores">

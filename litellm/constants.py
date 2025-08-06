@@ -280,6 +280,7 @@ LITELLM_CHAT_PROVIDERS = [
     "moonshot",
     "v0",
     "heroku",
+    "oci",
     "morph",
     "lambda_ai",
 ]
