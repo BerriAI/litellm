@@ -279,6 +279,7 @@ def validate_redacted_message_span_attributes(span):
         "metadata.mcp_tool_call_metadata",
         "metadata.vector_store_request_metadata",
         "metadata.requester_custom_headers",
+        "metadata.cold_storage_object_key",
     ]
 
     _all_attributes = set(
