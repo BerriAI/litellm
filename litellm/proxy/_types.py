@@ -2210,7 +2210,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     braintrust: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="braintrust",
-        litellm_callback_params=["BRAINTRUST_API_KEY"],
+        litellm_callback_params=["BRAINTRUST_API_KEY","BRAINTRUST_API_BASE"],
         ui_callback_name="Braintrust",
     )
 
