@@ -459,6 +459,15 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     finish_reason="stop",
                     usage=None,
                 )
+            elif "thinking" in chunk and not chunk["response"]:
+                # Handle GPT-OSS models that include 'thinking' field with empty response
+                # These are intermediate chunks that don't contain user-facing content
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=is_finished,
+                    finish_reason=None,
+                    usage=None,
+                )
             else:
                 raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:
