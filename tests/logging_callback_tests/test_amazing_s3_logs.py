@@ -476,3 +476,60 @@ def test_s3_logging_r2():
         # post, close log file and verify
         # Reset stdout to the original value
         print("Passed! Testing async s3 logging")
+
+from litellm.integrations.s3_v2 import S3Logger
+
+class TestS3Logger(S3Logger):
+    def __init__(self, *args, **kwargs):
+        self.recorded_requests = {}
+        self.logged_standard_logging_payload: Optional[StandardLoggingPayload] = None
+        super().__init__(*args, **kwargs)
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.recorded_requests[response_obj["id"]] = start_time
+        print("recorded request", self.recorded_requests)
+        self.logged_standard_logging_payload = kwargs["standard_logging_object"]
+        return await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+
+
+@pytest.mark.asyncio
+async def test_s3_v2_with_cold_storage():
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.secret_managers.main import get_secret_bool
+    litellm._turn_on_debug()
+
+    s3_v2_logger = TestS3Logger(
+        s3_flush_interval=1,
+        s3_bucket_name="load-testing-oct",
+        s3_aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+        s3_aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+        s3_region_name="us-west-2",
+    )
+    litellm.callbacks = [s3_v2_logger]
+
+
+
+    # make llm call
+    response = await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "This is a test"}],
+        mock_response="It's simple to use and easy to get started",
+    )
+    
+    # wait 5 seconds
+    await asyncio.sleep(11)
+
+
+    # download the s3 object
+
+    downloaded_object = await s3_v2_logger.get_proxy_server_request_from_cold_storage(
+        request_id=response.id,
+        start_time=s3_v2_logger.recorded_requests[response.id],
+    )
+
+    print("downloaded object", downloaded_object)
+
+    # assert that the downloaded object is the same as the response
+    assert downloaded_object["id"] == s3_v2_logger.logged_standard_logging_payload["id"]
