@@ -91,7 +91,7 @@ async def serve_login_page(
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting PROXY_BASE_URL in .env
     Supports OAuth2 token flow when response_type=oauth_token for external applications.
-    
+
     OAuth2 URL format: https://your-proxy-url.com/sso/key/generate?response_type=oauth_token
     """
     from litellm.proxy.proxy_server import premium_user
@@ -104,37 +104,39 @@ async def serve_login_page(
     if response_type is not None and response_type != "oauth_token":
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported response_type: {response_type}. Only 'oauth_token' is supported."
+            detail=f"Unsupported response_type: {response_type}. Only 'oauth_token' is supported.",
         )
-    
+
     if response_type == "oauth_token":
         # For OAuth token flow, check if user is already authenticated first
         verbose_proxy_logger.info("OAuth token flow detected")
-        
+
         # Validate redirect_uri if provided
         if redirect_uri:
             if not OAuth2URLManager.validate_redirect_uri(redirect_uri):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid redirect_uri: {redirect_uri}. Must be a valid URI with allowed scheme."
+                    detail=f"Invalid redirect_uri: {redirect_uri}. Must be a valid URI with allowed scheme.",
                 )
-        
+
         # Check if user is already authenticated via Authorization header
         existing_token = await _check_existing_authentication(request)
         if existing_token:
-            verbose_proxy_logger.info("User already authenticated, generating new OAuth session key")
+            verbose_proxy_logger.info(
+                "User already authenticated, generating new OAuth session key"
+            )
             return await _handle_authenticated_oauth_flow(
                 request=request,
                 existing_token=existing_token,
-                redirect_uri=redirect_uri
+                redirect_uri=redirect_uri,
             )
-        
+
         # User not authenticated, redirect to SSO login
         verbose_proxy_logger.info("User not authenticated, redirecting to SSO login")
         redirect_url = OAuth2URLManager.modify_url_for_oauth_flow(str(request.url))
-        
+
         return RedirectResponse(url=redirect_url, status_code=303)
-    
+
     ####### Check if UI is disabled #######
     _disable_ui_flag = os.getenv("DISABLE_ADMIN_UI")
     if _disable_ui_flag is not None:
@@ -456,11 +458,11 @@ async def serve_login_page(
 
 @router.get("/sso/login", tags=["experimental"], include_in_schema=False)
 async def sso_login_redirect(
-    request: Request, 
-    source: Optional[str] = None, 
+    request: Request,
+    source: Optional[str] = None,
     key: Optional[str] = None,
     oauth_flow: Optional[str] = None,
-    redirect_uri: Optional[str] = None
+    redirect_uri: Optional[str] = None,
 ):
     """
     Handles SSO login redirect - this is what the "Login with SSO" button points to
@@ -500,10 +502,12 @@ async def sso_login_redirect(
         source=source,
         key=key,
     )
-    
+
     # If OAuth flow, create secure state parameter
     if oauth_flow == "true" and not cli_state:
-        cli_state = OAuth2StateManager.generate_secure_state("oauth_token", redirect_uri)
+        cli_state = OAuth2StateManager.generate_secure_state(
+            "oauth_token", redirect_uri
+        )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
     if user_custom_ui_sso_sign_in_handler is not None:
@@ -910,7 +914,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         else:
             # Fallback for backward compatibility
             is_oauth_flow = state.startswith("oauth:")
-    
+
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
 
@@ -1126,9 +1130,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values["budget_duration"] = (
-                litellm.internal_user_budget_duration
-            )
+            user_defined_values[
+                "budget_duration"
+            ] = litellm.internal_user_budget_duration
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1327,9 +1331,9 @@ class SSOAuthenticationHandler:
                 if state:
                     redirect_params["state"] = state
                 elif "okta" in generic_authorization_endpoint:
-                    redirect_params["state"] = (
-                        uuid.uuid4().hex
-                    )  # set state param for okta - required
+                    redirect_params[
+                        "state"
+                    ] = uuid.uuid4().hex  # set state param for okta - required
                 return await generic_sso.get_login_redirect(**redirect_params)  # type: ignore
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -1736,33 +1740,39 @@ class SSOAuthenticationHandler:
         if is_oauth_flow:
             if oauth_redirect_uri:
                 # VSCode extension style - redirect with access_token query param
-                verbose_proxy_logger.info(f"OAuth flow with redirect_uri detected, redirecting to: {oauth_redirect_uri}")
-                
+                verbose_proxy_logger.info(
+                    f"OAuth flow with redirect_uri detected, redirecting to: {oauth_redirect_uri}"
+                )
+
                 # Validate redirect_uri again for security
                 if not OAuth2URLManager.validate_redirect_uri(oauth_redirect_uri):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Invalid redirect_uri: {oauth_redirect_uri}"
+                        detail=f"Invalid redirect_uri: {oauth_redirect_uri}",
                     )
-                
+
                 # Build redirect URL with access_token
                 callback_url = OAuth2URLManager.build_callback_redirect_url(
                     redirect_uri=oauth_redirect_uri,
                     access_token=key,
                     token_type="Bearer",
-                    expires_in=86400
+                    expires_in=86400,
                 )
-                
+
                 return RedirectResponse(url=callback_url, status_code=303)
             else:
                 # Direct JSON response (original behavior)
-                verbose_proxy_logger.info("OAuth flow detected, returning JSON token response")
-                
-                oauth_response = OAuth2TokenManager.create_token_response(key, scope="litellm:api")
+                verbose_proxy_logger.info(
+                    "OAuth flow detected, returning JSON token response"
+                )
+
+                oauth_response = OAuth2TokenManager.create_token_response(
+                    key, scope="litellm:api"
+                )
                 cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
-                
+
                 return JSONResponse(content=oauth_response, headers=cors_headers)
-        
+
         if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
             _user_info: Optional[LiteLLM_UserTable] = None
             if (
@@ -1883,9 +1893,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
-                user_team_ids
-            )
+            original_msft_result[
+                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
+            ] = user_team_ids
             return original_msft_result or {}
 
         result = MicrosoftSSOHandler.openid_from_response(
@@ -1953,9 +1963,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[str] = (
-                MicrosoftSSOHandler.graph_api_user_groups_endpoint
-            )
+            next_link: Optional[
+                str
+            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -2351,48 +2361,50 @@ async def _check_existing_authentication(request: Request) -> Optional[str]:
         authorization = request.headers.get("Authorization")
         if not authorization:
             return None
-        
+
         # Extract the token from "Bearer <token>"
         if not authorization.startswith("Bearer "):
             return None
-        
+
         api_key = authorization[7:]  # Remove "Bearer " prefix
-        
+
         # Validate the token by attempting to authenticate it
         from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
-        
+
         try:
             user_auth_obj = await _user_api_key_auth_builder(
                 request=request,
                 api_key=api_key,
-                azure_api_key_header=None,
+                azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
                 azure_apim_header=None,
-                request_data=None,
+                request_data={},
                 custom_litellm_key_header=None,
             )
-            
+
             # If authentication succeeds, return the token
             if user_auth_obj and user_auth_obj.api_key:
-                verbose_proxy_logger.info(f"Found existing valid authentication for user: {user_auth_obj.user_id}")
+                verbose_proxy_logger.info(
+                    f"Found existing valid authentication for user: {user_auth_obj.user_id}"
+                )
                 return api_key
-                
+
         except Exception as auth_error:
-            verbose_proxy_logger.debug(f"Existing token validation failed: {auth_error}")
+            verbose_proxy_logger.debug(
+                f"Existing token validation failed: {auth_error}"
+            )
             return None
-            
+
     except Exception as e:
         verbose_proxy_logger.debug(f"Error checking existing authentication: {e}")
         return None
-    
+
     return None
 
 
 async def _handle_authenticated_oauth_flow(
-    request: Request,
-    existing_token: str,
-    redirect_uri: Optional[str] = None
+    request: Request, existing_token: str, redirect_uri: Optional[str] = None
 ) -> Union[RedirectResponse, JSONResponse]:
     """
     Handle OAuth flow for already authenticated users by generating a new session key.
@@ -2400,38 +2412,38 @@ async def _handle_authenticated_oauth_flow(
     try:
         # Get user information from the existing token
         from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
-        
+
         user_auth_obj = await _user_api_key_auth_builder(
             request=request,
             api_key=existing_token,
-            azure_api_key_header=None,
+            azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
             azure_apim_header=None,
-            request_data=None,
+            request_data={},
             custom_litellm_key_header=None,
         )
-        
+
         if not user_auth_obj:
             raise HTTPException(
-                status_code=401,
-                detail="Unable to validate existing authentication"
+                status_code=401, detail="Unable to validate existing authentication"
             )
-        
+
         # Determine client type from redirect_uri
         client_type = "oauth_external_app"
         if redirect_uri:
             from urllib.parse import urlparse
+
             parsed_uri = urlparse(redirect_uri)
-            if parsed_uri.scheme.startswith('vscode'):
+            if parsed_uri.scheme.startswith("vscode"):
                 client_type = "vscode_extension"
-            elif parsed_uri.scheme == 'cursor':
+            elif parsed_uri.scheme == "cursor":
                 client_type = "cursor_extension"
-            elif parsed_uri.scheme in ['fleet', 'zed', 'sublime', 'atom']:
+            elif parsed_uri.scheme in ["fleet", "zed", "sublime", "atom"]:
                 client_type = f"{parsed_uri.scheme}_extension"
             else:
                 client_type = f"{parsed_uri.scheme}_app"
-        
+
         # Generate a new OAuth session key
         session_key = await OAuth2TokenManager.generate_oauth_session_key(
             user_id=user_auth_obj.user_id or "oauth_user",
@@ -2441,32 +2453,38 @@ async def _handle_authenticated_oauth_flow(
             client_type=client_type,
             expires_in=86400,  # 24 hours
             scopes=["api_access"],
-            redirect_uri=redirect_uri
+            redirect_uri=redirect_uri,
         )
-        
-        verbose_proxy_logger.info(f"Generated new OAuth session key for authenticated user {user_auth_obj.user_id}: {session_key[:20]}...")
-        
+
+        verbose_proxy_logger.info(
+            f"Generated new OAuth session key for authenticated user {user_auth_obj.user_id}: {session_key[:20]}..."
+        )
+
         if redirect_uri:
             # Redirect to IDE with access_token
             callback_url = OAuth2URLManager.build_callback_redirect_url(
                 redirect_uri=redirect_uri,
                 access_token=session_key,
                 token_type="Bearer",
-                expires_in=86400
+                expires_in=86400,
             )
-            
-            verbose_proxy_logger.info(f"Redirecting authenticated user to: {redirect_uri}")
+
+            verbose_proxy_logger.info(
+                f"Redirecting authenticated user to: {redirect_uri}"
+            )
             return RedirectResponse(url=callback_url, status_code=303)
         else:
             # Return JSON response
-            oauth_response = OAuth2TokenManager.create_token_response(session_key, scope="litellm:api")
+            oauth_response = OAuth2TokenManager.create_token_response(
+                session_key, scope="litellm:api"
+            )
             cors_headers = OAuth2CORSHandler.get_oauth_cors_headers()
-            
+
             return JSONResponse(content=oauth_response, headers=cors_headers)
-            
+
     except Exception as e:
         verbose_proxy_logger.error(f"Error handling authenticated OAuth flow: {e}")
         raise HTTPException(
             status_code=500,
-            detail="Failed to generate OAuth session key for authenticated user"
+            detail="Failed to generate OAuth session key for authenticated user",
         )
