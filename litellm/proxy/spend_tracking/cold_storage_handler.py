@@ -55,14 +55,17 @@ class ColdStorageHandler:
         self,
     ) -> Optional[_custom_logger_compatible_callbacks_literal]:
         from litellm.proxy.proxy_server import general_settings
+        cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = ColdStorageHandler._get_configured_cold_storage_custom_logger()
+
+        return cold_storage_custom_logger
+    
+
+    @staticmethod
+    def _get_configured_cold_storage_custom_logger() -> Optional[_custom_logger_compatible_callbacks_literal]:
+        from litellm.proxy.proxy_server import general_settings
         cold_storage_custom_logger: Optional[str] = general_settings.get("cold_storage_custom_logger")
         if not cold_storage_custom_logger:
             verbose_proxy_logger.debug("No cold storage custom logger found in general settings")
             return None
-
-        # validate if it's a valid custom logger
-        if cold_storage_custom_logger not in _custom_logger_compatible_callbacks_literal:
-            raise ValueError(f"Invalid custom logger: {cold_storage_custom_logger}")
         
         return cast(_custom_logger_compatible_callbacks_literal, cold_storage_custom_logger)
-    
