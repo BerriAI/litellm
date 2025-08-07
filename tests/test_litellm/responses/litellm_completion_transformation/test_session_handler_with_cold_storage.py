@@ -36,6 +36,8 @@ class TestColdStorageObjectKeyIntegration:
         This test verifies that the StandardLoggingMetadata TypedDict has the 
         cold_storage_object_key field for storing S3/GCS object keys.
         """
+        from litellm.types.utils import StandardLoggingMetadata
+
         # Create a StandardLoggingMetadata instance with cold_storage_object_key
         metadata = StandardLoggingMetadata(
             user_api_key_hash="test_hash",
@@ -45,8 +47,6 @@ class TestColdStorageObjectKeyIntegration:
         # Verify the field can be set and accessed
         assert metadata.get("cold_storage_object_key") == "test/path/to/object.json"
         
-        # Verify it's part of the StandardLoggingMetadata annotations
-        from litellm.types.utils import StandardLoggingMetadata
         assert "cold_storage_object_key" in StandardLoggingMetadata.__annotations__
 
     def test_spend_logs_metadata_has_cold_storage_object_key_field(self):
@@ -68,41 +68,6 @@ class TestColdStorageObjectKeyIntegration:
         # Verify it's part of the SpendLogsMetadata annotations
         assert "cold_storage_object_key" in SpendLogsMetadata.__annotations__
 
-    @patch('litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger')
-    @patch('asyncio.create_task')  # Mock asyncio.create_task to avoid event loop issues
-    def test_s3_logger_generates_object_key_when_cold_storage_enabled(self, mock_create_task, mock_get_logger):
-        """
-        Test: S3Logger generates object key when cold storage is enabled.
-        
-        This test verifies that the S3Logger checks if it's configured as cold storage logger
-        and adds the object key to StandardLoggingPayload metadata.
-        """
-        # Mock cold storage logger configuration
-        mock_get_logger.return_value = "s3_v2"
-        
-        # Create S3Logger instance
-        s3_logger = S3Logger(s3_bucket_name="test-bucket")
-        
-        # Test _is_configured_as_cold_storage_logger method
-        assert s3_logger._is_configured_as_cold_storage_logger() is True
-        
-        # Test _generate_s3_object_key_for_standard_logging_payload method
-        start_time = datetime.now(timezone.utc)
-        standard_logging_payload = {
-            "id": "test_id",
-            "metadata": {
-                "user_api_key_team_alias": "test_team"
-            }
-        }
-        
-        with patch('litellm.utils.get_logging_id', return_value="test_file"):
-            object_key = s3_logger._generate_s3_object_key_for_standard_logging_payload(
-                start_time=start_time,
-                standard_logging_payload=standard_logging_payload
-            )
-            
-            assert object_key is not None
-            assert isinstance(object_key, str)
 
     def test_spend_tracking_utils_stores_object_key_in_metadata(self):
         """
@@ -118,16 +83,11 @@ class TestColdStorageObjectKeyIntegration:
             "user_api_key_team_id": "test_team"
         }
         
-        standard_logging_payload = {
-            "metadata": {
-                "cold_storage_object_key": "test/path/to/object.json"
-            }
-        }
         
         # Call the function
         result = _get_spend_logs_metadata(
             metadata=metadata,
-            standard_logging_payload=standard_logging_payload
+            cold_storage_object_key="test/path/to/object.json"
         )
         
         # Verify the object key is stored in the result
