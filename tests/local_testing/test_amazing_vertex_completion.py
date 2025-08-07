@@ -518,7 +518,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
         litellm.num_retries = 3
         if sync_mode:
             resp = litellm.completion(
-                model="{}/gemini-2.5-flash-lite-preview-0514".format(provider),
+                model="{}/gemini-2.5-flash-lite".format(provider),
                 messages=[
                     {"role": "system", "content": "Be a good bot"},
                     {
@@ -537,7 +537,7 @@ async def test_gemini_pro_vision(provider, sync_mode):
             )
         else:
             resp = await litellm.acompletion(
-                model="{}/gemini-2.5-flash-lite-preview-0514".format(provider),
+                model="{}/gemini-2.5-flash-lite".format(provider),
                 messages=[
                     {"role": "system", "content": "Be a good bot"},
                     {
@@ -605,7 +605,7 @@ def test_completion_function_plus_pdf(load_pdf):
         image_message = {"role": "user", "content": image_content}
 
         response = completion(
-            model="vertex_ai_beta/gemini-2.5-flash-lite-preview-0514",
+            model="vertex_ai_beta/gemini-2.5-flash-lite",
             messages=[image_message],
             stream=False,
         )
