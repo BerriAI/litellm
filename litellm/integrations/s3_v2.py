@@ -586,7 +586,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response = await self.async_httpx_client.get(url, headers=signed_headers)
 
             if response.status_code != 200:
-                verbose_logger.exception(f"S3 object not found, saw response=", response.text)
+                verbose_logger.exception("S3 object not found, saw response=", response.text)
                 return None
             
             # Parse JSON response

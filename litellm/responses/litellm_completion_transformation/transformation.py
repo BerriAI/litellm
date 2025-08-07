@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
-from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (

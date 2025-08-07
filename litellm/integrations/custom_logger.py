@@ -1,7 +1,6 @@
 #### What this does ####
 #    On success, logs events to Promptlayer
 import traceback
-from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,

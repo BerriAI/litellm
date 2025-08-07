@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 
 from litellm._logging import verbose_proxy_logger
@@ -37,7 +36,6 @@ class ResponsesSessionHandler:
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             ChatCompletionSession,
-            LiteLLMCompletionResponsesConfig,
         )
 
         verbose_proxy_logger.debug(
@@ -97,7 +95,6 @@ class ResponsesSessionHandler:
         Extend the chat completion message history with the spend log payload
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
-            ChatCompletionSession,
             LiteLLMCompletionResponsesConfig,
         )
 
@@ -241,8 +238,6 @@ class ResponsesSessionHandler:
         2. `ColdStorageHandler._get_configured_cold_storage_custom_logger()` is not None
         """
         from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
-        from litellm.proxy.proxy_server import general_settings
-        from litellm.secret_managers.main import get_secret_bool
         configured_cold_storage_custom_logger = ColdStorageHandler._get_configured_cold_storage_custom_logger()
         if configured_cold_storage_custom_logger is None:
             return False
