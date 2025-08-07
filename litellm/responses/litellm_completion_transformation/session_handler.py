@@ -105,12 +105,14 @@ class ResponsesSessionHandler:
             spend_log=spend_log,
         )
         response_input_param: Optional[Union[str, ResponseInputParam]] = None
+        _messages: Optional[Union[str, ResponseInputParam]] = None
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
             _response_input_param = proxy_server_request_dict.get("input", None)
+            _messages = proxy_server_request_dict.get("messages", None)
             if isinstance(_response_input_param, str):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
@@ -121,6 +123,18 @@ class ResponsesSessionHandler:
         if response_input_param:
             chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=response_input_param,
+                responses_api_request=proxy_server_request_dict or {},
+            )
+            chat_completion_message_history.extend(chat_completion_messages)
+
+        ############################################################
+        # Check if `messages` field is present in the proxy server request dict
+        ############################################################
+        elif _messages:
+            # ensure all messages are /chat/completions/messages
+            # certain requests can be stored as Responses API format - this ensures they are transformed to /chat/completions/messages
+            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=_messages,
                 responses_api_request=proxy_server_request_dict or {},
             )
             chat_completion_message_history.extend(chat_completion_messages)
@@ -160,32 +174,62 @@ class ResponsesSessionHandler:
         # Check if user has setup cold storage for session handling
         ############################################################
         if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
-            _proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage(
-                request_id=spend_log["request_id"],
-                start_time=spend_log["startTime"],
-            )
+            # Try to get cold storage object key from spend log metadata
+            _proxy_server_request_dict: Optional[dict] = None
+            cold_storage_object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
+            if cold_storage_object_key:
+                # Use the object key directly from metadata
+                _proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage_with_object_key(
+                    object_key=cold_storage_object_key,
+                )
             if _proxy_server_request_dict:
                 proxy_server_request_dict = _proxy_server_request_dict
         
         return proxy_server_request_dict
-    
+        
     @staticmethod
-    async def get_proxy_server_request_from_cold_storage(
-        request_id: str,
-        start_time: Union[datetime, str],
+    def _get_cold_storage_object_key_from_spend_log(spend_log: SpendLogsPayload) -> Optional[str]:
+        """
+        Extract the cold storage object key from spend log metadata.
+        
+        Args:
+            spend_log: The spend log payload containing metadata
+            
+        Returns:
+            Optional[str]: The cold storage object key if found, None otherwise
+        """
+        try:
+            metadata_str = spend_log.get("metadata", "{}")
+            if isinstance(metadata_str, str):
+                metadata_dict = json.loads(metadata_str)
+                return metadata_dict.get("cold_storage_object_key")
+            elif isinstance(metadata_str, dict):
+                return metadata_str.get("cold_storage_object_key")
+            return None
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            verbose_proxy_logger.debug("Failed to parse metadata from spend log to extract cold storage object key")
+            return None
+
+    @staticmethod
+    async def get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key: str,
     ) -> Optional[dict]:
         """
-        Get the proxy server request from cold storage
+        Get the proxy server request from cold storage using the object key directly.
+        
+        Args:
+            object_key: The S3/GCS object key to retrieve
+            
+        Returns:
+            Optional[dict]: The proxy server request dict or None if not found
         """
-        verbose_proxy_logger.debug("inside get_proxy_server_request_from_cold_storage...")
+        verbose_proxy_logger.debug("inside get_proxy_server_request_from_cold_storage_with_object_key...")
 
-        proxy_server_request_dict = await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage(
-            request_id=request_id,
-            start_time=start_time,
+        proxy_server_request_dict = await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage_with_object_key(
+            object_key=object_key,
         )
 
         return proxy_server_request_dict
-    
 
     @staticmethod
     def _should_check_cold_storage_for_full_payload(
@@ -199,7 +243,6 @@ class ResponsesSessionHandler:
         from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
         from litellm.proxy.proxy_server import general_settings
         from litellm.secret_managers.main import get_secret_bool
-        verbose_proxy_logger.debug("inside _should_check_cold_storage_for_full_payload.... for proxy_server_request_dict===", proxy_server_request_dict)
         configured_cold_storage_custom_logger = ColdStorageHandler._get_configured_cold_storage_custom_logger()
         if configured_cold_storage_custom_logger is None:
             return False
