@@ -465,7 +465,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 return GenericStreamingChunk(
                     text="",
                     is_finished=is_finished,
-                    finish_reason=None,
+                    finish_reason="",
                     usage=None,
                 )
             else:
