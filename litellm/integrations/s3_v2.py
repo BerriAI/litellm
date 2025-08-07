@@ -527,7 +527,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         """
         try:
             import hashlib
-            import json
 
             import requests
             from botocore.auth import SigV4Auth
