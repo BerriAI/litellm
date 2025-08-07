@@ -3,7 +3,8 @@ import os
 import pathlib
 import ssl
 import sys
-from unittest.mock import MagicMock, patch
+import warnings
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import certifi
 import httpx
@@ -183,3 +184,89 @@ def test_get_ssl_configuration_integration():
     # Verify it has basic SSL context properties
     assert ssl_context.protocol is not None
     assert ssl_context.verify_mode is not None
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_context_manager_proper_cleanup():
+    """Test that AsyncHTTPHandler properly closes client when used as async context manager"""
+    handler = AsyncHTTPHandler()
+    
+    # Mock the client to track close calls
+    handler.client.aclose = AsyncMock()
+    
+    # Use as async context manager
+    async with handler as client:
+        assert client is handler.client
+        assert not handler.client.aclose.called
+    
+    # Verify client was closed when exiting context
+    handler.client.aclose.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_context_manager_with_exception():
+    """Test that AsyncHTTPHandler properly closes client even when exception occurs"""
+    handler = AsyncHTTPHandler()
+    
+    # Mock the client to track close calls
+    handler.client.aclose = AsyncMock()
+    
+    # Use as async context manager with exception
+    with pytest.raises(ValueError):
+        async with handler as client:
+            assert client is handler.client
+            assert not handler.client.aclose.called
+            raise ValueError("Test exception")
+    
+    # Verify client was closed even with exception
+    handler.client.aclose.assert_called_once()
+
+
+@pytest.mark.asyncio 
+async def test_async_http_handler_manual_close():
+    """Test that AsyncHTTPHandler can be manually closed"""
+    handler = AsyncHTTPHandler()
+    
+    # Mock the client to track close calls
+    handler.client.aclose = AsyncMock()
+    
+    # Manually close the handler
+    await handler.close()
+    
+    # Verify client was closed
+    handler.client.aclose.assert_called_once()
+
+
+def test_async_http_handler_del_resource_warning():
+    """Test that AsyncHTTPHandler issues ResourceWarning if not properly closed"""
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        
+        handler = AsyncHTTPHandler()
+        
+        # Mock the client's is_closed property to simulate unclosed state
+        with patch.object(type(handler.client), 'is_closed', new_callable=lambda: property(lambda self: False)):
+            # Trigger __del__ by deleting the handler
+            del handler
+            
+            # Verify ResourceWarning was issued
+            resource_warnings = [w for w in caught_warnings if issubclass(w.category, ResourceWarning)]
+            assert len(resource_warnings) == 1
+            assert "AsyncHTTPHandler was not properly closed" in str(resource_warnings[0].message)
+
+
+def test_async_http_handler_del_no_warning_when_closed():
+    """Test that AsyncHTTPHandler doesn't warn if client is already closed"""
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        
+        handler = AsyncHTTPHandler()
+        
+        # Mock the client's is_closed property to simulate closed state
+        with patch.object(type(handler.client), 'is_closed', new_callable=lambda: property(lambda self: True)):
+            # Trigger __del__ by deleting the handler
+            del handler
+            
+            # Verify no ResourceWarning was issued
+            resource_warnings = [w for w in caught_warnings if issubclass(w.category, ResourceWarning)]
+            assert len(resource_warnings) == 0
