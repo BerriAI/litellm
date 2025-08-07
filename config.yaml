@@ -32,4 +32,4 @@ model_list:
       api_key: "os.environ/OPENAI_API_KEY"
 
 litellm_settings:
-  callbacks: ["moneta.lago_logger.lago_logger"]
+  callbacks: ["entitlement_callback.entitlement_checker"]
