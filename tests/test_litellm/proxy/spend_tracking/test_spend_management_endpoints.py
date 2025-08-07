@@ -29,6 +29,7 @@ ignored_keys = [
     "endTime",
     "metadata.model_map_information",
     "metadata.usage_object",
+    "metadata.cold_storage_object_key",
 ]
 
 
