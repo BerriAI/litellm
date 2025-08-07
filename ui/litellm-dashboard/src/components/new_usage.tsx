@@ -34,20 +34,14 @@ import {
 import AdvancedDatePicker from "./shared/advanced_date_picker"
 import { AreaChart } from "@tremor/react"
 
-import { userDailyActivityCall, tagListCall } from "./networking";
-import { Tag } from "./tag_management/types";
-import ViewUserSpend from "./view_user_spend";
-import TopKeyView from "./top_key_view";
-import { ActivityMetrics, processActivityData } from "./activity_metrics";
-import UserAgentActivity from "./user_agent_activity";
-import {
-  SpendMetrics,
-  DailyData,
-  ModelActivityData,
-  MetricWithMetadata,
-  KeyMetricWithMetadata,
-} from "./usage/types";
-import EntityUsage from "./entity_usage";
+import { userDailyActivityCall, tagListCall } from "./networking"
+import { Tag } from "./tag_management/types"
+import ViewUserSpend from "./view_user_spend"
+import TopKeyView from "./top_key_view"
+import { ActivityMetrics, processActivityData } from "./activity_metrics"
+import UserAgentActivity from "./user_agent_activity"
+import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types"
+import EntityUsage from "./entity_usage"
 import {
   old_admin_roles,
   v2_admin_role_names,
@@ -62,6 +56,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { valueFormatterSpend } from "./usage/utils/value_formatters"
 import CloudZeroExportModal from "./cloudzero_export_modal"
 import { ChartLoader } from "./shared/chart_loader"
+import { getProviderLogoAndName } from "./provider_info_helpers"
 
 interface NewUsagePageProps {
   accessToken: string | null
@@ -416,16 +411,8 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         <TabList variant="solid" className="mt-1">
           {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
           <Tab>Team Usage</Tab>
-          {all_admin_roles.includes(userRole || "") ? (
-            <Tab>Tag Usage</Tab>
-          ) : (
-            <></>
-          )}
-          {all_admin_roles.includes(userRole || "") ? (
-            <Tab>User Agent Activity</Tab>
-          ) : (
-            <></>
-          )}
+          {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
+          {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
         </TabList>
         <TabPanels>
           {/* Your Usage Panel */}
@@ -658,7 +645,29 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                                     .filter((provider) => provider.spend > 0)
                                     .map((provider) => (
                                       <TableRow key={provider.provider}>
-                                        <TableCell>{provider.provider}</TableCell>
+                                        <TableCell>
+                                          <div className="flex items-center space-x-2">
+                                            {provider.provider && (
+                                              <img
+                                                src={getProviderLogoAndName(provider.provider).logo}
+                                                alt={`${provider.provider} logo`}
+                                                className="w-4 h-4"
+                                                onError={(e) => {
+                                                  const target = e.target as HTMLImageElement
+                                                  const parent = target.parentElement
+                                                  if (parent) {
+                                                    const fallbackDiv = document.createElement("div")
+                                                    fallbackDiv.className =
+                                                      "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs"
+                                                    fallbackDiv.textContent = provider.provider?.charAt(0) || "-"
+                                                    parent.replaceChild(fallbackDiv, target)
+                                                  }
+                                                }}
+                                              />
+                                            )}
+                                            <span>{provider.provider}</span>
+                                          </div>
+                                        </TableCell>
                                         <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
                                         <TableCell className="text-green-600">
                                           {provider.successful_requests.toLocaleString()}
@@ -725,10 +734,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
           </TabPanel>
           {/* User Agent Activity Panel */}
           <TabPanel>
-            <UserAgentActivity
-              accessToken={accessToken}
-              userRole={userRole}
-            />
+            <UserAgentActivity accessToken={accessToken} userRole={userRole} />
           </TabPanel>
         </TabPanels>
       </TabGroup>
