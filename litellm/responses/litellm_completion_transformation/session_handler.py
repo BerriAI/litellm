@@ -159,7 +159,7 @@ class ResponsesSessionHandler:
         ############################################################
         # Check if user has setup cold storage for session handling
         ############################################################
-        if proxy_server_request_dict and ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
+        if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
             _proxy_server_request_dict = await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage(
                 request_id=spend_log["request_id"],
                 start_time=spend_log["startTime"],
@@ -194,19 +194,23 @@ class ResponsesSessionHandler:
         """
         Only check cold storage when both are true 
         1. `LITELLM_TRUNCATED_PAYLOAD_FIELD` is in the proxy server request dict
-        2. `general_settings.get("store_prompts_in_cold_storage")` is True
+        2. `ColdStorageHandler._get_configured_cold_storage_custom_logger()` is not None
         """
         from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
         from litellm.proxy.proxy_server import general_settings
         from litellm.secret_managers.main import get_secret_bool
-
-        if proxy_server_request_dict and LITELLM_TRUNCATED_PAYLOAD_FIELD in proxy_server_request_dict:
-            return (
-                general_settings.get("store_prompts_in_cold_storage") is True
-                or get_secret_bool("STORE_PROMPTS_IN_COLD_STORAGE") is True
-            )
-        
+        verbose_proxy_logger.debug("inside _should_check_cold_storage_for_full_payload.... for proxy_server_request_dict===", proxy_server_request_dict)
+        configured_cold_storage_custom_logger = ColdStorageHandler._get_configured_cold_storage_custom_logger()
+        if configured_cold_storage_custom_logger is None:
+            return False
+        if proxy_server_request_dict is None:
+            return True
+        if len(proxy_server_request_dict) == 0:
+            return True
+        if LITELLM_TRUNCATED_PAYLOAD_FIELD in proxy_server_request_dict:
+            return True
         return False
+
 
 
     @staticmethod
