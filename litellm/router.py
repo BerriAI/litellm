@@ -4308,6 +4308,8 @@ class Router:
         """
         Track remaining tpm/rpm quota for model in model_list
         """
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
         try:
             standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
@@ -4346,23 +4348,32 @@ class Router:
                 # ------------
                 # update cache
 
+                pipeline_operations: List[RedisPipelineIncrementOperation] = []
+
                 ## TPM
-                await self.cache.async_increment_cache(
-                    key=tpm_key,
-                    value=total_tokens,
-                    parent_otel_span=parent_otel_span,
-                    ttl=RoutingArgs.ttl.value,
+                pipeline_operations.append(
+                    RedisPipelineIncrementOperation(
+                        key=tpm_key,
+                        increment_value=total_tokens,
+                        ttl=RoutingArgs.ttl.value,
+                    )
                 )
 
                 ## RPM
                 rpm_key = RouterCacheEnum.RPM.value.format(
                     id=id, current_minute=current_minute, model=deployment_name
                 )
-                await self.cache.async_increment_cache(
-                    key=rpm_key,
-                    value=1,
+                pipeline_operations.append(
+                    RedisPipelineIncrementOperation(
+                        key=rpm_key,
+                        increment_value=1,
+                        ttl=RoutingArgs.ttl.value,
+                    )
+                )
+
+                await self.cache.async_increment_cache_pipeline(
+                    increment_list=pipeline_operations,
                     parent_otel_span=parent_otel_span,
-                    ttl=RoutingArgs.ttl.value,
                 )
 
                 increment_deployment_successes_for_current_minute(
