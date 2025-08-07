@@ -6,20 +6,11 @@ LiteLLM supports the following models for OCI on-demand GenAI API.
 
 Check the [OCI Models List](https://docs.oracle.com/en-us/iaas/Content/generative-ai/pretrained-models.htm) to see if the model is available for your region.
 
-- `cohere.command-a-03-2025`
-- `cohere.command-r-08-2024`
-- `cohere.command-plus-latest` (alias `cohere.command-r-plus-08-2024`)
-- `cohere.command-r-16k` (deprecated)
-- `cohere.command-r-plus` (deprecated)
-
 - `meta.llama-4-maverick-17b-128e-instruct-fp8`
 - `meta.llama-4-scout-17b-16e-instruct`
 - `meta.llama-3.3-70b-instruct`
 - `meta.llama-3.2-90b-vision-instruct`
-- `meta.llama-3.2-11b-vision-instruct`
 - `meta.llama-3.1-405b-instruct`
-- `meta.llama-3.1-70b-instruct`
-- `meta.llama-3-70b-instruct`
 
 - `xai.grok-4`
 - `xai.grok-3`
