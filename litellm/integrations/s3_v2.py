@@ -596,10 +596,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception(f"Error downloading from S3: {str(e)}")
             return None
 
-    async def get_proxy_server_request_from_cold_storage(
+    async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
-        request_id: str,
-        start_time: Union[datetime, str],
+        object_key: str,
     ) -> Optional[dict]:
         """
         Get the proxy server request from cold storage
@@ -614,14 +613,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             Optional[dict]: The request data dictionary or None if not found
         """
         try:
-            # Convert start_time to datetime if it's a string
-            start_time_dt = self._convert_start_time_to_datetime(start_time)
-            
-            # Generate the S3 object key using the same pattern as logging
-            s3_object_key = self._generate_s3_object_key_for_request(request_id, start_time_dt)
-            
             # Download and return the object from S3
-            return await self._download_object_from_s3(s3_object_key)
+            downloaded_object = await self._download_object_from_s3(object_key)
+            return downloaded_object
         except Exception as e:
-            verbose_logger.exception(f"Error retrieving request {request_id} from cold storage: {str(e)}")
+            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {str(e)}")
             return None
