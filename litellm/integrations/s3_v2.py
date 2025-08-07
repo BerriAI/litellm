@@ -526,6 +526,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             Optional[dict]: The parsed JSON object or None if not found/error
         """
         try:
+            import hashlib
             import json
 
             import requests
@@ -562,8 +563,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 url = self.s3_endpoint_url + "/" + s3_object_key
 
             # Prepare the request for GET operation
+            # For GET requests, we need x-amz-content-sha256 with hash of empty string
+            empty_string_hash = hashlib.sha256(b"").hexdigest()
             headers = {
-                "Content-Type": "application/json",
+                "x-amz-content-sha256": empty_string_hash,
             }
             req = requests.Request("GET", url, headers=headers)
             prepped = req.prepare()
@@ -581,12 +584,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Make the request
             response = await self.async_httpx_client.get(url, headers=signed_headers)
-            
-            if response.status_code == 404:
-                verbose_logger.debug(f"S3 object not found: {s3_object_key}")
+
+            if response.status_code != 200:
+                verbose_logger.exception(f"S3 object not found, saw response=", response.text)
                 return None
-                
-            response.raise_for_status()
             
             # Parse JSON response
             return response.json()
