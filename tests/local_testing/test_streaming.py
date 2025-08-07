@@ -701,7 +701,7 @@ async def test_completion_gemini_stream(sync_mode):
                 },
             }
         ]
-        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+        messages = [{"role": "user", "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response."}]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
@@ -817,7 +817,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 },
             }
         ]
-        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+        messages = [{"role": "user", "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response."}]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
