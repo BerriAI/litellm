@@ -430,7 +430,7 @@ def test_gemini_with_empty_function_call_arguments():
 async def test_claude_tool_use_with_gemini():
     response = await litellm.anthropic.messages.acreate(
         messages=[
-            {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
+            {"role": "user", "content": "Hello, can you tell me the weather in Boston. Please respond with a tool call?"}
         ],
         model="gemini/gemini-2.5-flash",
         stream=True,
