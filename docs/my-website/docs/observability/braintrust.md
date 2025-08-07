@@ -15,6 +15,7 @@ import os
 
 # set env
 os.environ["BRAINTRUST_API_KEY"] = ""
+os.environ["BRAINTRUST_API_BASE"] = "https://api.braintrustdata.com/v1"
 os.environ['OPENAI_API_KEY']=""
 
 # set braintrust as a callback, litellm will send the data to braintrust
@@ -35,6 +36,7 @@ response = litellm.completion(
 
 ```env
 BRAINTRUST_API_KEY=""
+BRAINTRUST_API_BASE="https://api.braintrustdata.com/v1"
 ```
 
 2. Add braintrust to callbacks
@@ -156,6 +158,8 @@ For more examples, [**Click Here**](../proxy/user_keys.md#chatcompletions)
 
 </TabItem>
 </Tabs>
+
+You can use `BRAINTRUST_API_BASE` to point to your self-hosted Braintrust data plane. Read more about this [here](https://www.braintrust.dev/docs/guides/self-hosting).
 
 ## Full API Spec
 
