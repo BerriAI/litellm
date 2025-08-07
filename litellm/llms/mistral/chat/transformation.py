@@ -310,21 +310,14 @@ class MistralConfig(OpenAIGPTConfig):
         if not tools:
             return tools
             
-        # Import here to avoid circular imports
-        # Make a copy to avoid modifying the original
         import copy
 
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-        from litellm.utils import (
-            _remove_additional_properties,
-            _remove_json_schema_refs,
-            _remove_strict_from_schema,
-        )
+        from litellm.utils import _remove_json_schema_refs
+
         cleaned_tools = copy.deepcopy(tools)
         
         # Apply all cleaning functions with max_depth protection
-        cleaned_tools = _remove_additional_properties(cleaned_tools)
-        cleaned_tools = _remove_strict_from_schema(cleaned_tools)
         cleaned_tools = _remove_json_schema_refs(cleaned_tools, max_depth=DEFAULT_MAX_RECURSE_DEPTH)
         
         return cleaned_tools
