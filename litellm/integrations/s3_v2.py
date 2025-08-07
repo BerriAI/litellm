@@ -463,58 +463,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
 
 
-    def _convert_start_time_to_datetime(self, start_time: Union[datetime, str]) -> datetime:
-        """
-        Convert start_time to datetime object if it's a string.
-        
-        Args:
-            start_time: Either a datetime object or ISO format string
-            
-        Returns:
-            datetime: The datetime object
-        """
-        if isinstance(start_time, str):
-            from datetime import datetime
-            return datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-        return start_time
-
-    def _generate_s3_object_key_for_request(
-        self, 
-        request_id: str, 
-        start_time: datetime
-    ) -> str:
-        """
-        Generate the S3 object key for a request using the same pattern as logging.
-        
-        Args:
-            request_id: The request ID to search for
-            start_time: The start time of the request
-            
-        Returns:
-            str: The S3 object key
-        """
-        # Generate the file name using the same pattern as create_s3_batch_logging_element
-        s3_file_name = f"time-{start_time.strftime('%H-%M-%S-%f')}_{request_id}"
-        
-        # Use empty team alias prefix for now - this could be enhanced to support team prefixes
-        team_alias_prefix = ""
-        if (
-            litellm.enable_preview_features
-            and self.s3_use_team_prefix
-        ):
-            # For retrieval, we might need to iterate through possible team prefixes
-            # For now, assume no team prefix
-            team_alias_prefix = ""
-
-        s3_object_key = get_s3_object_key(
-            s3_path=cast(Optional[str], self.s3_path) or "",
-            team_alias_prefix=team_alias_prefix,
-            start_time=start_time,
-            s3_file_name=s3_file_name,
-        )
-        
-        return s3_object_key
-
     async def _download_object_from_s3(self, s3_object_key: str) -> Optional[dict]:
         """
         Download and parse JSON object from S3.
