@@ -97,6 +97,13 @@ class InMemoryCache(BaseCache):
         """
         Remove a key from both cache_dict and ttl_dict
         """
+        # Get the cached item before removing it
+        cached_item = self.cache_dict.get(key)
+        
+        # Cleanup HTTP clients if they exist
+        if cached_item is not None:
+            self._cleanup_cached_item(cached_item)
+        
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
 
@@ -120,6 +127,35 @@ class InMemoryCache(BaseCache):
                 # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
                 # One of the most common causes of memory leaks in Python is the retention of objects that are no longer being used.
                 # This can occur when an object is referenced by another object, but the reference is never removed.
+
+    def _cleanup_cached_item(self, cached_item):
+        """
+        Cleanup cached items when they're evicted from cache
+        """
+        try:
+            # Handle AsyncHTTPHandler cleanup
+            if hasattr(cached_item, 'client') and hasattr(cached_item.client, 'is_closed'):
+                if not cached_item.client.is_closed:
+                    # Schedule cleanup but don't block
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(cached_item.close())
+                    except RuntimeError:
+                        # No event loop running, just warn
+                        import warnings
+                        warnings.warn(
+                            "HTTP client was evicted from cache but couldn't be closed properly (no event loop)",
+                            ResourceWarning,
+                            stacklevel=3
+                        )
+            
+            # Handle HTTPHandler cleanup  
+            elif hasattr(cached_item, 'client') and hasattr(cached_item.client, 'close'):
+                cached_item.client.close()
+        except Exception:
+            # Don't raise exceptions during cleanup
+            pass
 
     def allow_ttl_override(self, key: str) -> bool:
         """
