@@ -466,3 +466,73 @@ def test_get_masked_values():
         sensitive_object, unmasked_length=4, number_of_asterisks=4
     )
     assert masked_values["presidio_anonymizer_api_base"] is None
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_successful():
+    """
+    Test end-to-end generation of cold storage object key when cold storage is properly configured.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-12345"
+    team_alias = "test-team"
+    
+    with patch("litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger", return_value="s3"), \
+         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
+        
+        # Mock the S3 object key generation to return a predictable result
+        mock_get_s3_key.return_value = "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id,
+            team_alias=team_alias
+        )
+        
+        # Verify the S3 function was called with correct parameters
+        mock_get_s3_key.assert_called_once_with(
+            s3_path="",  # Empty path as default
+            team_alias_prefix="",  # No team alias prefix for cold storage
+            start_time=start_time,
+            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345"
+        )
+        
+        # Verify the result
+        assert result == "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        assert result is not None
+        assert isinstance(result, str)
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_not_configured():
+    """
+    Test end-to-end generation of cold storage object key when cold storage is not configured.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-67890"
+    team_alias = "another-team"
+    
+    with patch("litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger", return_value=None):
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id,
+            team_alias=team_alias
+        )
+        
+        # Verify the result is None when cold storage is not configured
+        assert result is None
