@@ -357,7 +357,7 @@ disable_copilot_system_to_assistant: bool = (
 )
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION #####
+#### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
 
 
