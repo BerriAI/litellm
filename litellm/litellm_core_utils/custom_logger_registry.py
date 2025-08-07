@@ -10,6 +10,7 @@ Example:
 
 from typing import Union
 
+from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
@@ -150,3 +151,14 @@ class CustomLoggerRegistry:
             if callback_class == class_type:
                 callback_strs.append(callback_str)
         return callback_strs
+    
+
+    @classmethod
+    def get_class_type_for_custom_logger_name(
+        cls,
+        custom_logger_name: _custom_logger_compatible_callbacks_literal,
+    ) -> type:
+        """
+        Get the class type for a given custom logger name
+        """
+        return cls.CALLBACK_CLASS_STR_TO_CLASS_TYPE[custom_logger_name]

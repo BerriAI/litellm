@@ -53,6 +53,7 @@ def _get_spend_logs_metadata(
     guardrail_information: Optional[StandardLoggingGuardrailInformation] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
+    cold_storage_object_key: Optional[str] = None
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -75,6 +76,7 @@ def _get_spend_logs_metadata(
             model_map_information=None,
             usage_object=None,
             guardrail_information=None,
+            cold_storage_object_key=cold_storage_object_key,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -98,6 +100,8 @@ def _get_spend_logs_metadata(
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
+    clean_metadata["cold_storage_object_key"] = cold_storage_object_key
+    
     return clean_metadata
 
 
@@ -264,6 +268,11 @@ def get_logging_payload(  # noqa: PLR0915
         ),
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
+            if standard_logging_payload is not None
+            else None
+        ),
+        cold_storage_object_key=(
+            standard_logging_payload["metadata"].get("cold_storage_object_key", None)
             if standard_logging_payload is not None
             else None
         ),
@@ -474,6 +483,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than 1000 characters and handles nested dictionaries.
     """
+    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
     MAX_STRING_LENGTH = 1000
 
     if visited is None:
@@ -492,7 +502,7 @@ def _sanitize_request_body_for_spend_logs_payload(
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
             if len(value) > MAX_STRING_LENGTH:
-                return f"{value[:MAX_STRING_LENGTH]}... (truncated {len(value) - MAX_STRING_LENGTH} chars)"
+                return f"{value[:MAX_STRING_LENGTH]}... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} {len(value) - MAX_STRING_LENGTH} chars)"
             return value
         return value
 

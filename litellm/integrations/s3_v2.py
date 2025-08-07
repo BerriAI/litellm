@@ -304,7 +304,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
+                aws_region_name=self.s3_region_name
+            )
+            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
@@ -444,7 +447,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
+                aws_region_name=self.s3_region_name
+            )
+            SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
 
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
@@ -455,3 +461,108 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
+
+
+    async def _download_object_from_s3(self, s3_object_key: str) -> Optional[dict]:
+        """
+        Download and parse JSON object from S3.
+        
+        Args:
+            s3_object_key: The S3 object key to download
+            
+        Returns:
+            Optional[dict]: The parsed JSON object or None if not found/error
+        """
+        try:
+            import hashlib
+
+            import requests
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+        except ImportError:
+            raise ImportError("Missing boto3 to call S3. Run 'pip install boto3'.")
+            
+        try:
+            from litellm.litellm_core_utils.asyncify import asyncify
+
+            # Get AWS credentials
+            asyncified_get_credentials = asyncify(self.get_credentials)
+            credentials = await asyncified_get_credentials(
+                aws_access_key_id=self.s3_aws_access_key_id,
+                aws_secret_access_key=self.s3_aws_secret_access_key,
+                aws_session_token=self.s3_aws_session_token,
+                aws_region_name=self.s3_region_name,
+                aws_session_name=self.s3_aws_session_name,
+                aws_profile_name=self.s3_aws_profile_name,
+                aws_role_name=self.s3_aws_role_name,
+                aws_web_identity_token=self.s3_aws_web_identity_token,
+                aws_sts_endpoint=self.s3_aws_sts_endpoint,
+            )
+
+            verbose_logger.debug(
+                f"s3_v2 logger - downloading data from s3 - {s3_object_key}"
+            )
+
+            # Prepare the URL
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{s3_object_key}"
+
+            if self.s3_endpoint_url:
+                url = self.s3_endpoint_url + "/" + s3_object_key
+
+            # Prepare the request for GET operation
+            # For GET requests, we need x-amz-content-sha256 with hash of empty string
+            empty_string_hash = hashlib.sha256(b"").hexdigest()
+            headers = {
+                "x-amz-content-sha256": empty_string_hash,
+            }
+            req = requests.Request("GET", url, headers=headers)
+            prepped = req.prepare()
+
+            # Sign the request
+            aws_request = AWSRequest(
+                method=prepped.method,
+                url=prepped.url,
+                headers=prepped.headers,
+            )
+            SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+
+            # Prepare the signed headers
+            signed_headers = dict(aws_request.headers.items())
+
+            # Make the request
+            response = await self.async_httpx_client.get(url, headers=signed_headers)
+
+            if response.status_code != 200:
+                verbose_logger.exception("S3 object not found, saw response=", response.text)
+                return None
+            
+            # Parse JSON response
+            return response.json()
+            
+        except Exception as e:
+            verbose_logger.exception(f"Error downloading from S3: {str(e)}")
+            return None
+
+    async def get_proxy_server_request_from_cold_storage_with_object_key(
+        self,
+        object_key: str,
+    ) -> Optional[dict]:
+        """
+        Get the proxy server request from cold storage
+
+        Allows fetching a dict of the proxy server request from s3 or GCS bucket.
+        
+        Args:
+            request_id: The unique request ID to search for
+            start_time: The start time of the request (datetime or ISO string)
+            
+        Returns:
+            Optional[dict]: The request data dictionary or None if not found
+        """
+        try:
+            # Download and return the object from S3
+            downloaded_object = await self._download_object_from_s3(object_key)
+            return downloaded_object
+        except Exception as e:
+            verbose_logger.exception(f"Error retrieving object {object_key} from cold storage: {str(e)}")
+            return None

@@ -11,9 +11,9 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-
-from enterprise.litellm_enterprise.enterprise_callbacks.session_handler import (
-    _ENTERPRISE_ResponsesSessionHandler,
+from litellm.responses.litellm_completion_transformation import session_handler
+from litellm.responses.litellm_completion_transformation.session_handler import (
+    ResponsesSessionHandler,
 )
 
 
@@ -111,7 +111,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
 
     # Mock the get_all_spend_logs_for_previous_response_id method
     with patch.object(
-        _ENTERPRISE_ResponsesSessionHandler,
+        ResponsesSessionHandler,
         "get_all_spend_logs_for_previous_response_id",
         new_callable=AsyncMock,
     ) as mock_get_spend_logs:
@@ -119,7 +119,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
 
         # Test the function
         previous_response_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
-        result = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             previous_response_id
         )
 
@@ -166,17 +166,130 @@ async def test_get_chat_completion_message_history_empty_spend_logs():
     Test get_chat_completion_message_history_for_previous_response_id with empty spend logs
     """
     with patch.object(
-        _ENTERPRISE_ResponsesSessionHandler,
+        ResponsesSessionHandler,
         "get_all_spend_logs_for_previous_response_id",
         new_callable=AsyncMock,
     ) as mock_get_spend_logs:
         mock_get_spend_logs.return_value = []
 
         previous_response_id = "non-existent-id"
-        result = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             previous_response_id
         )
 
         # Verify empty result structure
         assert result.get("messages") == []
         assert result.get("litellm_session_id") is None
+
+
+@pytest.mark.asyncio
+async def test_e2e_cold_storage_successful_retrieval():
+    """
+    Test end-to-end cold storage functionality with successful retrieval of full proxy request from cold storage.
+    """
+    # Mock spend logs with cold storage object key in metadata
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-test-123",
+            "session_id": "session-456",
+            "metadata": '{"cold_storage_object_key": "s3://test-bucket/requests/session_456_req1.json"}',
+            "proxy_server_request": '{"litellm_truncated": true}',  # Truncated payload
+            "response": {
+                "id": "chatcmpl-test-123",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "I am an AI assistant."
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+    
+    # Full proxy request data from cold storage
+    full_proxy_request = {
+        "input": "Hello, who are you?",
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello, who are you?"}]
+    }
+    
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs, \
+    patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage, \
+    patch("litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger", return_value="s3"):
+        
+        # Setup mocks
+        mock_get_spend_logs.return_value = mock_spend_logs
+        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(return_value=full_proxy_request)
+        
+        # Call the main function
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-test-123"
+        )
+        
+        # Verify cold storage was called with correct object key
+        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key.assert_called_once_with(
+            object_key="s3://test-bucket/requests/session_456_req1.json"
+        )
+        
+        # Verify result structure
+        assert result.get("litellm_session_id") == "session-456"
+        assert len(result.get("messages", [])) >= 1  # At least the assistant response
+
+
+@pytest.mark.asyncio
+async def test_e2e_cold_storage_fallback_to_truncated_payload():
+    """
+    Test end-to-end cold storage functionality when object key is missing, falling back to truncated payload.
+    """
+    # Mock spend logs without cold storage object key
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-test-789",
+            "session_id": "session-999",
+            "metadata": '{"user_api_key": "test-key"}',  # No cold storage object key
+            "proxy_server_request": '{"input": "Truncated message", "model": "gpt-4"}',  # Regular payload
+            "response": {
+                "id": "chatcmpl-test-789",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "This is a response."
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+    
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs, \
+    patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage:
+        
+        # Setup mocks
+        mock_get_spend_logs.return_value = mock_spend_logs
+        
+        # Call the main function
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-test-789"
+        )
+        
+        # Verify cold storage was NOT called since no object key in metadata
+        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key.assert_not_called()
+        
+        # Verify result structure
+        assert result.get("litellm_session_id") == "session-999"
+        assert len(result.get("messages", [])) >= 1  # At least the assistant response
