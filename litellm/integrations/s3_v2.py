@@ -8,7 +8,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 
 import asyncio
 from datetime import datetime
-from typing import List, Optional, Union, cast
+from typing import List, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
