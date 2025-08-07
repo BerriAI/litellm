@@ -107,6 +107,7 @@ from litellm.utils import (
     supports_httpx_timeout,
     token_counter,
     validate_and_fix_openai_messages,
+    validate_and_fix_openai_tools,
     validate_chat_completion_tool_choice,
 )
 
@@ -151,6 +152,7 @@ from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
+from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
@@ -252,6 +254,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
 sagemaker_chat_completion = SagemakerChatHandler()
 bytez_transformation = BytezChatConfig()
+oci_transformation = OCIChatConfig()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -963,6 +966,7 @@ def completion(  # type: ignore # noqa: PLR0915
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
+    tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
@@ -2388,6 +2392,24 @@ def completion(  # type: ignore # noqa: PLR0915
                 headers=hf_headers,
                 model_response=model_response,
                 api_key=huggingface_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+            )
+        elif custom_llm_provider == "oci":
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
@@ -3880,7 +3902,6 @@ def embedding(  # noqa: PLR0915
             )
         elif (
             custom_llm_provider == "openai_like"
-            or custom_llm_provider == "jina_ai"
             or custom_llm_provider == "hosted_vllm"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
@@ -4304,6 +4325,25 @@ def embedding(  # noqa: PLR0915
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
                 optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "jina_ai":
+            if isinstance(input, str):
+                transformed_input = [input]
+            else:
+                transformed_input = input
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=transformed_input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
                 client=client,
                 aembedding=aembedding,
             )
@@ -5682,7 +5722,11 @@ def stream_chunk_builder_text_completion(
 
 
 def stream_chunk_builder(  # noqa: PLR0915
-    chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
+    chunks: list,
+    messages: Optional[list] = None,
+    start_time=None,
+    end_time=None,
+    logging_obj: Optional[Logging] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:
@@ -5806,6 +5850,12 @@ def stream_chunk_builder(  # noqa: PLR0915
         )
 
         setattr(response, "usage", usage)
+
+        # Add cost to usage object if include_cost_in_streaming_usage is True
+        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+            setattr(
+                usage, "cost", logging_obj._response_cost_calculator(result=response)
+            )
 
         return response
     except Exception as e:

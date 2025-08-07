@@ -279,6 +279,7 @@ LITELLM_CHAT_PROVIDERS = [
     "dashscope",
     "moonshot",
     "v0",
+    "oci",
     "morph",
     "lambda_ai",
 ]
@@ -765,6 +766,7 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
+LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################

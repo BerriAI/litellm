@@ -25,6 +25,8 @@ class RouteChecks:
             from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
 
             EnterpriseRouteChecks.should_call_route(route=route)
+        except HTTPException as e:
+            raise e
         except Exception:
             pass
 
@@ -208,7 +210,7 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         ):  # routes that manage their own allowed/disallowed logic
             pass
-        elif route.startswith("/v1/mcp/"):
+        elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
         else:
             user_role = "unknown"
@@ -386,7 +388,7 @@ class RouteChecks:
         if "thread" in request.url.path or "assistant" in request.url.path:
             return True
         return False
-    
+
     @staticmethod
     def is_generate_content_route(route: str) -> bool:
         """

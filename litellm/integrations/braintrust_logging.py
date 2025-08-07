@@ -42,7 +42,7 @@ class BraintrustLogger(CustomLogger):
     ) -> None:
         super().__init__()
         self.validate_environment(api_key=api_key)
-        self.api_base = api_base or API_BASE
+        self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
         self.api_key: str = api_key or os.getenv("BRAINTRUST_API_KEY")  # type: ignore
         self.headers = {

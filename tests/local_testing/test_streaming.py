@@ -709,7 +709,7 @@ async def test_completion_gemini_stream(sync_mode):
         chunks = []
         if sync_mode:
             response = completion(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash-lite",
                 messages=messages,
                 stream=True,
                 functions=function1,
@@ -726,7 +726,7 @@ async def test_completion_gemini_stream(sync_mode):
                 complete_response += chunk
         else:
             response = await litellm.acompletion(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash-lite",
                 messages=messages,
                 stream=True,
                 functions=function1,
@@ -829,7 +829,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 client, "post", side_effect=gemini_mock_post_streaming
             ) as mock_client:
                 response = completion(
-                    model="gemini/gemini-1.5-flash",
+                    model="gemini/gemini-2.5-flash-lite",
                     messages=messages,
                     stream=True,
                     functions=function1,
@@ -854,7 +854,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 client, "post", side_effect=gemini_mock_post_streaming
             ) as mock_client:
                 response = await litellm.acompletion(
-                    model="gemini/gemini-1.5-flash",
+                    model="gemini/gemini-2.5-flash-lite",
                     messages=messages,
                     stream=True,
                     functions=function1,
@@ -2982,7 +2982,7 @@ def test_completion_claude_3_function_call_with_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "gemini/gemini-1.5-flash",
+        "gemini/gemini-2.5-flash-lite",
     ],  #  "claude-3-opus-20240229"
 )  #
 @pytest.mark.asyncio
@@ -3669,7 +3669,7 @@ def test_unit_test_custom_stream_wrapper_function_call():
             )
         ],
         created=1720755257,
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash-lite",
         object="chat.completion.chunk",
         system_fingerprint=None,
         usage=Usage(prompt_tokens=67, completion_tokens=55, total_tokens=122),
@@ -3948,3 +3948,45 @@ def test_is_delta_empty():
             audio=None,
         )
     )
+
+
+def test_streaming_with_cost_calculation():
+    from litellm.types.utils import Usage
+    from typing import Optional
+
+    litellm.include_cost_in_streaming_usage = True
+
+    ## Test 1: check if usage object can handle 'cost' field
+    usage_object = Usage(
+        prompt_tokens=100,
+        completion_tokens=100,
+        total_tokens=200,
+        cost=1.0,
+    )
+    assert usage_object.cost is not None
+
+    print(f"usage_object: {usage_object}")
+
+    ## Test 2: check if usage object has 'cost' field when streaming
+
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+
+    usage_object: Optional[Usage] = None
+    for chunk in response:
+        _usage_obj = getattr(chunk, "usage", None)
+        if _usage_obj is not None:
+            usage_object = _usage_obj
+            break
+
+    assert usage_object is not None
+    assert usage_object.total_tokens is not None
+    assert usage_object.total_tokens > 0
+    assert usage_object.prompt_tokens is not None
+    assert usage_object.prompt_tokens > 0
+    assert usage_object.cost is not None
+    assert usage_object.cost > 0

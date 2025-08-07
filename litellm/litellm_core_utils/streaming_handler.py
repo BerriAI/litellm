@@ -1584,7 +1584,9 @@ class CustomStreamWrapper:
         except StopIteration:
             if self.sent_last_chunk is True:
                 complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks, messages=self.messages
+                    chunks=self.chunks,
+                    messages=self.messages,
+                    logging_obj=self.logging_obj,
                 )
 
                 response = self.model_response_creator()
@@ -1768,7 +1770,9 @@ class CustomStreamWrapper:
             if self.sent_last_chunk is True:
                 # log the final chunk with accurate streaming values
                 complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks, messages=self.messages
+                    chunks=self.chunks,
+                    messages=self.messages,
+                    logging_obj=self.logging_obj,
                 )
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:

@@ -5410,7 +5410,7 @@ export const deleteMCPServer = async (
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string) => {
+export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -5419,12 +5419,22 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 
     console.log("Fetching MCP tools from:", url);
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias && authValue) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else if (authValue) {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+      headers,
     });
 
     const data = await response.json();

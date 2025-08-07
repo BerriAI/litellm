@@ -965,6 +965,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
+    service_tier: Optional[str]
+    safety_identifier: Optional[str]
     prompt: Optional[PromptObject]
 
 
