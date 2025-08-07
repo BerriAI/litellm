@@ -10,7 +10,10 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.ollama.completion.transformation import OllamaConfig
+from litellm.llms.ollama.completion.transformation import (
+    OllamaConfig,
+    OllamaTextCompletionResponseIterator,
+)
 from litellm.types.utils import Message, ModelResponse
 
 
@@ -155,3 +158,75 @@ class TestOllamaConfig:
         assert result.choices[0]["message"].content == expected_content
         assert result.choices[0]["finish_reason"] == "stop"
         # No usage assertions here as we don't need to test them in every case
+
+
+class TestOllamaTextCompletionResponseIterator:
+    def test_chunk_parser_with_thinking_field(self):
+        """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        # Test chunk with thinking field - this is the problematic case from the issue
+        chunk_with_thinking = {
+            "model": "gpt-oss:20b",
+            "created_at": "2025-08-06T14:34:31.5276077Z",
+            "response": "",
+            "thinking": "User",
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(chunk_with_thinking)
+
+        # Should return empty text and not be finished
+        assert result["text"] == ""
+        assert result["is_finished"] is False
+        assert result["finish_reason"] is None
+        assert result["usage"] is None
+
+    def test_chunk_parser_normal_response(self):
+        """Test that normal response chunks still work."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        # Test normal chunk with response
+        normal_chunk = {
+            "model": "llama2",
+            "created_at": "2025-08-06T14:34:31.5276077Z",
+            "response": "Hello world",
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(normal_chunk)
+
+        assert result["text"] == "Hello world"
+        assert result["is_finished"] is False
+        assert result["finish_reason"] == "stop"
+        assert result["usage"] is None
+
+    def test_chunk_parser_done_chunk(self):
+        """Test that done chunks work correctly."""
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
+
+        # Test done chunk
+        done_chunk = {
+            "model": "llama2",
+            "created_at": "2025-08-06T14:34:31.5276077Z",
+            "response": "",
+            "done": True,
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert result["text"] == ""
+        assert result["is_finished"] is True
+        assert result["finish_reason"] == "stop"
+        assert result["usage"] is not None
+        assert result["usage"]["prompt_tokens"] == 10
+        assert result["usage"]["completion_tokens"] == 5
+        assert result["usage"]["total_tokens"] == 15
