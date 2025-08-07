@@ -181,7 +181,7 @@ class TestOllamaTextCompletionResponseIterator:
         # Should return empty text and not be finished
         assert result["text"] == ""
         assert result["is_finished"] is False
-        assert result["finish_reason"] is None
+        assert result["finish_reason"] == ""
         assert result["usage"] is None
 
     def test_chunk_parser_normal_response(self):
