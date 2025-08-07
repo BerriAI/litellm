@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.openai.openai_moderation import (
+    OpenAIModerationGuardrailConfigModel,
+)
+
 """
 Pydantic object defining how to set guardrails on litellm proxy
 
@@ -30,10 +34,12 @@ class SupportedGuardrailIntegrations(Enum):
     AIM = "aim"
     PANGEA = "pangea"
     LASSO = "lasso"
+    PILLAR = "pillar"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
-
+    MODEL_ARMOR = "model_armor"
+    OPENAI_MODERATION = "openai_moderation"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -269,6 +275,10 @@ class BedrockGuardrailConfigModel(BaseModel):
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
     )
+    disable_exception_on_block: Optional[bool] = Field(
+        default=False,
+        description="If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
+    )
     aws_region_name: Optional[str] = Field(
         default=None, description="AWS region where your guardrail is deployed"
     )
@@ -299,6 +309,7 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_bedrock_runtime_endpoint: Optional[str] = Field(
         default=None, description="AWS Bedrock runtime endpoint URL"
     )
+
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
@@ -336,6 +347,15 @@ class LassoGuardrailConfigModel(BaseModel):
     )
     lasso_conversation_id: Optional[str] = Field(
         default=None, description="Conversation ID for the Lasso guardrail"
+    )
+
+
+class PillarGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Pillar Security guardrail"""
+
+    on_flagged_action: Optional[str] = Field(
+        default="monitor",
+        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
     )
 
 
@@ -386,7 +406,37 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         default=None, description="Recipe for output (LLM response)"
     )
 
+    model: Optional[str] = Field(
+        default=None, description="Optional field if guardrail requires a 'model' parameter"
+    )
+
+    # Model Armor params
+    template_id: Optional[str] = Field(
+        default=None, description="The ID of your Model Armor template"
+    )
+    location: Optional[str] = Field(
+        default=None, description="Google Cloud location/region (e.g., us-central1)"
+    )
+    credentials: Optional[str] = Field(
+        default=None,
+        description="Path to Google Cloud credentials JSON file or JSON string",
+    )
+    api_endpoint: Optional[str] = Field(
+        default=None, description="Optional custom API endpoint for Model Armor"
+    )
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description="Whether to fail the request if Model Armor encounters an error",
+    )
+    
     model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+
+class Mode(BaseModel):
+    tags: Dict[str, str] = Field(description="Tags for the guardrail mode")
+    default: Optional[str] = Field(
+        default=None, description="Default mode when no tags match"
+    )
 
 
 class LitellmParams(
@@ -394,10 +444,11 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
+    PillarGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
-    mode: Union[str, List[str]] = Field(
+    mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
 
@@ -440,6 +491,8 @@ class GuardrailEventHooks(str, Enum):
     post_call = "post_call"
     during_call = "during_call"
     logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
 
 
 class DynamicGuardrailParams(TypedDict):

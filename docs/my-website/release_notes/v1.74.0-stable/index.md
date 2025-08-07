@@ -1,5 +1,5 @@
 ---
-title: "[Pre-Release] v1.74.0"
+title: "v1.74.0-stable"
 slug: "v1-74-0-stable"
 date: 2025-07-05T10:00:00
 authors:
@@ -28,14 +28,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.74.0.rc
+ghcr.io/berriai/litellm:v1.74.0-stable
 ```
 </TabItem>
 
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.74.0.post1
+pip install litellm==1.74.0.post2
 ```
 
 </TabItem>
@@ -45,12 +45,19 @@ pip install litellm==1.74.0.post1
 
 ## Key Highlights 
 
+- **MCP Gateway Namespace Servers** - Clients connecting to LiteLLM can now specify which MCP servers to use. 
+- **Key/Team Based Logging on UI** - Proxy Admins can configure team or key-based logging settings directly in the UI. 
+- **Azure Content Safety Guardrails** - Added support for prompt injection and text moderation with Azure Content Safety Guardrails. 
+- **VertexAI Deepseek Models** - Support for calling VertexAI Deepseek models with LiteLLM's/chat/completions or /responses API.
+- **Github Copilot API** - You can now use Github Copilot as an LLM API provider.
 
-### Azure Content Safety Guardrails
 
-### MCP Gateway: Segregate MCP tools
+### MCP Gateway: Namespaced MCP Servers
 
-MCP Server Segregation is now supported on LiteLLM. This means you can specify the `x-mcp-servers` header to specify which servers to list tools from. This is useful when you want to request tools from only a subset of configured servers — enabling curated toolsets and cleaner control.
+This release brings support for namespacing MCP Servers on LiteLLM MCP Gateway.  This means you can specify the `x-mcp-servers` header to specify which servers to list tools from. 
+ 
+This is useful when you want to point MCP clients to specific MCP Servers on LiteLLM. 
+
 
 #### Usage
 
@@ -151,7 +158,19 @@ For developers using LiteLLM, their logs are automatically routed to their speci
 - `arize`
 - `langsmith`
 
+### Azure Content Safety Guardrails
 
+<Image 
+  img={require('../../img/azure_content_safety_guardrails.jpg')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br />
+
+
+LiteLLM now supports **Azure Content Safety Guardrails** for Prompt Injection and Text Moderation. This is **great for internal chat-ui** use cases, as you can now create guardrails with detection for Azure’s Harm Categories, specify custom severity thresholds and run them across 100+ LLMs for just that use-case (or across all your calls). 
+
+[Get Started](../../docs/proxy/guardrails/azure_content_guardrail)
 
 
 ### Python SDK: 2.3 Second Faster Import Times
@@ -274,6 +293,8 @@ This release brings significant performance improvements to the Python SDK with 
 ## Logging / Guardrail Integrations
 
 #### Features
+- Guardrails 
+  - All guardrails are now supported on the UI - [PR](https://github.com/BerriAI/litellm/pull/12349)
 - **[Azure Content Safety](../../docs/guardrails/azure_content_safety)**
   - Add Azure Content Safety Guardrails to LiteLLM proxy - [PR](https://github.com/BerriAI/litellm/pull/12268)
   - Add azure content safety guardrails to the UI - [PR](https://github.com/BerriAI/litellm/pull/12309)

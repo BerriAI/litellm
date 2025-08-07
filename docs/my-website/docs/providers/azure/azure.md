@@ -175,6 +175,25 @@ print(response)
 </Tabs>
 
 
+### Setting API Version
+
+You can set the `api_version` for Azure OpenAI in your proxy config.yaml in the following ways
+
+#### Option 1: Per Model Configuration
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/my-gpt4-deployment
+      api_base: https://your-resource.openai.azure.com/
+      api_version: "2024-08-01-preview"  # Set version per model
+      api_key: os.environ/AZURE_API_KEY
+```
+
+
+
+
 
 ## Azure OpenAI Chat Completion Models
 
@@ -618,29 +637,51 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ### Azure AD Token Refresh - `DefaultAzureCredential`
 
-Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests
+Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests. `DefaultAzureCredential` automatically discovers and uses available Azure credentials from multiple sources.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
+**Option 1: Explicit DefaultAzureCredential (Recommended)**
 ```python
 from litellm import completion
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
+# DefaultAzureCredential automatically discovers credentials from:
+# - Environment variables (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
+# - Managed Identity (AKS, Azure VMs, etc.)
+# - Azure CLI credentials
+# - And other Azure identity sources
 token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
-
 
 response = completion(
     model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
     api_base = "",                                      # azure api base
     api_version = "",                                   # azure api version
-    azure_ad_token_provider=token_provider
+    azure_ad_token_provider=token_provider,
+    messages = [{"role": "user", "content": "good morning"}],
+)
+```
+
+**Option 2: LiteLLM Auto-Fallback to DefaultAzureCredential**
+```python
+import litellm
+
+# Enable automatic fallback to DefaultAzureCredential
+litellm.enable_azure_ad_token_refresh = True
+
+response = litellm.completion(
+    model = "azure/<your deployment name>",
+    api_base = "",
+    api_version = "",
     messages = [{"role": "user", "content": "good morning"}],
 )
 ```
 
 </TabItem>
 <TabItem value="proxy" label="PROXY config.yaml">
+
+**Scenario 1: With Environment Variables (Traditional)**
 
 1. Add relevant env vars
 
@@ -663,11 +704,47 @@ litellm_settings:
     enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
 ```
 
+**Scenario 2: Managed Identity (AKS, Azure VMs) - No Hard-coded Credentials Required**
+
+Perfect for AKS clusters, Azure VMs, or other managed environments where Azure automatically injects credentials.
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/your-deployment-name
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+
+litellm_settings:
+    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+```
+
+**Scenario 3: Azure CLI Authentication**
+
+If you're authenticated via `az login`, no additional configuration needed:
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/your-deployment-name
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+
+litellm_settings:
+    enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
+```
+
 3. Start proxy
 
 ```bash
 litellm --config /path/to/config.yaml
 ```
+
+**How it works**: 
+- LiteLLM first tries Service Principal authentication (if environment variables are available)
+- If that fails, it automatically falls back to `DefaultAzureCredential`
+- `DefaultAzureCredential` will use Managed Identity, Azure CLI credentials, or other available Azure identity sources
+- This eliminates the need for hard-coded credentials in managed environments like AKS
 
 </TabItem>
 </Tabs>

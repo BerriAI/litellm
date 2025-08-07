@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
+from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast, overload
 
 import httpx
 
@@ -14,9 +14,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_llm import CustomLLM
 
 #################### Initialize provider clients ####################
+llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -26,6 +28,8 @@ from litellm.main import (
     openai_image_variations,
     vertex_image_generation,
 )
+
+###########################################
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import ImageGenerationRequestQuality
@@ -78,17 +82,20 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
-        if isinstance(init_response, dict) or isinstance(
-            init_response, ImageResponse
-        ):  ## CACHING SCENARIO
-            if isinstance(init_response, dict):
-                init_response = ImageResponse(**init_response)
+
+        response: Optional[ImageResponse] = None
+        if isinstance(init_response, dict):
+            response = ImageResponse(**init_response)
+        elif isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
-        else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
+        
+        if response is None:
+            raise ValueError(
+                "Unable to get Image Response. Please pass a valid llm_provider."
+            )
+        
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -101,6 +108,54 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         )
 
 
+# Overload for when aimg_generation=True (returns Coroutine)
+@overload
+def image_generation(
+    prompt: str,
+    model: Optional[str] = None,
+    n: Optional[int] = None,
+    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
+    response_format: Optional[str] = None,
+    size: Optional[str] = None,
+    style: Optional[str] = None,
+    user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    custom_llm_provider=None,
+    *,
+    aimg_generation: Literal[True],
+    **kwargs,
+) -> Coroutine[Any, Any, ImageResponse]:
+    ...
+
+
+# Overload for when aimg_generation=False or not specified (returns ImageResponse)
+@overload
+def image_generation(
+    prompt: str,
+    model: Optional[str] = None,
+    n: Optional[int] = None,
+    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
+    response_format: Optional[str] = None,
+    size: Optional[str] = None,
+    style: Optional[str] = None,
+    user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
+    timeout=600,  # default to 10 minutes
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    custom_llm_provider=None,
+    *,
+    aimg_generation: Literal[False] = False,
+    **kwargs,
+) -> ImageResponse:
+    ...
+
+
 @client
 def image_generation(  # noqa: PLR0915
     prompt: str,
@@ -111,13 +166,17 @@ def image_generation(  # noqa: PLR0915
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
     timeout=600,  # default to 10 minutes
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     custom_llm_provider=None,
     **kwargs,
-) -> ImageResponse:
+) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -168,6 +227,7 @@ def image_generation(  # noqa: PLR0915
             "quality",
             "size",
             "style",
+            "input_fidelity",
         ]
         litellm_params = all_litellm_params
         default_params = openai_params + litellm_params
@@ -195,6 +255,7 @@ def image_generation(  # noqa: PLR0915
             size=size,
             style=style,
             user=user,
+            input_fidelity=input_fidelity,
             custom_llm_provider=custom_llm_provider,
             provider_config=image_generation_config,
             **non_default_params,
@@ -302,6 +363,8 @@ def image_generation(  # noqa: PLR0915
                 model_response=model_response,
                 aimg_generation=aimg_generation,
                 client=client,
+                api_base=api_base,
+                api_key=api_key
             )
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (
@@ -341,6 +404,28 @@ def image_generation(  # noqa: PLR0915
                 vertex_credentials=vertex_credentials,
                 aimg_generation=aimg_generation,
                 api_base=api_base,
+                client=client,
+            )
+        #########################################################
+        # Providers using llm_http_handler
+        #########################################################
+        elif custom_llm_provider in (
+            litellm.LlmProviders.RECRAFT,
+            litellm.LlmProviders.GEMINI,
+            
+        ):
+            if image_generation_config is None:
+                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
+            
+            return llm_http_handler.image_generation_handler(
+                model=model,
+                prompt=prompt,
+                image_generation_provider_config=image_generation_config,
+                image_generation_optional_request_params=optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
                 client=client,
             )
         elif (

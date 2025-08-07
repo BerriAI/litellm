@@ -337,7 +337,7 @@ def test_openai_max_retries_0(mock_get_openai_client):
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
 
 
-@pytest.mark.parametrize("model", ["o1", "o1-preview", "o1-mini", "o3-mini"])
+@pytest.mark.parametrize("model", ["o1", "o1-mini", "o3-mini"])
 def test_o1_parallel_tool_calls(model):
     litellm.completion(
         model=model,
@@ -543,3 +543,114 @@ async def test_openai_codex(sync_mode):
     print("response: ", response)
 
     assert response.choices[0].message.content is not None
+
+
+@pytest.mark.asyncio
+async def test_openai_via_gemini_streaming_bridge():
+    """
+    Test that the openai via gemini streaming bridge works correctly
+    """
+    from litellm import Router
+    from litellm.types.utils import ModelResponseStream
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                },
+                "model_info": {
+                    "version": 2,
+                },
+            }
+        ],
+        model_group_alias={"gemini-2.5-pro": "openai/gpt-3.5-turbo"},
+    )
+
+    response = await router.agenerate_content_stream(
+        model="openai/gpt-3.5-turbo",
+        contents=[
+            {
+                "parts": [{"text": "Write a long story about space exploration"}],
+                "role": "user",
+            }
+        ],
+        generationConfig={"maxOutputTokens": 500},
+    )
+
+    printed_chunks = []
+    async for chunk in response:
+        print("chunk: ", chunk)
+        printed_chunks.append(chunk)
+        assert not isinstance(chunk, ModelResponseStream)
+
+    assert len(printed_chunks) > 0
+
+
+def test_openai_deepresearch_model_bridge():
+    """
+    Test that the deepresearch model bridge works correctly
+    """
+    litellm._turn_on_debug()
+    response = litellm.completion(
+        model="o3-deep-research-2025-06-26",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        tools=[
+            {"type": "web_search_preview"},
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+        ],
+    )
+
+    print("response: ", response)
+
+
+def test_openai_tool_calling():
+    from pydantic import BaseModel
+    from typing import Any, Literal
+
+    class OpenAIFunction(BaseModel):
+        description: Optional[str] = None
+        name: str
+        parameters: Optional[dict[str, Any]] = None
+
+    class OpenAITool(BaseModel):
+        type: Literal["function"]
+        function: OpenAIFunction
+
+    completion_params = {
+        "model": "openai/gpt-4.1",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is TSLA stock price at today?"}
+                ],
+            }
+        ],
+        "stream": False,
+        "temperature": 0.5,
+        "stop": None,
+        "max_tokens": 1600,
+        "tools": [
+            OpenAITool(
+                type="function",
+                function=OpenAIFunction(
+                    description="Get the current stock price for a given ticker symbol.",
+                    name="get_stock_price",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "ticker": {
+                                "type": "string",
+                                "description": "The stock ticker symbol, e.g. AAPL for Apple Inc.",
+                            }
+                        },
+                        "required": ["ticker"],
+                    },
+                ),
+            )
+        ],
+    }
+
+    response = litellm.completion(**completion_params)

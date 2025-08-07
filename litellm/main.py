@@ -66,9 +66,6 @@ from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_request_utils import (
-    pick_cheapest_chat_models_from_llm_provider,
-)
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -110,6 +107,7 @@ from litellm.utils import (
     supports_httpx_timeout,
     token_counter,
     validate_and_fix_openai_messages,
+    validate_and_fix_openai_tools,
     validate_chat_completion_tool_choice,
 )
 
@@ -142,6 +140,7 @@ from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image.image_handler import BedrockImageGeneration
+from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
 from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -149,9 +148,11 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
+from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
+from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
@@ -252,6 +253,8 @@ databricks_embedding = DatabricksEmbeddingHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
 sagemaker_chat_completion = SagemakerChatHandler()
+bytez_transformation = BytezChatConfig()
+oci_transformation = OCIChatConfig()
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -453,7 +456,6 @@ async def acompletion(
     #########################################################
     #########################################################
 
-    
     # Adjusted to use explicit arguments instead of *args and **kwargs
     completion_kwargs = {
         "model": model,
@@ -510,13 +512,17 @@ async def acompletion(
             )
         return response
 
-    ### APPLY MOCK DELAY ### 
+    ### APPLY MOCK DELAY ###
 
     mock_delay = kwargs.get("mock_delay")
     mock_response = kwargs.get("mock_response")
     mock_tool_calls = kwargs.get("mock_tool_calls")
     mock_timeout = kwargs.get("mock_timeout")
-    if mock_delay and should_run_mock_completion(mock_response=mock_response, mock_tool_calls=mock_tool_calls, mock_timeout=mock_timeout):
+    if mock_delay and should_run_mock_completion(
+        mock_response=mock_response,
+        mock_tool_calls=mock_tool_calls,
+        mock_timeout=mock_timeout,
+    ):
         await asyncio.sleep(mock_delay)
 
     try:
@@ -683,7 +689,6 @@ async def _sleep_for_timeout_async(timeout: Union[float, str, httpx.Timeout]):
         await asyncio.sleep(float(timeout))
     elif isinstance(timeout, httpx.Timeout) and timeout.connect is not None:
         await asyncio.sleep(timeout.connect)
-
 
 
 def mock_completion(
@@ -961,6 +966,7 @@ def completion(  # type: ignore # noqa: PLR0915
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
+    tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     ######### unpacking kwargs #####################
@@ -1047,11 +1053,13 @@ def completion(  # type: ignore # noqa: PLR0915
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
     litellm_params = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
+
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (
         litellm_logging_obj.should_run_prompt_management_hooks(
             prompt_id=prompt_id, non_default_params=non_default_params
         )
     ):
+
         (
             model,
             messages,
@@ -1764,7 +1772,36 @@ def completion(  # type: ignore # noqa: PLR0915
                     additional_args={"headers": headers},
                 )
                 raise e
-
+        elif custom_llm_provider == "xai":
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    timeout=timeout,  # type: ignore
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=encoding,
+                    stream=stream,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
         elif custom_llm_provider == "groq":
             api_base = (
                 api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
@@ -2366,6 +2403,24 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=encoding,
                 stream=stream,
             )
+        elif custom_llm_provider == "oci":
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+            )
         elif custom_llm_provider == "oobabooga":
             custom_llm_provider = "oobabooga"
             model_response = oobabooga.completion(
@@ -2565,7 +2620,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             gemini_api_key = (
                 api_key
-                or get_secret("GEMINI_API_KEY")
+                or get_api_key_from_env()
                 or get_secret("PALM_API_KEY")  # older palm api key should also work
                 or litellm.api_key
             )
@@ -2870,9 +2925,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params[
-                        "aws_region_name"
-                    ] = aws_bedrock_client.meta.region_name
+                    optional_params["aws_region_name"] = (
+                        aws_bedrock_client.meta.region_name
+                    )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -2892,6 +2947,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     acompletion=acompletion,
                     client=client,
                     api_base=api_base,
+                    api_key=api_key,
                 )
             elif bedrock_route == "converse_like":
                 model = model.replace("converse_like/", "")
@@ -3267,6 +3323,35 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
             )
 
+        elif custom_llm_provider == "bytez":
+            api_key = (
+                api_key
+                or litellm.bytez_key
+                or get_secret_str("BYTEZ_API_KEY")
+                or litellm.api_key
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                encoding=encoding,
+                stream=stream,
+                provider_config=bytez_transformation,
+            )
+
+            pass
+
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -3442,13 +3527,13 @@ async def acompletion_with_retries(*args, **kwargs):
     retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
     original_function = kwargs.pop("original_function", completion)
     if retry_strategy == "exponential_backoff_retry":
-        retryer = tenacity.Retrying(
+        retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        retryer = tenacity.Retrying(
+        retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(num_retries), reraise=True
         )
     return await retryer(original_function, *args, **kwargs)
@@ -3517,6 +3602,8 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         )
 
 
+# fmt: off
+
 # Overload for when aembedding=True (returns coroutine)
 @overload
 def embedding(
@@ -3539,7 +3626,7 @@ def embedding(
     *,
     aembedding: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, EmbeddingResponse]:
+) -> Coroutine[Any, Any, EmbeddingResponse]: 
     ...
 
 
@@ -3565,32 +3652,10 @@ def embedding(
     *,
     aembedding: Literal[False] = False,
     **kwargs,
-) -> EmbeddingResponse:
+) -> EmbeddingResponse: 
     ...
 
-
-# Overload for when aembedding is not specified at all (returns EmbeddingResponse)
-@overload
-def embedding(
-    model,
-    input=[],
-    # Optional params
-    dimensions: Optional[int] = None,
-    encoding_format: Optional[str] = None,
-    timeout=600,  # default to 10 minutes
-    # set api_base, api_version, api_key
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_type: Optional[str] = None,
-    caching: bool = False,
-    user: Optional[str] = None,
-    custom_llm_provider=None,
-    litellm_call_id=None,
-    logger_fn=None,
-    **kwargs,
-) -> EmbeddingResponse:
-    ...
+# fmt: on
 
 
 @client
@@ -3856,7 +3921,6 @@ def embedding(  # noqa: PLR0915
             )
         elif (
             custom_llm_provider == "openai_like"
-            or custom_llm_provider == "jina_ai"
             or custom_llm_provider == "hosted_vllm"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
@@ -3873,6 +3937,9 @@ def embedding(  # noqa: PLR0915
                     or litellm.openai_like_key
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
+
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
 
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
@@ -3955,6 +4022,7 @@ def embedding(  # noqa: PLR0915
                 api_base=api_base,
                 print_verbose=print_verbose,
                 extra_headers=extra_headers,
+                api_key=api_key,
             )
         elif custom_llm_provider == "triton":
             if api_base is None:
@@ -3976,9 +4044,7 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "gemini":
-            gemini_api_key = (
-                api_key or get_secret_str("GEMINI_API_KEY") or litellm.api_key
-            )
+            gemini_api_key = api_key or get_api_key_from_env() or litellm.api_key
 
             api_base = api_base or litellm.api_base or get_secret_str("GEMINI_API_BASE")
 
@@ -4278,6 +4344,25 @@ def embedding(  # noqa: PLR0915
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
                 optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "jina_ai":
+            if isinstance(input, str):
+                transformed_input = [input]
+            else:
+                transformed_input = input
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=transformed_input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                litellm_params={},
                 client=client,
                 aembedding=aembedding,
             )
@@ -4746,9 +4831,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[
-        Union[BaseModel, AdapterCompletionStreamWrapper]
-    ] = None
+    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
+        None
+    )
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5409,34 +5494,6 @@ def speech(  # noqa: PLR0915
 ##### Health Endpoints #######################
 
 
-async def ahealth_check_wildcard_models(
-    model: str,
-    custom_llm_provider: str,
-    model_params: dict,
-    litellm_logging_obj: Logging,
-) -> dict:
-    # this is a wildcard model, we need to pick a random model from the provider
-    cheapest_models = pick_cheapest_chat_models_from_llm_provider(
-        custom_llm_provider=custom_llm_provider, n=3
-    )
-    if len(cheapest_models) == 0:
-        raise Exception(
-            f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-        )
-    if len(cheapest_models) > 1:
-        fallback_models = cheapest_models[
-            1:
-        ]  # Pick the last 2 models from the shuffled list
-    else:
-        fallback_models = None
-    model_params["model"] = cheapest_models[0]
-    model_params["litellm_logging_obj"] = litellm_logging_obj
-    model_params["fallbacks"] = fallback_models
-    model_params["max_tokens"] = 1
-    await acompletion(**model_params)
-    return {}
-
-
 async def ahealth_check(
     model_params: dict,
     mode: Optional[
@@ -5465,7 +5522,12 @@ async def ahealth_check(
             "x-ms-region": str,
         }
     """
+    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+
     # Map modes to their corresponding health check calls
+    #########################################################
+    # Init request with tracking information
+    #########################################################
     litellm_logging_obj = Logging(
         model="",
         messages=[],
@@ -5476,6 +5538,13 @@ async def ahealth_check(
         function_id="1234",
         log_raw_request_response=True,
     )
+    model_params["litellm_logging_obj"] = litellm_logging_obj
+    model_params = (
+        HealthCheckHelpers._update_model_params_with_health_check_tracking_information(
+            model_params=model_params
+        )
+    )
+    #########################################################
     try:
         model: Optional[str] = model_params.get("model", None)
         if model is None:
@@ -5493,13 +5562,12 @@ async def ahealth_check(
         }  # don't used cached responses for making health check calls
         mode = mode or "chat"
         if "*" in model:
-            return await ahealth_check_wildcard_models(
+            return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 model_params=model_params,
                 litellm_logging_obj=litellm_logging_obj,
             )
-        model_params["litellm_logging_obj"] = litellm_logging_obj
 
         mode_handlers = {
             "chat": lambda: litellm.acompletion(
@@ -5537,6 +5605,9 @@ async def ahealth_check(
                 api_base=model_params.get("api_base", None),
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
+            ),
+            "batch": lambda: litellm.alist_batches(
+                **_filter_model_params(model_params),
             ),
         }
 
@@ -5670,7 +5741,11 @@ def stream_chunk_builder_text_completion(
 
 
 def stream_chunk_builder(  # noqa: PLR0915
-    chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
+    chunks: list,
+    messages: Optional[list] = None,
+    start_time=None,
+    end_time=None,
+    logging_obj: Optional[Logging] = None,
 ) -> Optional[Union[ModelResponse, TextCompletionResponse]]:
     try:
         if chunks is None:
@@ -5739,9 +5814,22 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"][
-                "content"
-            ] = processor.get_combined_content(content_chunks)
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
+
+        thinking_blocks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "thinking_blocks" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["thinking_blocks"] is not None
+        ]
+
+        if len(thinking_blocks) > 0:
+            response["choices"][0]["message"]["thinking_blocks"] = (
+                processor.get_combined_thinking_content(thinking_blocks)
+            )
 
         reasoning_chunks = [
             chunk
@@ -5752,9 +5840,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"][
-                "reasoning_content"
-            ] = processor.get_combined_reasoning_content(reasoning_chunks)
+            response["choices"][0]["message"]["reasoning_content"] = (
+                processor.get_combined_reasoning_content(reasoning_chunks)
+            )
 
         audio_chunks = [
             chunk
@@ -5781,6 +5869,12 @@ def stream_chunk_builder(  # noqa: PLR0915
         )
 
         setattr(response, "usage", usage)
+
+        # Add cost to usage object if include_cost_in_streaming_usage is True
+        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+            setattr(
+                usage, "cost", logging_obj._response_cost_calculator(result=response)
+            )
 
         return response
     except Exception as e:

@@ -313,11 +313,22 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## VertexAI Mistral API
 
 [**Supported OpenAI Params**](https://github.com/BerriAI/litellm/blob/e0f3cd580cb85066f7d36241a03c30aa50a8a31d/litellm/llms/openai.py#L137)
+
+**LiteLLM Supports all Vertex AI Mistral Models.** Ensure you use the `vertex_ai/mistral-` prefix for all Vertex AI Mistral models.
+
+Overview
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `vertex_ai/mistral-{MODEL}` |
+| Vertex Documentation | [Vertex AI - Mistral Models](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/mistral) |
  
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | mistral-large@latest   | `completion('vertex_ai/mistral-large@latest', messages)` |
 | mistral-large@2407   | `completion('vertex_ai/mistral-large@2407', messages)` |
+| mistral-small-2503   | `completion('vertex_ai/mistral-small-2503', messages)` |
+| mistral-large-2411   | `completion('vertex_ai/mistral-large-2411', messages)` |
 | mistral-nemo@latest   | `completion('vertex_ai/mistral-nemo@latest', messages)` |
 | codestral@latest   | `completion('vertex_ai/codestral@latest', messages)` |
 | codestral@@2405   | `completion('vertex_ai/codestral@2405', messages)` |
@@ -579,7 +590,7 @@ All OpenAI compatible models from Vertex Model Garden are supported.
 | Property | Details |
 |----------|---------|
 | Provider Route | `vertex_ai/openai/{MODEL_ID}` |
-| Vertex Documentation | [SDK for Deploy & OpenAI Chat Completions](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/get_started_with_model_garden_sdk.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
+| Vertex Documentation | [Model Garden LiteLLM Inference](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/open-models/use-cases/model_garden_litellm_inference.ipynb), [Vertex Model Garden](https://cloud.google.com/model-garden?hl=en) |
 | Supported Operations | `/chat/completions`, `/embeddings` |
 
 <Tabs>

@@ -68,7 +68,9 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     )
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, exception_type="debug")
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
     # Check that decrypted_token is not None before using json.loads
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
@@ -334,3 +336,39 @@ async def test_vector_store_access_check_with_permissions():
             )
 
         assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
+def test_can_object_call_model_with_alias():
+    """Test that can_object_call_model works with model aliases"""
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "[ip-approved] gpt-4o"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "[ip-approved] gpt-4o": {
+                "model": "gpt-3.5-turbo",
+                "hidden": True,
+            },
+        },
+    )
+
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["gpt-3.5-turbo"],
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    print(result)

@@ -18,6 +18,7 @@ export interface Team {
 
 export interface KeyResponse {
     token: string;
+    token_id: string;
     key_name: string;
     key_alias: string;
     spend: number;
@@ -78,6 +79,7 @@ export interface KeyResponse {
     object_permission?: {
         object_permission_id: string;
         mcp_servers: string[];
+        mcp_access_groups?: string[];
         vector_stores: string[];
     };
 }

@@ -130,6 +130,7 @@ async def test_batch_completion_fastest_response_unit_test():
 @pytest.mark.asyncio
 async def test_batch_completion_fastest_response_streaming():
     litellm.set_verbose = True
+    litellm._turn_on_debug()
 
     router = litellm.Router(
         model_list=[

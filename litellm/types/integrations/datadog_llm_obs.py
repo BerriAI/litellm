@@ -3,8 +3,9 @@ Payloads for Datadog LLM Observability Service (LLMObs)
 
 API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=example#api-standards
 """
-
 from typing import Any, Dict, List, Literal, Optional, TypedDict
+
+from litellm.types.integrations.custom_logger import StandardCustomLoggerInitParams
 
 
 class InputMeta(TypedDict):
@@ -31,6 +32,7 @@ class LLMMetrics(TypedDict, total=False):
     total_tokens: float
     time_to_first_token: float
     time_per_output_token: float
+    total_cost: float
 
 
 class LLMObsPayload(TypedDict):
@@ -54,3 +56,10 @@ class DDSpanAttributes(TypedDict):
 class DDIntakePayload(TypedDict):
     type: str
     attributes: DDSpanAttributes
+
+
+class DatadogLLMObsInitParams(StandardCustomLoggerInitParams):
+    """
+    Params for initializing a DatadogLLMObs logger on litellm
+    """
+    pass

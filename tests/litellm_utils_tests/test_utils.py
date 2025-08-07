@@ -1,4 +1,5 @@
 import copy
+import logging
 import sys
 import time
 from datetime import datetime
@@ -43,7 +44,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 @pytest.fixture(autouse=True)
 def reset_mock_cache():
     from litellm.utils import _model_cache
+
     _model_cache.flush_cache()
+
+
 # Test 1: Check trimming of normal message
 def test_basic_trimming():
     litellm._turn_on_debug()
@@ -238,11 +242,19 @@ def test_trimming_with_tool_calls():
             "content": '{"location": "Paris", "temperature": "22", "unit": "celsius"}',
         },
     ]
-    result = trim_messages(messages=messages, max_tokens=1, return_response_tokens=True)
+    num_tool_calls = 3
+
+    result = trim_messages(messages=messages, max_tokens=1)
 
     print(result)
 
-    assert len(result[0]) == 3  # final 3 messages are tool calls
+    # only trailing tool calls are returned
+    assert len(result) == num_tool_calls
+    assert result == messages[-num_tool_calls:]
+
+    result = trim_messages(messages=messages, max_tokens=999)
+    # message length is below max_tokens, so output should match input
+    assert messages == result
 
 
 def test_trimming_should_not_change_original_messages():
@@ -272,6 +284,50 @@ def test_trimming_with_model_cost_max_input_tokens(model):
         get_token_count(trimmed_messages, model=model)
         < litellm.model_cost[model]["max_input_tokens"]
     )
+
+
+def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        },
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco?",
+            # non-string values will cause the tokenizer to raise an exception
+            "user_id": 123,
+        },
+        Message(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    function=Function(
+                        arguments='{"location": "San Francisco, CA", "unit": "celsius"}',
+                        name="get_current_weather",
+                    ),
+                    id="call_G11shFcS024xEKjiAOSt6Tc9",
+                    type="function",
+                ),
+            ],
+            function_call=None,
+        ),
+        {
+            "tool_call_id": "call_G11shFcS024xEKjiAOSt6Tc9",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+        },
+    ]
+
+    # trim_messages() catches the exception raised by the tokenizer and logs an error
+    with caplog.at_level(level=logging.ERROR, logger="LiteLLM"):
+        trimmed_messages = trim_messages(messages, max_tokens=999)
+
+    assert trimmed_messages == messages
 
 
 def test_aget_valid_models():
@@ -444,6 +500,7 @@ def test_function_to_dict():
 
 
 # test_function_to_dict()
+
 
 @pytest.mark.parametrize(
     "model, expected_bool",
@@ -622,17 +679,19 @@ def test_redact_embedding_response():
     litellm.turn_off_message_logging = True
 
     # Create a test EmbeddingResponse with usage data
-    original_usage = litellm.Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10)
+    original_usage = litellm.Usage(
+        prompt_tokens=10, completion_tokens=0, total_tokens=10
+    )
     original_data = [
         {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]},
-        {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]}
+        {"object": "embedding", "index": 1, "embedding": [0.6, 0.7, 0.8, 0.9, 1.0]},
     ]
 
     response_obj = litellm.EmbeddingResponse(
         model="text-embedding-ada-002",
         data=original_data,
         usage=original_usage,
-        object="list"
+        object="list",
     )
 
     litellm_logging_obj = Logging(
@@ -658,7 +717,9 @@ def test_redact_embedding_response():
 
     # Assert the redacted response preserves critical metadata
     assert _redacted_response_obj.usage == original_usage  # usage should be preserved
-    assert _redacted_response_obj.model == "text-embedding-ada-002"  # model should be preserved
+    assert (
+        _redacted_response_obj.model == "text-embedding-ada-002"
+    )  # model should be preserved
     assert _redacted_response_obj.object == "list"  # object should be preserved
 
     # Assert sensitive data is cleared
@@ -1093,7 +1154,9 @@ def test_async_http_handler(mock_async_client):
     concurrent_limit = 2
 
     # Mock the transport creation to return a specific transport
-    with mock.patch.object(AsyncHTTPHandler, '_create_async_transport') as mock_create_transport:
+    with mock.patch.object(
+        AsyncHTTPHandler, "_create_async_transport"
+    ) as mock_create_transport:
         mock_transport = mock.MagicMock()
         mock_create_transport.return_value = mock_transport
 
@@ -1101,7 +1164,7 @@ def test_async_http_handler(mock_async_client):
 
         # Get the call arguments
         call_args = mock_async_client.call_args[1]
-        
+
         # Assert SSL context is being used instead of direct cert/verify params
         assert call_args["cert"] == "/client.pem"
         assert isinstance(call_args["verify"], ssl.SSLContext)
@@ -2175,7 +2238,6 @@ def test_get_provider_audio_transcription_config():
         ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
     ],
 )
-
 def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
 
@@ -2201,7 +2263,6 @@ def test_get_valid_models_from_provider():
     assert "gpt-4o-mini" in valid_models
 
 
-
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     """
     Test that get_valid_models returns the correct models for a given provider
@@ -2210,11 +2271,12 @@ def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
 
     monkeypatch.setenv("OPENAI_API_KEY", "123")
 
-    _model_cache.set_cached_model_info("openai", litellm_params=None, available_models=["gpt-4o-mini"])
+    _model_cache.set_cached_model_info(
+        "openai", litellm_params=None, available_models=["gpt-4o-mini"]
+    )
     monkeypatch.delenv("OPENAI_API_KEY")
 
     assert _model_cache.get_cached_model_info("openai") is None
-
 
 
 def test_get_valid_models_from_dynamic_api_key():
@@ -2226,14 +2288,21 @@ def test_get_valid_models_from_dynamic_api_key():
 
     creds = CredentialLiteLLMParams(api_key="123")
 
-    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    valid_models = get_valid_models(
+        custom_llm_provider="anthropic",
+        litellm_params=creds,
+        check_provider_endpoint=True,
+    )
     assert len(valid_models) == 0
 
     creds = CredentialLiteLLMParams(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    valid_models = get_valid_models(custom_llm_provider="anthropic", litellm_params=creds, check_provider_endpoint=True)
+    valid_models = get_valid_models(
+        custom_llm_provider="anthropic",
+        litellm_params=creds,
+        check_provider_endpoint=True,
+    )
     assert len(valid_models) > 0
     assert "anthropic/claude-3-7-sonnet-20250219" in valid_models
-
 
 
 def test_get_whitelisted_models():

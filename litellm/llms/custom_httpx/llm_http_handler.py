@@ -35,6 +35,9 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -339,6 +342,7 @@ class BaseLLMHTTPHandler:
             optional_params=optional_params,
             request_data=data,
             api_base=api_base,
+            api_key=api_key,
             stream=stream,
             fake_stream=fake_stream,
             model=model,
@@ -1324,6 +1328,7 @@ class BaseLLMHTTPHandler:
             ),  # dynamic aws_* params are passed under litellm_params
             request_data=request_body,
             api_base=request_url,
+            api_key=api_key,
             stream=stream,
             fake_stream=False,
             model=model,
@@ -2368,6 +2373,7 @@ class BaseLLMHTTPHandler:
             BaseRerankConfig,
             BaseResponsesAPIConfig,
             BaseImageEditConfig,
+            BaseImageGenerationConfig,
             BaseVectorStoreConfig,
             BaseGoogleGenAIGenerateContentConfig,
             BaseAnthropicMessagesConfig,
@@ -2655,6 +2661,216 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    def image_generation_handler(
+        self,
+        model: str,
+        prompt: str,
+        image_generation_provider_config: BaseImageGenerationConfig,
+        image_generation_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: Dict,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        _is_async: bool = False,
+        fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
+        """
+        Handles image generation requests.
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        if _is_async:
+            # Return the async coroutine if called with _is_async=True
+            return self.async_image_generation_handler(
+                model=model,
+                prompt=prompt,
+                image_generation_provider_config=image_generation_provider_config,
+                image_generation_optional_request_params=image_generation_optional_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+                fake_stream=fake_stream,
+                litellm_metadata=litellm_metadata,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)}
+            )
+        else:
+            sync_httpx_client = client
+
+        headers = image_generation_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key", None),
+            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            model=model,
+            messages=[],
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = image_generation_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base", None),
+            api_key=litellm_params.get("api_key", None),
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+        )
+
+        data = image_generation_provider_config.transform_image_generation_request(
+            model=model,
+            prompt=prompt,
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=image_generation_provider_config,
+            )
+
+        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
+            model=model,
+            raw_response=response,
+            model_response=litellm.ImageResponse(),
+            logging_obj=logging_obj,
+            request_data=data,
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+            encoding=None,
+        )
+
+        return model_response
+
+    async def async_image_generation_handler(
+        self,
+        model: str,
+        prompt: str,
+        image_generation_provider_config: BaseImageGenerationConfig,
+        image_generation_optional_request_params: Dict,
+        custom_llm_provider: str,
+        litellm_params: Dict,
+        logging_obj: LiteLLMLoggingObj,
+        timeout: Union[float, httpx.Timeout],
+        extra_headers: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        fake_stream: bool = False,
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> ImageResponse:
+        """
+        Async version of the image generation handler.
+        Uses async HTTP client to make requests.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+
+        headers = image_generation_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key", None),
+            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            model=model,
+            messages=[],
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+        )
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = image_generation_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base", None),
+            api_key=litellm_params.get("api_key", None),
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+        )
+
+        data = image_generation_provider_config.transform_image_generation_request(
+            model=model,
+            prompt=prompt,
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+            headers=headers,
+        )
+
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                json=data,
+                timeout=timeout,
+            )
+
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=image_generation_provider_config,
+            )
+
+        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
+            model=model,
+            raw_response=response,
+            model_response=litellm.ImageResponse(),
+            logging_obj=logging_obj,
+            request_data=data,
+            optional_params=image_generation_optional_request_params,
+            litellm_params=dict(litellm_params),
+            encoding=None,
+        )
+        
+        return model_response
+
     ###### VECTOR STORE HANDLER ######
     async def async_vector_store_search_handler(
         self,
@@ -2697,7 +2913,17 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
             )
+        )
+        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params.update(vector_store_search_optional_params or {})
+        headers, signed_json_body = vector_store_provider_config.sign_request(
+            headers=headers,
+            optional_params=all_optional_params,
+            request_data=request_body,
+            api_base=url,
         )
 
         logging_obj.pre_call(
@@ -2710,15 +2936,21 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+
         try:
             response = await async_httpx_client.post(
-                url=url, headers=headers, json=request_body, timeout=timeout
+                url=url,
+                headers=headers,
+                data=request_data,
+                timeout=timeout,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     def vector_store_search_handler(
@@ -2778,7 +3010,19 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
+                litellm_logging_obj=logging_obj,
+                litellm_params=dict(litellm_params),
             )
+        )
+
+        all_optional_params: Dict[str, Any] = dict(litellm_params)
+        all_optional_params.update(vector_store_search_optional_params or {})
+
+        headers, signed_json_body = vector_store_provider_config.sign_request(
+            headers=headers,
+            optional_params=all_optional_params,
+            request_data=request_body,
+            api_base=url,
         )
 
         logging_obj.pre_call(
@@ -2791,15 +3035,20 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+
         try:
             response = sync_httpx_client.post(
-                url=url, headers=headers, json=request_body
+                url=url,
+                headers=headers,
+                data=request_data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
         return vector_store_provider_config.transform_search_vector_store_response(
             response=response,
+            litellm_logging_obj=logging_obj,
         )
 
     async def async_vector_store_create_handler(
@@ -2947,6 +3196,7 @@ class BaseLLMHTTPHandler:
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: Dict,
+        tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -2972,6 +3222,7 @@ class BaseLLMHTTPHandler:
                 contents=contents,
                 generate_content_provider_config=generate_content_provider_config,
                 generate_content_config_dict=generate_content_config_dict,
+                tools=tools,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -3007,6 +3258,7 @@ class BaseLLMHTTPHandler:
         data = generate_content_provider_config.transform_generate_content_request(
             model=model,
             contents=contents,
+            tools=tools,
             generate_content_config_dict=generate_content_config_dict,
         )
 
@@ -3068,6 +3320,7 @@ class BaseLLMHTTPHandler:
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: Dict,
+        tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3111,6 +3364,7 @@ class BaseLLMHTTPHandler:
         data = generate_content_provider_config.transform_generate_content_request(
             model=model,
             contents=contents,
+            tools=tools,
             generate_content_config_dict=generate_content_config_dict,
         )
 

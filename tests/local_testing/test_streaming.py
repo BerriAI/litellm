@@ -80,7 +80,9 @@ def validate_first_format(chunk):
 
     for choice in chunk["choices"]:
         assert isinstance(choice["index"], int), "'index' should be an integer."
-        assert isinstance(choice["delta"]["role"], str), "'role' should be a string."
+        assert isinstance(
+            choice["delta"]["role"], str
+        ), f"'role' should be a string. Got {choice['delta']['role']}"
         assert "messages" not in choice
         # openai v1.0.0 returns content as None
         assert (choice["finish_reason"] is None) or isinstance(
@@ -642,7 +644,6 @@ def test_completion_ollama_hosted_stream():
     "model",
     [
         # "claude-3-5-haiku-20241022",
-        # "claude-2",
         # "mistral/mistral-small-latest",
         "openrouter/openai/gpt-4o-mini",
     ],
@@ -669,37 +670,6 @@ def test_completion_model_stream(model):
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.asyncio
-async def test_acompletion_claude_2_stream():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="claude-2.1",
-            messages=[{"role": "user", "content": "hello from litellm"}],
-            stream=True,
-        )
-        complete_response = ""
-        # Add any assertions here to check the response
-        idx = 0
-        async for chunk in response:
-            print(chunk)
-            # print(chunk.choices[0].delta)
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-            idx += 1
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except litellm.InternalServerError:
-        pass
-    except litellm.RateLimitError:
-        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -739,7 +709,7 @@ async def test_completion_gemini_stream(sync_mode):
         chunks = []
         if sync_mode:
             response = completion(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash-lite",
                 messages=messages,
                 stream=True,
                 functions=function1,
@@ -756,7 +726,7 @@ async def test_completion_gemini_stream(sync_mode):
                 complete_response += chunk
         else:
             response = await litellm.acompletion(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash-lite",
                 messages=messages,
                 stream=True,
                 functions=function1,
@@ -859,7 +829,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 client, "post", side_effect=gemini_mock_post_streaming
             ) as mock_client:
                 response = completion(
-                    model="gemini/gemini-1.5-flash",
+                    model="gemini/gemini-2.5-flash-lite",
                     messages=messages,
                     stream=True,
                     functions=function1,
@@ -884,7 +854,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 client, "post", side_effect=gemini_mock_post_streaming
             ) as mock_client:
                 response = await litellm.acompletion(
-                    model="gemini/gemini-1.5-flash",
+                    model="gemini/gemini-2.5-flash-lite",
                     messages=messages,
                     stream=True,
                     functions=function1,
@@ -919,6 +889,7 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
         # if "429 Resource has been exhausted":
         #     return
         pytest.fail(f"Error occurred: {e}")
+
 
 @pytest.mark.flaky(retries=3, delay=1)
 def test_completion_mistral_api_mistral_large_function_call_with_streaming():
@@ -2018,7 +1989,6 @@ def test_openai_chat_completion_complete_response_call():
         "gpt-3.5-turbo",
         "azure/chatgpt-v-3",
         "claude-3-haiku-20240307",
-        "o1-preview",
         "o1",
         "azure/fake-o1-mini",
     ],
@@ -2185,54 +2155,6 @@ def test_together_ai_completion_call_mistral():
 
 
 # # test on together ai completion call - starcoder
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_openai_o1_completion_call_streaming(sync_mode):
-    try:
-        litellm.set_verbose = False
-        if sync_mode:
-            response = completion(
-                model="o1-preview",
-                messages=messages,
-                stream=True,
-            )
-            complete_response = ""
-            print(f"returned response object: {response}")
-            has_finish_reason = False
-            for idx, chunk in enumerate(response):
-                chunk, finished = streaming_format_tests(idx, chunk)
-                has_finish_reason = finished
-                if finished:
-                    break
-                complete_response += chunk
-            if has_finish_reason is False:
-                raise Exception("Finish reason not set for last chunk")
-            if complete_response == "":
-                raise Exception("Empty response received")
-        else:
-            response = await acompletion(
-                model="o1-preview",
-                messages=messages,
-                stream=True,
-            )
-            complete_response = ""
-            print(f"returned response object: {response}")
-            has_finish_reason = False
-            idx = 0
-            async for chunk in response:
-                chunk, finished = streaming_format_tests(idx, chunk)
-                has_finish_reason = finished
-                if finished:
-                    break
-                complete_response += chunk
-                idx += 1
-            if has_finish_reason is False:
-                raise Exception("Finish reason not set for last chunk")
-            if complete_response == "":
-                raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except Exception:
-        pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 
 def test_together_ai_completion_call_starcoder_bad_key():
@@ -3060,7 +2982,7 @@ def test_completion_claude_3_function_call_with_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "gemini/gemini-1.5-flash",
+        "gemini/gemini-2.5-flash-lite",
     ],  #  "claude-3-opus-20240229"
 )  #
 @pytest.mark.asyncio
@@ -3747,7 +3669,7 @@ def test_unit_test_custom_stream_wrapper_function_call():
             )
         ],
         created=1720755257,
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash-lite",
         object="chat.completion.chunk",
         system_fingerprint=None,
         usage=Usage(prompt_tokens=67, completion_tokens=55, total_tokens=122),
@@ -4026,3 +3948,45 @@ def test_is_delta_empty():
             audio=None,
         )
     )
+
+
+def test_streaming_with_cost_calculation():
+    from litellm.types.utils import Usage
+    from typing import Optional
+
+    litellm.include_cost_in_streaming_usage = True
+
+    ## Test 1: check if usage object can handle 'cost' field
+    usage_object = Usage(
+        prompt_tokens=100,
+        completion_tokens=100,
+        total_tokens=200,
+        cost=1.0,
+    )
+    assert usage_object.cost is not None
+
+    print(f"usage_object: {usage_object}")
+
+    ## Test 2: check if usage object has 'cost' field when streaming
+
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+
+    usage_object: Optional[Usage] = None
+    for chunk in response:
+        _usage_obj = getattr(chunk, "usage", None)
+        if _usage_obj is not None:
+            usage_object = _usage_obj
+            break
+
+    assert usage_object is not None
+    assert usage_object.total_tokens is not None
+    assert usage_object.total_tokens > 0
+    assert usage_object.prompt_tokens is not None
+    assert usage_object.prompt_tokens > 0
+    assert usage_object.cost is not None
+    assert usage_object.cost > 0

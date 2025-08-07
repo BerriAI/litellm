@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
+import { Button, TextInput, Grid, Col, Select as TremorSelect, SelectItem } from "@tremor/react";
 import {
   Card,
   Metric,
@@ -33,10 +33,10 @@ import {
   getPossibleUserRoles,
   userFilterUICall,
   keyCreateServiceAccountCall,
+  fetchMCPAccessGroups,
+  getPromptsList,
 } from "./networking";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import PremiumVectorStoreSelector from "./common_components/PremiumVectorStoreSelector";
-import PremiumMCPSelector from "./common_components/PremiumMCPSelector";
 import { Team } from "./key_team_helpers/key_list";
 import TeamDropdown from "./common_components/team_dropdown";
 import { InfoCircleOutlined } from '@ant-design/icons';
@@ -47,7 +47,9 @@ import debounce from 'lodash/debounce';
 import { rolesWithWriteAccess } from '../utils/roles';
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-
+import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import ModelAliasManager from "./common_components/ModelAliasManager";
 
 
 const { Option } = Select;
@@ -169,6 +171,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
@@ -178,11 +181,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   >({});
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
+  const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
+  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
+  const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
+  const [keyType, setKeyType] = useState<string>("default");
+  const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
 
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
+    setKeyType("default");
+    setModelAliases({});
   };
 
   const handleCancel = () => {
@@ -191,6 +202,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setSelectedCreateKeyTeam(null);
     form.resetFields();
     setLoggingSettings([]);
+    setDisabledCallbacks([]);
+    setKeyType("default");
+    setModelAliases({});
   };
 
   useEffect(() => {
@@ -198,6 +212,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
   }, [accessToken, userID, userRole]);
+
+  const fetchMcpAccessGroups = async () => {
+    try {
+      if (accessToken == null) {
+        return;
+      }
+      const groups = await fetchMCPAccessGroups(accessToken);
+      setMcpAccessGroups(groups);
+    } catch (error) {
+      console.error("Failed to fetch MCP access groups:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchMcpAccessGroups();
+  }, [accessToken]);
 
 
   useEffect(() => {
@@ -213,7 +243,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       }
     };
 
+    const fetchPrompts = async () => {
+      try {
+        const response = await getPromptsList(accessToken);
+        setPromptsList(response.prompts.map(prompt => prompt.prompt_id));
+      } catch (error) {
+        console.error("Failed to fetch prompts:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPrompts();
   }, [accessToken]);
 
   // Fetch possible user roles when component mounts
@@ -287,11 +327,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         };
       }
       
+      // Add disabled callbacks to the metadata
+      if (disabledCallbacks.length > 0) {
+        // Map display names to internal callback values
+        const mappedDisabledCallbacks = mapDisplayToInternalNames(disabledCallbacks);
+        metadata = {
+          ...metadata,
+          litellm_disabled_callbacks: mappedDisabledCallbacks
+        };
+      }
+      
       // Update the formValues with the final metadata
       formValues.metadata = JSON.stringify(metadata);
 
 
-      // Transform allowed_vector_store_ids and allowed_mcp_server_ids into object_permission format
+      // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission format
       if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
         formValues.object_permission = {
           vector_stores: formValues.allowed_vector_store_ids
@@ -300,15 +350,37 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         delete formValues.allowed_vector_store_ids;
       }
 
-      // Transform allowed_mcp_server_ids into object_permission format
-      if (formValues.allowed_mcp_server_ids && formValues.allowed_mcp_server_ids.length > 0) {
+      // Transform allowed_mcp_servers_and_groups into object_permission format
+      if (formValues.allowed_mcp_servers_and_groups && (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 || formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0)) {
         if (!formValues.object_permission) {
           formValues.object_permission = {};
         }
-        formValues.object_permission.mcp_servers = formValues.allowed_mcp_server_ids;
+        const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+        if (servers && servers.length > 0) {
+          formValues.object_permission.mcp_servers = servers;
+        }
+        if (accessGroups && accessGroups.length > 0) {
+          formValues.object_permission.mcp_access_groups = accessGroups;
+        }
         // Remove the original field as it's now part of object_permission
-        delete formValues.allowed_mcp_server_ids;
+        delete formValues.allowed_mcp_servers_and_groups;
       }
+
+      // Transform allowed_mcp_access_groups into object_permission format
+      if (formValues.allowed_mcp_access_groups && formValues.allowed_mcp_access_groups.length > 0) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        formValues.object_permission.mcp_access_groups = formValues.allowed_mcp_access_groups;
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_mcp_access_groups;
+      }
+      
+      // Add model_aliases if any are defined
+      if (Object.keys(modelAliases).length > 0) {
+        formValues.aliases = JSON.stringify(modelAliases);
+      }
+      
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -501,6 +573,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="team_id"
               initialValue={team ? team.team_id : null}
               className="mt-4"
+              rules={[
+                { 
+                  required: keyOwner === "service_account", 
+                  message: "Please select a team for the service account" 
+                }
+              ]}
+              help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown 
                 teams={teams} 
@@ -543,31 +622,40 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             >
               <TextInput placeholder="" />
             </Form.Item>
-            
-            <Form.Item
-              label={
-                <span>
-                  Models{' '}
-                  <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              }
-              name="models"
-              rules={[{ required: true, message: "Please select a model" }]}
-              help="required"
-              className="mt-4"
-            >
-              <Select
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
-                onChange={(values) => {
-                  if (values.includes("all-team-models")) {
-                    form.setFieldsValue({ models: ["all-team-models"] });
-                  }
-                }}
-              >
+
+                         <Form.Item
+               label={
+                 <span>
+                   Models{' '}
+                   <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                     <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                   </Tooltip>
+                 </span>
+               }
+               name="models"
+               rules={
+                 keyType === "management" || keyType === "read_only" 
+                   ? []
+                   : [{ required: true, message: "Please select a model" }]
+               }
+               help={
+                 keyType === "management" || keyType === "read_only"
+                   ? "Models field is disabled for this key type"
+                   : "required"
+               }
+               className="mt-4"
+             >
+               <Select
+                 mode="multiple"
+                 placeholder="Select models"
+                 style={{ width: "100%" }}
+                 disabled={keyType === "management" || keyType === "read_only"}
+                 onChange={(values) => {
+                   if (values.includes("all-team-models")) {
+                     form.setFieldsValue({ models: ["all-team-models"] });
+                   }
+                 }}
+               >
                 <Option key="all-team-models" value="all-team-models">
                   All Team Models
                 </Option>
@@ -578,296 +666,417 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                 ))}
               </Select>
             </Form.Item>
+
+
+            <Form.Item
+              label={
+                <span>
+                  Key Type{' '}
+                  <Tooltip title="Select the type of key to determine what routes and operations this key can access">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              }
+              name="key_type"
+              initialValue="default"
+              className="mt-4"
+            >
+              <Select 
+                defaultValue="default" 
+                placeholder="Select key type" 
+                style={{ width: "100%" }}
+                optionLabelProp="label"
+                onChange={(value) => {
+                  setKeyType(value);
+                  // Clear models field and disable if management or read_only
+                  if (value === "management" || value === "read_only") {
+                    form.setFieldsValue({ models: [] });
+                  }
+                }}
+              >
+                <Option value="default" label="Default">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call LLM API + Management routes
+                    </div>
+                  </div>
+                </Option>
+                <Option value="llm_api" label="LLM API">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>LLM API</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only LLM API routes (chat/completions, embeddings, etc.)
+                    </div>
+                  </div>
+                </Option>
+                <Option value="management" label="Management">
+                  <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontWeight: 500 }}>Management</div>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                      Can call only management routes (user/team/key management)
+                    </div>
+                  </div>
+                </Option>
+              </Select>
+            </Form.Item>
+            
           </div>
           )}
 
           {/* Section 3: Optional Settings */}
           {!isFormDisabled && (
             <div className="mb-8">
-              <Accordion className="mt-4 mb-4">
-              <AccordionHeader>
-                <Title className="m-0">Optional Settings</Title>
-              </AccordionHeader>
-              <AccordionBody>
-                <Form.Item
-                  className="mt-4"
-                  label={
-                    <span>
-                      Max Budget (USD){' '}
-                      <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="max_budget"
-                  help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
-                  rules={[
-                    {
-                      validator: async (_, value) => {
-                        if (
-                          value &&
-                          team &&
-                          team.max_budget !== null &&
-                          value > team.max_budget
-                        ) {
-                          throw new Error(
-                            `Budget cannot exceed team max budget: $${formatNumberWithCommas(team.max_budget, 4)}`
-                          );
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <NumericalInput step={0.01} precision={2} width={200} />
-                </Form.Item>
-                <Form.Item
-                  className="mt-4"
-                  label={
-                    <span>
-                      Reset Budget{' '}
-                      <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="budget_duration"
-                  help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
-                >
-                  <BudgetDurationDropdown onChange={(value) => form.setFieldValue('budget_duration', value)} />
-                </Form.Item>
-                <Form.Item
-                  className="mt-4"
-                  label={
-                    <span>
-                      Tokens per minute Limit (TPM){' '}
-                      <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="tpm_limit"
-                  help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
-                  rules={[
-                    {
-                      validator: async (_, value) => {
-                        if (
-                          value &&
-                          team &&
-                          team.tpm_limit !== null &&
-                          value > team.tpm_limit
-                        ) {
-                          throw new Error(
-                            `TPM limit cannot exceed team TPM limit: ${team.tpm_limit}`
-                          );
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <NumericalInput step={1} width={400} />
-                </Form.Item>
-                <Form.Item
-                  className="mt-4"
-                  label={
-                    <span>
-                      Requests per minute Limit (RPM){' '}
-                      <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="rpm_limit"
-                  help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
-                  rules={[
-                    {
-                      validator: async (_, value) => {
-                        if (
-                          value &&
-                          team &&
-                          team.rpm_limit !== null &&
-                          value > team.rpm_limit
-                        ) {
-                          throw new Error(
-                            `RPM limit cannot exceed team RPM limit: ${team.rpm_limit}`
-                          );
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <NumericalInput step={1} width={400} />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span>
-                      Expire Key{' '}
-                      <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="duration"
-                  className="mt-4"
-                >
-                  <TextInput placeholder="e.g., 30d" />
-                </Form.Item>
-                <Form.Item 
-                  label={
-                    <span>
-                      Guardrails{' '}
-                      <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
-                        <a 
-                          href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                        >
-                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                        </a>
-                      </Tooltip>
-                    </span>
-                  }
-                  name="guardrails" 
-                  className="mt-4"
-                  help="Select existing guardrails or enter new ones"
-                >
-                  <Select
-                    mode="tags"
-                    style={{ width: '100%' }}
-                    placeholder="Select or enter guardrails"
-                    options={guardrailsList.map(name => ({ value: name, label: name }))}
-                  />
-                </Form.Item>
-                <Form.Item 
-                      label={
-                        <span>
-                          Allowed Vector Stores{' '}
-                          <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
-                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                          </Tooltip>
-                        </span>
-                      } 
-                      name="allowed_vector_store_ids" 
-                      className="mt-4"
-                      help="Select vector stores this key can access. Leave empty for access to all vector stores"
-                    >
-                      <PremiumVectorStoreSelector
-                        onChange={(values) => form.setFieldValue('allowed_vector_store_ids', values)}
-                        value={form.getFieldValue('allowed_vector_store_ids')}
-                        accessToken={accessToken}
-                        placeholder="Select vector stores (optional)"
-                        premiumUser={premiumUser}
-                      />
-                    </Form.Item>
-
-                <Form.Item 
-                      label={
-                        <span>
-                          Allowed MCP Servers{' '}
-                          <Tooltip title="Select which MCP servers this key can access. If none selected, the key will have access to all available MCP servers">
-                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                          </Tooltip>
-                        </span>
-                      } 
-                      name="allowed_mcp_server_ids" 
-                      className="mt-4"
-                      help="Select MCP servers this key can access. Leave empty for access to all MCP servers"
-                    >
-                      <PremiumMCPSelector
-                        onChange={(values) => form.setFieldValue('allowed_mcp_server_ids', values)}
-                        value={form.getFieldValue('allowed_mcp_server_ids')}
-                        accessToken={accessToken}
-                        placeholder="Select MCP servers (optional)"
-                        premiumUser={premiumUser}
-                      />
-                    </Form.Item>
-
-                <Form.Item 
-                  label={
-                    <span>
-                      Metadata{' '}
-                      <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  } 
-                  name="metadata" 
-                  className="mt-4"
-                >
-                  <Input.TextArea
-                    rows={4}
-                    placeholder="Enter metadata as JSON"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span>
-                      Tags{' '}
-                      <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
-                        <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="tags"
-                  className="mt-4"
-                  help={`Tags for tracking spend and/or doing tag-based routing.`}
-                >
-                <Select
-                    mode="tags"
-                    style={{ width: '100%' }}
-                    placeholder="Enter tags"
-                    tokenSeparators={[',']}
-                    options={predefinedTags}
-                  />
-                </Form.Item>
-
-                <Accordion className="mt-4 mb-4">
-                  <AccordionHeader>
-                    <b>Logging Settings</b>
-                  </AccordionHeader>
-                  <AccordionBody>
-                    <div className="mt-4">
-                      <PremiumLoggingSettings
-                        value={loggingSettings}
-                        onChange={setLoggingSettings}
-                        premiumUser={premiumUser}
-                      />
-                    </div>
-                  </AccordionBody>
-                </Accordion>
-                <Accordion className="mt-4 mb-4">
-                  <AccordionHeader>
-                  <div className="flex items-center gap-2">
-
-                    <b>Advanced Settings</b>
-                    <Tooltip title={ 
+              <Accordion className="mt-4 mb-4" onClick={() => { if (!mcpAccessGroupsLoaded) { fetchMcpAccessGroups(); setMcpAccessGroupsLoaded(true); } }}>
+                <AccordionHeader>
+                  <Title className="m-0">Optional Settings</Title>
+                </AccordionHeader>
+                <AccordionBody>
+                  <Form.Item
+                    className="mt-4"
+                    label={
                       <span>
-                        Learn more about advanced settings in our{' '}
-                        <a 
-                          href={proxyBaseUrl ? `${proxyBaseUrl}/#/key%20management/generate_key_fn_key_generate_post`: `/#/key%20management/generate_key_fn_key_generate_post`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-400 hover:text-blue-300"
-                        >
-                          documentation
-                        </a>
+                        Max Budget (USD){' '}
+                        <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
                       </span>
-                    }>
-                      <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
+                    }
+                    name="max_budget"
+                    help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
+                    rules={[
+                      {
+                        validator: async (_, value) => {
+                          if (
+                            value &&
+                            team &&
+                            team.max_budget !== null &&
+                            value > team.max_budget
+                          ) {
+                            throw new Error(
+                              `Budget cannot exceed team max budget: $${formatNumberWithCommas(team.max_budget, 4)}`
+                            );
+                          }
+                        },
+                      },
+                    ]}
+                  >
+                    <NumericalInput step={0.01} precision={2} width={200} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Reset Budget{' '}
+                        <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="budget_duration"
+                    help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
+                  >
+                    <BudgetDurationDropdown onChange={(value) => form.setFieldValue('budget_duration', value)} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Tokens per minute Limit (TPM){' '}
+                        <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="tpm_limit"
+                    help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
+                    rules={[
+                      {
+                        validator: async (_, value) => {
+                          if (
+                            value &&
+                            team &&
+                            team.tpm_limit !== null &&
+                            value > team.tpm_limit
+                          ) {
+                            throw new Error(
+                              `TPM limit cannot exceed team TPM limit: ${team.tpm_limit}`
+                            );
+                          }
+                        },
+                      },
+                    ]}
+                  >
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Requests per minute Limit (RPM){' '}
+                        <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="rpm_limit"
+                    help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
+                    rules={[
+                      {
+                        validator: async (_, value) => {
+                          if (
+                            value &&
+                            team &&
+                            team.rpm_limit !== null &&
+                            value > team.rpm_limit
+                          ) {
+                            throw new Error(
+                              `RPM limit cannot exceed team RPM limit: ${team.rpm_limit}`
+                            );
+                          }
+                        },
+                      },
+                    ]}
+                  >
+                    <NumericalInput step={1} width={400} />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Expire Key{' '}
+                        <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="duration"
+                    className="mt-4"
+                  >
+                    <TextInput placeholder="e.g., 30d" />
+                  </Form.Item>
+                  <Form.Item 
+                    label={
+                      <span>
+                        Guardrails{' '}
+                        <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="guardrails" 
+                    className="mt-4"
+                    help={premiumUser ? "Select existing guardrails or enter new ones" : "Premium feature - Upgrade to set guardrails by key"}
+                  >
+                    <Tooltip 
+                      title={!premiumUser ? "Setting guardrails by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set guardrails by key"
+                            : "Select or enter guardrails"
+                        }
+                        options={guardrailsList.map(name => ({ value: name, label: name }))}
+                      />
                     </Tooltip>
-                    </div>
-                  </AccordionHeader>
-                  <AccordionBody>
-                    <SchemaFormFields 
-                      schemaComponent="GenerateKeyRequest"
-                      form={form}
-                      excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}
+                  </Form.Item>
+                  <Form.Item 
+                    label={
+                      <span>
+                        Prompts{' '}
+                        <Tooltip title="Allow this key to use specific prompt templates">
+                          <a 
+                            href="https://docs.litellm.ai/docs/proxy/prompt_management" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="prompts" 
+                    className="mt-4"
+                    help={premiumUser ? "Select existing prompts or enter new ones" : "Premium feature - Upgrade to set prompts by key"}
+                  >
+                    <Tooltip 
+                      title={!premiumUser ? "Setting prompts by key is a premium feature" : ""}
+                      placement="top"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        disabled={!premiumUser}
+                        placeholder={
+                          !premiumUser
+                            ? "Premium feature - Upgrade to set prompts by key"
+                            : "Select or enter prompts"
+                        }
+                        options={promptsList.map(name => ({ value: name, label: name }))}
+                      />
+                    </Tooltip>
+                  </Form.Item>
+                  <Form.Item 
+                        label={
+                          <span>
+                            Allowed Vector Stores{' '}
+                            <Tooltip title="Select which vector stores this key can access. If none selected, the key will have access to all available vector stores">
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </Tooltip>
+                          </span>
+                        } 
+                        name="allowed_vector_store_ids" 
+                        className="mt-4"
+                        help="Select vector stores this key can access. Leave empty for access to all vector stores"
+                      >
+                        <VectorStoreSelector
+                          onChange={(values: string[]) => form.setFieldValue('allowed_vector_store_ids', values)}
+                          value={form.getFieldValue('allowed_vector_store_ids')}
+                          accessToken={accessToken}
+                          placeholder="Select vector stores (optional)"
+                        />
+                      </Form.Item>
+
+                  <Form.Item 
+                        label={
+                          <span>
+                            Allowed MCP Servers{' '}
+                            <Tooltip title="Select which MCP servers or access groups this key can access. ">
+                              <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                            </Tooltip>
+                          </span>
+                        } 
+                        name="allowed_mcp_servers_and_groups" 
+                        className="mt-4"
+                        help="Select MCP servers or access groups this key can access. "
+                      >
+                        <MCPServerSelector
+                          onChange={(val: any) => form.setFieldValue('allowed_mcp_servers_and_groups', val)}
+                          value={form.getFieldValue('allowed_mcp_servers_and_groups')}
+                          accessToken={accessToken}
+                          placeholder="Select MCP servers or access groups (optional)"
+                        />
+                      </Form.Item>
+
+                  <Form.Item 
+                    label={
+                      <span>
+                        Metadata{' '}
+                        <Tooltip title="JSON object with additional information about this key. Used for tracking or custom logic">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    } 
+                    name="metadata" 
+                    className="mt-4"
+                  >
+                    <Input.TextArea
+                      rows={4}
+                      placeholder="Enter metadata as JSON"
                     />
-                  </AccordionBody>
-                </Accordion>
-              </AccordionBody>
-            </Accordion>
-          </div>
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Tags{' '}
+                        <Tooltip title="Tags for tracking spend and/or doing tag-based routing. Used for analytics and filtering">
+                          <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    name="tags"
+                    className="mt-4"
+                    help={`Tags for tracking spend and/or doing tag-based routing.`}
+                  >
+                  <Select
+                      mode="tags"
+                      style={{ width: '100%' }}
+                      placeholder="Enter tags"
+                      tokenSeparators={[',']}
+                      options={predefinedTags}
+                    />
+                  </Form.Item>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Logging Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <PremiumLoggingSettings
+                          value={loggingSettings}
+                          onChange={setLoggingSettings}
+                          premiumUser={premiumUser}
+                          disabledCallbacks={disabledCallbacks}
+                          onDisabledCallbacksChange={setDisabledCallbacks}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Model Aliases</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4">
+                        <Text className="text-sm text-gray-600 mb-4">
+                          Create custom aliases for models that can be used in API calls. This allows you to create shortcuts for specific models.
+                        </Text>
+                        <ModelAliasManager
+                          accessToken={accessToken}
+                          initialModelAliases={modelAliases}
+                          onAliasUpdate={setModelAliases}
+                          showExampleConfig={false}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                    <div className="flex items-center gap-2">
+
+                      <b>Advanced Settings</b>
+                      <Tooltip title={ 
+                        <span>
+                          Learn more about advanced settings in our{' '}
+                          <a 
+                            href={proxyBaseUrl ? `${proxyBaseUrl}/#/key%20management/generate_key_fn_key_generate_post`: `/#/key%20management/generate_key_fn_key_generate_post`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300"
+                          >
+                            documentation
+                          </a>
+                        </span>
+                      }>
+                        <InfoCircleOutlined className="text-gray-400 hover:text-gray-300 cursor-help" />
+                      </Tooltip>
+                      </div>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <SchemaFormFields 
+                        schemaComponent="GenerateKeyRequest"
+                        form={form}
+                        excludedFields={['key_alias', 'team_id', 'models', 'duration', 'metadata', 'tags', 'guardrails', "max_budget", "budget_duration", "tpm_limit", "rpm_limit"]}
+                      />
+                    </AccordionBody>
+                  </Accordion>
+                </AccordionBody>
+              </Accordion>
+            </div>
           )}
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>

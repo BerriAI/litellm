@@ -37,9 +37,11 @@ from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     LiteLLMPydanticObjectBase,
 )
+from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason
 from .guardrails import GuardrailEventHooks
+from .llms.base import HiddenParams
 from .llms.openai import (
     Batch,
     ChatCompletionAnnotation,
@@ -273,6 +275,11 @@ class CallTypes(Enum):
     generate_content_stream = "generate_content_stream"
     agenerate_content_stream = "agenerate_content_stream"
 
+    #########################################################
+    # MCP Call Types
+    #########################################################
+    call_mcp_tool = "call_mcp_tool"
+
 
 CallTypesLiteral = Literal[
     "embedding",
@@ -465,40 +472,6 @@ class ChatCompletionDeltaToolCall(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
-
-
-class HiddenParams(OpenAIObject):
-    original_response: Optional[Union[str, Any]] = None
-    model_id: Optional[str] = None  # used in Router for individual deployments
-    api_base: Optional[str] = None  # returns api base used for making completion call
-    _response_ms: Optional[float] = None
-
-    model_config = ConfigDict(extra="allow", protected_namespaces=())
-
-    def get(self, key, default=None):
-        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
-        return getattr(self, key, default)
-
-    def __getitem__(self, key):
-        # Allow dictionary-style access to attributes
-        return getattr(self, key)
-
-    def __setitem__(self, key, value):
-        # Allow dictionary-style assignment of attributes
-        setattr(self, key, value)
-
-    def json(self, **kwargs):  # type: ignore
-        try:
-            return self.model_dump()  # noqa
-        except Exception:
-            # if using pydantic v1
-            return self.dict()
-
-    def model_dump(self, **kwargs):
-        # Override model_dump to include private attributes
-        data = super().model_dump(**kwargs)
-        data["_response_ms"] = self._response_ms
-        return data
 
 
 class ChatCompletionMessageToolCall(OpenAIObject):
@@ -914,6 +887,10 @@ class Usage(CompletionUsage):
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
 
     server_tool_use: Optional[ServerToolUse] = None
+    cost: Optional[float] = None
+
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+    """Breakdown of tokens used in a completion."""
 
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
@@ -931,6 +908,7 @@ class Usage(CompletionUsage):
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
         server_tool_use: Optional[ServerToolUse] = None,
+        cost: Optional[float] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -1001,6 +979,11 @@ class Usage(CompletionUsage):
             self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
+
+        if cost is not None:
+            self.cost = cost
+        else:
+            del self.cost
 
         ## ANTHROPIC MAPPING ##
         if "cache_creation_input_tokens" in params and isinstance(
@@ -1841,6 +1824,18 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     (this is to render the logo on the logs page on litellm ui)
     """
 
+    namespaced_tool_name: Optional[str]
+    """
+    Namespaced tool name of the MCP tool that the tool call was made to
+
+    Includes the server name prefix if it exists - eg. `deepwiki-mcp/get_page_content`
+    """
+
+    mcp_server_cost_info: Optional[MCPServerCostInfo]
+    """
+    Cost per query for the MCP server tool call
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -1968,9 +1963,16 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_message: Optional[str]
 
 
+class GuardrailMode(TypedDict, total=False):
+    tags: Optional[Dict[str, str]]
+    default: Optional[str]
+
+
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_name: Optional[str]
-    guardrail_mode: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks]]]
+    guardrail_mode: Optional[
+        Union[GuardrailEventHooks, List[GuardrailEventHooks], GuardrailMode]
+    ]
     guardrail_request: Optional[dict]
     guardrail_response: Optional[Union[dict, str, List[dict]]]
     guardrail_status: Literal["success", "failure"]
@@ -2094,12 +2096,14 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
 
     # Logging settings
     turn_off_message_logging: Optional[bool]  # when true will not log messages
+    litellm_disabled_callbacks: Optional[List[str]]
 
 
 all_litellm_params = [
     "metadata",
     "litellm_metadata",
     "litellm_trace_id",
+    "guardrails",
     "tags",
     "acompletion",
     "aimg_generation",
@@ -2152,6 +2156,7 @@ all_litellm_params = [
     "hf_model_name",
     "model_info",
     "proxy_server_request",
+    "secret_fields",
     "preset_cache_key",
     "caching_groups",
     "ttl",
@@ -2246,6 +2251,7 @@ class LlmProviders(str, Enum):
     CLARIFAI = "clarifai"
     ANTHROPIC = "anthropic"
     ANTHROPIC_TEXT = "anthropic_text"
+    BYTEZ = "bytez"
     REPLICATE = "replicate"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
@@ -2278,6 +2284,11 @@ class LlmProviders(str, Enum):
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
+    DASHSCOPE = "dashscope"
+    MOONSHOT = "moonshot"
+    V0 = "v0"
+    MORPH = "morph"
+    LAMBDA_AI = "lambda_ai"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -2315,6 +2326,12 @@ class LlmProviders(str, Enum):
     GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
+    PG_VECTOR = "pg_vector"
+    HYPERBOLIC = "hyperbolic"
+    RECRAFT = "recraft"
+    OCI = "oci"
+    AUTO_ROUTER = "auto_router"
+    DOTPROMPT = "dotprompt"
 
 
 # Create a set of all provider values for quick lookup

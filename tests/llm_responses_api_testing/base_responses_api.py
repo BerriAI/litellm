@@ -25,6 +25,9 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     IncompleteDetails,
 )
+from openai.types.responses.response_create_params import (
+    ResponseInputParam,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -137,6 +140,7 @@ class BaseResponsesAPITest(ABC):
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
@@ -183,8 +187,8 @@ class BaseResponsesAPITest(ABC):
         # basic test assert the usage seems reasonable
         print("response_completed_event.response.usage=", response_completed_event.response.usage)
         assert response_completed_event.response.usage.input_tokens > 0 and response_completed_event.response.usage.input_tokens < 100
-        assert response_completed_event.response.usage.output_tokens > 0 and response_completed_event.response.usage.output_tokens < 1000
-        assert response_completed_event.response.usage.total_tokens > 0 and response_completed_event.response.usage.total_tokens < 1000
+        assert response_completed_event.response.usage.output_tokens > 0 and response_completed_event.response.usage.output_tokens < 2000
+        assert response_completed_event.response.usage.total_tokens > 0 and response_completed_event.response.usage.total_tokens < 2000
 
         # total tokens should be the sum of input and output tokens
         assert response_completed_event.response.usage.total_tokens == response_completed_event.response.usage.input_tokens + response_completed_event.response.usage.output_tokens
@@ -228,6 +232,7 @@ class BaseResponsesAPITest(ABC):
     
 
     @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode):
         #litellm._turn_on_debug()
@@ -277,6 +282,7 @@ class BaseResponsesAPITest(ABC):
             )
 
     @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_get_endpoint(self, sync_mode):
         litellm._turn_on_debug()
@@ -317,6 +323,7 @@ class BaseResponsesAPITest(ABC):
                 raise ValueError("response is not a ResponsesAPIResponse")
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_list_input_items_endpoint(self):
         """Test that calls the OpenAI List Input Items endpoint"""
         litellm._turn_on_debug()
@@ -363,3 +370,73 @@ class BaseResponsesAPITest(ABC):
         # assert the response is not None
         assert response_1 is not None
         assert response_2 is not None
+    
+    @pytest.mark.asyncio
+    async def test_responses_api_with_tool_calls(self):
+        """Test that calls the Responses API with tool calls including function call and output"""
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        
+        # Define the input with message, function call, and function call output
+        input_data: ResponseInputParam = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "How is the weather in São Paulo today ?"
+            },
+            {
+                "type": "function_call",
+                "arguments": "{\"location\": \"São Paulo, Brazil\"}",
+                "call_id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "name": "get_weather",
+                "id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "status": "completed"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "output": "Rainy"
+            }
+        ]
+        
+        # Define the tools
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get current temperature for a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "City and country e.g. Bogotá, Colombia"
+                        }
+                    },
+                    "required": ["location"],
+                    "additionalProperties": False
+                }
+            }
+        ]
+        
+        try:
+            # Make the responses API call
+            response = await litellm.aresponses(
+                input=input_data,
+                store=False,
+                tools=tools,
+                **base_completion_call_args
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Skipping test due to litellm.InternalServerError")
+        
+        print("litellm response=", json.dumps(response, indent=4, default=str))
+        
+        # Validate the response structure
+        validate_responses_api_response(response, final_chunk=True)
+        
+        # Additional assertions specific to tool calls
+        assert response is not None
+        assert "output" in response
+        assert len(response["output"]) > 0

@@ -34,11 +34,15 @@ const sidebars = {
         ...[
           "proxy/guardrails/aim_security",
           "proxy/guardrails/aporia_api",
+          "proxy/guardrails/azure_content_guardrail",
           "proxy/guardrails/bedrock",
           "proxy/guardrails/lasso_security",
           "proxy/guardrails/guardrails_ai",
           "proxy/guardrails/lakera_ai",
+          "proxy/guardrails/model_armor",
+          "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
+          "proxy/guardrails/pillar_security",
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
@@ -71,7 +75,10 @@ const sidebars = {
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
         "tutorials/litellm_gemini_cli",
+        "tutorials/litellm_qwen_code_cli",
+        "tutorials/github_copilot_integration",
         "tutorials/claude_responses_api",
+        "tutorials/cost_tracking_coding",
       ]
     },
 
@@ -114,7 +121,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling", "proxy/spend_logs_deletion"],
+          items: ["proxy/architecture", "proxy/control_plane_and_data_plane", "proxy/db_info", "proxy/db_deadlocks", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch", "proxy/image_handling", "proxy/spend_logs_deletion"],
         },
         {
           type: "link",
@@ -164,11 +171,13 @@ const sidebars = {
             "proxy/ui",
             "proxy/admin_ui_sso",
             "proxy/custom_root_ui",
+            "proxy/model_hub",
             "proxy/self_serve",
             "proxy/public_teams",
             "tutorials/scim_litellm",
             "proxy/custom_sso",
             "proxy/ui_credentials",
+            "proxy/ui/bulk_edit_users",
             {
               type: "category",
               label: "UI Logs",
@@ -276,6 +285,13 @@ const sidebars = {
         },
         {
           type: "category",
+          label: "/vector_stores",
+          items: [
+            "vector_stores/search",
+          ]
+        },
+        {
+          type: "category",
           label: "Pass-through Endpoints (Anthropic SDK, etc.)",
           items: [
             "pass_through/intro",
@@ -371,6 +387,7 @@ const sidebars = {
           items: [
             "providers/gemini",
             "providers/google_ai_studio/files",
+            "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",
           ]
         },
@@ -399,6 +416,7 @@ const sidebars = {
             "providers/huggingface_rerank",
           ]
         },
+        "providers/hyperbolic",
         "providers/databricks",
         "providers/deepgram",
         "providers/watsonx",
@@ -406,6 +424,7 @@ const sidebars = {
         "providers/nvidia_nim",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         "providers/xai",
+        "providers/moonshot",
         "providers/lm_studio",
         "providers/cerebras",
         "providers/volcano",
@@ -431,8 +450,12 @@ const sidebars = {
         "providers/github_copilot",
         "providers/ai21",
         "providers/nlp_cloud",
+        "providers/recraft",
         "providers/replicate",
         "providers/togetherai",
+        "providers/v0",
+        "providers/morph",
+        "providers/lambda_ai",
         "providers/novita",
         "providers/voyage",
         "providers/jina_ai",
@@ -445,7 +468,10 @@ const sidebars = {
         "providers/snowflake",
         "providers/gradient_ai",
         "providers/featherless_ai",
-        "providers/nebius"
+        "providers/nebius",
+        "providers/dashscope",
+        "providers/bytez",
+        "providers/oci",
       ],
     },
     {
@@ -462,6 +488,7 @@ const sidebars = {
         "completion/vision",
         "completion/json_mode",
         "reasoning_content",
+        "completion/computer_use",
         "completion/prompt_caching",
         "completion/predict_outputs",
         "completion/knowledgebase",
@@ -488,7 +515,7 @@ const sidebars = {
         description: "Learn how to load balance, route, and set fallbacks for your LLM requests",
         slug: "/routing-load-balancing",
       },
-      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/tag_routing", "proxy/provider_budget_routing", "wildcard_routing"],
+      items: ["routing", "scheduler", "proxy/load_balancing", "proxy/reliability", "proxy/timeout", "proxy/auto_routing", "proxy/tag_routing", "proxy/provider_budget_routing", "wildcard_routing"],
     },
     {
       type: "category",
@@ -526,6 +553,8 @@ const sidebars = {
       items: [
         "tutorials/openweb_ui",
         "tutorials/openai_codex",
+        "tutorials/litellm_gemini_cli",
+        "tutorials/litellm_qwen_code_cli",
         "tutorials/anthropic_file_usage",
         "tutorials/default_team_self_serve",
         "tutorials/msft_sso",
@@ -608,6 +637,7 @@ const sidebars = {
             "projects/llm_cord",
             "projects/pgai",
             "projects/GPTLocalhost",
+            "projects/HolmesGPT"
           ],
         },
         "extras/code_quality",
@@ -616,6 +646,11 @@ const sidebars = {
         "proxy/customer_routing",
         "proxy_server",
       ],
+    },
+    {
+      type: "doc",
+      id: "provider_registration/index",
+      label: "Integrate as a Model Provider",
     },
     "troubleshoot",
   ],

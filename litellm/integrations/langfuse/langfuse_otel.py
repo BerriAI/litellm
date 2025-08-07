@@ -1,11 +1,15 @@
 import base64
 import os
+import json  # <--- NEW
 from typing import TYPE_CHECKING, Any, Union
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
-from litellm.types.integrations.langfuse_otel import LangfuseOtelConfig
+from litellm.types.integrations.langfuse_otel import (
+    LangfuseOtelConfig,
+    LangfuseSpanAttributes,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -28,6 +32,7 @@ LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
 
+
 class LangfuseOtelLogger:
     @staticmethod
     def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
@@ -36,7 +41,100 @@ class LangfuseOtelLogger:
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
         _utils.set_attributes(span, kwargs, response_obj)
+
+        #########################################################
+        # Set Langfuse specific attributes eg Langfuse Environment
+        #########################################################
+        LangfuseOtelLogger._set_langfuse_specific_attributes(
+            span=span,
+            kwargs=kwargs
+        )
         return
+
+    @staticmethod
+    def _extract_langfuse_metadata(kwargs: dict) -> dict:
+        """
+        Extracts Langfuse metadata from the standard LiteLLM kwargs structure.
+
+        1. Reads kwargs["litellm_params"]["metadata"] if present and is a dict.
+        2. Enriches it with any `langfuse_*` request-header params via the
+           existing LangFuseLogger.add_metadata_from_header helper so that proxy
+           users get identical behaviour across vanilla and OTEL integrations.
+        """
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        metadata = litellm_params.get("metadata") or {}
+        # Ensure we only work with dicts
+        if metadata is None or not isinstance(metadata, dict):
+            metadata = {}
+
+        # Re-use header extraction logic from the vanilla logger if available
+        try:
+            from litellm.integrations.langfuse.langfuse import (
+                LangFuseLogger as _LFLogger,
+            )
+
+            metadata = _LFLogger.add_metadata_from_header(litellm_params, metadata)  # type: ignore
+        except Exception:
+            # Fallback silently if import fails; header enrichment just won't happen
+            pass
+
+        return metadata
+
+    @staticmethod
+    def _set_langfuse_specific_attributes(span: Span, kwargs):
+        """
+        Sets Langfuse specific metadata attributes onto the OTEL span.
+
+        All keys supported by the vanilla Langfuse integration are mapped to
+        OTEL-safe attribute names defined in LangfuseSpanAttributes.  Complex
+        values (lists/dicts) are serialised to JSON strings for OTEL
+        compatibility.
+        """
+        from litellm.integrations.arize._utils import safe_set_attribute
+
+        # 1) Environment variable override
+        langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        if langfuse_environment:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value,
+                langfuse_environment,
+            )
+
+        # 2) Dynamic metadata from kwargs / headers
+        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
+
+        # Mapping from metadata key -> OTEL attribute enum
+        mapping = {
+            "generation_name": LangfuseSpanAttributes.GENERATION_NAME,
+            "generation_id": LangfuseSpanAttributes.GENERATION_ID,
+            "parent_observation_id": LangfuseSpanAttributes.PARENT_OBSERVATION_ID,
+            "version": LangfuseSpanAttributes.GENERATION_VERSION,
+            "mask_input": LangfuseSpanAttributes.MASK_INPUT,
+            "mask_output": LangfuseSpanAttributes.MASK_OUTPUT,
+            "trace_user_id": LangfuseSpanAttributes.TRACE_USER_ID,
+            "session_id": LangfuseSpanAttributes.SESSION_ID,
+            "tags": LangfuseSpanAttributes.TAGS,
+            "trace_name": LangfuseSpanAttributes.TRACE_NAME,
+            "trace_id": LangfuseSpanAttributes.TRACE_ID,
+            "trace_metadata": LangfuseSpanAttributes.TRACE_METADATA,
+            "trace_version": LangfuseSpanAttributes.TRACE_VERSION,
+            "trace_release": LangfuseSpanAttributes.TRACE_RELEASE,
+            "existing_trace_id": LangfuseSpanAttributes.EXISTING_TRACE_ID,
+            "update_trace_keys": LangfuseSpanAttributes.UPDATE_TRACE_KEYS,
+            "debug_langfuse": LangfuseSpanAttributes.DEBUG_LANGFUSE,
+        }
+
+        for key, enum_attr in mapping.items():
+            if key in metadata and metadata[key] is not None:
+                value = metadata[key]
+                # Lists / dicts must be stringified for OTEL
+                if isinstance(value, (list, dict)):
+                    try:
+                        value = json.dumps(value)
+                    except Exception:
+                        value = str(value)
+                safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
     def get_langfuse_otel_config() -> LangfuseOtelConfig:

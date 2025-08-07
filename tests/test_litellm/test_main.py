@@ -547,3 +547,578 @@ async def test_async_mock_delay():
     end_time = time.time()
     delay = end_time - start_time
     assert delay >= 0.01
+
+
+def test_stream_chunk_builder_thinking_blocks():
+    from litellm import stream_chunk_builder
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="I need to summar",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "I need to summar",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "I need to summar",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role="assistant",
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="ize the previous agent's thinking process into a",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "ize the previous agent's thinking process into a",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "ize the previous agent's thinking process into a",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" short description. Based on the input data provide",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " short description. Based on the input data provide",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " short description. Based on the input data provide",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="d, it seems the agent was planning to refine their search",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "d, it seems the agent was planning to refine their search",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "d, it seems the agent was planning to refine their search",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" to focus more on technical aspects of home automation and home",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " to focus more on technical aspects of home automation and home",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " to focus more on technical aspects of home automation and home",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" energy system management.\n\nI'll create a brief",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " energy system management.\n\nI'll create a brief",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " energy system management.\n\nI'll create a brief",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" summary of what the agent was doing.",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": " summary of what the agent was doing.",
+                                "signature": None,
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": " summary of what the agent was doing.",
+                                    "signature": None,
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "",
+                                "signature": "ErUBCkYIBRgCIkAKBSMkB2+MBF643wiWxlERsGXVdlhbPx9lnTIbygzjFIeZ5uhTV+HNWDon9vQV4hmXvAKwQfwS8vkNFB366l05Egzt2U18IpRrZRyQn1UaDDdYvKHYP8Ps1IbWjSIw8eSYOU9gtqNcwR6D0wY7iOPx2GliDEatLI5rSs96CByoTIoADL2M5bX8KP0jEpbHKh0ccYryigdH/3J8EiFt/BmGUceVASP5l9r22dFWiBgC",
+                            }
+                        ],
+                        provider_specific_fields={
+                            "thinking_blocks": [
+                                {
+                                    "type": "thinking",
+                                    "thinking": "",
+                                    "signature": "ErUBCkYIBRgCIkAKBSMkB2+MBF643wiWxlERsGXVdlhbPx9lnTIbygzjFIeZ5uhTV+HNWDon9vQV4hmXvAKwQfwS8vkNFB366l05Egzt2U18IpRrZRyQn1UaDDdYvKHYP8Ps1IbWjSIw8eSYOU9gtqNcwR6D0wY7iOPx2GliDEatLI5rSs96CByoTIoADL2M5bX8KP0jEpbHKh0ccYryigdH/3J8EiFt/BmGUceVASP5l9r22dFWiBgC",
+                                }
+                            ]
+                        },
+                        content="",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content='{"a',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content='gent_doing"',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=': "Re',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="searching",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=" technic",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="al aspect",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content="s of home au",
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=1,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content='tomation"}',
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+            citations=None,
+        ),
+        ModelResponseStream(
+            id="chatcmpl-e8febeb7-cf7d-4947-9417-59ae5e6989f9",
+            created=1751934860,
+            model="claude-3-7-sonnet-latest",
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    delta=Delta(
+                        provider_specific_fields=None,
+                        content=None,
+                        role=None,
+                        function_call=None,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    logprobs=None,
+                )
+            ],
+            provider_specific_fields=None,
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+    print(response)
+
+    assert response is not None
+    assert response.choices[0].message.content is not None
+    assert response.choices[0].message.thinking_blocks is not None
+
+
+from litellm.llms.openai.openai import OpenAIChatCompletion
+
+
+def throw_retryable_error(*_, **__):
+    raise RuntimeError("BOOM")
+
+
+@pytest.mark.asyncio
+async def test_retrying() -> None:
+    litellm.num_retries = 10
+    with (
+        patch.object(
+            OpenAIChatCompletion,
+            "make_openai_chat_completion_request",
+            side_effect=throw_retryable_error,
+        ) as mock_request,
+        pytest.raises(litellm.InternalServerError, match="LiteLLM Retried: 10 times"),
+    ):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+    assert mock_request.call_count >= 10, "Expected retrying to be used"

@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Caching - In-Memory, Redis, s3, Redis Semantic Cache, Disk
+# Caching - In-Memory, Redis, s3, gcs, Redis Semantic Cache, Disk
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching/caching.py)
 
@@ -14,7 +14,7 @@ import TabItem from '@theme/TabItem';
 
 :::
 
-## Initialize Cache - In Memory, Redis, s3 Bucket, Redis Semantic, Disk Cache, Qdrant Semantic
+## Initialize Cache - In Memory, Redis, s3 Bucket, gcs Bucket, Redis Semantic, Disk Cache, Qdrant Semantic
 
 
 <Tabs>
@@ -28,6 +28,8 @@ pip install redis
 
 For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
 
+**Basic Redis Cache**
+
 ```python
 import litellm
 from litellm import completion
@@ -36,6 +38,91 @@ from litellm.caching.caching import Cache
 litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password>)
 
 # Make completion calls
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+
+# response1 == response2, response 1 is cached
+```
+
+**GCP IAM Redis Authentication**
+
+For GCP Memorystore Redis with IAM authentication:
+
+```shell
+pip install google-cloud-iam
+```
+
+```python
+import litellm
+from litellm import completion
+# For Redis Cluster with GCP IAM
+from litellm.caching.redis_cluster_cache import RedisClusterCache
+
+litellm.cache = RedisClusterCache(
+    startup_nodes=[
+        {"host": "10.128.0.2", "port": 6379},
+        {"host": "10.128.0.2", "port": 11008},
+    ],
+    gcp_service_account="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com",
+    ssl=True,
+    ssl_cert_reqs=None,
+    ssl_check_hostname=False,
+)
+
+# Make completion calls
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+response2 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+
+# response1 == response2, response 1 is cached
+```
+
+**Environment Variables for GCP IAM Redis**
+
+You can also set these as environment variables:
+
+```shell
+export REDIS_HOST="10.128.0.2"
+export REDIS_PORT="6379"
+export REDIS_GCP_SERVICE_ACCOUNT="projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
+export REDIS_SSL="False"
+```
+
+Then simply initialize:
+
+```python
+litellm.cache = Cache(type="redis")
+```
+
+</TabItem>
+
+<TabItem value="gcs" label="gcs-cache">
+
+Set environment variables
+
+```shell
+GCS_BUCKET_NAME="my-cache-bucket"
+GCS_PATH_SERVICE_ACCOUNT="/path/to/service_account.json"
+```
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching.caching import Cache
+
+litellm.cache = Cache(type="gcs", gcs_bucket_name="my-cache-bucket", gcs_path_service_account="/path/to/service_account.json")
+
 response1 = completion(
     model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
@@ -80,6 +167,37 @@ response1 = completion(
 )
 response2 = completion(
     model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+
+# response1 == response2, response 1 is cached
+```
+
+</TabItem>
+
+<TabItem value="azureblob" label="azure-blob-cache">
+
+Install azure-storage-blob and azure-identity
+```shell
+pip install azure-storage-blob azure-identity
+```
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching.caching import Cache
+from azure.identity import DefaultAzureCredential
+
+# pass Azure Blob Storage account URL and container name
+litellm.cache = Cache(type="azure-blob", azure_account_url="https://example.blob.core.windows.net", azure_blob_container="litellm")
+
+# Make completion calls
+response1 = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+)
+response2 = completion(
+    model="gpt-3.5-turbo",
     messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
@@ -374,7 +492,7 @@ Advanced Params
 
 ```python
 litellm.enable_cache(
-    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "gcs", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
@@ -398,7 +516,7 @@ Update the Cache params
 
 ```python
 litellm.update_cache(
-    type: Optional[Literal["local", "redis", "s3", "disk"]] = "local",
+    type: Optional[Literal["local", "redis", "s3", "gcs", "disk"]] = "local",
     host: Optional[str] = None,
     port: Optional[str] = None,
     password: Optional[str] = None,
@@ -459,7 +577,7 @@ cache.get_cache = get_cache
 ```python
 def __init__(
     self,
-    type: Optional[Literal["local", "redis", "redis-semantic", "s3", "disk"]] = "local",
+    type: Optional[Literal["local", "redis", "redis-semantic", "s3", "gcs", "disk"]] = "local",
     supported_call_types: Optional[
         List[Literal["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"]]
     ] = ["completion", "acompletion", "embedding", "aembedding", "atranscription", "transcription"],
@@ -473,6 +591,13 @@ def __init__(
     namespace: Optional[str] = None,
     default_in_redis_ttl: Optional[float] = None,
     redis_flush_size=None,
+    
+    # GCP IAM Redis authentication params
+    gcp_service_account: Optional[str] = None,
+    gcp_ssl_ca_certs: Optional[str] = None,
+    ssl: Optional[bool] = None,
+    ssl_cert_reqs: Optional[Union[str, None]] = None,
+    ssl_check_hostname: Optional[bool] = None,
 
     # redis semantic cache params
     similarity_threshold: Optional[float] = None,

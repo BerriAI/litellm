@@ -165,6 +165,7 @@ def test_chat_completion(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -211,6 +212,7 @@ def test_add_headers_to_request(litellm_key_header_name):
         "Authorization": "Bearer 1234",
         "X-Custom-Header": "Custom-Value",
         "X-Stainless-Header": "Stainless-Value",
+        "anthropic-beta": "beta-value",
     }
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
@@ -219,7 +221,10 @@ def test_add_headers_to_request(litellm_key_header_name):
     forwarded_headers = LiteLLMProxyRequestSetup._get_forwardable_headers(
         request_headers
     )
-    assert forwarded_headers == {"X-Custom-Header": "Custom-Value"}
+    assert forwarded_headers == {
+        "X-Custom-Header": "Custom-Value",
+        "anthropic-beta": "beta-value",
+    }
 
 
 @pytest.mark.parametrize(
@@ -431,6 +436,7 @@ def test_engines_model_chat_completions(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -468,6 +474,7 @@ def test_chat_completion_azure(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -512,6 +519,7 @@ def test_openai_deployments_model_chat_completions_azure(
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -545,6 +553,7 @@ def test_embedding(mock_aembedding, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -572,6 +581,7 @@ def test_bedrock_embedding(mock_aembedding, client_no_auth):
             input=["good morning from litellm"],
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -629,6 +639,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             size="1024x1024",
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -731,6 +742,7 @@ def test_chat_completion_optional_params(mock_acompletion, client_no_auth):
             specific_deployment=True,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
+            secret_fields=mock.ANY,
         )
         assert response.status_code == 200
         result = response.json()
@@ -2236,6 +2248,41 @@ async def test_run_background_health_check_reflects_llm_model_list(monkeypatch):
     assert len(called_model_lists) >= 2
     assert called_model_lists[0] == test_model_list_1
     assert called_model_lists[1] == test_model_list_2
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_skip_disabled_models(monkeypatch):
+    """Ensure models with disable_background_health_check are skipped."""
+    import litellm.proxy.proxy_server as proxy_server
+    import copy
+
+    test_model_list = [
+        {"model_name": "model-a"},
+        {"model_name": "model-b", "model_info": {"disable_background_health_check": True}},
+    ]
+    called_model_lists = []
+
+    async def fake_perform_health_check(model_list, details):
+        called_model_lists.append(copy.deepcopy(model_list))
+        return (["healthy"], [])
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", copy.deepcopy(test_model_list))
+    monkeypatch.setattr(proxy_server, "perform_health_check", fake_perform_health_check)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+
+    async def fake_sleep(interval):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    try:
+        await proxy_server._run_background_health_check()
+    except asyncio.CancelledError:
+        pass
+
+    assert called_model_lists == [[{"model_name": "model-a"}]]
 
 
 def test_get_timeout_from_request():

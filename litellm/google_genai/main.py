@@ -1,10 +1,10 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterator, Optional, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import request_timeout
@@ -24,11 +24,14 @@ if TYPE_CHECKING:
         GenerateContentConfigDict,
         GenerateContentContentListUnionDict,
         GenerateContentResponse,
+        ToolConfigDict,
     )
 else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
+    ToolConfigDict = Any
+
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -39,6 +42,8 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 class GenerateContentSetupResult(BaseModel):
     """Internal Type - Result of setting up a generate content call"""
 
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
+
     model: str
     request_body: Dict[str, Any]
     custom_llm_provider: str
@@ -47,9 +52,6 @@ class GenerateContentSetupResult(BaseModel):
     litellm_params: GenericLiteLLMParams
     litellm_logging_obj: LiteLLMLoggingObj
     litellm_call_id: Optional[str]
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class GenerateContentHelper:
@@ -84,6 +86,7 @@ class GenerateContentHelper:
         config: Optional[GenerateContentConfigDict] = None,
         custom_llm_provider: Optional[str] = None,
         stream: bool = False,
+        tools: Optional[ToolConfigDict] = None,
         **kwargs,
     ) -> GenerateContentSetupResult:
         """
@@ -167,6 +170,7 @@ class GenerateContentHelper:
             generate_content_provider_config.transform_generate_content_request(
                 model=model,
                 contents=contents,
+                tools=tools,
                 generate_content_config_dict=generate_content_config_dict,
             )
         )
@@ -201,6 +205,7 @@ async def agenerate_content(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -236,6 +241,7 @@ async def agenerate_content(
             extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
+            tools=tools,
             **kwargs,
         )
 
@@ -264,6 +270,7 @@ def generate_content(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -297,6 +304,7 @@ def generate_content(
             config=config,
             custom_llm_provider=custom_llm_provider,
             stream=False,
+            tools=tools,
             **kwargs,
         )
 
@@ -317,6 +325,7 @@ def generate_content(
         response = base_llm_http_handler.generate_content_handler(
             model=setup_result.model,
             contents=contents,
+            tools=tools,
             generate_content_provider_config=setup_result.generate_content_provider_config,
             generate_content_config_dict=setup_result.generate_content_config_dict,
             custom_llm_provider=setup_result.custom_llm_provider,
@@ -347,6 +356,7 @@ async def agenerate_content_stream(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -378,6 +388,7 @@ async def agenerate_content_stream(
                 "config": config,
                 "custom_llm_provider": custom_llm_provider,
                 "stream": True,
+                "tools": tools,
                 **kwargs,
             }
         )
@@ -385,13 +396,15 @@ async def agenerate_content_stream(
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
             # Use the adapter to convert to completion format
-            return await GenerateContentToCompletionHandler.async_generate_content_handler(
-                model=model,
-                contents=contents,  # type: ignore
-                config=setup_result.generate_content_config_dict,
-                litellm_params=setup_result.litellm_params,
-                stream=True,
-                **kwargs
+            return (
+                await GenerateContentToCompletionHandler.async_generate_content_handler(
+                    model=model,
+                    contents=contents,  # type: ignore
+                    config=setup_result.generate_content_config_dict,
+                    litellm_params=setup_result.litellm_params,
+                    stream=True,
+                    **kwargs,
+                )
             )
 
         # Call the handler with async enabled and streaming
@@ -401,6 +414,7 @@ async def agenerate_content_stream(
             contents=contents,
             generate_content_provider_config=setup_result.generate_content_provider_config,
             generate_content_config_dict=setup_result.generate_content_config_dict,
+            tools=tools,
             custom_llm_provider=setup_result.custom_llm_provider,
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,
@@ -428,6 +442,7 @@ def generate_content_stream(
     model: str,
     contents: GenerateContentContentListUnionDict,
     config: Optional[GenerateContentConfigDict] = None,
+    tools: Optional[ToolConfigDict] = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -453,6 +468,7 @@ def generate_content_stream(
             config=config,
             custom_llm_provider=custom_llm_provider,
             stream=True,
+            tools=tools,
             **kwargs,
         )
 
@@ -475,6 +491,7 @@ def generate_content_stream(
             contents=contents,
             generate_content_provider_config=setup_result.generate_content_provider_config,
             generate_content_config_dict=setup_result.generate_content_config_dict,
+            tools=tools,
             custom_llm_provider=setup_result.custom_llm_provider,
             litellm_params=setup_result.litellm_params,
             logging_obj=setup_result.litellm_logging_obj,

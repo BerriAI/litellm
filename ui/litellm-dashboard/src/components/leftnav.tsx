@@ -23,6 +23,7 @@ import {
   LockOutlined,
   ToolOutlined,
   TagsOutlined,
+  BgColorsOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles, isAdminRole } from '../utils/roles';
 import UsageIndicator from './usage_indicator';
@@ -64,10 +65,24 @@ const Sidebar: React.FC<SidebarProps> = ({
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
     { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
-    { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
+    { 
+      key: "16", 
+      page: "model-hub-table", 
+      label: "Model Hub", 
+      icon: <AppstoreOutlined />
+    },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
     { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-    { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined />, roles: all_admin_roles },
+    {
+      key: "26",
+      page: "tools",
+      label: "Tools",
+      icon: <ToolOutlined />,
+      children: [
+        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },
+        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
+      ]
+    },
     { 
       key: "experimental", 
       page: "experimental",
@@ -75,10 +90,10 @@ const Sidebar: React.FC<SidebarProps> = ({
       icon: <ExperimentOutlined />,
       children: [
         { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
+        { key: "25", page: "prompts", label: "Prompts", icon: <FileTextOutlined />, roles: all_admin_roles },
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
         { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
         { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
-        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
         { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
       ]
     },
@@ -92,6 +107,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         { key: "11", page: "general-settings", label: "Router Settings", icon: <SettingOutlined />, roles: all_admin_roles },
         { key: "8", page: "settings", label: "Logging & Alerts", icon: <SettingOutlined />, roles: all_admin_roles },
         { key: "13", page: "admin-panel", label: "Admin Settings", icon: <SettingOutlined />, roles: all_admin_roles },
+        { key: "14", page: "ui-theme", label: "UI Theme", icon: <BgColorsOutlined />, roles: all_admin_roles },
       ]
     }
   ];
@@ -116,6 +132,8 @@ const Sidebar: React.FC<SidebarProps> = ({
   const filteredMenuItems = menuItems.filter(item => {
     // Check if parent item has roles and user has access
     const hasParentAccess = !item.roles || item.roles.includes(userRole);
+    
+    console.log(`Menu item ${item.label}: roles=${item.roles}, userRole=${userRole}, hasAccess=${hasParentAccess}`);
     
     if (!hasParentAccess) return false;
 
