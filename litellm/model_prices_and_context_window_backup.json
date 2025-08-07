@@ -5486,6 +5486,36 @@
         "litellm_provider": "groq",
         "mode": "audio_transcription"
     },
+    "groq/openai/gpt-oss-20b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 5e-07,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
+    "groq/openai/gpt-oss-120b": {
+        "max_tokens": 32766,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32766,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 7.5e-07,
+        "litellm_provider": "groq",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "cerebras/llama3.1-8b": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
