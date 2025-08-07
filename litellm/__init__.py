@@ -533,6 +533,7 @@ morph_models: List = []
 lambda_ai_models: List = []
 hyperbolic_models: List = []
 recraft_models: List = []
+oci_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -722,6 +723,8 @@ def add_known_models():
             hyperbolic_models.append(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
+        elif value.get("litellm_provider") == "oci":
+            oci_models.append(key)
 
 
 add_known_models()
@@ -810,6 +813,7 @@ model_list = (
     + morph_models
     + lambda_ai_models
     + recraft_models
+    + oci_models
 )
 
 model_list_set = set(model_list)
@@ -883,6 +887,7 @@ models_by_provider: dict = {
     "lambda_ai": lambda_ai_models,
     "hyperbolic": hyperbolic_models,
     "recraft": recraft_models,
+    "oci": oci_models,
 }
 
 # mapping for those models which have larger equivalents
