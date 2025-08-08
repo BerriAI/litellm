@@ -84,7 +84,8 @@ const Settings: React.FC<SettingsPageProps> = ({
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
-  const [form] = Form.useForm();
+  const [addForm] = Form.useForm();
+  const [editForm] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
   const [catchAllWebhookURL, setCatchAllWebhookURL] = useState<string>("");
   const [alertToWebhooks, setAlertToWebhooks] = useState<
@@ -105,6 +106,15 @@ const Settings: React.FC<SettingsPageProps> = ({
   );
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [callbackToDelete, setCallbackToDelete] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (showEditCallback && selectedEditCallback) {
+      const normalized = Object.fromEntries(
+        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""])
+      );
+      editForm.setFieldsValue(normalized)
+    }
+  }, [showEditCallback, selectedEditCallback, editForm]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
@@ -155,7 +165,7 @@ const Settings: React.FC<SettingsPageProps> = ({
   };
 
   const updateCallbackCall = async (formValues: Record<string, any>) => {
-    if (!accessToken) {
+    if (!accessToken || !selectedEditCallback) {
       return;
     }
 
@@ -167,17 +177,27 @@ const Settings: React.FC<SettingsPageProps> = ({
       }
     });
     let payload = {
-      environment_variables: env_vars,
-    };
+      environment_variables: formValues,
+      litellm_settings: {
+        "success_callback": [selectedEditCallback.name]
+      }
+    }
+
 
     try {
       await setCallbacksCall(accessToken, payload);
-      message.success(`Callback added successfully`);
-      setIsModalVisible(false);
-      form.resetFields();
-      setSelectedCallback(null);
+      message.success(`Callback updated successfully`);
+      setShowEditCallback(false);
+      editForm.resetFields();
+      setSelectedEditCallback(null);
+      
+      // Refresh the callbacks list
+      if (userID && userRole) {
+        const updatedData = await getCallbacksCall(accessToken, userID, userRole);
+        setCallbacks(updatedData.callbacks);
+      }
     } catch (error) {
-      message.error("Failed to add callback: " + error, 20);
+      message.error("Failed to update callback: " + error, 20);
     }
   };
 
@@ -196,7 +216,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     });
 
     let payload = {
-      environment_variables: env_vars,
+      environment_variables: formValues,
       litellm_settings: {
         success_callback: [new_callback],
       },
@@ -205,9 +225,14 @@ const Settings: React.FC<SettingsPageProps> = ({
     try {
       await setCallbacksCall(accessToken, payload);
       message.success(`Callback ${new_callback} added successfully`);
-      setIsModalVisible(false);
-      form.resetFields();
+      setShowAddCallbacksModal(false);
+      addForm.resetFields();
       setSelectedCallback(null);
+      setSelectedCallbackParams([]);
+      
+      // Refresh the callbacks list
+      const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
+      setCallbacks(updatedData.callbacks);
     } catch (error) {
       message.error("Failed to add callback: " + error, 20);
     }
@@ -288,7 +313,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       return;
     }
     // Handle form submission
-    form.validateFields().then((values) => {
+    addForm.validateFields().then((values) => {
       // Call API to add the callback
       let payload;
       if (values.callback === "langfuse") {
@@ -365,7 +390,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         };
       }
       setIsModalVisible(false);
-      form.resetFields();
+      addForm.resetFields();
       setSelectedCallback(null);
     });
   };
@@ -579,7 +604,11 @@ const Settings: React.FC<SettingsPageProps> = ({
         title="Add Logging Callback"
         visible={showAddCallbacksModal}
         width={800}
-        onCancel={() => setShowAddCallbacksModal(false)}
+        onCancel= {() => {
+          setShowAddCallbacksModal(false)
+          setSelectedCallback(null);
+          setSelectedCallbackParams([]);
+        }}
         footer={null}
       >
         <a
@@ -593,7 +622,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         </a>
 
         <Form
-          form={form}
+          form={addForm}
           onFinish={addNewCallbackCall}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
@@ -659,7 +688,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                     },
                   ]}
                 >
-                  <TextInput type="password" />
+                  <Input.Password />
                 </FormItem>
               ))}
 
@@ -674,11 +703,14 @@ const Settings: React.FC<SettingsPageProps> = ({
         visible={showEditCallback}
         width={800}
         title={`Edit ${selectedEditCallback?.name} Settings`}
-        onCancel={() => setShowEditCallback(false)}
+        onCancel={() =>  {
+            setShowEditCallback(false)
+            setSelectedEditCallback(null);
+          }}
         footer={null}
       >
         <Form
-          form={form}
+          form={editForm}
           onFinish={updateCallbackCall}
           labelCol={{ span: 8 }}
           wrapperCol={{ span: 16 }}
@@ -687,13 +719,21 @@ const Settings: React.FC<SettingsPageProps> = ({
           <>
             {selectedEditCallback &&
               selectedEditCallback.variables &&
-              Object.entries(selectedEditCallback.variables).map(
-                ([param, value]) => (
-                  <FormItem label={param} name={param} key={param}>
-                    <TextInput type="password" defaultValue={value as string} />
-                  </FormItem>
-                )
-              )}
+              Object.entries(selectedEditCallback.variables).map(([param]) => (
+                <FormItem 
+                  label={param} 
+                  name={param} 
+                  key={param}
+                  rules={[
+                    {
+                      required: true,
+                      message: `Please enter the value for ${param}`,
+                    },
+                  ]}
+                >
+                  <Input.Password />
+                </FormItem>
+              ))}
           </>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>

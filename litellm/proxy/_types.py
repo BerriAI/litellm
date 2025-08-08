@@ -2164,6 +2164,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         litellm_callback_params=[
             "LANGFUSE_PUBLIC_KEY",
             "LANGFUSE_SECRET_KEY",
+            "LANGFUSE_HOST",
         ],
     )
 
