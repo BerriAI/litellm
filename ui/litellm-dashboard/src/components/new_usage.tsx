@@ -31,7 +31,7 @@ import {
   DateRangePickerValue,
   Button,
 } from "@tremor/react"
-import UsageDatePicker from "./shared/usage_date_picker"
+import AdvancedDatePicker from "./shared/advanced_date_picker"
 import { AreaChart } from "@tremor/react"
 
 import { userDailyActivityCall, tagListCall } from "./networking"
@@ -39,6 +39,7 @@ import { Tag } from "./tag_management/types"
 import ViewUserSpend from "./view_user_spend"
 import TopKeyView from "./top_key_view"
 import { ActivityMetrics, processActivityData } from "./activity_metrics"
+import UserAgentActivity from "./user_agent_activity"
 import { SpendMetrics, DailyData, ModelActivityData, MetricWithMetadata, KeyMetricWithMetadata } from "./usage/types"
 import EntityUsage from "./entity_usage"
 import {
@@ -54,7 +55,8 @@ import { EntityList } from "./entity_usage"
 import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { valueFormatterSpend } from "./usage/utils/value_formatters"
 import CloudZeroExportModal from "./cloudzero_export_modal"
-import { UiLoadingSpinner } from "./ui/ui-loading-spinner"
+import { ChartLoader } from "./shared/chart_loader"
+import { getProviderLogoAndName } from "./provider_info_helpers"
 
 interface NewUsagePageProps {
   accessToken: string | null
@@ -361,23 +363,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     return () => clearTimeout(timeoutId)
   }, [fetchUserSpendData])
 
-  // Enhanced loading component with better visual feedback
-  const ChartLoader = () => (
-    <div className="flex items-center justify-center h-40">
-      <div className="flex items-center justify-center gap-3">
-        <UiLoadingSpinner className="size-5" />
-        <div className="flex flex-col">
-          <span className="text-gray-600 text-sm font-medium">
-            {isDateChanging ? "Processing date selection..." : "Loading chart data..."}
-          </span>
-          <span className="text-gray-400 text-xs mt-1">
-            {isDateChanging ? "This will only take a moment" : "Fetching your data"}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-
   const modelMetrics = processActivityData(userSpendData, "models")
   const keyMetrics = processActivityData(userSpendData, "api_keys")
   const mcpServerMetrics = processActivityData(userSpendData, "mcp_servers")
@@ -427,13 +412,14 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
           {all_admin_roles.includes(userRole || "") ? <Tab>Global Usage</Tab> : <Tab>Your Usage</Tab>}
           <Tab>Team Usage</Tab>
           {all_admin_roles.includes(userRole || "") ? <Tab>Tag Usage</Tab> : <></>}
+          {all_admin_roles.includes(userRole || "") ? <Tab>User Agent Activity</Tab> : <></>}
         </TabList>
         <TabPanels>
           {/* Your Usage Panel */}
           <TabPanel>
-            <Grid numItems={2} className="gap-2 w-full mb-4">
+            <Grid numItems={2} className="gap-10 w-1/2 mb-4">
               <Col>
-                <UsageDatePicker value={dateValue} onValueChange={handleDateChange} />
+                <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
               </Col>
             </Grid>
             <TabGroup>
@@ -514,7 +500,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                       <Card>
                         <Title>Daily Spend</Title>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
                             data={[...userSpendData.results].sort(
@@ -590,7 +576,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                           </div>
                         </div>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <BarChart
                             className="mt-4 h-40"
@@ -630,7 +616,7 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                           <Title>Spend by Provider</Title>
                         </div>
                         {loading ? (
-                          <ChartLoader />
+                          <ChartLoader isDateChanging={isDateChanging} />
                         ) : (
                           <Grid numItems={2}>
                             <Col numColSpan={1}>
@@ -659,7 +645,29 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
                                     .filter((provider) => provider.spend > 0)
                                     .map((provider) => (
                                       <TableRow key={provider.provider}>
-                                        <TableCell>{provider.provider}</TableCell>
+                                        <TableCell>
+                                          <div className="flex items-center space-x-2">
+                                            {provider.provider && (
+                                              <img
+                                                src={getProviderLogoAndName(provider.provider).logo}
+                                                alt={`${provider.provider} logo`}
+                                                className="w-4 h-4"
+                                                onError={(e) => {
+                                                  const target = e.target as HTMLImageElement
+                                                  const parent = target.parentElement
+                                                  if (parent) {
+                                                    const fallbackDiv = document.createElement("div")
+                                                    fallbackDiv.className =
+                                                      "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs"
+                                                    fallbackDiv.textContent = provider.provider?.charAt(0) || "-"
+                                                    parent.replaceChild(fallbackDiv, target)
+                                                  }
+                                                }}
+                                              />
+                                            )}
+                                            <span>{provider.provider}</span>
+                                          </div>
+                                        </TableCell>
                                         <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
                                         <TableCell className="text-green-600">
                                           {provider.successful_requests.toLocaleString()}
@@ -723,6 +731,10 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
               entityList={allTags}
               premiumUser={premiumUser}
             />
+          </TabPanel>
+          {/* User Agent Activity Panel */}
+          <TabPanel>
+            <UserAgentActivity accessToken={accessToken} userRole={userRole} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

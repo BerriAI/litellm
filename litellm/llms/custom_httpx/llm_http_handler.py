@@ -3237,6 +3237,7 @@ class BaseLLMHTTPHandler:
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: Dict,
+        tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3262,6 +3263,7 @@ class BaseLLMHTTPHandler:
                 contents=contents,
                 generate_content_provider_config=generate_content_provider_config,
                 generate_content_config_dict=generate_content_config_dict,
+                tools=tools,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
                 logging_obj=logging_obj,
@@ -3297,6 +3299,7 @@ class BaseLLMHTTPHandler:
         data = generate_content_provider_config.transform_generate_content_request(
             model=model,
             contents=contents,
+            tools=tools,
             generate_content_config_dict=generate_content_config_dict,
         )
 
@@ -3358,6 +3361,7 @@ class BaseLLMHTTPHandler:
         contents: Any,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
         generate_content_config_dict: Dict,
+        tools: Any,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -3401,6 +3405,7 @@ class BaseLLMHTTPHandler:
         data = generate_content_provider_config.transform_generate_content_request(
             model=model,
             contents=contents,
+            tools=tools,
             generate_content_config_dict=generate_content_config_dict,
         )
 

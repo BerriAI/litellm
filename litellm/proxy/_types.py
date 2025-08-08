@@ -380,6 +380,8 @@ class LiteLLMRoutes(enum.Enum):
         "/health",
         "/key/list",
         "/user/filter/ui",
+        "/models",
+        "/v1/models",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -492,6 +494,8 @@ class LiteLLMRoutes(enum.Enum):
             "/global/spend/end_users",
             "/global/activity",
             "/global/activity/model",
+            "/v1/models/{model_id}",
+            "/models/{model_id}",
         ]
         + spend_tracking_routes
         + key_management_routes
@@ -513,6 +517,8 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/model/{model_id}/update",
+        "/prompt/list",
+        "/prompt/info",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -683,6 +689,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    prompts: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
@@ -919,6 +926,13 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
     mcp_access_groups: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
+    # Health check status
+    status: Optional[str] = Field(
+        default="unknown",
+        description="Health status: 'healthy', 'unhealthy', 'unknown'",
+    )
+    last_health_check: Optional[datetime] = None
+    health_check_error: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1174,6 +1188,7 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
+    prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
@@ -1849,7 +1864,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLMPydanticObjectBase):
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
     updated_by: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
@@ -2195,7 +2210,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     braintrust: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="braintrust",
-        litellm_callback_params=["BRAINTRUST_API_KEY"],
+        litellm_callback_params=["BRAINTRUST_API_KEY","BRAINTRUST_API_BASE"],
         ui_callback_name="Braintrust",
     )
 
@@ -2249,6 +2264,7 @@ class SpendLogsMetadata(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     usage_object: Optional[dict]
     model_map_information: Optional[StandardLoggingModelInformation]
+    cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
 
 
 class SpendLogsPayload(TypedDict):
@@ -2887,6 +2903,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
     "tags",
     "team_member_key_duration",
+    "prompts",
 ]
 
 
