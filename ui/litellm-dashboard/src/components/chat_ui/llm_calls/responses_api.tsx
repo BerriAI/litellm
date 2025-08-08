@@ -18,7 +18,10 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTool?: string
+  selectedMCPTool?: string,
+  previous_response_id?: string | null,
+  onResponseId?: (responseId: string) => void,
+  base64Images?: string[]
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -48,12 +51,37 @@ export async function makeOpenAIResponsesRequest(
     const startTime = Date.now();
     let firstTokenReceived = false;
     
-    // Format messages for the API
-    const formattedInput = messages.map(message => ({
-      role: message.role,
-      content: message.content,
-      type: "message"
-    }));
+    // Format messages for the API - convert text messages to input format
+    const formattedInput = messages.map((message, index) => {
+      // For responses API, we need to format content based on whether it includes images
+      if (index === messages.length - 1 && base64Images && base64Images.length > 0) {
+        // Latest message with images - format as input_text + input_image
+        const inputContent = [
+          {
+            type: "input_text",
+            text: message.content
+          }
+        ];
+        
+        // Add base64 images
+        base64Images.forEach(base64Image => {
+          inputContent.push({
+            type: "input_image",
+            image_url: {
+              url: base64Image
+            }
+          } as any);
+        });
+        
+        return inputContent;
+      } else {
+        // Regular text message
+        return {
+          type: message.role === "user" ? "input_text" : "output_text",
+          text: message.content
+        };
+      }
+    }).flat();
 
     // Format MCP tool if selected
     const tools = selectedMCPTool ? [{
@@ -68,7 +96,7 @@ export async function makeOpenAIResponsesRequest(
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
-    const response = await (client as any).responses.create({
+    const requestBody: any = {
       model: selectedModel,
       input: formattedInput,
       stream: true,
@@ -76,7 +104,14 @@ export async function makeOpenAIResponsesRequest(
       ...(vector_store_ids ? { vector_store_ids } : {}),
       ...(guardrails ? { guardrails } : {}),
       ...(tools ? { tools, tool_choice: "required" } : {}),
-    }, { signal });
+    };
+
+    // Add previous_response_id for session management if provided
+    if (previous_response_id) {
+      requestBody.previous_response_id = previous_response_id;
+    }
+
+    const response = await (client as any).responses.create(requestBody, { signal });
 
     let mcpToolUsed = "";
 
@@ -133,6 +168,13 @@ export async function makeOpenAIResponsesRequest(
           const response_obj = event.response;
           const usage = response_obj.usage;
           console.log("Usage data:", usage);
+          
+          // Capture response ID for session management
+          if (response_obj.id && onResponseId) {
+            console.log("Response ID:", response_obj.id);
+            onResponseId(response_obj.id);
+          }
+          
           if (usage && onUsageData) {
             console.log("Usage data:", usage);
             

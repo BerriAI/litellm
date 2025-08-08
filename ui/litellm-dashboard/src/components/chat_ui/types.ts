@@ -66,4 +66,6 @@ export interface MessageType {
     reasoningTokens?: number;
   };
   toolName?: string;
+  response_id?: string; // Response ID from responses API
+  previous_response_id?: string; // Previous response ID for session tracking
 } 

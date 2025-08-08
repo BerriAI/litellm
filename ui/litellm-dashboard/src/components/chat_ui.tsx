@@ -160,6 +160,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
+  
+  // Session management for responses API
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => sessionStorage.getItem('currentSessionId') || null);
+  const [lastResponseId, setLastResponseId] = useState<string | null>(() => sessionStorage.getItem('lastResponseId') || null);
+  const [base64Images, setBase64Images] = useState<string[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -233,7 +238,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
     } else {
       sessionStorage.removeItem('messageTraceId');
     }
-  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, selectedMCPTools]);
+    
+    // Save session management state
+    if (currentSessionId) {
+      sessionStorage.setItem('currentSessionId', currentSessionId);
+    } else {
+      sessionStorage.removeItem('currentSessionId');
+    }
+    if (lastResponseId) {
+      sessionStorage.setItem('lastResponseId', lastResponseId);
+    } else {
+      sessionStorage.removeItem('lastResponseId');
+    }
+  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, selectedMCPTools, currentSessionId, lastResponseId]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -442,6 +459,23 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setImagePreviewUrl(null);
   };
 
+  // Handle base64 image upload for responses API
+  const handleBase64ImageUpload = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      if (result) {
+        setBase64Images(prev => [...prev, result]);
+        message.success("Image added for responses API");
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeBase64Image = (index: number) => {
+    setBase64Images(prev => prev.filter((_, i) => i !== index));
+  };
+
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
@@ -525,8 +559,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
             );
           }
         } else if (endpointType === EndpointType.RESPONSES) {
-          // Create chat history for API call - strip out model field and isImage field
-          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          // For responses API, we only need the current message when using session management
+          // When session management is active (lastResponseId exists), only send the new message
+          const apiChatHistory = lastResponseId 
+            ? [newUserMessage] // Only send current message when in session
+            : [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
           
           await makeOpenAIResponsesRequest(
             apiChatHistory,
@@ -541,7 +578,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools // Pass the selected tool directly
+            selectedMCPTools, // Pass the selected tool directly
+            lastResponseId, // Pass previous response ID for session management
+            handleResponseId, // Callback to capture new response ID
+            base64Images.length > 0 ? base64Images : undefined // Pass base64 images
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -577,17 +617,39 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (endpointType === EndpointType.IMAGE_EDITS) {
         handleRemoveImage();
       }
+      // Clear base64 images after successful responses API request
+      if (endpointType === EndpointType.RESPONSES && base64Images.length > 0) {
+        setBase64Images([]);
+      }
     }
 
     setInputMessage("");
   };
 
+  // Handle response ID from responses API for session management
+  const handleResponseId = (responseId: string) => {
+    setLastResponseId(responseId);
+    sessionStorage.setItem('lastResponseId', responseId);
+    
+    // Create a session ID if we don't have one
+    if (!currentSessionId) {
+      const sessionId = uuidv4();
+      setCurrentSessionId(sessionId);
+      sessionStorage.setItem('currentSessionId', sessionId);
+    }
+  };
+
   const clearChatHistory = () => {
     setChatHistory([]);
     setMessageTraceId(null);
+    setLastResponseId(null);
+    setCurrentSessionId(null);
+    setBase64Images([]);
     handleRemoveImage(); // Clear any uploaded images
     sessionStorage.removeItem('chatHistory');
     sessionStorage.removeItem('messageTraceId');
+    sessionStorage.removeItem('lastResponseId');
+    sessionStorage.removeItem('currentSessionId');
     message.success("Chat history cleared.");
   };
 
@@ -705,6 +767,34 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   }}
                   className="mb-4"
                 />  
+                
+                {/* Session Display for Responses API */}
+                {endpointType === EndpointType.RESPONSES && (
+                  <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                    <Text className="text-sm font-medium text-blue-800 mb-1">
+                      Session Management
+                    </Text>
+                    {currentSessionId ? (
+                      <div className="space-y-1">
+                        <Text className="text-xs text-blue-600">
+                          Session ID: {currentSessionId.slice(0, 8)}...
+                        </Text>
+                        {lastResponseId && (
+                          <Text className="text-xs text-blue-600">
+                            Last Response: {lastResponseId.slice(0, 8)}...
+                          </Text>
+                        )}
+                        <Text className="text-xs text-green-600">
+                          ✓ Session active - sending only new messages
+                        </Text>
+                      </div>
+                    ) : (
+                      <Text className="text-xs text-gray-600">
+                        No active session - will send full conversation
+                      </Text>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -962,6 +1052,66 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     >
                       <DeleteOutlined />
                     </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Base64 Image Upload Section for Responses API */}
+            {endpointType === EndpointType.RESPONSES && (
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <Text className="text-sm font-medium text-gray-700">
+                    Images for Responses API ({base64Images.length})
+                  </Text>
+                  {base64Images.length > 0 && (
+                    <TremorButton
+                      size="xs"
+                      variant="secondary"
+                      onClick={() => setBase64Images([])}
+                      className="text-xs"
+                    >
+                      Clear All
+                    </TremorButton>
+                  )}
+                </div>
+                
+                <Dragger
+                  beforeUpload={(file) => {
+                    handleBase64ImageUpload(file);
+                    return false;
+                  }}
+                  accept="image/*"
+                  showUploadList={false}
+                  className="border-dashed border-2 border-gray-300 rounded-lg p-3 mb-2"
+                >
+                  <p className="ant-upload-drag-icon">
+                    <PictureOutlined style={{ fontSize: '20px', color: '#666' }} />
+                  </p>
+                  <p className="ant-upload-text text-sm">Add images to your message</p>
+                  <p className="ant-upload-hint text-xs text-gray-500">
+                    Images will be sent as base64 data
+                  </p>
+                </Dragger>
+
+                {/* Display uploaded base64 images */}
+                {base64Images.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {base64Images.map((imageData, index) => (
+                      <div key={index} className="relative inline-block">
+                        <img
+                          src={imageData}
+                          alt={`Preview ${index + 1}`}
+                          className="w-16 h-16 rounded-md border border-gray-200 object-cover"
+                        />
+                        <button
+                          className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs hover:bg-red-600"
+                          onClick={() => removeBase64Image(index)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
