@@ -3,3 +3,12 @@ model_list:
     litellm_params:
       model: gemini/*
 
+litellm_settings:
+  callbacks: ["s3_v2"]
+  s3_callback_params:
+    s3_bucket_name: litellm-logs   # AWS Bucket Name for S3
+    s3_region_name: us-west-2       
+
+general_settings:
+  cold_storage_custom_logger: s3_v2
+  store_prompts_in_cold_storage: true

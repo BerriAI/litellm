@@ -5,7 +5,7 @@ import { TokenUsage } from "../ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 
 export async function makeOpenAIChatCompletionRequest(
-    chatHistory: { role: string; content: string }[],
+    chatHistory: { role: string; content: string | any[] }[],
     updateUI: (chunk: string, model?: string) => void,
     selectedModel: string,
     accessToken: string,

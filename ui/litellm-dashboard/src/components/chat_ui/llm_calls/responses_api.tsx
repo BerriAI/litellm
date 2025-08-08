@@ -49,11 +49,22 @@ export async function makeOpenAIResponsesRequest(
     let firstTokenReceived = false;
     
     // Format messages for the API
-    const formattedInput = messages.map(message => ({
-      role: message.role,
-      content: message.content,
-      type: "message"
-    }));
+    const formattedInput = messages.map(message => {
+      // If content is already an array (multimodal), use it directly
+      if (Array.isArray(message.content)) {
+        return {
+          role: message.role,
+          content: message.content,
+          type: "message"
+        };
+      }
+      // Otherwise, wrap text content in the expected format
+      return {
+        role: message.role,
+        content: message.content,
+        type: "message"
+      };
+    });
 
     // Format MCP tool if selected
     const tools = selectedMCPTool ? [{
