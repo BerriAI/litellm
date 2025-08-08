@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from "react";
-import { Button, Text, TextInput, Title, Grid, Col } from "@tremor/react";
-import { Modal, Form, InputNumber, message } from "antd";
-import { add } from "date-fns";
-import { regenerateKeyCall } from "./networking";
-import { KeyResponse } from "./key_team_helpers/key_list";
-import { CopyToClipboard } from "react-copy-to-clipboard";
+import React, { useEffect, useState } from "react"
+import { Button, Text, TextInput, Title, Grid, Col } from "@tremor/react"
+import { Modal, Form, InputNumber, message } from "antd"
+import { add } from "date-fns"
+import { regenerateKeyCall } from "../networking"
+import { KeyResponse } from "../key_team_helpers/key_list"
+import { CopyToClipboard } from "react-copy-to-clipboard"
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null
@@ -70,43 +70,47 @@ export function RegenerateKeyModal({
   const calculateNewExpiryTime = (duration: string | undefined): string | null => {
     if (!duration) return null
 
-      try {
-        const now = new Date();
-        let newExpiry: Date;
+    try {
+      const now = new Date()
+      let newExpiry: Date
 
-        if (duration.endsWith("s")) {
-          newExpiry = add(now, { seconds: parseInt(duration) });
-        } else if (duration.endsWith("h")) {
-          newExpiry = add(now, { hours: parseInt(duration) });
-        } else if (duration.endsWith("d")) {
-          newExpiry = add(now, { days: parseInt(duration) });
-        } else {
-          throw new Error("Invalid duration format");
-        }
-
-        return newExpiry.toLocaleString();
-      } catch (error) {
-        return null;
+      if (duration.endsWith("s")) {
+        newExpiry = add(now, { seconds: parseInt(duration) })
+      } else if (duration.endsWith("h")) {
+        newExpiry = add(now, { hours: parseInt(duration) })
+      } else if (duration.endsWith("d")) {
+        newExpiry = add(now, { days: parseInt(duration) })
+      } else {
+        throw new Error("Invalid duration format")
       }
-    };
+
+      return newExpiry.toLocaleString()
+    } catch (error) {
+      return null
+    }
+  }
 
   useEffect(() => {
     if (regenerateFormData?.duration) {
-      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
+      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration))
     } else {
-      setNewExpiryTime(null);
+      setNewExpiryTime(null)
     }
-  }, [regenerateFormData?.duration]);
+  }, [regenerateFormData?.duration])
 
   const handleRegenerateKey = async () => {
     if (!selectedToken || !currentAccessToken) return
 
-    setIsRegenerating(true);
+    setIsRegenerating(true)
     try {
       const formValues = await form.validateFields()
 
       // Use the current access token for the API call
-      const response = await regenerateKeyCall(currentAccessToken, selectedToken.token || selectedToken.token_id, formValues)
+      const response = await regenerateKeyCall(
+        currentAccessToken,
+        selectedToken.token || selectedToken.token_id,
+        formValues,
+      )
       setRegeneratedKey(response.key)
       message.success("API Key regenerated successfully")
 
@@ -142,11 +146,11 @@ export function RegenerateKeyModal({
 
       setIsRegenerating(false)
     } catch (error) {
-      console.error("Error regenerating key:", error);
-      message.error("Failed to regenerate API Key");
-      setIsRegenerating(false); // Reset regenerating state on error
+      console.error("Error regenerating key:", error)
+      message.error("Failed to regenerate API Key")
+      setIsRegenerating(false) // Reset regenerating state on error
     }
-  };
+  }
 
   const handleClose = () => {
     setRegeneratedKey(null)
@@ -162,49 +166,43 @@ export function RegenerateKeyModal({
       title="Regenerate API Key"
       open={visible}
       onCancel={handleClose}
-      footer={regeneratedKey ? [
-        <Button key="close" onClick={handleClose}>
-          Close
-        </Button>,
-      ] : [
-        <Button key="cancel" onClick={handleClose} className="mr-2">
-          Cancel
-        </Button>,
-        <Button 
-          key="regenerate" 
-          onClick={handleRegenerateKey}
-          disabled={isRegenerating}
-        >
-          {isRegenerating ? "Regenerating..." : "Regenerate"}
-        </Button>,
-      ]}
+      footer={
+        regeneratedKey
+          ? [
+              <Button key="close" onClick={handleClose}>
+                Close
+              </Button>,
+            ]
+          : [
+              <Button key="cancel" onClick={handleClose} className="mr-2">
+                Cancel
+              </Button>,
+              <Button key="regenerate" onClick={handleRegenerateKey} disabled={isRegenerating}>
+                {isRegenerating ? "Regenerating..." : "Regenerate"}
+              </Button>,
+            ]
+      }
     >
       {regeneratedKey ? (
         <Grid numItems={1} className="gap-2 w-full">
           <Title>Regenerated Key</Title>
           <Col numColSpan={1}>
             <p>
-              Please replace your old key with the new key generated. For
-              security reasons, <b>you will not be able to view it again</b>{" "}
-              through your LiteLLM account. If you lose this secret key, you
-              will need to generate a new one.
+              Please replace your old key with the new key generated. For security reasons,{" "}
+              <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key,
+              you will need to generate a new one.
             </p>
           </Col>
           <Col numColSpan={1}>
             <Text className="mt-3">Key Alias:</Text>
             <div className="bg-gray-100 p-2 rounded mb-2">
-              <pre className="break-words whitespace-normal">
-                {selectedToken?.key_alias || "No alias set"}
-              </pre>
+              <pre className="break-words whitespace-normal">{selectedToken?.key_alias || "No alias set"}</pre>
             </div>
             <Text className="mt-3">New API Key:</Text>
             <div className="bg-gray-100 p-2 rounded mb-2">
               <pre className="break-words whitespace-normal">{regeneratedKey}</pre>
             </div>
-            <CopyToClipboard
-              text={regeneratedKey}
-              onCopy={() => message.success("API Key copied to clipboard")}
-            >
+            <CopyToClipboard text={regeneratedKey} onCopy={() => message.success("API Key copied to clipboard")}>
               <Button className="mt-3">Copy API Key</Button>
             </CopyToClipboard>
           </Col>
@@ -215,7 +213,7 @@ export function RegenerateKeyModal({
           layout="vertical"
           onValuesChange={(changedValues) => {
             if ("duration" in changedValues) {
-              setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }));
+              setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }))
             }
           }}
         >
@@ -237,13 +235,9 @@ export function RegenerateKeyModal({
           <div className="mt-2 text-sm text-gray-500">
             Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
           </div>
-          {newExpiryTime && (
-            <div className="mt-2 text-sm text-green-600">
-              New expiry: {newExpiryTime}
-            </div>
-          )}
+          {newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
         </Form>
       )}
     </Modal>
-  );
+  )
 }
