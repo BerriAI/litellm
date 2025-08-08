@@ -1434,6 +1434,20 @@ async def team_member_delete(
                     data={"teams": {"set": team_list}},
                 )
 
+    # Also clean up any existing team membership rows for this user and team
+    user_ids_to_delete = set()
+    if data.user_id is not None:
+        user_ids_to_delete.add(data.user_id)
+    if existing_user_rows is not None and isinstance(existing_user_rows, list):
+        for existing_user in existing_user_rows:
+            if getattr(existing_user, "user_id", None):
+                user_ids_to_delete.add(existing_user.user_id)
+
+    for _uid in user_ids_to_delete:
+        await prisma_client.db.litellm_teammembership.delete_many(
+            where={"team_id": data.team_id, "user_id": _uid}
+        )
+
     return existing_team_row
 
 
