@@ -1000,78 +1000,98 @@ router_settings:
 </TabItem>
 </Tabs>
 
-### How Cooldowns Work with Multiple Deployments
+### How Cooldowns Work
 
-Cooldowns apply to individual deployments, not entire model groups. The router intelligently isolates failures to specific deployments while keeping healthy alternatives available.
+Cooldowns apply to individual deployments, not entire model groups. The router isolates failures to specific deployments while keeping healthy alternatives available.
 
 #### What is a deployment?
-- A single entry on the config.yaml is 1 deployment, which you can provide litellm_params for. In this example we have 2 deployments for claude-sonnet-4-20250514. 
 
-Under the hood, litellm generats a unique model_id for each entry here - it combines all the litellm_params and generats a deterministic hash of the combined litellm_params. 
+A deployment is a single entry in your `config.yaml` model list. Each deployment represents a unique configuration with its own `litellm_params`. 
 
-```yaml
+LiteLLM generates a unique `model_id` for each deployment by creating a deterministic hash of all the `litellm_params`. This allows the router to track and manage each deployment independently.
+
+**Example: Multiple deployments for the same model**
+
+```yaml showLineNumbers title="Load Balancing config.yaml"
 model_list:
-- model_name: sonnet-4 # deployment 1 == model_id: 1234567890
+  - model_name: sonnet-4              # Deployment 1
     litellm_params:
       model: anthropic/claude-sonnet-4-20250514
       api_key: <our-real-key>
-- model_name: byok-sonnet-4 # deployment 2 == model_id: 9129922	
+      
+  - model_name: byok-sonnet-4         # Deployment 2  
     litellm_params:
       model: anthropic/claude-sonnet-4-20250514
-      api_key: <dummy-value-to-be-replaced-by-our-internal-proxy-with-the-customer-key>
+      api_key: <customer-managed-key>
       api_base: https://proxy.litellm.ai/api.anthropic.com
-  - model_name: sonnet-4 # deployment 3 == model_id: 4982929292
+      
+  - model_name: sonnet-4              # Deployment 3
     litellm_params:
       model: vertex_ai/claude-sonnet-4-20250514
       vertex_project: my-project
 ```
+
+Each deployment gets a unique `model_id` (e.g., `1234567890`, `9129922`, `4982929292`) that the router uses for tracking health and cooldown status.
 
 #### When are deployments cooled down?
 
-The router uses the following logic to determine if a deployment should be cooled down:
+The router automatically cools down deployments based on the following conditions:
 
-- **Rate Limiting (429)**: Immediate cooldown for the deployment
-- **High Failure Rate**: >50% failures in the current minute for the deployment
-- **Non-Retryable Errors**: 401 (Auth), 404 (Not Found), 408 (Timeout)
+| Condition | Trigger | Cooldown Duration |
+|-----------|---------|-------------------|
+| **Rate Limiting (429)** | Immediate on 429 response | 5 seconds (default) |
+| **High Failure Rate** | >50% failures in current minute | 5 seconds (default) |
+| **Non-Retryable Errors** | 401 (Auth), 404 (Not Found), 408 (Timeout) | 5 seconds (default) |
 
+During cooldown, the specific deployment is temporarily removed from the available pool, while other healthy deployments continue serving requests.
 
-#### Flow Diagram
+#### Cooldown Recovery
 
+Deployments automatically recover from cooldown after the cooldown period expires. The router will:
+
+1. **Monitor cooldown timers** for each deployment
+2. **Automatically re-enable** deployments when cooldown expires  
+3. **Gradually reintroduce** cooled-down deployments to the rotation
+4. **Reset failure counters** once the deployment is healthy again
 
 #### Real-World Example
 
-You have multiple deployments for high availability:
+Consider this high-availability setup with multiple providers:
 
-```yaml
+```yaml showLineNumbers title="Load Balancing config.yaml"
 model_list:
-- model_name: sonnet-4 # deployment 1 == model_id: 1234567890
+  - model_name: sonnet-4              # Primary: Anthropic Direct
     litellm_params:
       model: anthropic/claude-sonnet-4-20250514
-      api_key: <our-real-key>
-- model_name: byok-sonnet-4 # deployment 2 == model_id: 9129922	
+      api_key: <anthropic-key>
+      
+  - model_name: byok-sonnet-4         # BYOK: Customer-managed keys
     litellm_params:
       model: anthropic/claude-sonnet-4-20250514
-      api_key: <dummy-value-to-be-replaced-by-our-internal-proxy-with-the-customer-key>
+      api_key: <customer-managed-key>
       api_base: https://proxy.litellm.ai/api.anthropic.com
-  - model_name: sonnet-4 # deployment 3 == model_id: 4982929292
+      
+  - model_name: sonnet-4              # Fallback: Vertex AI
     litellm_params:
       model: vertex_ai/claude-sonnet-4-20250514
       vertex_project: my-project
 ```
 
+**Failure Scenario:**
 ```mermaid
 flowchart TD
-    A["Request for 'sonnet-4'"] --> B["Router finds deployments with model_name='sonnet-4'"]
-    B --> C["Available:<br/>• Anthropic API - model_id: 1234567890<br/>• Vertex AI - model_id: 4982929292"]
-    C --> D["Selects Anthropic API deployment"]
-    D --> E{"Fails?"}
-    E -->|No| F["Success"]
-    E -->|Yes| G{"Cooldown needed?"}
-    G -->|No| H["Track failure, keep available"]
-    G -->|Yes| I["Cooldown Anthropic API - model_id: 1234567890 only"]
-	I --> J["Next Request with model_name='sonnet-4'"]
-    J --> K["Use Vertex AI - model_id: 4982929292, since Anthropic API is cooled down"]
-    K --> L["Success"]
+    A["Request for 'sonnet-4'"] --> B["Router finds available deployments"]
+    B --> C["Available:<br/>• Anthropic Direct<br/>• Vertex AI"]
+    C --> D["Selects Anthropic Direct"]
+    D --> E{"Request fails with 429?"}
+    E -->|No| F["Success ✅"]
+    E -->|Yes| G["Cooldown Anthropic Direct<br/>for 5 seconds"]
+    G --> H["Next request for 'sonnet-4'"]
+    H --> I["Route to Vertex AI<br/>(only available deployment for model_name='sonnet-4')"]
+    I --> J["Success ✅"]
+    
+    style G fill:#ffcccc
+    style I fill:#ccffcc
 ```
 
 
