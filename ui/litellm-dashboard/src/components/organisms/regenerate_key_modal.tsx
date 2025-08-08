@@ -5,6 +5,7 @@ import { add } from "date-fns"
 import { regenerateKeyCall } from "../networking"
 import { KeyResponse } from "../key_team_helpers/key_list"
 import { CopyToClipboard } from "react-copy-to-clipboard"
+import NotificationManager from "../molecules/notifications_manager"
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null
@@ -112,7 +113,7 @@ export function RegenerateKeyModal({
         formValues,
       )
       setRegeneratedKey(response.key)
-      message.success("API Key regenerated successfully")
+      NotificationManager.success("API Key regenerated successfully")
 
       console.log("Full regenerate response:", response) // Debug log to see what's returned
 
@@ -147,7 +148,7 @@ export function RegenerateKeyModal({
       setIsRegenerating(false)
     } catch (error) {
       console.error("Error regenerating key:", error)
-      message.error("Failed to regenerate API Key")
+      NotificationManager.fromBackend(error)
       setIsRegenerating(false) // Reset regenerating state on error
     }
   }
@@ -202,7 +203,7 @@ export function RegenerateKeyModal({
             <div className="bg-gray-100 p-2 rounded mb-2">
               <pre className="break-words whitespace-normal">{regeneratedKey}</pre>
             </div>
-            <CopyToClipboard text={regeneratedKey} onCopy={() => message.success("API Key copied to clipboard")}>
+            <CopyToClipboard text={regeneratedKey} onCopy={() => NotificationManager.success("API Key copied to clipboard")}>
               <Button className="mt-3">Copy API Key</Button>
             </CopyToClipboard>
           </Col>
