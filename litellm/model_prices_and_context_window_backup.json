@@ -709,14 +709,12 @@
         "supports_reasoning": true
     },
     "gpt-5-chat": {
-        "max_tokens": 32768,
-        "max_input_tokens": 1047576,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 5e-06,
-        "output_cost_per_token": 2e-05,
-        "input_cost_per_token_batches": 2.5e-06,
-        "output_cost_per_token_batches": 1e-05,
-        "cache_read_input_token_cost": 1.25e-06,
+        "max_tokens": 128000,
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 1e-05,
+        "cache_read_input_token_cost": 1.25e-07,
         "litellm_provider": "openai",
         "mode": "chat",
         "supported_endpoints": [
@@ -739,7 +737,8 @@
         "supports_prompt_caching": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_reasoning": true
     },
     "gpt-5-chat-latest": {
         "max_tokens": 128000,
