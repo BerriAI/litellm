@@ -1064,123 +1064,146 @@ const ChatUI: React.FC<ChatUIProps> = ({
             {/* Show file previews above input when files are uploaded */}
             {(endpointType === EndpointType.RESPONSES && responsesUploadedImage) && (
               <div className="mb-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="relative inline-block">
                     {responsesUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
-                      <div className="w-16 h-16 rounded-md border border-gray-200 bg-red-50 flex items-center justify-center">
-                        <FilePdfOutlined style={{ fontSize: '24px', color: '#dc2626' }} />
+                      <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '16px', color: 'white' }} />
                       </div>
                     ) : (
                       <img 
                         src={responsesImagePreviewUrl || ''} 
                         alt="Upload preview" 
-                        className="max-w-16 max-h-16 rounded-md border border-gray-200 object-cover"
+                        className="w-10 h-10 rounded-md border border-gray-200 object-cover"
                       />
                     )}
-                    <button
-                      className="absolute -top-1 -right-1 bg-white shadow-sm border border-gray-200 rounded-full w-4 h-4 flex items-center justify-center text-red-500 hover:bg-red-50 text-xs"
-                      onClick={handleRemoveResponsesImage}
-                    >
-                      <DeleteOutlined style={{ fontSize: '8px' }} />
-                    </button>
                   </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {responsesUploadedImage.name}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {responsesUploadedImage.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image'}
+                    </div>
+                  </div>
+                  <button
+                    className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                    onClick={handleRemoveResponsesImage}
+                  >
+                    <DeleteOutlined style={{ fontSize: '12px' }} />
+                  </button>
                 </div>
               </div>
             )}
             
             {(endpointType === EndpointType.CHAT && chatUploadedImage) && (
               <div className="mb-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="relative inline-block">
                     {chatUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
-                      <div className="w-16 h-16 rounded-md border border-gray-200 bg-red-50 flex items-center justify-center">
-                        <FilePdfOutlined style={{ fontSize: '24px', color: '#dc2626' }} />
+                      <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '16px', color: 'white' }} />
                       </div>
                     ) : (
                       <img 
                         src={chatImagePreviewUrl || ''} 
                         alt="Upload preview" 
-                        className="max-w-16 max-h-16 rounded-md border border-gray-200 object-cover"
+                        className="w-10 h-10 rounded-md border border-gray-200 object-cover"
                       />
                     )}
-                    <button
-                      className="absolute -top-1 -right-1 bg-white shadow-sm border border-gray-200 rounded-full w-4 h-4 flex items-center justify-center text-red-500 hover:bg-red-50 text-xs"
-                      onClick={handleRemoveChatImage}
-                    >
-                      <DeleteOutlined style={{ fontSize: '8px' }} />
-                    </button>
                   </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {chatUploadedImage.name}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {chatUploadedImage.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image'}
+                    </div>
+                  </div>
+                  <button
+                    className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                    onClick={handleRemoveChatImage}
+                  >
+                    <DeleteOutlined style={{ fontSize: '12px' }} />
+                  </button>
                 </div>
               </div>
             )}
             
-            <div className="flex items-end gap-2">
-              {/* Image upload button inline with input */}
-              <div className="flex items-center gap-1 pb-1">
-                {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
-                  <ResponsesImageUpload
-                    responsesUploadedImage={responsesUploadedImage}
-                    responsesImagePreviewUrl={responsesImagePreviewUrl}
-                    onImageUpload={handleResponsesImageUpload}
-                    onRemoveImage={handleRemoveResponsesImage}
-                  />
-                )}
-                
-                {endpointType === EndpointType.CHAT && !chatUploadedImage && (
-                  <ChatImageUpload
-                    chatUploadedImage={chatUploadedImage}
-                    chatImagePreviewUrl={chatImagePreviewUrl}
-                    onImageUpload={handleChatImageUpload}
-                    onRemoveImage={handleRemoveChatImage}
-                  />
-                )}
-              </div>
-              
-              <TextArea
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  endpointType === EndpointType.CHAT ||
-                  endpointType === EndpointType.RESPONSES ||
-                  endpointType === EndpointType.ANTHROPIC_MESSAGES
-                    ? "Type your message... (Shift+Enter for new line)"
-                    : endpointType === EndpointType.IMAGE_EDITS
-                    ? "Describe how you want to edit the image..."
-                    : "Describe the image you want to generate..."
-                }
-                disabled={isLoading}
-                className="flex-1"
-                autoSize={{ minRows: 1, maxRows: 6 }}
-                style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
-              />
-              {isLoading ? (
-                <TremorButton
-                  onClick={handleCancelRequest}
-                  className="ml-2 bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
-                  icon={DeleteOutlined}
-                >
-                  Cancel
-                </TremorButton>
-              ) : (
-                <TremorButton
-                  onClick={handleSendMessage}
-                  className="ml-2 text-white"
-                  icon={
+            <div className="flex items-center gap-2">
+              <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
+                {/* Left: paperclip icon */}
+                <div className="flex-shrink-0 mr-2">
+                  {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
+                    <ResponsesImageUpload
+                      responsesUploadedImage={responsesUploadedImage}
+                      responsesImagePreviewUrl={responsesImagePreviewUrl}
+                      onImageUpload={handleResponsesImageUpload}
+                      onRemoveImage={handleRemoveResponsesImage}
+                    />
+                  )}
+                  {endpointType === EndpointType.CHAT && !chatUploadedImage && (
+                    <ChatImageUpload
+                      chatUploadedImage={chatUploadedImage}
+                      chatImagePreviewUrl={chatImagePreviewUrl}
+                      onImageUpload={handleChatImageUpload}
+                      onRemoveImage={handleRemoveChatImage}
+                    />
+                  )}
+                </div>
+
+                {/* Middle: input field */}
+                <TextArea
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
                     endpointType === EndpointType.CHAT ||
                     endpointType === EndpointType.RESPONSES ||
                     endpointType === EndpointType.ANTHROPIC_MESSAGES
-                      ? SendOutlined
-                      : RobotOutlined
+                      ? "Type your message... (Shift+Enter for new line)"
+                      : endpointType === EndpointType.IMAGE_EDITS
+                      ? "Describe how you want to edit the image..."
+                      : "Describe the image you want to generate..."
                   }
+                  disabled={isLoading}
+                  className="flex-1"
+                  autoSize={{ minRows: 1, maxRows: 4 }}
+                  style={{ 
+                    resize: 'none', 
+                    border: 'none', 
+                    boxShadow: 'none',
+                    background: 'transparent',
+                    padding: '4px 0',
+                    fontSize: '14px',
+                    lineHeight: '20px'
+                  }}
+                />
+
+                {/* Right: send button */}
+                <TremorButton
+                  icon={SendOutlined}
+                  onClick={handleSendMessage}
+                  disabled={isLoading || !inputMessage.trim()}
+                  className="flex-shrink-0 ml-2"
+                  style={{ 
+                    width: '32px', 
+                    height: '32px',
+                    minWidth: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                />
+              </div>
+
+              {isLoading && (
+                <TremorButton
+                  onClick={handleCancelRequest}
+                  className="bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
+                  icon={DeleteOutlined}
                 >
-                  {endpointType === EndpointType.CHAT ||
-                  endpointType === EndpointType.RESPONSES ||
-                  endpointType === EndpointType.ANTHROPIC_MESSAGES
-                    ? "Send"
-                    : endpointType === EndpointType.IMAGE_EDITS
-                    ? "Edit"
-                    : "Generate"}
+                  Cancel
                 </TremorButton>
               )}
             </div>

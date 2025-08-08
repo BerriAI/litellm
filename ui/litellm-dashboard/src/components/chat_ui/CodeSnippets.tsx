@@ -103,9 +103,9 @@ response = client.chat.completions.create(
 
 print(response)
 
-# Example with image (uncomment and provide image path to use)
-# base64_image = encode_image("path/to/your/image.jpg")
-# response_with_image = client.chat.completions.create(
+# Example with image or PDF (uncomment and provide file path to use)
+# base64_file = encode_image("path/to/your/file.jpg")  # or .pdf
+# response_with_file = client.chat.completions.create(
 #     model="${modelNameForCode}",
 #     messages=[
 #         {
@@ -118,14 +118,14 @@ print(response)
 #                 {
 #                     "type": "image_url",
 #                     "image_url": {
-#                         "url": f"data:image/jpeg;base64,{base64_image}"
+#                         "url": f"data:image/jpeg;base64,{base64_file}"  # or data:application/pdf;base64,{base64_file}
 #                     }
 #                 }
 #             ]
 #         }
 #     ]${extraBodyCode}
 # )
-# print(response_with_image)
+# print(response_with_file)
 `;
 					break;
 			}
@@ -159,9 +159,9 @@ response = client.responses.create(
 
 print(response.output_text)
 
-# Example with image (uncomment and provide image path to use)
-# base64_image = encode_image("path/to/your/image.jpg")
-# response_with_image = client.responses.create(
+# Example with image or PDF (uncomment and provide file path to use)
+# base64_file = encode_image("path/to/your/file.jpg")  # or .pdf
+# response_with_file = client.responses.create(
 #     model="${modelNameForCode}",
 #     input=[
 #         {
@@ -170,13 +170,13 @@ print(response.output_text)
 #                 {"type": "input_text", "text": "${safePrompt}"},
 #                 {
 #                     "type": "input_image",
-#                     "image_url": f"data:image/jpeg;base64,{base64_image}",
+#                     "image_url": f"data:image/jpeg;base64,{base64_file}",  # or data:application/pdf;base64,{base64_file}
 #                 },
 #             ],
 #         }
 #     ]${extraBodyCode}
 # )
-# print(response_with_image.output_text)
+# print(response_with_file.output_text)
 `;
 				break;
 			}
