@@ -517,6 +517,7 @@ anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
+sambanova_embedding_models: List = []
 novita_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
@@ -691,6 +692,8 @@ def add_known_models():
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.append(key)
+        elif value.get("litellm_provider") == "sambanova-embedding-models":
+            sambanova_embedding_models.append(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.append(key)
         elif value.get("litellm_provider") == "nebius-chat-models":
@@ -869,7 +872,7 @@ models_by_provider: dict = {
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
-    "sambanova": sambanova_models,
+    "sambanova": sambanova_models + sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models + nebius_embedding_models,
     "assemblyai": assemblyai_models,
@@ -921,6 +924,7 @@ all_embedding_models = (
     + vertex_embedding_models
     + fireworks_ai_embedding_models
     + nebius_embedding_models
+    + sambanova_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -1172,6 +1176,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
+from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
