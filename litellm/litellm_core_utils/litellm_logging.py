@@ -4106,7 +4106,16 @@ class StandardLoggingPayloadSetup:
         from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
         # Only generate object key if cold storage is configured
-        configured_cold_storage_logger = ColdStorageHandler._get_configured_cold_storage_custom_logger()
+        try:
+            configured_cold_storage_logger = (
+                ColdStorageHandler._get_configured_cold_storage_custom_logger()
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                f"Cold storage custom logger unavailable: {e}"
+            )
+            return None
+
         if configured_cold_storage_logger is None:
             return None
             

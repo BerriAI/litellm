@@ -163,6 +163,14 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-5 | `response = completion(model="gpt-5", messages=messages)` |
+| gpt-5-mini | `response = completion(model="gpt-5-mini", messages=messages)` |
+| gpt-5-nano | `response = completion(model="gpt-5-nano", messages=messages)` |
+| gpt-5-chat | `response = completion(model="gpt-5-chat", messages=messages)` |
+| gpt-5-chat-latest | `response = completion(model="gpt-5-chat-latest", messages=messages)` |
+| gpt-5-2025-08-07 | `response = completion(model="gpt-5-2025-08-07", messages=messages)` |
+| gpt-5-mini-2025-08-07 | `response = completion(model="gpt-5-mini-2025-08-07", messages=messages)` |
+| gpt-5-nano-2025-08-07 | `response = completion(model="gpt-5-nano-2025-08-07", messages=messages)` |
 | gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
