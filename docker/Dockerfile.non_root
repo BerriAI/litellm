@@ -55,8 +55,9 @@ RUN pip uninstall jwt -y && \
     pip install PyJWT==2.9.0 --no-cache-dir
 
 # --- Prisma Handling for Non-Root User ---
-# Set Prisma cache directory (npm cache no longer needed with binary pre-caching)
+# Set Prisma cache directories
 ENV PRISMA_BINARY_CACHE_DIR=/nonexistent
+ENV NPM_CONFIG_CACHE=/.npm
 
 # Install prisma and make entrypoints executable
 RUN pip install --no-cache-dir prisma && \
@@ -64,9 +65,9 @@ RUN pip install --no-cache-dir prisma && \
     chmod +x docker/prod_entrypoint.sh
 
 # Create directories and set permissions for non-root user
-RUN mkdir -p /nonexistent && \
+RUN mkdir -p /nonexistent /.npm && \
     chown -R nobody:nogroup /app && \
-    chown -R nobody:nogroup /nonexistent && \
+    chown -R nobody:nogroup /nonexistent /.npm && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup $PRISMA_PATH
 
@@ -89,19 +90,7 @@ USER nobody
 
 # Set HOME for prisma generate to have a writable directory
 ENV HOME=/app
-
-# Force Prisma to download and cache all binaries at build time -> for offline deployment
-# This uses official Prisma environment variables for offline deployment
-ENV PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1
-ENV PRISMA_CLI_BINARY_TARGETS=linux-musl-openssl-3.0.x,linux-musl-arm64-openssl-3.0.x
-
-# this will generate the Prisma client and cache all engine binaries
 RUN prisma generate
-
-# These commands force download of all CLI binaries without dummy database URLs
-RUN prisma version
-RUN prisma format --schema=/dev/null || echo "Schema format test completed"
-
 # --- End of Prisma Handling ---
 
 EXPOSE 4000/tcp
