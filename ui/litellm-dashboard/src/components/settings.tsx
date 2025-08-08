@@ -585,7 +585,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                       await serviceHealthCheck(accessToken, "slack");
                       NotificationsManager.success("Alert test triggered. Test request to slack made - check logs/alerts on slack to verify");
                     } catch (error) {
-                      NotificationsManager.fromBackendError(parseErrorMessage(error));
+                      NotificationsManager.fromBackend(parseErrorMessage(error));
                     }
                   }}
                   className="mx-2"
