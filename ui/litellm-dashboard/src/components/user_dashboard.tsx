@@ -14,7 +14,7 @@ import {
 import { fetchTeams } from "./common_components/fetch_teams"
 import { Grid, Col, Card, Text, Title } from "@tremor/react"
 import CreateKey from "./organisms/create_key_button"
-import ViewKeyTable from "./view_key_table"
+import ViewKeyTable from "./templates/view_key_table"
 import ViewUserSpend from "./view_user_spend"
 import ViewUserTeam from "./view_user_team"
 import DashboardTeam from "./dashboard_default_team"
