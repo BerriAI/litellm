@@ -65,6 +65,8 @@ import { AllKeysTable } from "../all_keys_table"
 import { Team } from "../key_team_helpers/key_list"
 import { Setter } from "@/types"
 
+import NotificationManager from "../molecules/notifications_manager"
+
 interface EditKeyModalProps {
   visible: boolean
   onCancel: () => void
@@ -253,7 +255,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
           setUserModels(models)
         }
       } catch (error) {
-        console.error("Error fetching user models:", error)
+        NotificationManager.error({ description: "Error fetching user models" })
       }
     }
 
@@ -283,8 +285,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       const filteredData = data.filter((item) => item.token !== keyToDelete)
       setData(filteredData)
     } catch (error) {
-      console.error("Error deleting the key:", error)
-      // Handle any error situations, such as displaying an error message to the user.
+      NotificationManager.error({ description: "Error deleting the key" })
     }
 
     // Close the confirmation modal and reset the keyToDelete
@@ -320,7 +321,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
   const handleRegenerateKey = async () => {
     if (!premiumUser) {
-      message.error("Regenerate API Key is an Enterprise feature. Please upgrade to use this feature.")
+      NotificationManager.warning({
+        description: "Regenerate API Key is an Enterprise feature. Please upgrade to use this feature.",
+      })
       return
     }
 
@@ -344,10 +347,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
       setRegenerateDialogVisible(false)
       regenerateForm.resetFields()
-      message.success("API Key regenerated successfully")
+      NotificationManager.success({ description: "API Key regenerated successfully" })
     } catch (error) {
       console.error("Error regenerating key:", error)
-      message.error("Failed to regenerate API Key")
+      NotificationManager.error({ description: "Failed to regenerate API Key" })
     }
   }
 
@@ -522,7 +525,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               >
                 <pre style={{ wordWrap: "break-word", whiteSpace: "normal" }}>{regeneratedKey}</pre>
               </div>
-              <CopyToClipboard text={regeneratedKey} onCopy={() => message.success("API Key copied to clipboard")}>
+              <CopyToClipboard
+                text={regeneratedKey}
+                onCopy={() => NotificationManager.success({ description: "API Key copied to clipboard" })}
+              >
                 <Button className="mt-3">Copy API Key</Button>
               </CopyToClipboard>
             </Col>

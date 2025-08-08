@@ -13,21 +13,22 @@ import {
   Title,
   Badge,
   TextInput,
-  Select as TremorSelect
-} from "@tremor/react";
-import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline";
-import { keyDeleteCall, keyUpdateCall } from "./networking";
-import { KeyResponse } from "./key_team_helpers/key_list";
-import { Form, Input, InputNumber, message, Select, Tooltip, Button as AntdButton } from "antd";
-import { KeyEditView } from "./key_edit_view";
-import { RegenerateKeyModal } from "./regenerate_key_modal";
-import { rolesWithWriteAccess } from '../utils/roles';
-import ObjectPermissionsView from "./object_permissions_view";
-import LoggingSettingsView from "./logging_settings_view";
-import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
-import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils";
-import { CopyIcon, CheckIcon } from "lucide-react";
-import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "./callback_info_helpers";
+  Select as TremorSelect,
+} from "@tremor/react"
+import { ArrowLeftIcon, TrashIcon, RefreshIcon } from "@heroicons/react/outline"
+import { keyDeleteCall, keyUpdateCall } from "./networking"
+import { KeyResponse } from "./key_team_helpers/key_list"
+import { Form, Input, InputNumber, Select, Tooltip, Button as AntdButton } from "antd"
+import NotificationManager from "./molecules/notifications_manager"
+import { KeyEditView } from "./key_edit_view"
+import { RegenerateKeyModal } from "./regenerate_key_modal"
+import { rolesWithWriteAccess } from "../utils/roles"
+import ObjectPermissionsView from "./object_permissions_view"
+import LoggingSettingsView from "./logging_settings_view"
+import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils"
+import { extractLoggingSettings, formatMetadataForDisplay } from "./key_info_utils"
+import { CopyIcon, CheckIcon } from "lucide-react"
+import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "./callback_info_helpers"
 
 interface KeyInfoViewProps {
   keyId: string
@@ -88,12 +89,7 @@ export default function KeyInfoView({
   if (!currentKeyData) {
     return (
       <div className="p-4">
-        <Button 
-          icon={ArrowLeftIcon} 
-          variant="light"
-          onClick={onClose}
-          className="mb-4"
-        >
+        <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
           Back to Keys
         </Button>
         <Text>Key not found</Text>
@@ -148,9 +144,9 @@ export default function KeyInfoView({
               : {}),
           };
         } catch (error) {
-          console.error("Error parsing metadata JSON:", error);
-          message.error("Invalid metadata JSON");
-          return;
+          console.error("Error parsing metadata JSON:", error)
+          NotificationManager.error("Invalid metadata JSON")
+          return
         }
       } else {
         formValues.metadata = {
@@ -189,12 +185,12 @@ export default function KeyInfoView({
       if (onKeyDataUpdate) {
         onKeyDataUpdate(newKeyValues)
       }
-      message.success("Key updated successfully");
-      setIsEditing(false);
+      NotificationManager.success("Key updated successfully")
+      setIsEditing(false)
       // Refresh key data here if needed
     } catch (error) {
-      message.error("Failed to update key");
-      console.error("Error updating key:", error);
+      NotificationManager.fromBackend(error)
+      console.error("Error updating key:", error)
     }
   };
 
@@ -202,14 +198,14 @@ export default function KeyInfoView({
     try {
       if (!accessToken) return
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id)
-      message.success("Key deleted successfully")
+      NotificationManager.success("Key deleted successfully")
       if (onDelete) {
         onDelete()
       }
       onClose();
     } catch (error) {
-      console.error("Error deleting the key:", error);
-      message.error("Failed to delete key");
+      console.error("Error deleting the key:", error)
+      NotificationManager.fromBackend(error)
     }
   };
 
@@ -492,7 +488,7 @@ export default function KeyInfoView({
                     <Text className="font-medium">Key ID</Text>
                     <Text className="font-mono">{currentKeyData.token_id || currentKeyData.token}</Text>
                   </div>
-                  
+
                   <div>
                     <Text className="font-medium">Key Alias</Text>
                     <Text>{currentKeyData.key_alias || "Not Set"}</Text>
@@ -548,16 +544,16 @@ export default function KeyInfoView({
                         : "Unlimited"}
                     </Text>
                   </div>
-                  
+
                   <div>
                     <Text className="font-medium">Prompts</Text>
                     <Text>
                       {Array.isArray(currentKeyData.metadata?.prompts) && currentKeyData.metadata.prompts.length > 0
                         ? currentKeyData.metadata.prompts.map((prompt, index) => (
-                          <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
-                            {prompt}
-                          </span>
-                        ))
+                            <span key={index} className="px-2 mr-2 py-1 bg-blue-100 rounded text-xs">
+                              {prompt}
+                            </span>
+                          ))
                         : "No prompts specified"}
                     </Text>
                   </div>
