@@ -282,6 +282,7 @@ LITELLM_CHAT_PROVIDERS = [
     "oci",
     "morph",
     "lambda_ai",
+    "parasail",
 ]
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS = [
@@ -455,6 +456,7 @@ openai_compatible_providers: List = [
     "morph",
     "lambda_ai",
     "hyperbolic",
+    "parasail",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
