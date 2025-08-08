@@ -84,14 +84,48 @@ client = openai.OpenAI(
 						extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
 					}
 
+					// Create example for chat completions with optional image support
+					const messagesExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
+
 					endpointSpecificCode = `
-# request sent to model set on litellm proxy, \`litellm --model\`
+import base64
+
+# Helper function to encode images to base64
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+# Example with text only
 response = client.chat.completions.create(
-	model="${modelNameForCode}",
-	messages = ${JSON.stringify(messages, null, 4)}${extraBodyCode}
+    model="${modelNameForCode}",
+    messages=${JSON.stringify(messagesExample, null, 4)}${extraBodyCode}
 )
 
 print(response)
+
+# Example with image (uncomment and provide image path to use)
+# base64_image = encode_image("path/to/your/image.jpg")
+# response_with_image = client.chat.completions.create(
+#     model="${modelNameForCode}",
+#     messages=[
+#         {
+#             "role": "user",
+#             "content": [
+#                 {
+#                     "type": "text",
+#                     "text": "${safePrompt}"
+#                 },
+#                 {
+#                     "type": "image_url",
+#                     "image_url": {
+#                         "url": f"data:image/jpeg;base64,{base64_image}"
+#                     }
+#                 }
+#             ]
+#         }
+#     ]${extraBodyCode}
+# )
+# print(response_with_image)
 `;
 					break;
 			}
@@ -106,14 +140,43 @@ print(response)
 					extraBodyCode = `,\n    extra_body=${indentedExtraBodyString}`;
 				}
 
+				// Create example for responses API with optional image support
+				const inputExample = messages.length > 0 ? messages : [{ role: "user", content: userPrompt }];
+				
 				endpointSpecificCode = `
-# request sent to model set on litellm proxy, \`litellm --model\`
+import base64
+
+# Helper function to encode images to base64
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+# Example with text only
 response = client.responses.create(
-	model="${modelNameForCode}",
-	messages = ${JSON.stringify(messages, null, 4)}${extraBodyCode}
+    model="${modelNameForCode}",
+    input=${JSON.stringify(inputExample, null, 4)}${extraBodyCode}
 )
 
-print(response)
+print(response.output_text)
+
+# Example with image (uncomment and provide image path to use)
+# base64_image = encode_image("path/to/your/image.jpg")
+# response_with_image = client.responses.create(
+#     model="${modelNameForCode}",
+#     input=[
+#         {
+#             "role": "user",
+#             "content": [
+#                 {"type": "input_text", "text": "${safePrompt}"},
+#                 {
+#                     "type": "input_image",
+#                     "image_url": f"data:image/jpeg;base64,{base64_image}",
+#                 },
+#             ],
+#         }
+#     ]${extraBodyCode}
+# )
+# print(response_with_image.output_text)
 `;
 				break;
 			}
