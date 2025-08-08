@@ -45,6 +45,12 @@ import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./chat_ui/ResponseMetrics";
+import ResponsesImageUpload from "./chat_ui/ResponsesImageUpload";
+import ResponsesImageRenderer from "./chat_ui/ResponsesImageRenderer";
+import { convertImageToBase64, createMultimodalMessage, createDisplayMessage } from "./chat_ui/ResponsesImageUtils";
+import ChatImageUpload from "./chat_ui/ChatImageUpload";
+import ChatImageRenderer from "./chat_ui/ChatImageRenderer";
+import { createChatMultimodalMessage, createChatDisplayMessage } from "./chat_ui/ChatImageUtils";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -61,7 +67,8 @@ import {
   UploadOutlined,
   PictureOutlined,
   CodeOutlined,
-  ToolOutlined
+  ToolOutlined,
+  FilePdfOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
@@ -157,6 +164,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [messageTraceId, setMessageTraceId] = useState<string | null>(() => sessionStorage.getItem('messageTraceId') || null);
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [responsesUploadedImage, setResponsesUploadedImage] = useState<File | null>(null);
+  const [responsesImagePreviewUrl, setResponsesImagePreviewUrl] = useState<string | null>(null);
+  const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
+  const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
@@ -442,6 +453,36 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setImagePreviewUrl(null);
   };
 
+  const handleResponsesImageUpload = (file: File): false => {
+    setResponsesUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setResponsesImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveResponsesImage = () => {
+    if (responsesImagePreviewUrl) {
+      URL.revokeObjectURL(responsesImagePreviewUrl);
+    }
+    setResponsesUploadedImage(null);
+    setResponsesImagePreviewUrl(null);
+  };
+
+  const handleChatImageUpload = (file: File): false => {
+    setChatUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setChatImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveChatImage = () => {
+    if (chatImagePreviewUrl) {
+      URL.revokeObjectURL(chatImagePreviewUrl);
+    }
+    setChatUploadedImage(null);
+    setChatImagePreviewUrl(null);
+  };
+
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
@@ -467,7 +508,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const signal = abortControllerRef.current.signal;
 
     // Create message object without model field for API call
-    const newUserMessage = { role: "user", content: inputMessage };
+    let newUserMessage: { role: string; content: string | any[] };
+    
+    // Handle image for responses API
+    if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+      try {
+        newUserMessage = await createMultimodalMessage(inputMessage, responsesUploadedImage);
+      } catch (error) {
+        message.error("Failed to process image. Please try again.");
+        return;
+      }
+    } 
+    // Handle image for chat completions API
+    else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+      try {
+        newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
+      } catch (error) {
+        message.error("Failed to process image. Please try again.");
+        return;
+      }
+    } else {
+      newUserMessage = { role: "user", content: inputMessage };
+    }
     
     // Generate new trace ID for a new conversation or use existing one
     const traceId = messageTraceId || uuidv4();
@@ -475,8 +537,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
       setMessageTraceId(traceId);
     }
     
-    // Update UI with full message object
-    setChatHistory([...chatHistory, newUserMessage]);
+    // Update UI with full message object (always display as text for UI)
+    let displayMessage: MessageType;
+    if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+      displayMessage = createDisplayMessage(inputMessage, true, responsesImagePreviewUrl || undefined, responsesUploadedImage.name);
+    } else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+      displayMessage = createChatDisplayMessage(inputMessage, true, chatImagePreviewUrl || undefined, chatUploadedImage.name);
+    } else {
+      displayMessage = createDisplayMessage(inputMessage, false);
+    }
+    
+    setChatHistory([...chatHistory, displayMessage]);
     setIsLoading(true);
 
     try {
@@ -484,7 +555,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
         
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
-          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          // For chat completions, we preserve the multimodal content structure
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ 
+            role, 
+            content: typeof content === 'string' ? content : '' 
+          })), newUserMessage];
           
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -577,6 +652,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (endpointType === EndpointType.IMAGE_EDITS) {
         handleRemoveImage();
       }
+      // Clear image after successful request for responses API
+      if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+        handleRemoveResponsesImage();
+      }
+      // Clear image after successful request for chat completions API
+      if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+        handleRemoveChatImage();
+      }
     }
 
     setInputMessage("");
@@ -585,7 +668,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const clearChatHistory = () => {
     setChatHistory([]);
     setMessageTraceId(null);
-    handleRemoveImage(); // Clear any uploaded images
+    handleRemoveImage(); // Clear any uploaded images for image edits
+    handleRemoveResponsesImage(); // Clear any uploaded images for responses
+    handleRemoveChatImage(); // Clear any uploaded images for chat completions
     sessionStorage.removeItem('chatHistory');
     sessionStorage.removeItem('messageTraceId');
     message.success("Chat history cleared.");
@@ -871,44 +956,54 @@ const ChatUI: React.FC<ChatUIProps> = ({
                        }}>
                     {message.isImage ? (
                       <img 
-                        src={message.content} 
+                        src={typeof message.content === "string" ? message.content : ""} 
                         alt="Generated image" 
                         className="max-w-full rounded-md border border-gray-200 shadow-sm" 
                         style={{ maxHeight: '500px' }} 
                       />
                     ) : (
-                      <ReactMarkdown
-                        components={{
-                          code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
-                            inline?: boolean;
-                            node?: any;
-                          }) {
-                            const match = /language-(\w+)/.exec(className || '');
-                            return !inline && match ? (
-                              <SyntaxHighlighter
-                                style={coy as any}
-                                language={match[1]}
-                                PreTag="div"
-                                className="rounded-md my-2"
-                                wrapLines={true}
-                                wrapLongLines={true}
-                                {...props}
-                              >
-                                {String(children).replace(/\n$/, '')}
-                              </SyntaxHighlighter>
-                            ) : (
-                              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
-                                {children}
-                              </code>
-                            );
-                          },
-                          pre: ({ node, ...props }) => (
-                            <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
-                          )
-                        }}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
+                      <>
+                        {/* Show attached image for user messages based on current endpoint */}
+                        {endpointType === EndpointType.RESPONSES && (
+                          <ResponsesImageRenderer message={message} />
+                        )}
+                        {endpointType === EndpointType.CHAT && (
+                          <ChatImageRenderer message={message} />
+                        )}
+                        
+                        <ReactMarkdown
+                          components={{
+                            code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                              inline?: boolean;
+                              node?: any;
+                            }) {
+                              const match = /language-(\w+)/.exec(className || '');
+                              return !inline && match ? (
+                                <SyntaxHighlighter
+                                  style={coy as any}
+                                  language={match[1]}
+                                  PreTag="div"
+                                  className="rounded-md my-2"
+                                  wrapLines={true}
+                                  wrapLongLines={true}
+                                  {...props}
+                                >
+                                  {String(children).replace(/\n$/, '')}
+                                </SyntaxHighlighter>
+                              ) : (
+                                <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
+                                  {children}
+                                </code>
+                              );
+                            },
+                            pre: ({ node, ...props }) => (
+                              <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
+                            )
+                          }}
+                        >
+                          {typeof message.content === "string" ? message.content : ""}
+                        </ReactMarkdown>
+                      </>
                     )}
                                         
                     {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
@@ -966,8 +1061,81 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 )}
               </div>
             )}
+            {/* Show file previews above input when files are uploaded */}
+            {(endpointType === EndpointType.RESPONSES && responsesUploadedImage) && (
+              <div className="mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="relative inline-block">
+                    {responsesUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
+                      <div className="w-16 h-16 rounded-md border border-gray-200 bg-red-50 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '24px', color: '#dc2626' }} />
+                      </div>
+                    ) : (
+                      <img 
+                        src={responsesImagePreviewUrl || ''} 
+                        alt="Upload preview" 
+                        className="max-w-16 max-h-16 rounded-md border border-gray-200 object-cover"
+                      />
+                    )}
+                    <button
+                      className="absolute -top-1 -right-1 bg-white shadow-sm border border-gray-200 rounded-full w-4 h-4 flex items-center justify-center text-red-500 hover:bg-red-50 text-xs"
+                      onClick={handleRemoveResponsesImage}
+                    >
+                      <DeleteOutlined style={{ fontSize: '8px' }} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             
-            <div className="flex items-center">
+            {(endpointType === EndpointType.CHAT && chatUploadedImage) && (
+              <div className="mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="relative inline-block">
+                    {chatUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
+                      <div className="w-16 h-16 rounded-md border border-gray-200 bg-red-50 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '24px', color: '#dc2626' }} />
+                      </div>
+                    ) : (
+                      <img 
+                        src={chatImagePreviewUrl || ''} 
+                        alt="Upload preview" 
+                        className="max-w-16 max-h-16 rounded-md border border-gray-200 object-cover"
+                      />
+                    )}
+                    <button
+                      className="absolute -top-1 -right-1 bg-white shadow-sm border border-gray-200 rounded-full w-4 h-4 flex items-center justify-center text-red-500 hover:bg-red-50 text-xs"
+                      onClick={handleRemoveChatImage}
+                    >
+                      <DeleteOutlined style={{ fontSize: '8px' }} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex items-end gap-2">
+              {/* Image upload button inline with input */}
+              <div className="flex items-center gap-1 pb-1">
+                {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
+                  <ResponsesImageUpload
+                    responsesUploadedImage={responsesUploadedImage}
+                    responsesImagePreviewUrl={responsesImagePreviewUrl}
+                    onImageUpload={handleResponsesImageUpload}
+                    onRemoveImage={handleRemoveResponsesImage}
+                  />
+                )}
+                
+                {endpointType === EndpointType.CHAT && !chatUploadedImage && (
+                  <ChatImageUpload
+                    chatUploadedImage={chatUploadedImage}
+                    chatImagePreviewUrl={chatImagePreviewUrl}
+                    onImageUpload={handleChatImageUpload}
+                    onRemoveImage={handleRemoveChatImage}
+                  />
+                )}
+              </div>
+              
               <TextArea
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
