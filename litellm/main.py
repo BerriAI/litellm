@@ -364,6 +364,7 @@ async def acompletion(
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    filter_tool_calls: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -914,6 +915,7 @@ def completion(  # type: ignore # noqa: PLR0915
     model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
+    filter_tool_calls: Optional[bool] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -2214,6 +2216,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     model,
                     custom_llm_provider="nlp_cloud",
                     logging_obj=logging,
+                    filter_tool_calls=filter_tool_calls,
                 )
 
             if optional_params.get("stream", False) or acompletion is True:
@@ -2263,6 +2266,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     model,
                     custom_llm_provider="aleph_alpha",
                     logging_obj=logging,
+                    filter_tool_calls=filter_tool_calls,
                 )
                 return response
             response = model_response
@@ -2443,6 +2447,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     model,
                     custom_llm_provider="oobabooga",
                     logging_obj=logging,
+                    filter_tool_calls=filter_tool_calls,
                 )
                 return response
             response = model_response
@@ -2767,6 +2772,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         model,
                         custom_llm_provider="vertex_ai",
                         logging_obj=logging,
+                        filter_tool_calls=filter_tool_calls,
                     )
                     return response
             response = model_response
@@ -2925,9 +2931,9 @@ def completion(  # type: ignore # noqa: PLR0915
                     "aws_region_name" not in optional_params
                     or optional_params["aws_region_name"] is None
                 ):
-                    optional_params["aws_region_name"] = (
-                        aws_bedrock_client.meta.region_name
-                    )
+                    optional_params[
+                        "aws_region_name"
+                    ] = aws_bedrock_client.meta.region_name
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             if bedrock_route == "converse":
@@ -3093,6 +3099,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     model,
                     custom_llm_provider="vllm",
                     logging_obj=logging,
+                    filter_tool_calls=filter_tool_calls,
                 )
                 return response
 
@@ -3239,6 +3246,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     model,
                     custom_llm_provider="baseten",
                     logging_obj=logging,
+                    filter_tool_calls=filter_tool_calls,
                 )
                 return response
             response = model_response
@@ -3268,6 +3276,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     model,
                     custom_llm_provider="petals",
                     logging_obj=logging,
+                    filter_tool_calls=filter_tool_calls,
                 )
                 return response
             response = model_response
@@ -4812,9 +4821,9 @@ def adapter_completion(
     new_kwargs = translation_obj.translate_completion_input_params(kwargs=kwargs)
 
     response: Union[ModelResponse, CustomStreamWrapper] = completion(**new_kwargs)  # type: ignore
-    translated_response: Optional[Union[BaseModel, AdapterCompletionStreamWrapper]] = (
-        None
-    )
+    translated_response: Optional[
+        Union[BaseModel, AdapterCompletionStreamWrapper]
+    ] = None
     if isinstance(response, ModelResponse):
         translated_response = translation_obj.translate_completion_output_params(
             response=response
@@ -5795,9 +5804,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = (
-                processor.get_combined_content(content_chunks)
-            )
+            response["choices"][0]["message"][
+                "content"
+            ] = processor.get_combined_content(content_chunks)
 
         thinking_blocks = [
             chunk
@@ -5808,9 +5817,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(thinking_blocks) > 0:
-            response["choices"][0]["message"]["thinking_blocks"] = (
-                processor.get_combined_thinking_content(thinking_blocks)
-            )
+            response["choices"][0]["message"][
+                "thinking_blocks"
+            ] = processor.get_combined_thinking_content(thinking_blocks)
 
         reasoning_chunks = [
             chunk
@@ -5821,9 +5830,9 @@ def stream_chunk_builder(  # noqa: PLR0915
         ]
 
         if len(reasoning_chunks) > 0:
-            response["choices"][0]["message"]["reasoning_content"] = (
-                processor.get_combined_reasoning_content(reasoning_chunks)
-            )
+            response["choices"][0]["message"][
+                "reasoning_content"
+            ] = processor.get_combined_reasoning_content(reasoning_chunks)
 
         audio_chunks = [
             chunk
