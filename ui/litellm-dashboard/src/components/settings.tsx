@@ -49,6 +49,7 @@ import {
   callbackInfo,
   Callbacks,
 } from "./callback_info_helpers";
+import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -478,7 +479,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                                     await serviceHealthCheck(accessToken, callback.name);
                                     NotificationsManager.success("Health check triggered");
                                   } catch (error) {
-                                    NotificationsManager.fromBackendError(error);
+                                    NotificationsManager.fromBackendError(parseErrorMessage(error));
                                   }
                                 }}
                                 className="ml-2"
@@ -584,7 +585,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                       await serviceHealthCheck(accessToken, "slack");
                       NotificationsManager.success("Alert test triggered");
                     } catch (error) {
-                      NotificationsManager.fromBackendError(error);
+                      NotificationsManager.fromBackendError(parseErrorMessage(error));
                     }
                   }}
                   className="mx-2"

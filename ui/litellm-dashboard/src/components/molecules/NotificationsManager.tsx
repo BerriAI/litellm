@@ -28,16 +28,48 @@ function toIntMaybe(val: any): number | undefined {
   return undefined
 }
 
+const AUTH_MATCH = [
+  "invalid api key",
+  "invalid authorization header format",
+  "authentication error",
+  "invalid proxy server token",
+  "invalid jwt token",
+  "invalid jwt submitted",
+  "unauthorized access to metrics endpoint",
+];
+
+const FORBIDDEN_MATCH = [
+  "admin-only endpoint",
+  "not allowed to access model",
+  "user does not have permission",
+  "access forbidden",
+  "invalid credentials used to access ui",
+  "user not allowed to access proxy",
+];
+
+const DB_MATCH = [
+  "db not connected",
+  "database not initialized",
+  "no db connected",
+  "prisma client not initialized",
+  "service unhealthy",
+];
+
 function titleFor(status?: number, desc?: string): string {
-  const d = (desc || "").toLowerCase()
-  if (status && status >= 500) return "Server Error"
-  if (status === 401 || d.includes("authentication")) return "Authentication Error"
-  if (status === 403 || d.includes("forbidden") || d.includes("access denied")) return "Access Denied"
-  if (status === 404 || d.includes("not found")) return "Not Found"
-  if (status === 429 || d.includes("rate limit") || d.includes("tpm") || d.includes("rpm")) return "Rate Limit Exceeded"
-  if (d.includes("enterprise") || d.includes("premium")) return "Info"
-  if (status && status >= 400) return "Request Error"
-  return "Error"
+  const d = (desc || "").toLowerCase();
+
+  if (AUTH_MATCH.some(s => d.includes(s))) return "Authentication Error";
+  if (FORBIDDEN_MATCH.some(s => d.includes(s))) return "Access Denied";
+  if (DB_MATCH.some(s => d.includes(s)) || status === 503) return "Service Unavailable";
+
+  if (status && status >= 500) return "Server Error";
+  if (status === 401) return "Authentication Error";
+  if (status === 403) return "Access Denied";
+  if (status === 404 || d.includes("not found")) return "Not Found";
+  if (status === 429 || d.includes("rate limit") || d.includes("tpm") || d.includes("rpm")) return "Rate Limit Exceeded";
+  if (d.includes("enterprise") || d.includes("premium")) return "Info";
+  if (status && status >= 400) return "Request Error";
+  return "Error";
 }
 
 const NotificationManager = {
