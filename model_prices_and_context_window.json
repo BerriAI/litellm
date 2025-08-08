@@ -18243,7 +18243,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/meta.llama-4-scout-17b-16e-instruct": {
@@ -18256,7 +18255,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/meta.llama-3.3-70b-instruct": {
@@ -18269,7 +18267,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/meta.llama-3.2-90b-vision-instruct": {
@@ -18282,7 +18279,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/meta.llama-3.1-405b-instruct": {
@@ -18295,7 +18291,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
 
@@ -18309,7 +18304,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/xai.grok-3": {
@@ -18322,7 +18316,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/xai.grok-3-mini": {
@@ -18335,7 +18328,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/xai.grok-3-fast": {
@@ -18348,7 +18340,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     },
     "oci/xai.grok-3-mini-fast": {
@@ -18361,7 +18352,6 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_tool_choice": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
     }
 }
