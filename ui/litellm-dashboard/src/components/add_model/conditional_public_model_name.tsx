@@ -74,8 +74,9 @@ const ConditionalPublicModelName: React.FC = () => {
       <div className="mb-2 font-normal">
         The name you specify in your API calls to LiteLLM Proxy
       </div>
-      <div className="mb-2 font-normal">
-        <strong>Example:</strong> If you choose <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">openai/qwen-plus-latest</code> as the LiteLLM model, and name your public model <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">example-name</code>
+        <div className="mb-2 font-normal">
+          <strong>Example:</strong> If you name your public model <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">example-name</code> 
+           , and choose <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">openai/qwen-plus-latest</code> as the LiteLLM model 
       </div>
       <div className="mb-2 font-normal">
         <strong>Usage:</strong> You make an API call to the LiteLLM proxy with <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">model = "example-name"</code>
