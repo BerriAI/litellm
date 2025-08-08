@@ -1000,6 +1000,82 @@ router_settings:
 </TabItem>
 </Tabs>
 
+### How Cooldowns Work with Multiple Deployments
+
+Cooldowns apply to individual deployments, not entire model groups. The router intelligently isolates failures to specific deployments while keeping healthy alternatives available.
+
+#### What is a deployment?
+- A single entry on the config.yaml is 1 deployment, which you can provide litellm_params for. In this example we have 2 deployments for claude-sonnet-4-20250514. 
+
+Under the hood, litellm generats a unique model_id for each entry here - it combines all the litellm_params and generats a deterministic hash of the combined litellm_params. 
+
+```yaml
+model_list:
+- model_name: sonnet-4 # deployment 1 == model_id: 1234567890
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: <our-real-key>
+- model_name: byok-sonnet-4 # deployment 2 == model_id: 9129922	
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: <dummy-value-to-be-replaced-by-our-internal-proxy-with-the-customer-key>
+      api_base: https://proxy.litellm.ai/api.anthropic.com
+  - model_name: sonnet-4 # deployment 3 == model_id: 4982929292
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-20250514
+      vertex_project: my-project
+```
+
+#### When are deployments cooled down?
+
+The router uses the following logic to determine if a deployment should be cooled down:
+
+- **Rate Limiting (429)**: Immediate cooldown for the deployment
+- **High Failure Rate**: >50% failures in the current minute for the deployment
+- **Non-Retryable Errors**: 401 (Auth), 404 (Not Found), 408 (Timeout)
+
+
+#### Flow Diagram
+
+
+#### Real-World Example
+
+You have multiple deployments for high availability:
+
+```yaml
+model_list:
+- model_name: sonnet-4 # deployment 1 == model_id: 1234567890
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: <our-real-key>
+- model_name: byok-sonnet-4 # deployment 2 == model_id: 9129922	
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: <dummy-value-to-be-replaced-by-our-internal-proxy-with-the-customer-key>
+      api_base: https://proxy.litellm.ai/api.anthropic.com
+  - model_name: sonnet-4 # deployment 3 == model_id: 4982929292
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-20250514
+      vertex_project: my-project
+```
+
+```mermaid
+flowchart TD
+    A["Request for 'sonnet-4'"] --> B["Router finds deployments with model_name='sonnet-4'"]
+    B --> C["Available:<br/>• Anthropic API - model_id: 1234567890<br/>• Vertex AI - model_id: 4982929292"]
+    C --> D["Selects Anthropic API deployment"]
+    D --> E{"Fails?"}
+    E -->|No| F["Success"]
+    E -->|Yes| G{"Cooldown needed?"}
+    G -->|No| H["Track failure, keep available"]
+    G -->|Yes| I["Cooldown Anthropic API - model_id: 1234567890 only"]
+	I --> J["Next Request with model_name='sonnet-4'"]
+    J --> K["Use Vertex AI - model_id: 4982929292, since Anthropic API is cooled down"]
+    K --> L["Success"]
+```
+
+
+
 ### Retries
 
 For both async + sync functions, we support retrying failed requests. 
