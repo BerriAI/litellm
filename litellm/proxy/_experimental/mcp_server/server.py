@@ -332,7 +332,7 @@ if MCP_AVAILABLE:
                         verbose_logger.debug(f"Could not resolve '{server_or_group}' as access group: {e}")
 
         if filtered_server_ids:
-            allowed_mcp_servers = filtered_server_ids
+            allowed_mcp_servers = list(filtered_server_ids)
 
         # Get tools from each allowed server
         all_tools = []
