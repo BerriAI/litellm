@@ -782,8 +782,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Rate Limits</Text>
-                    <div>TPM: {info.tpm_limit !== null && info.tpm_limit !== undefined ? info.tpm_limit : "Not set"}</div>
-                    <div>RPM: {info.rpm_limit !== null && info.rpm_limit !== undefined ? info.rpm_limit : "Not set"}</div>
+                    <div>TPM: {info.tpm_limit || "Unlimited"}</div>
+                    <div>RPM: {info.rpm_limit || "Unlimited"}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Team Budget</Text>
