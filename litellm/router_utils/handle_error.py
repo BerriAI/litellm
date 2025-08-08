@@ -2,9 +2,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
-from litellm.router_utils.cooldown_handlers import (
-    _async_get_cooldown_deployments_with_debug_info, _async_get_cooldown_deployments,
-)
+from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.router import RouterRateLimitError
 
