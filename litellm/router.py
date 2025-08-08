@@ -5496,6 +5496,19 @@ class Router:
         except Exception:
             pass
 
+        ## check for base model
+        try:
+            if custom_model_info is not None:
+                base_model = custom_model_info.get("base_model", None)
+                if base_model is not None:
+                    ## update litellm model info with base model info
+                    base_model_info = litellm.get_model_info(model=base_model)
+                    if base_model_info is not None:
+                        custom_model_info = custom_model_info or {}
+                        custom_model_info.update(base_model_info)
+        except Exception:
+            pass
+
         if custom_model_info is not None and litellm_model_name_model_info is not None:
             model_info = cast(
                 ModelInfo,
@@ -5574,7 +5587,7 @@ class Router:
                     )
                 else:
                     model_info = None
-            except Exception:
+            except Exception as e:
                 model_info = None
 
             # get llm provider
