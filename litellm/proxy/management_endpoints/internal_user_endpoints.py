@@ -26,7 +26,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity,
+    get_daily_activity_aggregated,
+)
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -1934,6 +1937,77 @@ async def get_user_daily_activity(
     except Exception as e:
         verbose_proxy_logger.exception(
             "/spend/daily/analytics: Exception occured - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+        )
+
+
+@router.get(
+    "/user/daily/activity/aggregated",
+    tags=["Budget & Spend Tracking", "Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+@management_endpoint_wrapper
+async def get_user_daily_activity_aggregated(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific model",
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific API key",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SpendAnalyticsPaginatedResponse:
+    """
+    Aggregated analytics for a user's daily activity without pagination.
+    Returns the same response shape as the paginated endpoint with page metadata set to single-page.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    try:
+        entity_id: Optional[str] = None
+        if not _user_has_admin_view(user_api_key_dict):
+            entity_id = user_api_key_dict.user_id
+
+        return await get_daily_activity_aggregated(
+            prisma_client=prisma_client,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=entity_id,
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date=end_date,
+            model=model,
+            api_key=api_key,
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/user/daily/activity/aggregated: Exception occured - {}".format(str(e))
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

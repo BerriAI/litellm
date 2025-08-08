@@ -426,3 +426,148 @@ async def get_daily_activity(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {str(e)}"},
         )
+
+
+async def get_daily_activity_aggregated(
+    prisma_client: Optional[PrismaClient],
+    table_name: str,
+    entity_id_field: str,
+    entity_id: Optional[Union[str, List[str]]],
+    entity_metadata_field: Optional[Dict[str, dict]],
+    start_date: Optional[str],
+    end_date: Optional[str],
+    model: Optional[str],
+    api_key: Optional[str],
+    exclude_entity_ids: Optional[List[str]] = None,
+) -> SpendAnalyticsPaginatedResponse:
+    """Aggregated variant that returns the full result set (no pagination).
+
+    Matches the response model of the paginated endpoint so the UI does not need to transform.
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    try:
+        # Build filter conditions
+        where_conditions: Dict[str, Any] = {
+            "date": {
+                "gte": start_date,
+                "lte": end_date,
+            }
+        }
+
+        if model:
+            where_conditions["model"] = model
+        if api_key:
+            where_conditions["api_key"] = api_key
+        if entity_id is not None:
+            if isinstance(entity_id, list):
+                where_conditions[entity_id_field] = {"in": entity_id}
+            else:
+                where_conditions[entity_id_field] = entity_id
+        if exclude_entity_ids:
+            where_conditions.setdefault(entity_id_field, {})["not"] = {
+                "in": exclude_entity_ids
+            }
+
+        # Fetch all matching results (no pagination)
+        daily_spend_data = await getattr(prisma_client.db, table_name).find_many(
+            where=where_conditions,
+            order=[
+                {"date": "desc"},
+            ],
+        )
+
+        # Get all unique API keys from the spend data
+        api_keys: Set[str] = set()
+        for record in daily_spend_data:
+            if record.api_key:
+                api_keys.add(record.api_key)
+
+        # Fetch key aliases in bulk
+        api_key_metadata: Dict[str, Dict[str, Any]] = {}
+        model_metadata: Dict[str, Dict[str, Any]] = {}
+        provider_metadata: Dict[str, Dict[str, Any]] = {}
+        if api_keys:
+            api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+
+        # Process results
+        results: List[DailySpendData] = []
+        total_metrics = SpendMetrics()
+        grouped_data: Dict[str, Dict[str, Any]] = {}
+
+        for record in daily_spend_data:
+            date_str = record.date
+            if date_str not in grouped_data:
+                grouped_data[date_str] = {
+                    "metrics": SpendMetrics(),
+                    "breakdown": BreakdownMetrics(),
+                }
+
+            # Update metrics
+            grouped_data[date_str]["metrics"] = update_metrics(
+                grouped_data[date_str]["metrics"], record
+            )
+
+            # Update breakdowns
+            grouped_data[date_str]["breakdown"] = update_breakdown_metrics(
+                grouped_data[date_str]["breakdown"],
+                record,
+                model_metadata,
+                provider_metadata,
+                api_key_metadata,
+                entity_id_field=entity_id_field,
+                entity_metadata_field=entity_metadata_field,
+            )
+
+            # Update total metrics
+            total_metrics = update_metrics(total_metrics, record)
+
+        # Convert grouped data to response format
+        for date_str, data in grouped_data.items():
+            results.append(
+                DailySpendData(
+                    date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+                    metrics=data["metrics"],
+                    breakdown=data["breakdown"],
+                )
+            )
+
+        # Sort results by date
+        results.sort(key=lambda x: x.date, reverse=True)
+
+        return SpendAnalyticsPaginatedResponse(
+            results=results,
+            metadata=DailySpendMetadata(
+                total_spend=total_metrics.spend,
+                total_prompt_tokens=total_metrics.prompt_tokens,
+                total_completion_tokens=total_metrics.completion_tokens,
+                total_tokens=total_metrics.total_tokens,
+                total_api_requests=total_metrics.api_requests,
+                total_successful_requests=total_metrics.successful_requests,
+                total_failed_requests=total_metrics.failed_requests,
+                total_cache_read_input_tokens=total_metrics.cache_read_input_tokens,
+                total_cache_creation_input_tokens=total_metrics.cache_creation_input_tokens,
+                page=1,
+                total_pages=1,
+                has_more=False,
+            ),
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            f"Error fetching aggregated daily activity: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+        )

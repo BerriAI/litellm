@@ -3198,6 +3198,55 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
+export const userDailyActivityAggregatedCall = async (
+  accessToken: String,
+  startTime: Date,
+  endTime: Date
+) => {
+  /**
+   * Get aggregated daily user activity (no pagination)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/daily/activity/aggregated`
+      : `/user/daily/activity/aggregated`;
+    const queryParams = new URLSearchParams();
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
 export const userGetAllUsersCall = async (
   accessToken: String,
   role: String
