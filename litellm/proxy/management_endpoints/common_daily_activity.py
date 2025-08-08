@@ -118,24 +118,24 @@ def update_breakdown_metrics(
             record,
         )
 
-    if record.mcp_namespaced_tool_name:
-        if record.mcp_namespaced_tool_name not in breakdown.mcp_servers:
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name] = MetricWithMetadata(
+    # MCP breakdown (schema may not have this column on older deployments)
+    mcp_tool_name = getattr(record, "mcp_namespaced_tool_name", None)
+    if mcp_tool_name:
+        if mcp_tool_name not in breakdown.mcp_servers:
+            breakdown.mcp_servers[mcp_tool_name] = MetricWithMetadata(
                 metrics=SpendMetrics(),
                 metadata={},
             )
-        breakdown.mcp_servers[record.mcp_namespaced_tool_name].metrics = update_metrics(
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name].metrics, record
+        breakdown.mcp_servers[mcp_tool_name].metrics = update_metrics(
+            breakdown.mcp_servers[mcp_tool_name].metrics, record
         )
 
         # Update API key breakdown for this MCP server
         if (
             record.api_key
-            not in breakdown.mcp_servers[
-                record.mcp_namespaced_tool_name
-            ].api_key_breakdown
+            not in breakdown.mcp_servers[mcp_tool_name].api_key_breakdown
         ):
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
+            breakdown.mcp_servers[mcp_tool_name].api_key_breakdown[
                 record.api_key
             ] = KeyMetricWithMetadata(
                 metrics=SpendMetrics(),
@@ -149,12 +149,8 @@ def update_breakdown_metrics(
                 ),
             )
 
-        breakdown.mcp_servers[record.mcp_namespaced_tool_name].api_key_breakdown[
-            record.api_key
-        ].metrics = update_metrics(
-            breakdown.mcp_servers[record.mcp_namespaced_tool_name]
-            .api_key_breakdown[record.api_key]
-            .metrics,
+        breakdown.mcp_servers[mcp_tool_name].api_key_breakdown[record.api_key].metrics = update_metrics(
+            breakdown.mcp_servers[mcp_tool_name].api_key_breakdown[record.api_key].metrics,
             record,
         )
 

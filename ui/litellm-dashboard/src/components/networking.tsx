@@ -1503,25 +1503,31 @@ export const tagDailyActivityCall = async (
   tags: string[] | null = null
 ) => {
   /**
-   * Get daily user activity on proxy
+   * Prefer aggregated endpoint (no pagination). Fall back to paginated if unavailable
    */
-  try {
+  const buildQuery = (useAggregated: boolean) => {
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/tag/daily/activity`
-      : `/tag/daily/activity`;
+      ? `${proxyBaseUrl}${useAggregated ? "/tag/daily/activity/aggregated" : "/tag/daily/activity"}`
+      : `${useAggregated ? "/tag/daily/activity/aggregated" : "/tag/daily/activity"}`;
     const queryParams = new URLSearchParams();
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
-    queryParams.append("page_size", "1000");
-    queryParams.append("page", page.toString());
-    if (tags) {
+    if (!useAggregated) {
+      queryParams.append("page_size", "1000");
+      queryParams.append("page", page.toString());
+    }
+    if (tags && tags.length > 0) {
       queryParams.append("tags", tags.join(","));
     }
     const queryString = queryParams.toString();
     if (queryString) {
       url += `?${queryString}`;
     }
+    return url;
+  };
 
+  const fetchOnce = async (useAggregated: boolean) => {
+    const url = buildQuery(useAggregated);
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1529,18 +1535,21 @@ export const tagDailyActivityCall = async (
         "Content-Type": "application/json",
       },
     });
-
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
       throw new Error("Network response was not ok");
     }
+    return response.json();
+  };
 
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
+  try {
+    // Try aggregated first
+    return await fetchOnce(true);
+  } catch (err) {
+    console.warn("/tag/daily/activity/aggregated failed, falling back to paginated", err);
+    // Fallback to paginated API
+    return await fetchOnce(false);
   }
 };
 
