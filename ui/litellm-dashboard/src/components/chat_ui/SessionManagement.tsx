@@ -1,6 +1,6 @@
 import React from "react";
-import { Switch, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Switch, Tooltip, message } from "antd";
+import { InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { EndpointType } from "./mode_endpoint_mapping";
 
 interface SessionManagementProps {
@@ -20,12 +20,19 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
     return null;
   }
 
+  const handleCopySessionId = () => {
+    if (responsesSessionId) {
+      navigator.clipboard.writeText(responsesSessionId);
+      message.success("Response ID copied to clipboard!");
+    }
+  };
+
   const getSessionDisplay = () => {
     if (!responsesSessionId) {
       return useApiSessionManagement ? 'API Session: Ready' : 'UI Session: Ready';
     }
     
-    const sessionPrefix = useApiSessionManagement ? 'API Session' : 'UI Session';
+    const sessionPrefix = useApiSessionManagement ? 'Response ID' : 'UI Session';
     const truncatedId = responsesSessionId.slice(0, 10);
     return `${sessionPrefix}: ${truncatedId}...`;
   };
@@ -67,9 +74,39 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
           ? 'bg-green-50 text-green-700 border border-green-200' 
           : 'bg-blue-50 text-blue-700 border border-blue-200'
       }`}>
-        <div className="flex items-center gap-1">
-          <InfoCircleOutlined style={{ fontSize: '12px' }} />
-          {getSessionDisplay()}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1">
+            <InfoCircleOutlined style={{ fontSize: '12px' }} />
+            {getSessionDisplay()}
+          </div>
+          {responsesSessionId && (
+            <Tooltip 
+              title={
+                <div className="text-xs">
+                  <div className="mb-1">Copy response ID to continue session:</div>
+                  <div className="bg-gray-800 text-gray-100 p-2 rounded font-mono text-xs whitespace-pre-wrap">
+{`curl -X POST "your-proxy-url/v1/responses" \\
+  -H "Authorization: Bearer your-api-key" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "your-model",
+    "input": [{"role": "user", "content": "your message", "type": "message"}],
+    "previous_response_id": "${responsesSessionId}",
+    "stream": true
+  }'`}
+                  </div>
+                </div>
+              }
+              overlayStyle={{ maxWidth: '500px' }}
+            >
+              <button
+                onClick={handleCopySessionId}
+                className="ml-2 p-1 hover:bg-green-100 rounded transition-colors"
+              >
+                <CopyOutlined style={{ fontSize: '12px' }} />
+              </button>
+            </Tooltip>
+          )}
         </div>
         <div className="text-xs opacity-75 mt-1">
           {getSessionDescription()}
