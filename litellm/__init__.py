@@ -357,7 +357,7 @@ disable_copilot_system_to_assistant: bool = (
 )
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION #####
+#### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
 
 
@@ -1145,6 +1145,9 @@ openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
+from .llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
+)
 from .llms.openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
 )
@@ -1158,6 +1161,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 )
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
