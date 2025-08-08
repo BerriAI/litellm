@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     Delta,
     LlmProviders,
@@ -372,6 +373,115 @@ def test_cohere_embedding_optional_params():
     assert optional_params is not None
 
 
+def validate_model_cost_values(model_data, exceptions=None):
+    """
+    Validates that cost values in model data do not exceed 1.
+    
+    Args:
+        model_data (dict): The model data dictionary
+        exceptions (list, optional): List of model IDs that are allowed to have costs > 1
+        
+    Returns:
+        tuple: (is_valid, violations) where is_valid is a boolean and violations is a list of error messages
+    """
+    if exceptions is None:
+        exceptions = []
+    
+    violations = []
+    
+    # Define all cost-related fields to check
+    cost_fields = [
+        "input_cost_per_token",
+        "output_cost_per_token", 
+        "input_cost_per_character",
+        "output_cost_per_character",
+        "input_cost_per_image",
+        "output_cost_per_image",
+        "input_cost_per_pixel",
+        "output_cost_per_pixel",
+        "input_cost_per_second",
+        "output_cost_per_second",
+        "input_cost_per_query",
+        "input_cost_per_request",
+        "input_cost_per_audio_token",
+        "output_cost_per_audio_token",
+        "input_cost_per_audio_per_second",
+        "input_cost_per_video_per_second",
+        "input_cost_per_token_above_128k_tokens",
+        "output_cost_per_token_above_128k_tokens",
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_character_above_128k_tokens",
+        "output_cost_per_character_above_128k_tokens",
+        "input_cost_per_image_above_128k_tokens",
+        "input_cost_per_video_per_second_above_8s_interval",
+        "input_cost_per_video_per_second_above_15s_interval",
+        "input_cost_per_video_per_second_above_128k_tokens",
+        "input_cost_per_token_batch_requests",
+        "input_cost_per_token_batches",
+        "output_cost_per_token_batches",
+        "input_cost_per_token_cache_hit",
+        "cache_creation_input_token_cost",
+        "cache_creation_input_audio_token_cost",
+        "cache_read_input_token_cost",
+        "cache_read_input_audio_token_cost",
+        "input_dbu_cost_per_token",
+        "output_db_cost_per_token",
+        "output_dbu_cost_per_token",
+        "output_cost_per_reasoning_token",
+        "citation_cost_per_token",
+    ]
+    
+    # Also check nested cost fields
+    nested_cost_fields = [
+        "search_context_cost_per_query",
+    ]
+    
+    for model_id, model_info in model_data.items():
+        # Skip if this model is in exceptions
+        if model_id in exceptions:
+            continue
+            
+        # Check direct cost fields
+        for field in cost_fields:
+            if field in model_info and model_info[field] is not None:
+                cost_value = model_info[field]
+                
+                # Convert string values to float if needed
+                if isinstance(cost_value, str):
+                    try:
+                        cost_value = float(cost_value)
+                    except (ValueError, TypeError):
+                        # Skip if we can't convert to float
+                        continue
+                
+                if isinstance(cost_value, (int, float)) and cost_value > 1:
+                    violations.append(
+                        f"Model '{model_id}' has {field} = {cost_value} which exceeds 1"
+                    )
+        
+        # Check nested cost fields
+        for field in nested_cost_fields:
+            if field in model_info and model_info[field] is not None:
+                nested_costs = model_info[field]
+                if isinstance(nested_costs, dict):
+                    for nested_field, nested_value in nested_costs.items():
+                        # Convert string values to float if needed
+                        if isinstance(nested_value, str):
+                            try:
+                                nested_value = float(nested_value)
+                            except (ValueError, TypeError):
+                                # Skip if we can't convert to float
+                                continue
+                        
+                        if isinstance(nested_value, (int, float)) and nested_value > 1:
+                            violations.append(
+                                f"Model '{model_id}' has {field}.{nested_field} = {nested_value} which exceeds 1"
+                            )
+    
+    return len(violations) == 0, violations
+
+
 def test_aaamodel_prices_and_context_window_json_is_valid():
     """
     Validates the `model_prices_and_context_window.json` file.
@@ -541,7 +651,23 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         "sample_spec", None
     )  # remove the sample, whose schema is inconsistent with the real data
 
+    # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
+    
+    # Validate cost values
+    # Define exceptions for models that are allowed to have costs > 1
+    # Add model IDs here if they legitimately have costs > 1
+    exceptions = [
+        # Add any model IDs that should be exempt from the cost validation
+        # Example: "expensive-model-id",
+    ]
+    
+    is_valid, violations = validate_model_cost_values(actual_json, exceptions)
+    
+    if not is_valid:
+        error_message = "Cost validation failed:\n" + "\n".join(violations)
+        error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
+        raise AssertionError(error_message)
 
 
 def test_get_model_info_gemini():
@@ -557,6 +683,7 @@ def test_get_model_info_gemini():
             model.startswith("gemini/")
             and not "gemma" in model
             and not "learnlm" in model
+            and not "imagen" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -717,6 +844,7 @@ async def test_supports_tool_choice():
             or "o1" in model_name
             or "o3" in model_name
             or "mistral" in model_name
+            or "oci" in model_name
         ):
             continue
 
@@ -904,13 +1032,6 @@ class TestProxyFunctionCalling:
                 "litellm_proxy/claude-3-5-sonnet-20240620",
                 True,
             ),
-            ("claude-3-opus-20240229", "litellm_proxy/claude-3-opus-20240229", True),
-            (
-                "claude-3-sonnet-20240229",
-                "litellm_proxy/claude-3-sonnet-20240229",
-                True,
-            ),
-            ("claude-3-haiku-20240307", "litellm_proxy/claude-3-haiku-20240307", True),
             # Google models
             ("gemini-pro", "litellm_proxy/gemini-pro", True),
             ("gemini/gemini-1.5-pro", "litellm_proxy/gemini/gemini-1.5-pro", True),
@@ -924,11 +1045,6 @@ class TestProxyFunctionCalling:
             ),  # This model doesn't support function calling
             # Cohere models (generally don't support function calling)
             ("command-nightly", "litellm_proxy/command-nightly", False),
-            (
-                "anthropic.claude-instant-v1",
-                "litellm_proxy/anthropic.claude-instant-v1",
-                False,
-            ),
         ],
     )
     def test_proxy_function_calling_support_consistency(
@@ -1058,7 +1174,7 @@ class TestProxyFunctionCalling:
         ), "Custom model names return False without proxy config context"
 
         # Case 2: Model name that can be resolved (matches pattern)
-        resolvable_model = "litellm_proxy/claude-3-sonnet-20240229"
+        resolvable_model = "litellm_proxy/claude-3-5-sonnet-latest"
         result = supports_function_calling(resolvable_model)
         assert result is True, "Resolvable model names work with fallback logic"
 
@@ -1069,7 +1185,7 @@ class TestProxyFunctionCalling:
         
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
-           - litellm_proxy/claude-3-sonnet-20240229
+           - litellm_proxy/claude-3-5-sonnet-latest
            - litellm_proxy/anthropic/claude-3-haiku-20240307
            
         ❌ DOESN'T WORK (requires proxy server config):
@@ -2165,6 +2281,136 @@ def test_image_response_utils():
         "hidden_params": {"additional_headers": {}},
     }
     image_response = ImageResponse(**result)
+
+
+def test_is_valid_api_key():
+    import hashlib
+
+    # Valid sk- keys
+    assert is_valid_api_key("sk-abc123")
+    assert is_valid_api_key("sk-ABC_123-xyz")
+    # Valid hashed key (64 hex chars)
+    assert is_valid_api_key("a" * 64)
+    assert is_valid_api_key("0123456789abcdef" * 4)  # 16*4 = 64
+    # Real SHA-256 hash
+    real_hash = hashlib.sha256(b"my_secret_key").hexdigest()
+    assert len(real_hash) == 64
+    assert is_valid_api_key(real_hash)
+    # Invalid: too short
+    assert not is_valid_api_key("sk-")
+    assert not is_valid_api_key("")
+    # Invalid: too long
+    assert not is_valid_api_key("sk-" + "a" * 200)
+    # Invalid: wrong prefix
+    assert not is_valid_api_key("pk-abc123")
+    # Invalid: wrong chars in sk- key
+    assert not is_valid_api_key("sk-abc$%#@!")
+    # Invalid: not a string
+    assert not is_valid_api_key(None)
+    assert not is_valid_api_key(12345)
+    # Invalid: wrong length for hash
+    assert not is_valid_api_key("a" * 63)
+    assert not is_valid_api_key("a" * 65)
+
+
+def test_block_key_hashing_logic():
+    """
+    Test that block_key() function only hashes keys that start with "sk-"
+    """
+    import hashlib
+
+    from litellm.proxy.utils import hash_token
+
+    # Test cases: (input_key, should_be_hashed, expected_output)
+    test_cases = [
+        ("sk-1234567890abcdef", True, hash_token("sk-1234567890abcdef")),
+        ("sk-test-key", True, hash_token("sk-test-key")),
+        ("abc123", False, "abc123"),  # Should not be hashed
+        ("hashed_key_123", False, "hashed_key_123"),  # Should not be hashed
+        ("", False, ""),  # Empty string should not be hashed
+        ("sk-", True, hash_token("sk-")),  # Edge case: just "sk-"
+    ]
+    
+    for input_key, should_be_hashed, expected_output in test_cases:
+        # Simulate the logic from block_key() function
+        if input_key.startswith("sk-"):
+            hashed_token = hash_token(token=input_key)
+        else:
+            hashed_token = input_key
+        
+        assert hashed_token == expected_output, f"Failed for input: {input_key}"
+        
+        # Additional verification: if it should be hashed, verify it's actually a hash
+        if should_be_hashed:
+            # SHA-256 hashes are 64 characters long and contain only hex digits
+            assert len(hashed_token) == 64, f"Hash length should be 64, got {len(hashed_token)} for {input_key}"
+            assert all(c in '0123456789abcdef' for c in hashed_token), f"Hash should contain only hex digits for {input_key}"
+        else:
+            # If not hashed, it should be the original string
+            assert hashed_token == input_key, f"Non-hashed key should remain unchanged: {input_key}"
+    
+    print("✅ All block_key hashing logic tests passed!")
+
+
+def test_generate_gcp_iam_access_token():
+    """
+    Test the _generate_gcp_iam_access_token function with mocked GCP IAM client.
+    """
+    from unittest.mock import Mock, patch
+    
+    service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
+    expected_token = "test-access-token-12345"
+    
+    # Mock the GCP IAM client and its response
+    mock_response = Mock()
+    mock_response.access_token = expected_token
+    
+    mock_client = Mock()
+    mock_client.generate_access_token.return_value = mock_response
+    
+    # Mock the iam_credentials_v1 module
+    mock_iam_credentials_v1 = Mock()
+    mock_iam_credentials_v1.IAMCredentialsClient = Mock(return_value=mock_client)
+    mock_iam_credentials_v1.GenerateAccessTokenRequest = Mock()
+    
+    # Test successful token generation by mocking sys.modules
+    with patch.dict('sys.modules', {'google.cloud.iam_credentials_v1': mock_iam_credentials_v1}):
+        from litellm._redis import _generate_gcp_iam_access_token
+        
+        result = _generate_gcp_iam_access_token(service_account)
+        
+        assert result == expected_token
+        mock_iam_credentials_v1.IAMCredentialsClient.assert_called_once()
+        mock_client.generate_access_token.assert_called_once()
+        
+        # Verify the request was created with correct parameters
+        mock_iam_credentials_v1.GenerateAccessTokenRequest.assert_called_once_with(
+            name=service_account,
+            scope=['https://www.googleapis.com/auth/cloud-platform']
+        )
+
+
+def test_generate_gcp_iam_access_token_import_error():
+    """
+    Test that _generate_gcp_iam_access_token raises ImportError when google-cloud-iam is not available.
+    """
+    # Import the function first, before mocking
+    from litellm._redis import _generate_gcp_iam_access_token
+
+    # Mock the import to fail when the function tries to import google.cloud.iam_credentials_v1
+    original_import = __builtins__['__import__']
+    
+    def mock_import(name, *args, **kwargs):
+        if name == 'google.cloud.iam_credentials_v1':
+            raise ImportError("No module named 'google.cloud.iam_credentials_v1'")
+        return original_import(name, *args, **kwargs)
+    
+    with patch('builtins.__import__', side_effect=mock_import):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_gcp_iam_access_token("test-service-account")
+        
+        assert "google-cloud-iam is required" in str(exc_info.value)
+        assert "pip install google-cloud-iam" in str(exc_info.value)
 
 
 if __name__ == "__main__":

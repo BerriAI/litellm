@@ -1539,6 +1539,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## [Datadog](../observability/datadog)
 
+👉 Go here for using [Datadog LLM Observability](../observability/datadog) with LiteLLM Proxy
+
+
 ## Lunary
 #### Step1: Install dependencies and set your environment variables 
 Install the dependencies
@@ -1590,54 +1593,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## MLflow
 
-
-#### Step1: Install dependencies
-Install the dependencies.
-
-```shell
-pip install litellm mlflow
-```
-
-#### Step 2: Create a `config.yaml` with `mlflow` callback
-
-```yaml
-model_list:
-  - model_name: "*"
-    litellm_params:
-      model: "*"
-litellm_settings:
-  success_callback: ["mlflow"]
-  failure_callback: ["mlflow"]
-```
-
-#### Step 3: Start the LiteLLM proxy
-```shell
-litellm --config config.yaml
-```
-
-#### Step 4: Make a request
-
-```shell
-curl -X POST 'http://0.0.0.0:4000/chat/completions' \
--H 'Content-Type: application/json' \
--d '{
-    "model": "gpt-4o-mini",
-    "messages": [
-      {
-        "role": "user",
-        "content": "What is the capital of France?"
-      }
-    ]
-}'
-```
-
-#### Step 5: Review traces
-
-Run the following command to start MLflow UI and review recorded traces.
-
-```shell
-mlflow ui
-```
+👉 Follow the tutorial [here](../observability/mlflow) to get started with mlflow on LiteLLM Proxy Server
 
 
 
@@ -1767,6 +1723,72 @@ litellm_settings:
   callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
 ```
+
+#### Step 2b - Loading Custom Callbacks from S3/GCS (Alternative)
+
+Instead of using local Python files, you can load custom callbacks directly from S3 or GCS buckets. This is useful for centralized callback management or when deploying in containerized environments.
+
+**URL Format:**
+- **S3**: `s3://bucket-name/module_name.instance_name`
+- **GCS**: `gcs://bucket-name/module_name.instance_name`
+
+**Example - Loading from S3:**
+
+Let's say you have a file `custom_callbacks.py` stored in your S3 bucket `litellm-proxy` with the following content:
+
+```python
+# custom_callbacks.py (stored in S3)
+from litellm.integrations.custom_logger import CustomLogger
+import litellm
+
+class MyCustomHandler(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"Custom UI SSO callback executed!")
+        # Your custom logic here
+  
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"Custom UI SSO failure callback!")
+        # Your failure handling logic
+
+# Instance that will be loaded by LiteLLM
+custom_handler = MyCustomHandler()
+```
+
+**Configuration:**
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+litellm_settings:
+  callbacks: ["s3://litellm-proxy/custom_callbacks.custom_handler"]
+```
+
+**Example - Loading from GCS:**
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+litellm_settings:
+  callbacks: ["gcs://my-gcs-bucket/custom_callbacks.custom_handler"]
+```
+
+**How it works:**
+1. LiteLLM detects the S3/GCS URL prefix
+2. Downloads the Python file to a temporary location
+3. Loads the module and extracts the specified instance
+4. Cleans up the temporary file
+5. Uses the callback instance for logging
+
+This approach allows you to:
+- Centrally manage callback files across multiple proxy instances
+- Share callbacks across different environments
+- Version control callback files in cloud storage
 
 #### Step 3 - Start proxy + test request
 

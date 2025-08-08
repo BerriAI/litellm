@@ -17,6 +17,8 @@ class MCPInfo(TypedDict, total=False):
 class MCPServer(BaseModel):
     server_id: str
     name: str
+    alias: Optional[str] = None
+    server_name: Optional[str] = None
     url: Optional[str] = None
     transport: MCPTransportType
     spec_version: MCPSpecVersionType
@@ -27,4 +29,5 @@ class MCPServer(BaseModel):
     command: Optional[str] = None
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
+    access_groups: Optional[List[str]] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)

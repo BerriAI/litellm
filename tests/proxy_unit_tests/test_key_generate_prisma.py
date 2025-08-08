@@ -94,7 +94,9 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
-from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
@@ -259,7 +261,9 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             # check /user/info to verify user_role was set correctly
             request_mock = MagicMock()
             new_user_info = await user_info(
-                request=request_mock, user_id=user_id, user_api_key_dict=user_api_key_dict
+                request=request_mock,
+                user_id=user_id,
+                user_api_key_dict=user_api_key_dict,
             )
             new_user_info = new_user_info.user_info
             print("new_user_info=", new_user_info)
@@ -1358,7 +1362,9 @@ def test_generate_and_update_key(prisma_client):
 
             # budget_reset_at should exist for "1mo" duration
             assert result["info"]["budget_reset_at"] is not None
-            budget_reset_at = result["info"]["budget_reset_at"].replace(tzinfo=timezone.utc)
+            budget_reset_at = result["info"]["budget_reset_at"].replace(
+                tzinfo=timezone.utc
+            )
             current_time = datetime.now(timezone.utc)
 
             print(f"Budget reset time: {budget_reset_at}")
@@ -1372,14 +1378,20 @@ def test_generate_and_update_key(prisma_client):
                 month_diff = budget_reset_at.month - current_time.month
                 if budget_reset_at.year > current_time.year:
                     month_diff += 12
-                
+
                 # Should be scheduled for next month (at least 0.5 month away)
-                assert month_diff >= 1, f"Expected reset to be at least 1 month ahead, got {month_diff} months"
-                assert month_diff <= 2, f"Expected reset to be at most 2 months ahead, got {month_diff} months"
+                assert (
+                    month_diff >= 1
+                ), f"Expected reset to be at least 1 month ahead, got {month_diff} months"
+                assert (
+                    month_diff <= 2
+                ), f"Expected reset to be at most 2 months ahead, got {month_diff} months"
             else:
                 # Just ensure the date is reasonable (not more than 40 days away)
                 days_diff = (budget_reset_at - current_time).days
-                assert 0 <= days_diff <= 40, f"Expected reset date to be reasonable, got {days_diff} days from now"
+                assert (
+                    0 <= days_diff <= 40
+                ), f"Expected reset date to be reasonable, got {days_diff} days from now"
 
             # cleanup - delete key
             delete_key_request = KeyRequest(keys=[generated_key])
@@ -2298,16 +2310,20 @@ def test_get_bearer_token():
     result = _get_bearer_token(api_key)
     assert result == "sk-1234", f"Expected 'valid_token', got '{result}'"
 
+
 @pytest.mark.asyncio
 async def test_update_logs_with_spend_logs_url(prisma_client):
     """
     Unit test for making sure spend logs list is still updated when url passed in
     """
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+
     db_spend_update_writer = DBSpendUpdateWriter()
 
     payload = {"startTime": datetime.now(), "endTime": datetime.now()}
-    await db_spend_update_writer._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client)
+    await db_spend_update_writer._insert_spend_log_to_db(
+        payload=payload, prisma_client=prisma_client
+    )
 
     assert len(prisma_client.spend_log_transactions) > 0
 
@@ -2349,7 +2365,7 @@ async def test_user_api_key_auth(prisma_client):
         print(exc.message)
         assert (
             exc.message
-            == "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: my_token"
+            == "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix."
         )
 
     # Test case: User passes empty string API Key
@@ -2359,8 +2375,8 @@ async def test_user_api_key_auth(prisma_client):
     except ProxyException as exc:
         print(exc.message)
         assert (
-            exc.message
-            == "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: "
+            "Authentication Error, Malformed API Key passed in. Ensure Key has `Bearer ` prefix."
+            in exc.message
         )
 
 
@@ -2884,12 +2900,12 @@ async def test_update_user_unit_test(prisma_client):
     # budget_reset_at should be at midnight 10 days from now
     budget_reset_at = _user_info["budget_reset_at"].replace(tzinfo=timezone.utc)
     current_time = datetime.now(timezone.utc)
-    
+
     # Verify that budget_reset_at is at midnight (hour, minute, second are all 0)
     assert budget_reset_at.hour == 0
     assert budget_reset_at.minute == 0
     assert budget_reset_at.second == 0
-    
+
     # Calculate days difference - should be close to 10 days (within 1 day to account for time of test execution)
     days_diff = (budget_reset_at.date() - current_time.date()).days
     assert 9 <= days_diff <= 10
@@ -3608,7 +3624,10 @@ async def test_key_generate_with_secret_manager_call(prisma_client):
     assert it is deleted from the secret manager
     """
     from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
-    from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+    from litellm.types.secret_managers.main import (
+        KeyManagementSystem,
+        KeyManagementSettings,
+    )
 
     from litellm.proxy.hooks.key_management_event_hooks import (
         LITELLM_PREFIX_STORED_VIRTUAL_KEYS,
@@ -4060,11 +4079,19 @@ async def test_reset_budget_job(prisma_client, entity_type):
     assert entity_after is not None
     assert entity_after.spend == 0.0
 
+
 def test_delete_nonexistent_key_returns_404(prisma_client):
     # Try to delete a key that does not exist, expect a 404 error
     import random, string
-    from litellm.proxy._types import KeyRequest, UserAPIKeyAuth, LitellmUserRoles, ProxyException
-    from litellm.proxy.management_endpoints.key_management_endpoints import delete_key_fn
+    from litellm.proxy._types import (
+        KeyRequest,
+        UserAPIKeyAuth,
+        LitellmUserRoles,
+        ProxyException,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        delete_key_fn,
+    )
     from starlette.datastructures import URL
     from fastapi import Request
 
@@ -4072,25 +4099,36 @@ def test_delete_nonexistent_key_returns_404(prisma_client):
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
+
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
             # Generate a random key that does not exist
-            random_key = "sk-" + ''.join(random.choices(string.ascii_letters + string.digits, k=24))
+            random_key = "sk-" + "".join(
+                random.choices(string.ascii_letters + string.digits, k=24)
+            )
             delete_key_request = KeyRequest(keys=[random_key])
             bearer_token = "Bearer sk-1234"
             request = Request(scope={"type": "http"})
             request._url = URL(url="/key/delete")
             # use admin to auth in
-            result = await litellm.proxy.proxy_server.user_api_key_auth(request=request, api_key=bearer_token)
+            result = await litellm.proxy.proxy_server.user_api_key_auth(
+                request=request, api_key=bearer_token
+            )
             result.user_role = LitellmUserRoles.PROXY_ADMIN
             try:
                 await delete_key_fn(data=delete_key_request, user_api_key_dict=result)
-                pytest.fail("Expected ProxyException 404 for non-existent key, but delete_key_fn did not raise.")
+                pytest.fail(
+                    "Expected ProxyException 404 for non-existent key, but delete_key_fn did not raise."
+                )
             except ProxyException as e:
                 print("Caught ProxyException:", e)
                 assert str(e.code) == "404"
-                assert "No keys found" in str(e.message) or "No matching keys or aliases found to delete" in str(e.message)
+                assert "No keys found" in str(
+                    e.message
+                ) or "No matching keys or aliases found to delete" in str(e.message)
+
         import asyncio
+
         asyncio.run(test())
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")

@@ -83,7 +83,7 @@ class JWTHandler:
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
-    
+
     @staticmethod
     def is_jwt(token: str):
         parts = token.split(".")
@@ -162,12 +162,13 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
-        if (
-            self.litellm_jwtauth.team_ids_jwt_field is not None
-            and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
-        ):
-
-            return token[self.litellm_jwtauth.team_ids_jwt_field]
+        if self.litellm_jwtauth.team_ids_jwt_field is not None:
+            team_ids: Optional[List[str]] = get_nested_value(
+                data=token,
+                key_path=self.litellm_jwtauth.team_ids_jwt_field,
+                default=[],
+            )
+            return team_ids or []
 
         return []
 
@@ -176,7 +177,11 @@ class JWTHandler:
     ) -> Optional[str]:
         try:
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
-                user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
+                user_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.end_user_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_id = None
         except KeyError:
@@ -210,7 +215,21 @@ class JWTHandler:
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.team_id_jwt_field is not None:
-                team_id = token[self.litellm_jwtauth.team_id_jwt_field]
+                # Use a sentinel value to detect if the path actually exists
+                sentinel = object()
+                team_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.team_id_jwt_field,
+                    default=sentinel,
+                )
+                if team_id is sentinel:
+                    # Path doesn't exist, use team_id_default if available
+                    if self.litellm_jwtauth.team_id_default is not None:
+                        return self.litellm_jwtauth.team_id_default
+                    else:
+                        return default_value
+                # At this point, team_id is not the sentinel, so it should be a string
+                return team_id  # type: ignore[return-value]
             elif self.litellm_jwtauth.team_id_default is not None:
                 team_id = self.litellm_jwtauth.team_id_default
             else:
@@ -232,7 +251,11 @@ class JWTHandler:
     def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_id_jwt_field is not None:
-                user_id = token[self.litellm_jwtauth.user_id_jwt_field]
+                user_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.user_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_id = default_value
         except KeyError:
@@ -319,7 +342,11 @@ class JWTHandler:
     ) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_email_jwt_field is not None:
-                user_email = token[self.litellm_jwtauth.user_email_jwt_field]
+                user_email = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.user_email_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_email = None
         except KeyError:
@@ -329,7 +356,11 @@ class JWTHandler:
     def get_object_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.object_id_jwt_field is not None:
-                object_id = token[self.litellm_jwtauth.object_id_jwt_field]
+                object_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.object_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 object_id = default_value
         except KeyError:
@@ -339,7 +370,11 @@ class JWTHandler:
     def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.org_id_jwt_field is not None:
-                org_id = token[self.litellm_jwtauth.org_id_jwt_field]
+                org_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.org_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 org_id = None
         except KeyError:
@@ -809,6 +844,7 @@ class JWTAuthManager:
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        route: str,
     ) -> Tuple[
         Optional[LiteLLM_UserTable],
         Optional[LiteLLM_OrganizationTable],
@@ -857,6 +893,7 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    route=route,
                 )
                 if end_user_id
                 else None
@@ -1098,6 +1135,7 @@ class JWTAuthManager:
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            route=route,
         )
 
         await JWTAuthManager.sync_user_role_and_teams(

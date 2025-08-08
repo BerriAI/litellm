@@ -2,7 +2,7 @@ import copy
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +13,7 @@ sys.path.insert(
 
 
 import litellm
+from litellm.router_utils.fallback_event_handlers import run_async_fallback
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -661,7 +662,6 @@ def test_arouter_responses_api_bridge():
         assert mock_post.call_args.kwargs["json"]["model"] == "webinterface-o3-pro"
 
 
-
 @pytest.mark.asyncio
 async def test_router_v1_messages_fallbacks():
     """
@@ -699,17 +699,17 @@ async def test_router_v1_messages_fallbacks():
     print(result)
     assert result["content"][0]["text"] == "Hello, world I am a fallback!"
 
-    
+
 def test_add_invalid_provider_to_router():
     """
     Test that router.add_deployment raises an error if the provider is invalid
     """
     from litellm.types.router import Deployment
-    
+
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "gpt-3.5-turbo",     
+                "model_name": "gpt-3.5-turbo",
                 "litellm_params": {"model": "gpt-3.5-turbo"},
             }
         ],
@@ -727,6 +727,7 @@ def test_add_invalid_provider_to_router():
         )
 
     assert router.pattern_router.patterns == {}
+
 
 @pytest.mark.asyncio
 async def test_router_ageneric_api_call_with_fallbacks_helper():
@@ -893,3 +894,510 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                     assert "Mock failure" in str(exc_info.value)
                     # Check that fail_calls was incremented
                     assert router.fail_calls["gpt-3.5-turbo"] == initial_fail_count + 1
+
+
+@pytest.mark.asyncio
+async def test_router_forward_client_headers_by_model_group():
+    """
+    Test that router.forward_client_headers_by_model_group returns the correct response
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.types.router import ModelGroupSettings
+
+    litellm.model_group_settings = ModelGroupSettings(
+        forward_client_headers_to_llm_api=[
+            "gpt-3.5-turbo-allow",
+            "openai/*",
+            "gpt-3.5-turbo-custom",
+        ]
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo-allow",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo-disallow",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                },
+            },
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                },
+            },
+        ],
+        model_group_alias={
+            "gpt-3.5-turbo-custom": "gpt-3.5-turbo-disallow",
+        },
+    )
+
+    ## Scenario 1: Direct model name
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="gpt-3.5-turbo-allow",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])
+
+    ## Scenario 2: Wildcard model name
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="openai/gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])
+
+    ## Scenario 3: Not in model_group_settings
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs.get("headers") is None
+
+    ## Scenario 4: Model group alias
+    with patch.object(
+        litellm.main, "completion", return_value=MagicMock()
+    ) as mock_completion:
+        await router.acompletion(
+            model="gpt-3.5-turbo-custom",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Hello, world!",
+            secret_fields={"raw_headers": {"test": "test"}},
+        )
+
+        mock_completion.assert_called_once()
+        print(mock_completion.call_args.kwargs["headers"])
+
+
+def test_router_apply_default_settings():
+    """
+    Test that Router.apply_default_settings() adds the expected default pre-call checks
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    # Apply default settings
+    result = router.apply_default_settings()
+
+    # Verify the method returns None
+    assert result is None
+
+    # Verify that the forward_client_headers_by_model_group pre-call check was added
+    # Check if any callback is of the ForwardClientHeadersByModelGroupCheck type
+    has_forward_headers_check = False
+    for callback in litellm.callbacks:
+        print(callback)
+        print(f"callback.__class__: {callback.__class__}")
+        if hasattr(
+            callback, "__class__"
+        ) and "ForwardClientSideHeadersByModelGroup" in str(callback.__class__):
+            has_forward_headers_check = True
+            break
+
+    assert (
+        has_forward_headers_check
+    ), "Expected ForwardClientSideHeadersByModelGroup to be added to callbacks"
+
+
+def test_router_get_model_access_groups_team_only_models():
+    """
+    Test that Router.get_model_access_groups returns the correct response for team-only models
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model-name",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {
+                    "team_id": "team_1",
+                    "access_groups": ["default-models"],
+                    "team_public_model_name": "gpt-3.5-turbo",
+                },
+            },
+        ]
+    )
+
+    access_groups = router.get_model_access_groups(
+        model_name="gpt-3.5-turbo", team_id=None
+    )
+    assert len(access_groups) == 0
+
+    access_groups = router.get_model_access_groups(
+        model_name="gpt-3.5-turbo", team_id="team_1"
+    )
+    assert list(access_groups.keys()) == ["default-models"]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator():
+    """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import ModelResponseStream
+
+    # Helper class for creating async iterators
+    class AsyncIterator:
+        def __init__(self, items, error_after=None):
+            self.items = items
+            self.index = 0
+            self.error_after = error_after
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.error_after is not None and self.index >= self.error_after:
+                raise self.error_after
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    # Set up router with fallback configuration
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key-2"},
+            },
+        ],
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+        set_verbose=True,
+    )
+
+    # Test data
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True, "temperature": 0.7}
+
+    # Test 1: Successful streaming (no errors)
+    print("\n=== Test 1: Successful streaming ===")
+
+    # Mock successful streaming response
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content=" there"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="!"))]),
+    ]
+
+    mock_response = AsyncIterator(mock_chunks)
+
+    setattr(mock_response, "model", "gpt-4")
+    setattr(mock_response, "custom_llm_provider", "openai")
+    setattr(mock_response, "logging_obj", MagicMock())
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=mock_response, messages=messages, initial_kwargs=initial_kwargs
+    )
+
+    # Collect streamed chunks
+    collected_chunks = []
+    async for chunk in result:
+        collected_chunks.append(chunk)
+
+    assert len(collected_chunks) == 3
+    assert all(chunk in mock_chunks for chunk in collected_chunks)
+    print("✓ Successfully streamed all chunks")
+
+    # Test 2: MidStreamFallbackError with fallback
+    print("\n=== Test 2: MidStreamFallbackError with fallback ===")
+
+    # Create error that should trigger after first chunk
+    error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Hello",
+    )
+
+    class AsyncIteratorWithError:
+        def __init__(self, items, error_after_index):
+            self.items = items
+            self.index = 0
+            self.error_after_index = error_after_index
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            if self.index == self.error_after_index:
+                raise error
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    mock_error_response = AsyncIteratorWithError(
+        mock_chunks, 1
+    )  # Error after first chunk
+
+    setattr(mock_error_response, "model", "gpt-4")
+    setattr(mock_error_response, "custom_llm_provider", "openai")
+    setattr(mock_error_response, "logging_obj", MagicMock())
+
+    # Mock the fallback response
+    fallback_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content=" world"))]),
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="!"))]),
+    ]
+
+    mock_fallback_response = AsyncIterator(fallback_chunks)
+
+    # Mock the fallback function
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=mock_fallback_response,
+    ) as mock_fallback_utils:
+
+        collected_chunks = []
+        result = await router._acompletion_streaming_iterator(
+            model_response=mock_error_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        async for chunk in result:
+            collected_chunks.append(chunk)
+
+        # Verify fallback was called
+        assert mock_fallback_utils.called
+        call_args = mock_fallback_utils.call_args
+
+        # Check that generated content was added to messages
+        fallback_kwargs = call_args.kwargs["kwargs"]
+        modified_messages = fallback_kwargs["messages"]
+
+        # Should have original message + system message + assistant message with prefix
+        assert len(modified_messages) == 3
+        assert modified_messages[0] == {"role": "user", "content": "Hello"}
+        assert modified_messages[1]["role"] == "system"
+        assert "continuation" in modified_messages[1]["content"]
+        assert modified_messages[2]["role"] == "assistant"
+        assert modified_messages[2]["content"] == "Hello"
+        assert modified_messages[2]["prefix"] == True
+
+        # Verify fallback parameters
+        assert call_args.kwargs["disable_fallbacks"] == False
+        assert call_args.kwargs["model_group"] == "gpt-4"
+
+        # Should get original chunk + fallback chunks
+        assert len(collected_chunks) == 3  # 1 original + 2 fallback
+        print("✓ Fallback system called correctly with proper message modification")
+
+    print("\n=== All tests passed! ===")
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_edge_cases():
+    """Test edge cases for _acompletion_streaming_iterator."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+        set_verbose=True,
+    )
+
+    messages = [{"role": "user", "content": "Test"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    # Test: Empty generated content
+    empty_error = MidStreamFallbackError(
+        message="Error",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",  # Empty content
+    )
+
+    class AsyncIteratorImmediateError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise empty_error
+
+    mock_response = AsyncIteratorImmediateError()
+
+    # Mock empty fallback response using AsyncIterator
+    class EmptyAsyncIterator:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    mock_fallback_response = EmptyAsyncIterator()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=mock_fallback_response,
+    ) as mock_fallback_utils:
+
+        collected_chunks = []
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        async for chunk in iterator:
+            collected_chunks.append(chunk)
+
+        # Should still call fallback even with empty content
+        assert mock_fallback_utils.called
+        fallback_kwargs = mock_fallback_utils.call_args.kwargs["kwargs"]
+        modified_messages = fallback_kwargs["messages"]
+
+        # Should have assistant message with empty content
+        assert modified_messages[2]["content"] == ""
+        print("✓ Handles empty generated content correctly")
+
+    print("✓ Edge case tests passed!")
+
+
+@pytest.mark.asyncio
+async def test_async_function_with_fallbacks_common_utils():
+    """Test the async_function_with_fallbacks_common_utils method"""
+    # Create a basic router for testing
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                },
+            }
+        ],
+        max_fallbacks=5,
+    )
+
+    # Test case 1: disable_fallbacks=True should raise original exception
+    test_exception = Exception("Test error")
+    with pytest.raises(Exception, match="Test error"):
+        await router.async_function_with_fallbacks_common_utils(
+            e=test_exception,
+            disable_fallbacks=True,
+            fallbacks=None,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="gpt-3.5-turbo",
+            args=(),
+            kwargs=MagicMock(),
+        )
+
+    # Test case 2: original_model_group=None should raise original exception
+    with pytest.raises(Exception, match="Test error"):
+        await router.async_function_with_fallbacks_common_utils(
+            e=test_exception,
+            disable_fallbacks=False,
+            fallbacks=None,
+            context_window_fallbacks=None,
+            content_policy_fallbacks=None,
+            model_group="gpt-3.5-turbo",
+            args=(),
+            kwargs={},  # No model key
+        )
+
+
+def test_should_include_deployment():
+    """Test that Router.should_include_deployment returns the correct response"""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_a28a12f9-3e44-4861-bd4f-325f2d309ce8_cd5dc6fb-b046-4e05-ae1d-32ba4d936266",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {
+                    "team_id": "a28a12f9-3e44-4861-bd4f-325f2d309ce8",
+                    "team_public_model_name": "openai/*",
+                },
+            }
+        ],
+    )
+
+    model = {
+        "model_name": "model_name_a28a12f9-3e44-4861-bd4f-325f2d309ce8_cd5dc6fb-b046-4e05-ae1d-32ba4d936266",
+        "litellm_params": {
+            "api_key": "sk-proj-1234567890",
+            "custom_llm_provider": "openai",
+            "use_in_pass_through": False,
+            "use_litellm_proxy": False,
+            "merge_reasoning_content_in_choices": False,
+            "model": "openai/*",
+        },
+        "model_info": {
+            "id": "95f58039-d54a-4d1c-b700-5e32e99a1120",
+            "db_model": True,
+            "updated_by": "64a2f787-0863-4d76-9516-2dc49c1598e8",
+            "created_by": "64a2f787-0863-4d76-9516-2dc49c1598e8",
+            "team_id": "a28a12f9-3e44-4861-bd4f-325f2d309ce8",
+            "team_public_model_name": "openai/*",
+            "mode": "completion",
+            "access_groups": ["restricted-models-openai"],
+        },
+    }
+    model_name = "openai/o4-mini-deep-research"
+    team_id = "a28a12f9-3e44-4861-bd4f-325f2d309ce8"
+    assert router.get_model_list(
+        model_name=model_name,
+        team_id=team_id,
+    )

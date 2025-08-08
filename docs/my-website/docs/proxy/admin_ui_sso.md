@@ -14,29 +14,7 @@ import TabItem from '@theme/TabItem';
 
 :::
 
-### SSO for UI
-
-#### Step 1: Set upperbounds for keys
-Control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
-
-```yaml
-litellm_settings:
-  upperbound_key_generate_params:
-    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
-    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
-    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
-    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
-    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
-    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
-
-```
-
-** Expected Behavior **
-
-- Send a `/key/generate` request with `max_budget=200`
-- Key will be created with `max_budget=100` since 100 is the upper bound
-
-#### Step 2: Setup Oauth Client
+### Usage (Google, Microsoft, Okta, etc.)
 
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
@@ -324,4 +302,43 @@ PROXY_BASE_URL=mydomain.com
 # Fix: Add the protocol
 PROXY_BASE_URL=https://mydomain.com
 ```
+
+### Fallback Login
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
+<Image img={require('../../img/fallback_login.png')} />
+
+
+### Debugging SSO JWT fields 
+
+If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
+
+
+<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
+<br />
+
+1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
+
+  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
+
+  ```bash showLineNumbers title="Redirect URL"
+  http://<proxy_base_url>/sso/debug/callback
+  ```
+
+
+2. Navigate to the debug login page on your browser 
+
+    Navigate to the following URL on your browser:
+
+    ```bash showLineNumbers title="URL to navigate to"
+    https://<proxy_base_url>/sso/debug/login
+    ```
+
+    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
+
+
+3. View the JWT fields 
+
+Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
 
