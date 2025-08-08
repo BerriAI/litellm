@@ -1,6 +1,5 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: gemini/*
     litellm_params:
-      model: anthropic/*
-
+      model: gemini/*
 

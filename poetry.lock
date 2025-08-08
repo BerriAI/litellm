@@ -2495,15 +2495,14 @@ files = [
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.2.15"
+version = "0.2.16"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.2.15-py3-none-any.whl", hash = "sha256:25e7d7cabe3f10233e2802d4521576bef438eea8b0800b1dbf38ba83ba751bb8"},
-    {file = "litellm_proxy_extras-0.2.15.tar.gz", hash = "sha256:62a9fdcb77d25aa7bfdfa04ac878e452f185dfb0b9538d4d8988a1b512360649"},
+    {file = "litellm_proxy_extras-0.2.16.tar.gz", hash = "sha256:81a1e8a172feb7da86985f529e891ca7be66ba293ae3e716bf69b266fa776a04"},
 ]
 
 [[package]]
