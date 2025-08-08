@@ -531,3 +531,90 @@ response = litellm.responses(
 )
 print(response.output)
 ```
+
+## Context-Free Grammar 
+
+
+```python showLineNumbers title="Context-Free Grammar"
+import litellm
+
+import textwrap
+
+# ----------------- grammars for MS SQL dialect -----------------
+mssql_grammar = textwrap.dedent(r"""
+            // ---------- Punctuation & operators ----------
+            SP: " "
+            COMMA: ","
+            GT: ">"
+            EQ: "="
+            SEMI: ";"
+
+            // ---------- Start ----------
+            start: "SELECT" SP "TOP" SP NUMBER SP select_list SP "FROM" SP table SP "WHERE" SP amount_filter SP "AND" SP date_filter SP "ORDER" SP "BY" SP sort_cols SEMI
+
+            // ---------- Projections ----------
+            select_list: column (COMMA SP column)*
+            column: IDENTIFIER
+
+            // ---------- Tables ----------
+            table: IDENTIFIER
+
+            // ---------- Filters ----------
+            amount_filter: "total_amount" SP GT SP NUMBER
+            date_filter: "order_date" SP GT SP DATE
+
+            // ---------- Sorting ----------
+            sort_cols: "order_date" SP "DESC"
+
+            // ---------- Terminals ----------
+            IDENTIFIER: /[A-Za-z_][A-Za-z0-9_]*/
+            NUMBER: /[0-9]+/
+            DATE: /'[0-9]{4}-[0-9]{2}-[0-9]{2}'/
+    """)
+
+sql_prompt_mssql = (
+    "Call the mssql_grammar to generate a query for Microsoft SQL Server that retrieve the "
+    "five most recent orders per customer, showing customer_id, order_id, order_date, and total_amount, "
+    "where total_amount > 500 and order_date is after '2025-01-01'. "
+)
+
+
+response = litellm.responses(
+    model="gpt-5",
+    input=sql_prompt_mssql,
+    text={"format": {"type": "text"}},
+    tools=[
+        {
+            "type": "custom",
+            "name": "mssql_grammar",
+            "description": "Executes read-only Microsoft SQL Server queries limited to SELECT statements with TOP and basic WHERE/ORDER BY. YOU MUST REASON HEAVILY ABOUT THE QUERY AND MAKE SURE IT OBEYS THE GRAMMAR.",
+            "format": {
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": mssql_grammar
+            }
+        },
+    ],
+    parallel_tool_calls=False
+)
+
+print("--- MS SQL Query ---")
+print(response_mssql.output[1].input)
+```
+
+## Minimal Reasoning
+
+```python showLineNumbers title="Minimal Reasoning"
+import litellm
+
+response = litellm.responses(
+    model="gpt-5",
+    input= [{ 'role': 'developer', 'content': prompt }, 
+            { 'role': 'user', 'content': 'The food that the restaurant was great! I recommend it to everyone.' }],
+    reasoning = {
+        "effort": "minimal"
+    },
+)
+
+print(response)
+```
