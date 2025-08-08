@@ -320,12 +320,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         return;
       }
 
+      const sanitizeNumeric = (v: any) => {
+        if (v === null || v === undefined) return null;
+        if (typeof v === "string" && v.trim() === "") return null;
+        if (typeof v === "number" && Number.isNaN(v)) return null;
+        return v;
+      };
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
         models: values.models,
-        tpm_limit: values.tpm_limit,
-        rpm_limit: values.rpm_limit,
+        tpm_limit: sanitizeNumeric(values.tpm_limit),
+        rpm_limit: sanitizeNumeric(values.rpm_limit),
         max_budget: values.max_budget,
         budget_duration: values.budget_duration,
         metadata: {
@@ -349,10 +356,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         servers: [],
         accessGroups: [],
       };
-      if (
-        (servers && servers.length > 0) ||
-        (accessGroups && accessGroups.length > 0)
-      ) {
+      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0)) {
         updateData.object_permission = {};
         if (servers && servers.length > 0) {
           updateData.object_permission.mcp_servers = servers;
@@ -472,8 +476,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Rate Limits</Text>
                 <div className="mt-2">
-                  <Text>TPM: {info.tpm_limit || "Unlimited"}</Text>
-                  <Text>RPM: {info.rpm_limit || "Unlimited"}</Text>
+                  <Text>
+                    TPM: {info.tpm_limit !== null && info.tpm_limit !== undefined ? info.tpm_limit : "Not set"}
+                  </Text>
+                  <Text>
+                    RPM: {info.rpm_limit !== null && info.rpm_limit !== undefined ? info.rpm_limit : "Not set"}
+                  </Text>
                   {info.max_parallel_requests && (
                     <Text>
                       Max Parallel Requests: {info.max_parallel_requests}
@@ -774,8 +782,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </div>
                   <div>
                     <Text className="font-medium">Rate Limits</Text>
-                    <div>TPM: {info.tpm_limit || "Unlimited"}</div>
-                    <div>RPM: {info.rpm_limit || "Unlimited"}</div>
+                    <div>TPM: {info.tpm_limit !== null && info.tpm_limit !== undefined ? info.tpm_limit : "Not set"}</div>
+                    <div>RPM: {info.rpm_limit !== null && info.rpm_limit !== undefined ? info.rpm_limit : "Not set"}</div>
                   </div>
                   <div>
                     <Text className="font-medium">Team Budget</Text>
