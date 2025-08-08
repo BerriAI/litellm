@@ -376,15 +376,10 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
   }],
   [Providers.GradientAI]: [
     {
-      key: "endpoint",
+      key: "api_base",
       label: "GradientAI Endpoint",
       placeholder: "https://...",
-      required: true
-    },
-    {
-      key: "base_model",
-      label: "Base Model",
-      placeholder: "gradient_ai/mistral-nemo"
+      required: false
     },
     {
       key: "api_key",
