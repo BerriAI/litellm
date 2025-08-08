@@ -130,6 +130,10 @@ async def route_request(
             llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):
+            # Resolve the alias to the actual model name
+            _model_from_alias = llm_router._get_model_from_alias(model=data["model"])
+            if _model_from_alias is not None:
+                data["model"] = _model_from_alias
 
             return getattr(llm_router, f"{route_type}")(**data)
 
