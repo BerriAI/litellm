@@ -698,6 +698,15 @@ async def test_get_tools_from_mcp_servers():
         transport=MCPTransport.http,
         spec_version=MCPSpecVersion.nov_2024
     )
+    mock_server_3 = MCPServer(
+        server_id="server3_id",
+        name="server3",
+        server_name="server3",
+        url="http://test3.com",
+        transport=MCPTransport.http,
+        spec_version=MCPSpecVersion.nov_2024,
+        access_groups=["group-a"]
+    )
     mock_tool_1 = MCPTool(name="tool1", description="test tool 1", inputSchema={})
     mock_tool_2 = MCPTool(name="tool2", description="test tool 2", inputSchema={})
 
@@ -709,6 +718,8 @@ async def test_get_tools_from_mcp_servers():
                 return mock_server_1
             elif server_id == "server2_id":
                 return mock_server_2
+            elif server_id == "server3_id":
+                return mock_server_3
             return None
 
         # Create a mock manager
@@ -743,6 +754,26 @@ async def test_get_tools_from_mcp_servers():
             )
             assert len(result) == 2, "Should return tools from all servers"
             assert result[0].name == "tool1" and result[1].name == "tool2", "Should return tools from all servers"
+
+        #
+        # Test Case 3: With specific MCP servers and access groups
+        # Create a mock manager
+        mock_manager = AsyncMock()
+        mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["server1_id", "server2_id", "server3_id"])
+        mock_manager.get_mcp_server_by_id = mock_get_server_by_id
+        mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
+
+        with patch('litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager', mock_manager):
+            with patch('litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups', AsyncMock(return_value=["server3_id"])):
+                # Test with specific servers
+                result = await _get_tools_from_mcp_servers(
+                    user_api_key_auth=mock_user_auth,
+                    mcp_auth_header=mock_auth_header,
+                    mcp_servers=["group-a"],
+                )
+                assert len(result) == 1, "Should only return tools from server3"
+                assert result[0].name == "tool1", "Should return tool from server1"
+
 
     except AssertionError as e:
         pytest.fail(f"Test failed: {str(e)}")
