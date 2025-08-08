@@ -111,6 +111,12 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if model_response_object is None:
         raise Exception("Error in response creating model response object")
 
+    # Defensive check for 'choices' field - some providers may return responses without this field
+    if "choices" not in response_object or response_object["choices"] is None:
+        raise Exception(
+            f"Error in response object: missing 'choices' field. Response: {response_object}"
+        )
+
     choice_list = []
 
     for idx, choice in enumerate(response_object["choices"]):
@@ -177,6 +183,12 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
     # used for yielding Cache hits when stream == True
     if response_object is None:
         raise Exception("Error in response object format")
+
+    # Defensive check for 'choices' field - some providers may return responses without this field
+    if "choices" not in response_object or response_object["choices"] is None:
+        raise Exception(
+            f"Error in response object: missing 'choices' field. Response: {response_object}"
+        )
 
     model_response_object = ModelResponse(stream=True)
     choice_list = []
@@ -498,6 +510,12 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list = []
+
+            # Defensive check for 'choices' field - some providers may return responses without this field
+            if "choices" not in response_object or response_object["choices"] is None:
+                raise Exception(
+                    f"Error in response object: missing 'choices' field. Response: {response_object}"
+                )
 
             assert response_object["choices"] is not None and isinstance(
                 response_object["choices"], Iterable
