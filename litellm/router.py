@@ -5505,9 +5505,10 @@ class Router:
                     base_model_info = litellm.get_model_info(model=base_model)
                     if base_model_info is not None:
                         custom_model_info = custom_model_info or {}
+                        # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
-                            custom_model_info,
                             cast(dict, base_model_info),
+                            custom_model_info,
                         )
         except Exception:
             pass
