@@ -903,6 +903,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
             <Title className="text-xl font-semibold mb-0">Test Key</Title>
             <div className="flex gap-2">
               <TremorButton
+                onClick={clearChatHistory}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                icon={ClearOutlined}
+              >
+                Clear Chat
+              </TremorButton>
+              <TremorButton
                 onClick={() => setIsGetCodeModalVisible(true)}
                 className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
                 icon={CodeOutlined}
