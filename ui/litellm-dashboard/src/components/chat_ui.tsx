@@ -884,16 +884,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
-              
-              <div className="space-y-2 mt-4">
-                <TremorButton
-                  onClick={clearChatHistory}
-                  className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-                  icon={ClearOutlined}
-                >
-                  Clear Chat
-                </TremorButton>
-              </div>
             </div>
         </div>
         
