@@ -31,7 +31,7 @@ import {
   Select,
   Button as Button2,
 } from "antd";
-import NotificationsManager from "./molecules/NotificationsManager";
+import NotificationsManager from "./molecules/notifications_manager";
 import EmailSettings from "./email_settings";
 
 const { Title, Paragraph } = Typography;
