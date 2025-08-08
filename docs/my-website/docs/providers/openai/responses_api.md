@@ -492,3 +492,42 @@ print(response_with_mcp_call)
 </Tabs>
 
 
+## Verbosity Parameter
+
+The `verbosity` parameter is supported for the `responses` API.
+
+```python showLineNumbers title="Verbosity Parameter"
+from litellm import responses
+
+question = "Write a poem about a boy and his first pet dog."
+
+for verbosity in ["low", "medium", "high"]:
+    response = responses(
+        model="gpt-5-mini",
+        input=question,
+        text={"verbosity": verbosity}
+    )
+
+    print(response)
+```
+
+## Free-form Function Calling
+
+```python showLineNumbers title="Free-form Function Calling"
+import litellm
+
+response = litellm.responses(
+    response = client.responses.create(
+    model="gpt-5-mini",
+    input="Please use the code_exec tool to calculate the area of a circle with radius equal to the number of 'r's in strawberry",
+    text={"format": {"type": "text"}},
+    tools=[
+        {
+            "type": "custom",
+            "name": "code_exec",
+            "description": "Executes arbitrary python code",
+        }
+    ]
+)
+print(response.output)
+```
