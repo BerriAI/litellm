@@ -2,7 +2,7 @@ import base64
 import datetime
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -586,8 +586,15 @@ class OCIChatConfig(BaseConfig):
 
         completion_stream = response.aiter_text()
 
+        async def split_chunks(completion_stream: AsyncIterator[str]):
+            async for item in completion_stream:
+                for chunk in item.split("\n\n"):
+                    if not chunk:
+                        continue
+                    yield chunk.strip()
+
         streaming_response = OCIStreamWrapper(
-            completion_stream=completion_stream,
+            completion_stream=split_chunks(completion_stream),
             model=model,
             custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
