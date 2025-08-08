@@ -18,6 +18,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
         return "gpt-5" in model
+    
+    def get_supported_openai_params(self, model: str) -> list:
+        base_gpt_series_params = super().get_supported_openai_params(model=model)
+        gpt_5_only_params = ["reasoning_effort"]
+        base_gpt_series_params.extend(gpt_5_only_params)
+        return base_gpt_series_params
 
     def map_openai_params(
         self,
