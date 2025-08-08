@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union, cast
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+from litellm.responses.redis_session_cache import get_responses_redis_cache
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -256,8 +257,12 @@ class ResponsesSessionHandler:
         previous_response_id: str,
     ) -> List[SpendLogsPayload]:
         """
-        Get all spend logs for a previous response id
+        Get all spend logs for a previous response id with Redis fallback.
 
+        Flow:
+        1. First check Redis cache for session data (fast - 1 minute cache)
+        2. If not found in Redis, fall back to database query (slow - 10 seconds)
+        3. When retrieving from DB, also cache in Redis for future requests
 
         SQL query
 
@@ -275,8 +280,40 @@ class ResponsesSessionHandler:
         previous_response_id = decoded_response_id.get(
             "response_id", previous_response_id
         )
+
+        # Try Redis cache first for fast retrieval
+        redis_cache = get_responses_redis_cache()
+        if redis_cache.is_available():
+            try:
+                # First, try to get session from individual response cache
+                cached_response = await redis_cache.get_response_by_id(previous_response_id)
+                if cached_response and cached_response.get("session_id"):
+                    session_id = cached_response["session_id"]
+                    verbose_proxy_logger.debug(
+                        f"ResponsesSessionHandler: Found session_id {session_id} for response {previous_response_id} in Redis cache"
+                    )
+                    
+                    # Get all spend logs for this session from Redis
+                    cached_spend_logs = await redis_cache.get_session_spend_logs(session_id)
+                    if cached_spend_logs:
+                        verbose_proxy_logger.debug(
+                            f"ResponsesSessionHandler: Retrieved {len(cached_spend_logs)} spend logs from Redis cache for session {session_id}"
+                        )
+                        return cached_spend_logs
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"ResponsesSessionHandler: Redis cache lookup failed: {e}"
+                )
+
+        # Fallback to database if Redis cache miss or unavailable
         if prisma_client is None:
+            verbose_proxy_logger.debug("ResponsesSessionHandler: No prisma client available")
             return []
+
+        verbose_proxy_logger.debug(
+            "ResponsesSessionHandler: Falling back to database query for response_id=%s", 
+            previous_response_id
+        )
 
         query = """
             WITH matching_session AS (
@@ -297,5 +334,31 @@ class ResponsesSessionHandler:
             previous_response_id,
             json.dumps(spend_logs, indent=4, default=str),
         )
+
+        # Cache the results in Redis for future fast access
+        if redis_cache.is_available() and spend_logs:
+            try:
+                # Find the session_id from the first spend log
+                first_log = spend_logs[0]
+                session_id = first_log.get("session_id")
+                
+                if session_id:
+                    verbose_proxy_logger.debug(
+                        f"ResponsesSessionHandler: Caching {len(spend_logs)} spend logs in Redis for session {session_id}"
+                    )
+                    
+                    # Store each response in the Redis cache
+                    for spend_log in spend_logs:
+                        response_id = spend_log.get("request_id")
+                        if response_id:
+                            await redis_cache.store_response_data(
+                                response_id=response_id,
+                                session_id=session_id,
+                                spend_log_data=spend_log
+                            )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"ResponsesSessionHandler: Failed to cache spend logs in Redis: {e}"
+                )
 
         return spend_logs
