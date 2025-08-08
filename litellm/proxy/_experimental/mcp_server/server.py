@@ -331,9 +331,12 @@ if MCP_AVAILABLE:
                     except Exception as e:
                         verbose_logger.debug(f"Could not resolve '{server_or_group}' as access group: {e}")
 
+        if filtered_server_ids:
+            allowed_mcp_servers = filtered_server_ids
+
         # Get tools from each allowed server
         all_tools = []
-        for server_id in filtered_server_ids:
+        for server_id in allowed_mcp_servers:
             server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
             if server is None:
                 continue
