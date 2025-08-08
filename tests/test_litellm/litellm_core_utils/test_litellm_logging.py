@@ -464,3 +464,30 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
         
         # Verify the result is None when cold storage is not configured
         assert result is None
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_runtime_error_handled():
+    """Ensure runtime errors while loading cold storage logger are ignored."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-runtime"
+    team_alias = "team"
+
+    with patch(
+        "litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger",
+        side_effect=RuntimeError("can't register atexit after shutdown"),
+    ):
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id,
+            team_alias=team_alias,
+        )
+
+    # When an exception occurs retrieving the cold storage logger, the
+    # function should return None instead of raising.
+    assert result is None
