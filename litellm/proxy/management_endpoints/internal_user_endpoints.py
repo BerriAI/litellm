@@ -1787,71 +1787,7 @@ async def ui_view_users(
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
 
 
-def update_metrics(
-    group_metrics: SpendMetrics, record: LiteLLM_DailyUserSpend
-) -> SpendMetrics:
-    group_metrics.spend += record.spend
-    group_metrics.prompt_tokens += record.prompt_tokens
-    group_metrics.completion_tokens += record.completion_tokens
-    group_metrics.cache_read_input_tokens += record.cache_read_input_tokens
-    group_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens
-    group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
-    group_metrics.api_requests += record.api_requests
-    group_metrics.successful_requests += record.successful_requests
-    group_metrics.failed_requests += record.failed_requests
-    return group_metrics
-
-
-def update_breakdown_metrics(
-    breakdown: BreakdownMetrics,
-    record: LiteLLM_DailyUserSpend,
-    model_metadata: Dict[str, Dict[str, Any]],
-    provider_metadata: Dict[str, Dict[str, Any]],
-    api_key_metadata: Dict[str, Dict[str, Any]],
-) -> BreakdownMetrics:
-    """Updates breakdown metrics for a single record using the existing update_metrics function"""
-
-    # Update model breakdown
-    if record.model:
-        if record.model not in breakdown.models:
-            breakdown.models[record.model] = MetricWithMetadata(
-                metrics=SpendMetrics(),
-                metadata=model_metadata.get(
-                    record.model, {}
-                ),  # Add any model-specific metadata here
-            )
-        breakdown.models[record.model].metrics = update_metrics(
-            breakdown.models[record.model].metrics, record
-        )
-
-    # Update provider breakdown
-    provider = record.custom_llm_provider or "unknown"
-    if provider not in breakdown.providers:
-        breakdown.providers[provider] = MetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=provider_metadata.get(
-                provider, {}
-            ),  # Add any provider-specific metadata here
-        )
-    breakdown.providers[provider].metrics = update_metrics(
-        breakdown.providers[provider].metrics, record
-    )
-
-    # Update api key breakdown
-    if record.api_key not in breakdown.api_keys:
-        breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
-            metrics=SpendMetrics(),
-            metadata=KeyMetadata(
-                key_alias=api_key_metadata.get(record.api_key, {}).get(
-                    "key_alias", None
-                )
-            ),  # Add any api_key-specific metadata here
-        )
-    breakdown.api_keys[record.api_key].metrics = update_metrics(
-        breakdown.api_keys[record.api_key].metrics, record
-    )
-
-    return breakdown
+# Using shared metric helper implementations from common_daily_activity
 
 
 @router.get(
@@ -1860,6 +1796,7 @@ def update_breakdown_metrics(
     dependencies=[Depends(user_api_key_auth)],
     response_model=SpendAnalyticsPaginatedResponse,
 )
+@management_endpoint_wrapper
 async def get_user_daily_activity(
     start_date: Optional[str] = fastapi.Query(
         default=None,
