@@ -68,7 +68,8 @@ import {
   PictureOutlined,
   CodeOutlined,
   ToolOutlined,
-  FilePdfOutlined
+  FilePdfOutlined,
+  ArrowUpOutlined
 } from "@ant-design/icons";
 
 const { TextArea } = Input;
@@ -1180,21 +1181,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   }}
                 />
 
-                {/* Right: send button */}
+                {/* Right: send button - matching blue theme */}
                 <TremorButton
-                  icon={SendOutlined}
                   onClick={handleSendMessage}
                   disabled={isLoading || !inputMessage.trim()}
-                  className="flex-shrink-0 ml-2"
-                  style={{ 
-                    width: '32px', 
-                    height: '32px',
-                    minWidth: '32px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                />
+                  className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
+                >
+                  <ArrowUpOutlined style={{ fontSize: '14px' }} />
+                </TremorButton>
               </div>
 
               {isLoading && (
