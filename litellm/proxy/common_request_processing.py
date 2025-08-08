@@ -505,6 +505,16 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict=user_api_key_dict,
                     request_data=self.data,
                 )
+                
+                # For streaming responses, wrap the generator to cache when complete
+                if route_type == "aresponses":
+                    selected_data_generator = self._wrap_streaming_generator_with_redis_caching(
+                        generator=selected_data_generator,
+                        request_data=self.data,
+                        route_type=route_type,
+                        logging_obj=logging_obj,
+                    )
+                
                 return await create_streaming_response(
                     generator=selected_data_generator,
                     media_type="text/event-stream",
@@ -514,6 +524,14 @@ class ProxyBaseLLMRequestProcessing:
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
             data=self.data, user_api_key_dict=user_api_key_dict, response=response
+        )
+
+        # Cache response immediately in Redis for fast session retrieval
+        await self._cache_response_in_redis_immediately(
+            response=response,
+            request_data=self.data,
+            route_type=route_type,
+            logging_obj=logging_obj,
         )
 
         hidden_params = (
@@ -785,3 +803,223 @@ class ProxyBaseLLMRequestProcessing:
             )
             error_returned = json.dumps({"error": proxy_exception.to_dict()})
             yield f"{STREAM_SSE_DATA_PREFIX}{error_returned}\n\n"
+
+    async def _cache_response_in_redis_immediately(
+        self,
+        response: Any,
+        request_data: dict,
+        route_type: str,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> None:
+        """
+        Cache response data immediately in Redis for fast session retrieval.
+        
+        This method runs immediately when responses are completed (both streaming and non-streaming)
+        to ensure data is available in Redis cache within milliseconds, not after 10 seconds.
+        """
+        try:
+            # Only cache responses API calls
+            if route_type not in ["aresponses", "responses"]:
+                return
+
+            # Check if this request has session data
+            session_id = None
+            response_id = getattr(logging_obj, "litellm_call_id", None)
+            
+            # Try to get session ID from various sources
+            if hasattr(logging_obj, "litellm_trace_id") and logging_obj.litellm_trace_id:
+                session_id = logging_obj.litellm_trace_id
+            elif request_data.get("litellm_trace_id"):
+                session_id = request_data.get("litellm_trace_id")
+            elif request_data.get("metadata", {}).get("litellm_session_id"):
+                session_id = request_data.get("metadata", {}).get("litellm_session_id")
+            
+            if not response_id:
+                verbose_proxy_logger.debug(
+                    f"ProxyRequestProcessing: Skipping Redis cache - no response_id"
+                )
+                return
+            
+            # For responses API, we want to cache even without explicit session_id
+            # We'll create a session based on the response chain
+            if not session_id:
+                # Use response_id as session for now - this will be linked when previous_response_id is used
+                session_id = f"resp_session_{response_id}"
+                verbose_proxy_logger.debug(
+                    f"ProxyRequestProcessing: Creating temporary session_id: {session_id}"
+                )
+
+            from litellm.responses.redis_session_cache import get_responses_redis_cache
+
+            redis_cache = get_responses_redis_cache()
+            if not redis_cache.is_available():
+                verbose_proxy_logger.debug(
+                    "ProxyRequestProcessing: Redis cache not available for immediate response caching"
+                )
+                return
+
+            # Prepare spend log data from request and response
+            spend_log_data = {
+                "request_id": response_id,
+                "session_id": session_id,
+                "call_type": route_type,
+                "model": request_data.get("model", ""),
+                "messages": json.dumps(request_data.get("messages", [])),
+                "startTime": getattr(logging_obj, "start_time", "").isoformat() if hasattr(getattr(logging_obj, "start_time", ""), "isoformat") else str(getattr(logging_obj, "start_time", "")),
+                "endTime": datetime.now().isoformat(),
+            }
+
+            # Add response data if available
+            if response and hasattr(response, "__dict__"):
+                try:
+                    if hasattr(response, "model_dump"):
+                        spend_log_data["response"] = json.dumps(response.model_dump())
+                    elif hasattr(response, "__dict__"):
+                        response_dict = {
+                            k: v for k, v in response.__dict__.items()
+                            if not k.startswith("_") and v is not None
+                        }
+                        spend_log_data["response"] = json.dumps(response_dict, default=str)
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        f"ProxyRequestProcessing: Failed to serialize response for Redis: {e}"
+                    )
+
+            # Store in Redis immediately
+            success = await redis_cache.store_response_data(
+                response_id=response_id,
+                session_id=session_id,
+                spend_log_data=spend_log_data,
+                response_content=None,  # Already included in spend_log_data
+            )
+
+            if success:
+                verbose_proxy_logger.debug(
+                    f"ProxyRequestProcessing: ✅ Immediately cached response {response_id} for session {session_id} in Redis"
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    f"ProxyRequestProcessing: ❌ Failed to immediately cache response {response_id} in Redis"
+                )
+
+        except Exception as e:
+            # Never let Redis caching failures affect the main flow
+            verbose_proxy_logger.debug(
+                f"ProxyRequestProcessing: Redis immediate caching error (non-blocking): {e}"
+            )
+
+    async def _wrap_streaming_generator_with_redis_caching(
+        self,
+        generator,
+        request_data: dict,
+        route_type: str,
+        logging_obj: "LiteLLMLoggingObj",
+    ):
+        """
+        Wrap streaming generator to cache the completed response in Redis.
+        
+        This ensures streaming responses are also cached when the stream completes.
+        """
+        complete_response_data = []
+        
+        try:
+            async for chunk in generator:
+                complete_response_data.append(chunk)
+                yield chunk
+                
+            # After streaming is complete, cache the full response
+            if complete_response_data:
+                await self._cache_streaming_response_in_redis(
+                    response_chunks=complete_response_data,
+                    request_data=request_data,
+                    route_type=route_type,
+                    logging_obj=logging_obj,
+                )
+                
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"ProxyRequestProcessing: Error in streaming Redis caching wrapper: {e}"
+            )
+            # Continue yielding even if caching fails
+            async for chunk in generator:
+                yield chunk
+
+    async def _cache_streaming_response_in_redis(
+        self,
+        response_chunks: list,
+        request_data: dict,
+        route_type: str,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> None:
+        """
+        Cache completed streaming response data in Redis.
+        """
+        try:
+                         # Extract session and response IDs
+             session_id = None
+             response_id = getattr(logging_obj, "litellm_call_id", None)
+             
+             # Try to get session ID from various sources
+             if hasattr(logging_obj, "litellm_trace_id") and logging_obj.litellm_trace_id:
+                 session_id = logging_obj.litellm_trace_id
+             elif request_data.get("litellm_trace_id"):
+                 session_id = request_data.get("litellm_trace_id")
+             elif request_data.get("metadata", {}).get("litellm_session_id"):
+                 session_id = request_data.get("metadata", {}).get("litellm_session_id")
+             
+             if not response_id:
+                 return
+             
+             # For responses API, create session if not exists
+             if not session_id:
+                 session_id = f"resp_session_{response_id}"
+
+            from litellm.responses.redis_session_cache import get_responses_redis_cache
+
+            redis_cache = get_responses_redis_cache()
+            if not redis_cache.is_available():
+                return
+
+            # Combine chunks into complete response
+            combined_content = ""
+            for chunk in response_chunks:
+                if isinstance(chunk, str):
+                    # Extract content from SSE format if needed
+                    if chunk.startswith("data: "):
+                        try:
+                            chunk_data = json.loads(chunk[6:])  # Remove "data: " prefix
+                            if isinstance(chunk_data, dict):
+                                # Extract text content from responses API format
+                                if "delta" in chunk_data:
+                                    combined_content += str(chunk_data.get("delta", ""))
+                        except:
+                            pass
+
+            # Prepare spend log data for streaming response
+            spend_log_data = {
+                "request_id": response_id,
+                "session_id": session_id,
+                "call_type": route_type,
+                "model": request_data.get("model", ""),
+                "messages": json.dumps(request_data.get("messages", [])),
+                "response": json.dumps({"content": combined_content, "streaming": True}),
+                "startTime": getattr(logging_obj, "start_time", "").isoformat() if hasattr(getattr(logging_obj, "start_time", ""), "isoformat") else str(getattr(logging_obj, "start_time", "")),
+                "endTime": datetime.now().isoformat(),
+            }
+
+            # Store in Redis
+            await redis_cache.store_response_data(
+                response_id=response_id,
+                session_id=session_id,
+                spend_log_data=spend_log_data,
+                response_content={"streaming_chunks": len(response_chunks)},
+            )
+
+            verbose_proxy_logger.debug(
+                f"ProxyRequestProcessing: ✅ Cached streaming response {response_id} for session {session_id} in Redis"
+            )
+
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"ProxyRequestProcessing: Error caching streaming response in Redis: {e}"
+            )

@@ -36,7 +36,6 @@ from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
-from litellm.responses.redis_session_cache import get_responses_redis_cache
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -115,13 +114,6 @@ class DBSpendUpdateWriter:
                 payload["startTime"] = payload["startTime"].isoformat()
             if isinstance(payload["endTime"], datetime):
                 payload["endTime"] = payload["endTime"].isoformat()
-
-            # Cache response in Redis for fast session retrieval (1 minute TTL)
-            await self._cache_response_in_redis(
-                payload=payload,
-                kwargs=kwargs,
-                completion_response=completion_response,
-            )
 
             asyncio.create_task(
                 self._update_user_db(
@@ -1238,87 +1230,4 @@ class DBSpendUpdateWriter:
 
             await self.daily_tag_spend_update_queue.add_update(
                 update={daily_transaction_key: daily_transaction}
-            )
-
-    async def _cache_response_in_redis(
-        self,
-        payload: SpendLogsPayload,
-        kwargs: Optional[dict],
-        completion_response: Optional[Union[litellm.ModelResponse, Any, Exception]],
-    ) -> None:
-        """
-        Cache response data in Redis for fast session retrieval.
-        
-        This method stores response data in Redis with a 1-minute TTL to provide
-        fast access for session handling, avoiding the 10-second database query delay.
-        
-        Only caches for Responses API calls that have a session_id.
-        """
-        try:
-            # Only cache if this is a Responses API call with session data
-            if not kwargs or not payload:
-                return
-
-            # Check if this is a responses API call
-            call_type = kwargs.get("call_type")
-            session_id = payload.get("session_id")
-            request_id = payload.get("request_id")
-            
-            # Only cache responses API calls that have session information
-            if (call_type not in ["aresponses", "responses"] or 
-                not session_id or 
-                not request_id):
-                verbose_proxy_logger.debug(
-                    f"DBSpendUpdateWriter: Skipping Redis cache - call_type: {call_type}, session_id: {session_id}, request_id: {request_id}"
-                )
-                return
-
-            # Get Redis cache handler
-            redis_cache = get_responses_redis_cache()
-            if not redis_cache.is_available():
-                verbose_proxy_logger.debug(
-                    "DBSpendUpdateWriter: Redis cache not available for response caching"
-                )
-                return
-
-            # Prepare additional response content if available
-            response_content = None
-            if (completion_response and 
-                hasattr(completion_response, '__dict__') and 
-                not isinstance(completion_response, Exception)):
-                try:
-                    # Convert ModelResponse to dict for storage
-                    if hasattr(completion_response, 'model_dump'):
-                        response_content = completion_response.model_dump()
-                    elif hasattr(completion_response, '__dict__'):
-                        response_content = {
-                            k: v for k, v in completion_response.__dict__.items()
-                            if not k.startswith('_')
-                        }
-                except Exception as e:
-                    verbose_proxy_logger.debug(
-                        f"DBSpendUpdateWriter: Failed to serialize completion_response: {e}"
-                    )
-
-            # Store in Redis cache
-            success = await redis_cache.store_response_data(
-                response_id=request_id,
-                session_id=session_id,
-                spend_log_data=payload,
-                response_content=response_content
-            )
-
-            if success:
-                verbose_proxy_logger.debug(
-                    f"DBSpendUpdateWriter: Successfully cached response {request_id} for session {session_id} in Redis"
-                )
-            else:
-                verbose_proxy_logger.debug(
-                    f"DBSpendUpdateWriter: Failed to cache response {request_id} in Redis"
-                )
-
-        except Exception as e:
-            # Never let Redis caching failures affect the main flow
-            verbose_proxy_logger.debug(
-                f"DBSpendUpdateWriter: Redis caching error (non-blocking): {e}"
             )
