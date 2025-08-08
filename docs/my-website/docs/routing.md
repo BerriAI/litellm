@@ -916,7 +916,41 @@ router = Router(model_list=model_list, default_max_parallel_requests=20) # 👈 
 
 ### Cooldowns
 
-Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
+Cooldowns temporarily remove failing deployments from the load balancer to prevent cascading failures. **Important**: Cooldowns apply to individual deployments, not entire model groups.
+
+#### How Cooldowns Work
+
+```mermaid
+flowchart TD
+    A[Request for model_name: 'claude-sonnet'] --> B[Router finds all deployments with model_name: 'claude-sonnet']
+    B --> C[Available Deployments:<br/>• Deployment A: Anthropic API<br/>• Deployment B: Vertex AI<br/>• Deployment C: Anthropic API #2]
+    C --> D[Router selects Deployment A]
+    D --> E{Does Deployment A fail?}
+    E -->|No| F[Request succeeds ✅]
+    E -->|Yes| G[Router tracks failure for Deployment A]
+    G --> H{Does Deployment A exceed<br/>failure threshold?}
+    H -->|No| I[Deployment A stays available<br/>for next requests]
+    H -->|Yes| J[❄️ ONLY Deployment A goes into cooldown]
+    J --> K[Router removes Deployment A from available pool]
+    K --> L[Next requests will only use:<br/>• Deployment B: Vertex AI ✅<br/>• Deployment C: Anthropic API #2 ✅]
+    L --> M[After cooldown_time expires,<br/>Deployment A becomes available again]
+```
+
+#### Key Points
+
+**✅ Only failing deployments are cooled down**
+- If you have multiple deployments with the same `model_name` (e.g., "claude-sonnet-dashboard"), only the specific failing deployment is removed
+- Other deployments with the same `model_name` remain available
+
+**✅ Provider-specific isolation**
+- If Anthropic API has an outage, only Anthropic deployments are cooled down
+- Vertex AI, OpenAI, or other provider deployments remain unaffected
+
+**✅ Automatic recovery**
+- Deployments automatically return to the pool after `cooldown_time` expires
+- No manual intervention required
+
+#### Configuration
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -924,81 +958,101 @@ Set the limit for how many calls a model is allowed to fail in a minute, before 
 ```python
 from litellm import Router
 
-model_list = [{...}]
+model_list = [
+    {
+        "model_name": "claude-sonnet", 
+        "litellm_params": {
+            "model": "anthropic/claude-3-5-sonnet",
+            "api_key": "your-anthropic-key"
+        }
+    },
+    {
+        "model_name": "claude-sonnet", 
+        "litellm_params": {
+            "model": "vertex_ai/claude-3-5-sonnet",
+            "vertex_project": "your-project"
+        }
+    }
+]
 
-router = Router(model_list=model_list, 
-                allowed_fails=1,      # cooldown model if it fails > 1 call in a minute. 
-				cooldown_time=100    # cooldown the deployment for 100 seconds if it num_fails > allowed_fails
-		)
+router = Router(
+    model_list=model_list, 
+    allowed_fails=3,        # deployment cooled down after 3 failures within 1 minute
+    cooldown_time=60       # deployment unavailable for 60 seconds
+)
 
-user_message = "Hello, whats the weather in San Francisco??"
-messages = [{"content": user_message, "role": "user"}]
-
-# normal call 
-response = router.completion(model="gpt-3.5-turbo", messages=messages)
-
-print(f"response: {response}")
+# If Anthropic fails, Vertex AI will automatically handle requests
+response = router.completion(model="claude-sonnet", messages=[...])
 ```
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
-**Set Global Value**
+**Global Settings**
 
 ```yaml
 router_settings:
-	allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
-  	cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
+  allowed_fails: 3        # failures before cooldown
+  cooldown_time: 60      # cooldown duration (seconds)
 ```
 
-Defaults:
-- allowed_fails: 3
-- cooldown_time: 5s (`DEFAULT_COOLDOWN_TIME_SECONDS` in constants.py)
-
-**Set Per Model**
+**Per-Deployment Settings**
 
 ```yaml
 model_list:
-- model_name: fake-openai-endpoint
-  litellm_params:
-    model: predibase/llama-3-8b-instruct
-    api_key: os.environ/PREDIBASE_API_KEY
-    tenant_id: os.environ/PREDIBASE_TENANT_ID
-    max_new_tokens: 256
-    cooldown_time: 0 # 👈 KEY CHANGE
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cooldown_time: 30     # custom cooldown for this deployment
+
+  - model_name: claude-sonnet  
+    litellm_params:
+      model: vertex_ai/claude-3-5-sonnet
+      vertex_project: my-project
+      cooldown_time: 120    # different cooldown for this deployment
 ```
 
 </TabItem>
 </Tabs>
 
-**Expected Response**
+**Default Values:**
+- `allowed_fails`: 3 failures per minute
+- `cooldown_time`: 5 seconds
 
-```
-No deployments available for selected model, Try again in 60 seconds. Passed model=claude-3-5-sonnet. pre-call-checks=False, allowed_model_region=n/a.
-```
+#### Cooldown Triggers
 
-#### **Disable cooldowns**
+Deployments are cooled down when:
 
+1. **Rate limit errors (429)** - Immediate cooldown (except single-deployment model groups)
+2. **High failure rate** - >50% failures with reasonable traffic volume
+3. **Authentication errors (401, 404)** - Immediate cooldown for non-retryable errors
+
+#### Disable Cooldowns
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
 ```python
-from litellm import Router 
-
-
-router = Router(..., disable_cooldowns=True)
+router = Router(model_list=model_list, disable_cooldowns=True)
 ```
+
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
 ```yaml
 router_settings:
-	disable_cooldowns: True
+  disable_cooldowns: true
 ```
 
 </TabItem>
 </Tabs>
+
+**Example Error Response:**
+```
+No deployments available for selected model, Try again in 60 seconds. 
+Passed model=claude-sonnet. pre-call-checks=False, allowed_model_region=n/a.
+```
 
 ### Retries
 
