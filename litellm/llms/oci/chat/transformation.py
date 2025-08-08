@@ -428,7 +428,10 @@ class OCIChatConfig(BaseConfig):
                 ),
             )
 
-        return data.model_dump(exclude_none=True)
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
+        request_body = data.model_dump(exclude_none=True)
+        return add_metadata_to_request_body(request_body, litellm_params)
 
     def transform_response(
         self,

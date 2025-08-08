@@ -428,11 +428,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
 
-        return {
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
+        request_body = {
             "model": model,
             "messages": messages,
             **optional_params,
         }
+        
+        return add_metadata_to_request_body(request_body, litellm_params)
 
     async def async_transform_request(
         self,
@@ -455,11 +459,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
         if self.__class__._is_base_class:
-            return {
+            from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+            
+            request_body = {
                 "model": model,
                 "messages": transformed_messages,
                 **optional_params,
             }
+            
+            return add_metadata_to_request_body(request_body, litellm_params)
         else:
             ## allow for any object specific behaviour to be handled
             return self.transform_request(

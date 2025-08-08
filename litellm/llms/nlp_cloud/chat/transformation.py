@@ -160,12 +160,14 @@ class NLPCloudConfig(BaseConfig):
     ) -> dict:
         text = " ".join(convert_content_list_to_str(message) for message in messages)
 
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         data = {
             "text": text,
             **optional_params,
         }
 
-        return data
+        return add_metadata_to_request_body(data, litellm_params)
 
     def transform_response(
         self,

@@ -171,13 +171,15 @@ class BytezChatConfig(BaseConfig):
 
         messages = adapt_messages_to_bytez_standard(messages=messages)  # type: ignore
 
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         data = {
             "messages": messages,
             "stream": stream,
             "params": optional_params,
         }
 
-        return data
+        return add_metadata_to_request_body(data, litellm_params)
 
     def transform_response(
         self,

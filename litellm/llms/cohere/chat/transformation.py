@@ -212,7 +212,8 @@ class CohereChatConfig(BaseConfig):
         if len(chat_history) > 0 and chat_history[-1]["role"] == "USER":
             optional_params["force_single_step"] = True
 
-        return optional_params
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        return add_metadata_to_request_body(optional_params, litellm_params)
 
     def transform_response(
         self,

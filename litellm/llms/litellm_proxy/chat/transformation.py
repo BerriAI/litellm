@@ -125,12 +125,16 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         # don't transform the request
-        return {
+        request_body = {
             "model": model,
             "messages": messages,
             **optional_params,
         }
+        
+        return add_metadata_to_request_body(request_body, litellm_params)
 
     async def async_transform_request(
         self,
@@ -140,9 +144,13 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         # don't transform the request
-        return {
+        request_body = {
             "model": model,
             "messages": messages,
             **optional_params,
         }
+        
+        return add_metadata_to_request_body(request_body, litellm_params)

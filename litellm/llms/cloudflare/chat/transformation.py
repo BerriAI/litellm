@@ -125,11 +125,13 @@ class CloudflareChatConfig(BaseConfig):
             if k not in optional_params:
                 optional_params[k] = v
 
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         data = {
             "messages": messages,
             **optional_params,
         }
-        return data
+        return add_metadata_to_request_body(data, litellm_params)
 
     def transform_response(
         self,

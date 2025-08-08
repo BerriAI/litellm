@@ -106,11 +106,13 @@ class ClarifaiConfig(BaseConfig):
             if k not in optional_params:
                 optional_params[k] = v
 
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         data = self._completions_to_model(
             prompt=prompt, optional_params=optional_params
         )
 
-        return data
+        return add_metadata_to_request_body(data, litellm_params)
 
     def validate_environment(
         self,

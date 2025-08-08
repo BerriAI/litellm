@@ -315,7 +315,8 @@ class OllamaChatConfig(BaseConfig):
         if keep_alive is not None:
             data["keep_alive"] = keep_alive
 
-        return data
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        return add_metadata_to_request_body(data, litellm_params)
 
     def transform_response(
         self,

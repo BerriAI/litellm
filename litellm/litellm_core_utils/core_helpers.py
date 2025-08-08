@@ -139,6 +139,25 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
     return {}
 
 
+def add_metadata_to_request_body(request_body: dict, litellm_params: dict) -> dict:
+    """
+    Helper to add metadata from litellm_params to request body for transform_request methods.
+    
+    This ensures consistent metadata handling across all provider transformations.
+    
+    Args:
+        request_body: The request dictionary to modify
+        litellm_params: The litellm parameters containing metadata
+        
+    Returns:
+        Modified request_body with metadata added if present
+    """
+    metadata = get_litellm_metadata_from_kwargs({"litellm_params": litellm_params})
+    if metadata:
+        request_body["metadata"] = metadata
+    return request_body
+
+
 # Helper functions used for OTEL logging
 def _get_parent_otel_span_from_kwargs(
     kwargs: Optional[dict] = None,

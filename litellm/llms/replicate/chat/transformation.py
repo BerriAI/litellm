@@ -230,7 +230,8 @@ class ReplicateConfig(BaseConfig):
             ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
                 request_data["version"] = model_parts[1]
 
-        return request_data
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        return add_metadata_to_request_body(request_data, litellm_params)
 
     def transform_response(
         self,

@@ -158,12 +158,17 @@ class SnowflakeConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         stream: bool = optional_params.pop("stream", None) or False
         extra_body = optional_params.pop("extra_body", {})
-        return {
+        
+        request_body = {
             "model": model,
             "messages": messages,
             "stream": stream,
             **optional_params,
             **extra_body,
         }
+        
+        return add_metadata_to_request_body(request_body, litellm_params)

@@ -717,13 +717,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             optional_params["metadata"] = {"user_id": _litellm_metadata["user_id"]}
 
+        from litellm.litellm_core_utils.core_helpers import add_metadata_to_request_body
+        
         data = {
             "model": model,
             "messages": anthropic_messages,
             **optional_params,
         }
 
-        return data
+        return add_metadata_to_request_body(data, litellm_params)
 
     def _transform_response_for_json_mode(
         self,
