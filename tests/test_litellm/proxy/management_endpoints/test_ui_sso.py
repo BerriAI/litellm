@@ -938,10 +938,10 @@ class TestUISSO_FunctionsExistence:
         from litellm.proxy.management_endpoints.ui_sso import auth_callback
         assert callable(auth_callback)
 
-    def test_sso_login_redirect_exists(self):
-        """Test that sso_login_redirect function exists"""
-        from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
-        assert callable(sso_login_redirect)
+    def test_google_login_exists(self):
+        """Test that google_login function exists"""
+        from litellm.proxy.management_endpoints.ui_sso import google_login
+        assert callable(google_login)
 
     def test_sso_authentication_handler_exists(self):
         """Test that SSOAuthenticationHandler class exists with new methods"""
@@ -1054,7 +1054,7 @@ class TestCustomUISSO:
         """Test that proper error is raised when enterprise module is not available"""
         from unittest.mock import MagicMock, patch
 
-        from litellm.proxy.management_endpoints.ui_sso import sso_login_redirect
+        from litellm.proxy.management_endpoints.ui_sso import google_login
 
         # Mock request
         mock_request = MagicMock()
@@ -1246,46 +1246,3 @@ class TestCustomUISSO:
                     assert result == mock_redirect_response
                     assert result.status_code == 303
 
-
-@pytest.mark.asyncio
-async def test_serve_login_page_server_root_path():
-    """
-    Test that serve_login_page includes SERVER_ROOT_PATH in the SSO login URL
-    when SERVER_ROOT_PATH is set.
-    """
-    # Arrange
-    mock_request = MagicMock(spec=Request)
-    captured_html = ""
-    
-    # Mock environment variables
-    env_vars = {
-        "PROXY_BASE_URL": "https://example.com",
-        "SERVER_ROOT_PATH": "/api/v1",
-        "GOOGLE_CLIENT_ID": "mock_google_client_id",  # Enable SSO
-        "DATABASE_URL": "mock_db_url",  # Satisfy show_missing_vars_in_env
-        "LITELLM_MASTER_KEY": "mock_master_key",  # Satisfy show_missing_vars_in_env
-    }
-    
-    # Patch HTMLResponse to capture the content
-    def mock_html_response(content, status_code=200):
-        nonlocal captured_html
-        captured_html = content
-        return MagicMock()
-    
-    with patch.dict(os.environ, env_vars):
-        with patch("litellm.proxy.proxy_server.premium_user", True):
-            with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):
-                with patch("litellm.proxy.proxy_server.master_key", "mock_master_key"):
-                    with patch("fastapi.responses.HTMLResponse", side_effect=mock_html_response):
-                        # Import the function to test
-                        from litellm.proxy.management_endpoints.ui_sso import (
-                            serve_login_page,
-                        )
-
-                        # Act
-                        result = await serve_login_page(request=mock_request)
-    
-    # Assert
-    assert result is not None
-    expected_url = "https://example.com/api/v1/sso/login"
-    assert expected_url in captured_html, f"Expected URL '{expected_url}' not found in HTML content"

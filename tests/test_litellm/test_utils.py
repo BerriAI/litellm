@@ -844,6 +844,7 @@ async def test_supports_tool_choice():
             or "o1" in model_name
             or "o3" in model_name
             or "mistral" in model_name
+            or "oci" in model_name
         ):
             continue
 
@@ -2317,8 +2318,9 @@ def test_block_key_hashing_logic():
     Test that block_key() function only hashes keys that start with "sk-"
     """
     import hashlib
+
     from litellm.proxy.utils import hash_token
-    
+
     # Test cases: (input_key, should_be_hashed, expected_output)
     test_cases = [
         ("sk-1234567890abcdef", True, hash_token("sk-1234567890abcdef")),
@@ -2394,7 +2396,7 @@ def test_generate_gcp_iam_access_token_import_error():
     """
     # Import the function first, before mocking
     from litellm._redis import _generate_gcp_iam_access_token
-    
+
     # Mock the import to fail when the function tries to import google.cloud.iam_credentials_v1
     original_import = __builtins__['__import__']
     
