@@ -198,7 +198,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         setCallbacks(updatedData.callbacks);
       }
     } catch (error) {
-      NotificationsManager.fromBackendError(error);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -235,7 +235,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
       setCallbacks(updatedData.callbacks);
     } catch (error) {
-      NotificationsManager.fromBackendError(error);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -275,7 +275,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     try {
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      NotificationsManager.fromBackendError(error);
+      NotificationsManager.fromBackend(error);
     }
     NotificationsManager.success("Alerts updated successfully");
   };
@@ -302,7 +302,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     try {
       setCallbacksCall(accessToken, payload);
     } catch (error) {
-      NotificationsManager.fromBackendError(error);
+      NotificationsManager.fromBackend(error);
     }
     NotificationsManager.success("Callback updated successfully");
   };
@@ -418,7 +418,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       setCallbackToDelete(null);
     } catch (error) {
       console.error("Failed to delete callback:", error);
-      NotificationsManager.fromBackendError(error);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -479,7 +479,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                                     await serviceHealthCheck(accessToken, callback.name);
                                     NotificationsManager.success("Health check triggered");
                                   } catch (error) {
-                                    NotificationsManager.fromBackendError(parseErrorMessage(error));
+                                    NotificationsManager.fromBackend(parseErrorMessage(error));
                                   }
                                 }}
                                 className="ml-2"
@@ -583,7 +583,7 @@ const Settings: React.FC<SettingsPageProps> = ({
                   onClick={async () => {
                     try {
                       await serviceHealthCheck(accessToken, "slack");
-                      NotificationsManager.success("Alert test triggered");
+                      NotificationsManager.success("Alert test triggered. Test request to slack made - check logs/alerts on slack to verify");
                     } catch (error) {
                       NotificationsManager.fromBackendError(parseErrorMessage(error));
                     }
