@@ -70,7 +70,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
     <>
       <Form.Item
         label="LiteLLM Model Name(s)"
-        tooltip="Actual model name used for making litellm.completion() / litellm.embedding() call."
+        tooltip="The model name LiteLLM will send to the LLM API"
         className="mb-0"
       >
         <Form.Item
@@ -145,9 +145,9 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
       </Form.Item>
       <Row>
         <Col span={10}></Col>
-        <Col span={10}>
+        <Col span={14}>
           <Text className="mb-3 mt-1">
-            Actual model name used for making litellm.completion() call. We loadbalance models with the same public name
+          The model name LiteLLM will send to the LLM API
           </Text>
         </Col>
       </Row>
