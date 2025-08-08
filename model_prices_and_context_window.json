@@ -614,7 +614,7 @@
     },
     "gpt-5": {
         "max_tokens": 128000,
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -646,7 +646,7 @@
     },
     "gpt-5-mini": {
         "max_tokens": 128000,
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 2e-06,
@@ -678,7 +678,7 @@
     },
     "gpt-5-nano": {
         "max_tokens": 128000,
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 4e-07,
@@ -710,7 +710,7 @@
     },
     "gpt-5-chat": {
         "max_tokens": 128000,
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -742,7 +742,7 @@
     },
     "gpt-5-chat-latest": {
         "max_tokens": 128000,
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -774,7 +774,7 @@
     },
     "gpt-5-2025-08-07": {
         "max_tokens": 128000,
-        "max_input_tokens": 2720000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -806,7 +806,7 @@
     },
     "gpt-5-mini-2025-08-07": {
         "max_tokens": 128000,
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 2e-06,
@@ -838,7 +838,7 @@
     },
     "gpt-5-nano-2025-08-07": {
         "max_tokens": 128000,
-        "max_input_tokens": 272000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 4e-07,
