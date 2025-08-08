@@ -1,4 +1,3 @@
-import asyncio
 import os
 import ssl
 import time
@@ -222,7 +221,7 @@ class AsyncHTTPHandler:
     async def __aenter__(self):
         return self.client
 
-    async def __aexit__(self):
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
         # close the client when exiting
         await self.client.aclose()
 
@@ -515,10 +514,15 @@ class AsyncHTTPHandler:
         return response
 
     def __del__(self) -> None:
-        try:
-            asyncio.get_running_loop().create_task(self.close())
-        except Exception:
-            pass
+        # Avoid unreliable async cleanup in __del__
+        # Proper cleanup should be done explicitly via close() or context managers
+        if hasattr(self.client, 'is_closed') and not self.client.is_closed:
+            import warnings
+            warnings.warn(
+                "AsyncHTTPHandler was not properly closed. Use 'async with' or call 'await handler.close()' explicitly.",
+                ResourceWarning,
+                stacklevel=2
+            )
 
     @staticmethod
     def _create_async_transport(
@@ -914,6 +918,36 @@ class HTTPHandler:
             return HTTPTransport(local_address="0.0.0.0")
         else:
             return None
+
+
+def _cleanup_http_client(cached_item):
+    """
+    Cleanup HTTP clients when they're evicted from cache
+    """
+    try:
+        # Handle AsyncHTTPHandler cleanup
+        if hasattr(cached_item, 'client') and hasattr(cached_item.client, 'is_closed'):
+            if not cached_item.client.is_closed:
+                # Schedule cleanup but don't block
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(cached_item.close())
+                except RuntimeError:
+                    # No event loop running, just warn
+                    import warnings
+                    warnings.warn(
+                        "HTTP client was evicted from cache but couldn't be closed properly (no event loop)",
+                        ResourceWarning,
+                        stacklevel=3
+                    )
+        
+        # Handle HTTPHandler cleanup  
+        elif hasattr(cached_item, 'client') and hasattr(cached_item.client, 'close'):
+            cached_item.client.close()
+    except Exception:
+        # Don't raise exceptions during cleanup
+        pass
 
 
 def get_async_httpx_client(

@@ -41,6 +41,18 @@ class VertexBase:
         self.project_id: Optional[str] = None
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
+    async def aclose(self) -> None:
+        """
+        Properly close all HTTP clients associated with this provider
+        """
+        if self.async_handler is not None:
+            try:
+                await self.async_handler.close()
+            except Exception:
+                pass
+            finally:
+                self.async_handler = None
+
     def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
         if is_global_only_vertex_model(model):
             return "global"
