@@ -282,66 +282,6 @@ const NotificationManager = {
     })
   },
 
-  // // Show a categorized notification from a backend-style error
-  // fromBackendError(error: any, extra?: Omit<NotificationConfig, "message" | "description">) {
-  //   const status = toIntMaybe(error?.response?.status) ?? toIntMaybe(error?.status_code) ?? toIntMaybe(error?.code)
-
-  //   // Try to surface the most informative backend message
-  //   const backendMsg =
-  //     error?.response?.data?.error?.message ??
-  //     error?.response?.data?.message ??
-  //     error?.response?.data?.error ??
-  //     error?.detail ??
-  //     error?.message ??
-  //     error
-
-  //   const description = parseErrorMessage(backendMsg)
-  //   const title = titleFor(status, description)
-
-  //   const base = {
-  //     ...(extra ?? {}),
-  //     message: title,
-  //     description,
-  //     placement: extra?.placement ?? defaultPlacement(),
-  //   }
-
-  //   if (title === "Rate Limit Exceeded" || title === "Info" || title === "Budget Exceeded" || title === "Feature Unavailable" || title === "Content Blocked" || title === "Integration Error") {
-  //     notification.warning({ ...base, duration: extra?.duration ?? 7 })
-  //     return
-  //   }
-  //   if (title === "Server Error") {
-  //     notification.error({ ...base, duration: extra?.duration ?? 8 })
-  //     return
-  //   }
-  //   if (
-  //     title === "Request Error" ||
-  //     title === "Authentication Error" ||
-  //     title === "Access Denied" ||
-  //     title === "Not Found" ||
-  //     title === "Error"
-  //   ) {
-  //     notification.error({ ...base, duration: extra?.duration ?? 6 })
-  //     return
-  //   }
-  //   notification.info({ ...base, duration: extra?.duration ?? 4 })
-  // },
-
-  // fromBackendMessage(message: any, extra?: Omit<NotificationConfig, "message" | "description">) {
-  //   const description = parseErrorMessage(message);
-  //   const cls = classifyGeneralMessage(description);
-
-  //   const base = {
-  //     ...(extra ?? {}),
-  //     message: cls?.title ?? "Info",
-  //     description,
-  //     placement: extra?.placement ?? defaultPlacement(),
-  //   };
-
-  //   if (cls?.kind === "success") { notification.success({ ...base, duration: extra?.duration ?? 3.5 }); return; }
-  //   if (cls?.kind === "warning") { notification.warning({ ...base, duration: extra?.duration ?? 6 }); return; }
-  //   notification.info({ ...base, duration: extra?.duration ?? 4 });
-  // },
-
   fromBackend(input: any, extra?: Omit<NotificationConfig, "message" | "description">) {
     const status = extractStatus(input);
     const description = extractDescription(input);
