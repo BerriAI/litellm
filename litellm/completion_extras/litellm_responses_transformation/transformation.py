@@ -157,8 +157,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["metadata"] = value
             elif key in ("previous_response_id"):
                 responses_api_request["previous_response_id"] = value
-            elif key == "reasoning_effort":
-                responses_api_request["reasoning"] = self._map_reasoning_effort(value)
+
+        responses_api_request["reasoning"] = self._map_reasoning_effort(optional_params.get("reasoning_effort"))
 
         # Get stream parameter from litellm_params if not in optional_params
         stream = optional_params.get("stream") or litellm_params.get("stream", False)
@@ -452,7 +452,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             responses_tools.append(tool)
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
-    def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
+    def _map_reasoning_effort(self, reasoning_effort: Optional[str]) -> Reasoning:
         if reasoning_effort == "high":
             return Reasoning(effort="high", summary="detailed")
         elif reasoning_effort == "medium":
@@ -460,7 +460,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return Reasoning(effort="medium", summary="auto")
         elif reasoning_effort == "low":
             return Reasoning(effort="low", summary="auto")
-        return None
+        return Reasoning(summary="auto")
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
         """Map responses API status to chat completion finish_reason"""
