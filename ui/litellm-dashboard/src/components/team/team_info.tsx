@@ -477,10 +477,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Text>Rate Limits</Text>
                 <div className="mt-2">
                   <Text>
-                    TPM: {info.tpm_limit !== null && info.tpm_limit !== undefined ? info.tpm_limit : "Not set"}
+                    TPM: {info.tpm_limit || "Unlimited"}
                   </Text>
                   <Text>
-                    RPM: {info.rpm_limit !== null && info.rpm_limit !== undefined ? info.rpm_limit : "Not set"}
+                    RPM: {info.rpm_limit || "Unlimited"}
                   </Text>
                   {info.max_parallel_requests && (
                     <Text>
