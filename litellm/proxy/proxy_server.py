@@ -8641,31 +8641,16 @@ async def get_config():  # noqa: PLR0915
     # return the callbacks and the env variables for the callback
 
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
         import base64
 
         all_available_callbacks = AllCallbacks()
 
-        # MANUALLY QUERY THE DB
-        # THIS IS THE MOST RELIABLE WAY TO GET THE LATEST CONFIG
-        if prisma_client is not None:
-            db_config_data = await prisma_client.db.litellm_config.find_many() 
-            _litellm_settings = {}
-            _general_settings = {}
-            environment_variables = {}
-            for row in db_config_data:
-                if row.param_name == "litellm_settings":
-                    _litellm_settings = row.param_value or {}
-                elif row.param_name == "general_settings":
-                    _general_settings = row.param_value or {}
-                elif row.param_name == "environment_variables":
-                    environment_variables = row.param_value or {}
-        else:
-            config_data = await proxy_config.get_config()
-            _litellm_settings = config_data.get("litellm_settings", {})
-            _general_settings = config_data.get("general_settings", {})
-            environment_variables = config_data.get("environment_variables", {})
+        config_data = await proxy_config.get_config()
+        _litellm_settings = config_data.get("litellm_settings", {})
+        _general_settings = config_data.get("general_settings", {})
+        environment_variables = config_data.get("environment_variables", {})
 
         # check if "langfuse" in litellm_settings
         _success_callbacks = _litellm_settings.get("success_callback", [])
