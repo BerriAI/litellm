@@ -29,6 +29,7 @@ import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "
 import { extractLoggingSettings, formatMetadataForDisplay } from "../key_info_utils"
 import { CopyIcon, CheckIcon } from "lucide-react"
 import { callback_map, mapInternalToDisplayNames, mapDisplayToInternalNames } from "../callback_info_helpers"
+import { parseErrorMessage } from "../shared/errorUtils"
 
 interface KeyInfoViewProps {
   keyId: string
@@ -181,7 +182,7 @@ export default function KeyInfoView({
       setIsEditing(false)
       // Refresh key data here if needed
     } catch (error) {
-      NotificationManager.fromBackend(error)
+      NotificationManager.fromBackend(parseErrorMessage(error))
       console.error("Error updating key:", error)
     }
   }
