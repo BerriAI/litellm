@@ -57,8 +57,20 @@ class OllamaModelInfo(BaseLLMModelInfo):
     """
 
     @staticmethod
-    def get_api_key(api_key=None) -> None:
-        return None  # Ollama does not use an API key by default
+    def get_api_key(api_key=None) -> Optional[str]:
+        """Get API key from environment variables or litellm configuration"""
+        import os
+
+        import litellm
+        from litellm.secret_managers.main import get_secret_str
+
+        return (
+            os.environ.get("OLLAMA_API_KEY")
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OLLAMA_API_KEY")
+        )
+
 
     @staticmethod
     def get_api_base(api_base: Optional[str] = None) -> str:
@@ -73,9 +85,12 @@ class OllamaModelInfo(BaseLLMModelInfo):
         """
 
         base = self.get_api_base(api_base)
+        api_key = self.get_api_key()
+        headers = { "Authorization": f"Bearer {api_key}" } if api_key else {}
+
         names: set[str] = set()
         try:
-            resp = httpx.get(f"{base}/api/tags")
+            resp = httpx.get(f"{base}/api/tags", headers=headers)
             resp.raise_for_status()
             data = resp.json()
             # Expecting a dict with a 'models' list
