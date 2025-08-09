@@ -1,7 +1,7 @@
 # LITELLM PROXY DEPENDENCIES #
 anyio==4.8.0 # openai + http req.
 httpx==0.28.1
-openai==1.81.0  # openai req.
+openai==1.99.5  # openai req.
 fastapi==0.115.5 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0.2 # server dep
@@ -13,7 +13,8 @@ redis==5.2.1 # redis caching
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.5.0 # for encrypting keys
-google-cloud-aiplatform==1.61.0 # for vertex ai calls
+google-cloud-aiplatform==1.47.0 # for vertex ai calls
+google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
 google-genai==1.22.0
 anthropic[vertex]==0.54.0
 mcp==1.10.1    # for MCP server
@@ -37,7 +38,7 @@ sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==43.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.2.12 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.2.16 # for proxy extras - e.g. prisma migrations
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
 tiktoken==0.8.0 # for calculating usage
@@ -61,4 +62,4 @@ opentelemetry-semantic-conventions==0.51b0
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.16
+litellm-enterprise==0.1.19

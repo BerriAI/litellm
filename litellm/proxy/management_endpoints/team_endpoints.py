@@ -261,12 +261,15 @@ async def new_team(  # noqa: PLR0915
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
     - members: Optional[List] - Control team members via `/team/member/add` and `/team/member/delete`.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
+    - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
     
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -693,11 +696,13 @@ async def update_team(
     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - blocked: bool - Flag indicating if the team is blocked or not - will stop all calls from keys with this team_id.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -1428,6 +1433,20 @@ async def team_member_delete(
                     },
                     data={"teams": {"set": team_list}},
                 )
+
+    # Also clean up any existing team membership rows for this user and team
+    user_ids_to_delete = set()
+    if data.user_id is not None:
+        user_ids_to_delete.add(data.user_id)
+    if existing_user_rows is not None and isinstance(existing_user_rows, list):
+        for existing_user in existing_user_rows:
+            if getattr(existing_user, "user_id", None):
+                user_ids_to_delete.add(existing_user.user_id)
+
+    for _uid in user_ids_to_delete:
+        await prisma_client.db.litellm_teammembership.delete_many(
+            where={"team_id": data.team_id, "user_id": _uid}
+        )
 
     return existing_team_row
 

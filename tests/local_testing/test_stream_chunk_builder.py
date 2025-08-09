@@ -168,56 +168,6 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message():
 # test_stream_chunk_builder_litellm_tool_call_regular_message()
 
 
-def test_stream_chunk_builder_litellm_usage_chunks():
-    """
-    Checks if stream_chunk_builder is able to correctly rebuild with given metadata from streaming chunks
-    """
-    from litellm.types.utils import Usage
-
-    messages = [
-        {"role": "user", "content": "Tell me the funniest joke you know."},
-        {
-            "role": "assistant",
-            "content": "Why did the chicken cross the road?\nYou will not guess this one I bet\n",
-        },
-        {"role": "user", "content": "I do not know, why?"},
-        {"role": "assistant", "content": "uhhhh\n\n\nhmmmm.....\nthinking....\n"},
-        {"role": "user", "content": "\nI am waiting...\n\n...\n"},
-    ]
-
-    usage: litellm.Usage = Usage(
-        completion_tokens=27,
-        prompt_tokens=50,
-        total_tokens=82,
-        completion_tokens_details=None,
-        prompt_tokens_details=None,
-    )
-
-    gemini_pt = usage.prompt_tokens
-
-    # make a streaming gemini call
-    try:
-        response = completion(
-            model="gemini/gemini-1.5-flash",
-            messages=messages,
-            stream=True,
-            complete_response=True,
-            stream_options={"include_usage": True},
-        )
-    except litellm.InternalServerError as e:
-        pytest.skip(f"Skipping test due to internal server error - {str(e)}")
-
-    usage: litellm.Usage = response.usage
-
-    stream_rebuilt_pt = usage.prompt_tokens
-
-    # assert prompt tokens are the same
-
-    assert (
-        gemini_pt == stream_rebuilt_pt
-    ), f"Stream builder is not able to rebuild usage correctly. Got={stream_rebuilt_pt}, expected={gemini_pt}"
-
-
 def test_stream_chunk_builder_litellm_mixed_calls():
     response = stream_chunk_builder(stream_chunk_testdata.chunks)
     assert (

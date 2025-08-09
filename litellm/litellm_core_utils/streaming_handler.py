@@ -940,8 +940,8 @@ class CustomStreamWrapper:
                 and not self.sent_last_thinking_block
                 and model_response.choices[0].delta.content
             ):
-                model_response.choices[0].delta.content = (
-                    "</think>" + (model_response.choices[0].delta.content or "")
+                model_response.choices[0].delta.content = "</think>" + (
+                    model_response.choices[0].delta.content or ""
                 )
                 self.sent_last_thinking_block = True
 
@@ -1584,7 +1584,9 @@ class CustomStreamWrapper:
         except StopIteration:
             if self.sent_last_chunk is True:
                 complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks, messages=self.messages
+                    chunks=self.chunks,
+                    messages=self.messages,
+                    logging_obj=self.logging_obj,
                 )
 
                 response = self.model_response_creator()
@@ -1768,7 +1770,9 @@ class CustomStreamWrapper:
             if self.sent_last_chunk is True:
                 # log the final chunk with accurate streaming values
                 complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks, messages=self.messages
+                    chunks=self.chunks,
+                    messages=self.messages,
+                    logging_obj=self.logging_obj,
                 )
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
@@ -1841,13 +1845,25 @@ class CustomStreamWrapper:
                     self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
                 )
             ## Map to OpenAI Exception
-            raise exception_type(
-                model=self.model,
-                custom_llm_provider=self.custom_llm_provider,
-                original_exception=e,
-                completion_kwargs={},
-                extra_kwargs={},
-            )
+            try:
+                exception_type(
+                    model=self.model,
+                    custom_llm_provider=self.custom_llm_provider,
+                    original_exception=e,
+                    completion_kwargs={},
+                    extra_kwargs={},
+                )
+            except Exception as e:
+                from litellm.exceptions import MidStreamFallbackError
+
+                raise MidStreamFallbackError(
+                    message=str(e),
+                    model=self.model,
+                    llm_provider=self.custom_llm_provider or "anthropic",
+                    original_exception=e,
+                    generated_content=self.response_uptil_now,
+                    is_pre_first_chunk=not self.sent_first_chunk,
+                )
 
     @staticmethod
     def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:

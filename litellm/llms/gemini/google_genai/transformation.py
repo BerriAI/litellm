@@ -11,7 +11,6 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -19,12 +18,15 @@ if TYPE_CHECKING:
         GenerateContentConfigDict,
         GenerateContentContentListUnionDict,
         GenerateContentResponse,
+        ToolConfigDict,
     )
 else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
-
+    ToolConfigDict = Any
+    
+from ..common_utils import get_api_key_from_env
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     """
@@ -131,7 +133,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         return (
             litellm_params.pop("api_key", None)
             or litellm_params.pop("gemini_api_key", None)
-            or get_secret_str("GEMINI_API_KEY")
+            or get_api_key_from_env()
             or litellm.api_key
         )
     
@@ -259,6 +261,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         model: str,
         contents: GenerateContentContentListUnionDict,
+        tools: Optional[ToolConfigDict],
         generate_content_config_dict: Dict,
     ) -> dict:
         from litellm.types.google_genai.main import (
@@ -268,6 +271,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,
             contents=contents,
+            tools=tools,
             generationConfig=GenerateContentConfigDict(**generate_content_config_dict),
         )
 
