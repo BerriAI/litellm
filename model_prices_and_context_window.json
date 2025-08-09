@@ -6074,6 +6074,36 @@
         "supports_tool_choice": true,
         "source": "https://inference-docs.cerebras.ai/support/pricing"
     },
+    "cerebras/openai/gpt-oss-20b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://inference-docs.cerebras.ai/support/pricing"
+    },
+    "cerebras/openai/gpt-oss-120b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 6.9e-07,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://www.cerebras.ai/blog/openai-gpt-oss-120b-runs-fastest-on-cerebras"
+    },
     "friendliai/meta-llama-3.1-8b-instruct": {
         "max_tokens": 8192,
         "max_input_tokens": 8192,
@@ -11657,6 +11687,36 @@
         "litellm_provider": "openrouter",
         "mode": "chat",
         "supports_tool_choice": true
+    },
+    "openrouter/openai/gpt-oss-20b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 8e-07,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://openrouter.ai/openai/gpt-oss-20b"
+    },
+    "openrouter/openai/gpt-oss-120b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 8e-07,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://openrouter.ai/openai/gpt-oss-120b"
     },
     "openrouter/anthropic/claude-instant-v1": {
         "max_tokens": 100000,
