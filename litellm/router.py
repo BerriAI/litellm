@@ -4329,6 +4329,39 @@ class Router:
                 elif isinstance(id, int):
                     id = str(id)
 
+                ## get deployment info
+                deployment_info = self.get_deployment(model_id=id)
+
+                if deployment_info is None:
+                    return
+                else:
+                    deployment_model_info = self.get_router_model_info(
+                        deployment=deployment_info.model_dump(),
+                        received_model_name=model_group,
+                    )
+                    # get tpm/rpm from deployment info
+                    tpm = deployment_info.get("tpm", None)
+                    rpm = deployment_info.get("rpm", None)
+
+                    ## check tpm/rpm in litellm_params
+                    tpm_litellm_params = deployment_info.litellm_params.tpm
+                    rpm_litellm_params = deployment_info.litellm_params.rpm
+
+                    ## check tpm/rpm in model_info
+                    tpm_model_info = deployment_model_info.get("tpm", None)
+                    rpm_model_info = deployment_model_info.get("rpm", None)
+
+                    ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                    if (
+                        tpm is None
+                        and rpm is None
+                        and tpm_litellm_params is None
+                        and rpm_litellm_params is None
+                        and tpm_model_info is None
+                        and rpm_model_info is None
+                    ):
+                        return
+
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 total_tokens: float = standard_logging_object.get("total_tokens", 0)
 
