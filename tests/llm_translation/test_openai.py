@@ -654,3 +654,13 @@ def test_openai_tool_calling():
     }
 
     response = litellm.completion(**completion_params)
+
+@pytest.mark.asyncio
+async def test_openai_gpt5_reasoning():
+    response = await litellm.acompletion(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        reasoning_effort="minimal",
+    )
+    print("response: ", response)
+    assert response.choices[0].message.content is not None
