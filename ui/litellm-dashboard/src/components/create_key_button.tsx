@@ -1009,22 +1009,58 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     />
                   </Form.Item>
 
-                  <Accordion className="mt-4 mb-4">
-                    <AccordionHeader>
-                      <b>Logging Settings</b>
-                    </AccordionHeader>
-                    <AccordionBody>
-                      <div className="mt-4">
-                        <PremiumLoggingSettings
-                          value={loggingSettings}
-                          onChange={setLoggingSettings}
-                          premiumUser={premiumUser}
-                          disabledCallbacks={disabledCallbacks}
-                          onDisabledCallbacksChange={setDisabledCallbacks}
-                        />
+                  {premiumUser ? (
+                    <Accordion className="mt-4 mb-4">
+                      <AccordionHeader>
+                        <b>Logging Settings</b>
+                      </AccordionHeader>
+                      <AccordionBody>
+                        <div className="mt-4">
+                          <PremiumLoggingSettings
+                            value={loggingSettings}
+                            onChange={setLoggingSettings}
+                            premiumUser={true}
+                            disabledCallbacks={disabledCallbacks}
+                            onDisabledCallbacksChange={setDisabledCallbacks}
+                          />
+                        </div>
+                      </AccordionBody>
+                    </Accordion>
+                  ) : (
+                    <Tooltip 
+                      title={
+                        <span>
+                          Key-level logging settings is an enterprise feature, get in touch -
+                          <a href="https://www.litellm.ai/enterprise" target="_blank">
+                            https://www.litellm.ai/enterprise
+                          </a>
+                        </span>
+                      }
+                      placement="top"
+                    >
+                      <div style={{ position: 'relative' }}>
+                        <div style={{ opacity: 0.5 }}>
+                          <Accordion className="mt-4 mb-4">
+                            <AccordionHeader>
+                              <b>Logging Settings</b>
+                            </AccordionHeader>
+                            <AccordionBody>
+                              <div className="mt-4">
+                                <PremiumLoggingSettings
+                                  value={loggingSettings}
+                                  onChange={setLoggingSettings}
+                                  premiumUser={false}
+                                  disabledCallbacks={disabledCallbacks}
+                                  onDisabledCallbacksChange={setDisabledCallbacks}
+                                />
+                              </div>
+                            </AccordionBody>
+                          </Accordion>
+                        </div>
+                        <div style={{ position: 'absolute', inset: 0, cursor: 'not-allowed' }} />
                       </div>
-                    </AccordionBody>
-                  </Accordion>
+                    </Tooltip>
+                  )}
 
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
