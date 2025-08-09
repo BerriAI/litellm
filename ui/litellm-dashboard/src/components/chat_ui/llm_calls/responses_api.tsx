@@ -18,7 +18,9 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTool?: string
+  selectedMCPTool?: string,
+  previousResponseId?: string | null,
+  onResponseId?: (responseId: string) => void
 ) {
   if (!accessToken) {
     throw new Error("API key is required");
@@ -84,6 +86,7 @@ export async function makeOpenAIResponsesRequest(
       input: formattedInput,
       stream: true,
       litellm_trace_id: traceId,
+      ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
       ...(vector_store_ids ? { vector_store_ids } : {}),
       ...(guardrails ? { guardrails } : {}),
       ...(tools ? { tools, tool_choice: "required" } : {}),
@@ -144,6 +147,14 @@ export async function makeOpenAIResponsesRequest(
           const response_obj = event.response;
           const usage = response_obj.usage;
           console.log("Usage data:", usage);
+          console.log("Response completed event:", response_obj);
+          
+          // Extract response_id for session management
+          if (response_obj.id && onResponseId) {
+            console.log("Response ID for session management:", response_obj.id);
+            onResponseId(response_obj.id);
+          }
+          
           if (usage && onUsageData) {
             console.log("Usage data:", usage);
             

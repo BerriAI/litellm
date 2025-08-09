@@ -51,6 +51,7 @@ import { convertImageToBase64, createMultimodalMessage, createDisplayMessage } f
 import ChatImageUpload from "./chat_ui/ChatImageUpload";
 import ChatImageRenderer from "./chat_ui/ChatImageRenderer";
 import { createChatMultimodalMessage, createChatDisplayMessage } from "./chat_ui/ChatImageUtils";
+import SessionManagement from "./chat_ui/SessionManagement";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -163,6 +164,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     }
   });
   const [messageTraceId, setMessageTraceId] = useState<string | null>(() => sessionStorage.getItem('messageTraceId') || null);
+  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(() => sessionStorage.getItem('responsesSessionId') || null);
+  const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {
+    const saved = sessionStorage.getItem('useApiSessionManagement');
+    return saved ? JSON.parse(saved) : true; // Default to API session management
+  });
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [responsesUploadedImage, setResponsesUploadedImage] = useState<File | null>(null);
@@ -245,7 +251,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
     } else {
       sessionStorage.removeItem('messageTraceId');
     }
-  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, selectedMCPTools]);
+    if (responsesSessionId) {
+      sessionStorage.setItem('responsesSessionId', responsesSessionId);
+    } else {
+      sessionStorage.removeItem('responsesSessionId');
+    }
+    sessionStorage.setItem('useApiSessionManagement', JSON.stringify(useApiSessionManagement));
+  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, responsesSessionId, useApiSessionManagement, selectedMCPTools]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -413,6 +425,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
       
       return prevHistory;
     });
+  };
+
+  const handleResponseId = (responseId: string) => {
+    console.log("Received response ID for session management:", responseId);
+    if (useApiSessionManagement) {
+      setResponsesSessionId(responseId);
+    }
+  };
+
+  const handleToggleSessionManagement = (useApi: boolean) => {
+    setUseApiSessionManagement(useApi);
+    if (!useApi) {
+      // Clear API session when switching to UI mode
+      setResponsesSessionId(null);
+    }
   };
 
   const updateImageUI = (imageUrl: string, model: string) => {
@@ -602,7 +629,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
           }
         } else if (endpointType === EndpointType.RESPONSES) {
           // Create chat history for API call - strip out model field and isImage field
-          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          let apiChatHistory;
+          
+          if (useApiSessionManagement && responsesSessionId) {
+            // When using API session management with existing session, only send the new message
+            apiChatHistory = [newUserMessage];
+          } else {
+            // When using UI session management or starting new API session, send full history
+            apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          }
           
           await makeOpenAIResponsesRequest(
             apiChatHistory,
@@ -617,7 +652,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools // Pass the selected tool directly
+            selectedMCPTools, // Pass the selected tool directly
+            useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
+            handleResponseId // Pass callback to capture new response ID
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -669,11 +706,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const clearChatHistory = () => {
     setChatHistory([]);
     setMessageTraceId(null);
+    setResponsesSessionId(null); // Clear responses session ID
     handleRemoveImage(); // Clear any uploaded images for image edits
     handleRemoveResponsesImage(); // Clear any uploaded images for responses
     handleRemoveChatImage(); // Clear any uploaded images for chat completions
     sessionStorage.removeItem('chatHistory');
     sessionStorage.removeItem('messageTraceId');
+    sessionStorage.removeItem('responsesSessionId');
     message.success("Chat history cleared.");
   };
 
@@ -790,7 +829,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     }
                   }}
                   className="mb-4"
-                />  
+                />
+                
+                {/* Session Management Component */}
+                <SessionManagement
+                  endpointType={endpointType}
+                  responsesSessionId={responsesSessionId}
+                  useApiSessionManagement={useApiSessionManagement}
+                  onToggleSessionManagement={handleToggleSessionManagement}
+                />
               </div>
 
               <div>
