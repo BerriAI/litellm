@@ -37,6 +37,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm._service_logger import ServiceLogging
+from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
@@ -75,6 +76,9 @@ class CachingHandlerResponse(BaseModel):
     )
 
 
+in_memory_cache_obj = InMemoryCache()
+
+
 class LLMCachingHandler:
     def __init__(
         self,
@@ -91,7 +95,8 @@ class LLMCachingHandler:
         self.start_time = start_time
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
             self.dual_cache: Optional[DualCache] = DualCache(
-                redis_cache=litellm.cache.cache
+                redis_cache=litellm.cache.cache,
+                in_memory_cache=in_memory_cache_obj,
             )
         else:
             self.dual_cache = None

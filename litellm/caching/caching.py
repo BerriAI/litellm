@@ -625,7 +625,6 @@ class Cache:
                 cache_key, cached_data, kwargs = self._add_cache_logic(
                     result=result, **kwargs
                 )
-
                 if dynamic_cache_object is not None:
                     await dynamic_cache_object.async_set_cache(
                         cache_key, cached_data, **kwargs
