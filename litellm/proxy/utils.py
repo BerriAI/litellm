@@ -22,7 +22,7 @@ from typing import (
     overload,
 )
 
-from litellm.constants import MAX_TEAM_LIST_LIMIT, DEFAULT_MODEL_CREATED_AT_TIME
+from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
@@ -448,7 +448,6 @@ class ProxyLogging:
             litellm_parent_otel_span=None,
         )
 
-
     def _convert_user_api_key_auth_to_dict(self, user_api_key_auth_obj):
         """
         Helper function to convert UserAPIKeyAuth object to dictionary.
@@ -728,15 +727,19 @@ class ProxyLogging:
         }
         return result
 
-    def _create_mcp_request_object_from_kwargs(self, kwargs: dict) -> "MCPPreCallRequestObject":
+    def _create_mcp_request_object_from_kwargs(
+        self, kwargs: dict
+    ) -> "MCPPreCallRequestObject":
         """
         Helper function to create MCPPreCallRequestObject from kwargs for standard pre_call_hook.
         """
         from litellm.types.llms.base import HiddenParams
         from litellm.types.mcp import MCPPreCallRequestObject
 
-        user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(kwargs.get("user_api_key_auth"))
-        
+        user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(
+            kwargs.get("user_api_key_auth")
+        )
+
         return MCPPreCallRequestObject(
             tool_name=kwargs.get("name", ""),
             arguments=kwargs.get("arguments", {}),
@@ -745,22 +748,23 @@ class ProxyLogging:
             hidden_params=HiddenParams(),
         )
 
-    def _convert_mcp_hook_response_to_kwargs(self, response_data: Optional[dict], original_kwargs: dict) -> dict:
+    def _convert_mcp_hook_response_to_kwargs(
+        self, response_data: Optional[dict], original_kwargs: dict
+    ) -> dict:
         """
         Helper function to convert pre_call_hook response back to kwargs for MCP usage.
         """
         if not response_data:
             return original_kwargs
-        
+
         # Apply any argument modifications from the hook response
         modified_kwargs = original_kwargs.copy()
-        
+
         # If the response contains modified arguments, apply them
         if response_data.get("modified_arguments"):
             modified_kwargs["arguments"] = response_data["modified_arguments"]
-        
-        return modified_kwargs
 
+        return modified_kwargs
 
     async def process_pre_call_hook_response(self, response, data, call_type):
         if isinstance(response, Exception):
@@ -894,6 +898,7 @@ class ProxyLogging:
 
         try:
             for callback in litellm.callbacks:
+                start_time = time.time()
                 _callback = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
@@ -903,15 +908,13 @@ class ProxyLogging:
                     _callback = callback  # type: ignore
                 if _callback is not None and isinstance(_callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
-                    
+
                     event_type = GuardrailEventHooks.pre_call
                     if call_type == "mcp_call":
                         event_type = GuardrailEventHooks.pre_mcp_call
-                        
+
                     if (
-                        _callback.should_run_guardrail(
-                            data=data, event_type=event_type
-                        )
+                        _callback.should_run_guardrail(data=data, event_type=event_type)
                         is not True
                     ):
                         continue
@@ -936,7 +939,7 @@ class ProxyLogging:
                 ):
                     if call_type == "mcp_call" and user_api_key_dict is None:
                         continue
-                        
+
                     response = await _callback.async_pre_call_hook(
                         user_api_key_dict=user_api_key_dict,
                         cache=self.call_details["user_api_key_cache"],
@@ -948,6 +951,19 @@ class ProxyLogging:
                             response=response, data=data, call_type=call_type
                         )
 
+                end_time = time.time()
+                duration = end_time - start_time
+                if (
+                    hasattr(self, "service_logging_obj") and duration > 0.01
+                ):  # only if duration is non-negligible - don't spam the logs
+                    await self.service_logging_obj.async_service_success_hook(
+                        service=ServiceTypes.PROXY_PRE_CALL,
+                        duration=duration,
+                        call_type=f"{_callback.__class__.__name__}",
+                        parent_otel_span=user_api_key_dict.parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
             return data
         except Exception as e:
             raise e
@@ -999,7 +1015,9 @@ class ProxyLogging:
                             continue
                     # Convert user_api_key_dict to proper format for async_moderation_hook
                     if call_type == "mcp_call":
-                        user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(user_api_key_dict)
+                        user_api_key_auth_dict = (
+                            self._convert_user_api_key_auth_to_dict(user_api_key_dict)
+                        )
                     else:
                         user_api_key_auth_dict = user_api_key_dict
 
@@ -3668,8 +3686,9 @@ def construct_database_url_from_env_vars() -> Optional[str]:
             database_url = f"postgresql://{database_username_enc}@{database_host}/{database_name_enc}"
 
         return database_url
-    
+
     return None
+
 
 async def count_tokens_with_anthropic_api(
     model_to_use: str,
@@ -3691,8 +3710,9 @@ async def count_tokens_with_anthropic_api(
         return None
 
     try:
-        import anthropic
         import os
+
+        import anthropic
 
         # Get Anthropic API key from deployment config
         anthropic_api_key = None
@@ -3712,7 +3732,7 @@ async def count_tokens_with_anthropic_api(
             response = client.beta.messages.count_tokens(
                 model=model_to_use,
                 messages=messages,  # type: ignore
-                betas=["token-counting-2024-11-01"]
+                betas=["token-counting-2024-11-01"],
             )
             total_tokens = response.input_tokens
             tokenizer_used = "anthropic_api"
@@ -3723,10 +3743,15 @@ async def count_tokens_with_anthropic_api(
             }
 
     except ImportError:
-        verbose_proxy_logger.warning("Anthropic library not available, falling back to LiteLLM tokenizer")
+        verbose_proxy_logger.warning(
+            "Anthropic library not available, falling back to LiteLLM tokenizer"
+        )
     except Exception as e:
-        verbose_proxy_logger.warning(f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer")
+        verbose_proxy_logger.warning(
+            f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer"
+        )
     return None
+
 
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
@@ -3743,7 +3768,7 @@ async def get_available_models_for_user(
 ) -> List[str]:
     """
     Get the list of models available to a user based on their API key and team permissions.
-    
+
     Args:
         user_api_key_dict: User API key authentication object
         llm_router: LiteLLM router instance
@@ -3755,18 +3780,18 @@ async def get_available_models_for_user(
         include_model_access_groups: Whether to include model access groups
         only_model_access_groups: Whether to only return model access groups
         return_wildcard_routes: Whether to return wildcard routes
-        
+
     Returns:
         List of model names available to the user
     """
+    from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
+        get_complete_model_list,
         get_key_models,
         get_team_models,
-        get_complete_model_list,
     )
-    from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.management_endpoints.team_endpoints import validate_membership
-    
+
     # Get proxy model list and access groups
     if llm_router is None:
         proxy_model_list = []
@@ -3831,19 +3856,19 @@ def create_model_info_response(
 ) -> dict:
     """
     Create a standardized model info response.
-    
+
     Args:
         model_id: The model ID
         provider: The model provider
         include_metadata: Whether to include metadata
         fallback_type: Type of fallbacks to include
         llm_router: LiteLLM router instance
-        
+
     Returns:
         Dictionary containing model information
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
-    
+
     model_info = {
         "id": model_id,
         "object": "model",
@@ -3886,16 +3911,18 @@ def validate_model_access(
 ) -> None:
     """
     Validate that a model is accessible to the user.
-    
+
     Args:
         model_id: The model ID to validate
         available_models: List of models available to the user
-        
+
     Raises:
         HTTPException: If the model is not accessible
     """
     if model_id not in available_models:
         raise HTTPException(
             status_code=404,
-            detail="The model `{}` does not exist or is not accessible".format(model_id)
+            detail="The model `{}` does not exist or is not accessible".format(
+                model_id
+            ),
         )
