@@ -75,54 +75,6 @@ class CachingHandlerResponse(BaseModel):
     )
 
 
-def llm_caching_handler_wrapper(
-    original_function: Callable,
-):
-    """
-    Wrapper function to handle caching logic for LLM API requests (completion / embedding / text_completion / transcription etc)
-    """
-    import time
-
-    from litellm.litellm_core_utils.core_helpers import (
-        _get_parent_otel_span_from_kwargs,
-    )
-    from litellm.types.services import ServiceTypes
-
-    service_logger_obj = ServiceLogging()
-
-    @wraps(original_function)
-    async def wrapper(*args, **kwargs):
-        start_time = time.time()
-        try:
-            original_function_kwargs = kwargs.get("kwargs") or kwargs.get(
-                "request_kwargs"
-            )
-            if original_function_kwargs is None:
-                return await original_function(*args, **kwargs)  # skip otel logging
-            parent_otel_span = _get_parent_otel_span_from_kwargs(
-                original_function_kwargs
-            )
-            result = await original_function(*args, **kwargs)
-            end_time = time.time()
-            _duration = end_time - start_time
-            asyncio.create_task(
-                service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.LITELLM,
-                    call_type=f"_llm_caching_handler.{original_function.__name__}",
-                    duration=_duration,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                    event_metadata={},
-                )
-            )
-            return result
-        except Exception as e:
-            raise e
-
-    return wrapper
-
-
 class LLMCachingHandler:
     def __init__(
         self,
@@ -130,14 +82,21 @@ class LLMCachingHandler:
         request_kwargs: Dict[str, Any],
         start_time: datetime.datetime,
     ):
+        from litellm.caching import DualCache, RedisCache
+
         self.async_streaming_chunks: List[ModelResponse] = []
         self.sync_streaming_chunks: List[ModelResponse] = []
         self.request_kwargs = request_kwargs
         self.original_function = original_function
         self.start_time = start_time
+        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
+            self.dual_cache: Optional[DualCache] = DualCache(
+                redis_cache=litellm.cache.cache
+            )
+        else:
+            self.dual_cache = None
         pass
 
-    @llm_caching_handler_wrapper
     async def _async_get_cache(
         self,
         model: str,
@@ -168,20 +127,16 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        import time
-
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )
-        from litellm.types.services import ServiceTypes
         from litellm.utils import CustomStreamWrapper
 
-        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-
-        _llm_caching_handler_start_time = time.time()
-
+        kwargs = kwargs.copy()
         args = args or ()
 
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+        kwargs["parent_otel_span"] = parent_otel_span
         final_embedding_cached_response: Optional[EmbeddingResponse] = None
         embedding_all_elements_cache_hit: bool = False
         cached_result: Optional[Any] = None
@@ -623,7 +578,12 @@ class LLMCachingHandler:
                 preset_cache_key = litellm.cache.get_cache_key(
                     **{**new_kwargs, "input": i}
                 )
-                tasks.append(litellm.cache.async_get_cache(cache_key=preset_cache_key))
+                tasks.append(
+                    litellm.cache.async_get_cache(
+                        cache_key=preset_cache_key,
+                        dynamic_cache_object=self.dual_cache,
+                    )
+                )
             cached_result = await asyncio.gather(*tasks)
             ## check if cached result is None ##
             if cached_result is not None and isinstance(cached_result, list):
@@ -632,9 +592,14 @@ class LLMCachingHandler:
                     cached_result = None
         else:
             if litellm.cache._supports_async() is True:
-                cached_result = await litellm.cache.async_get_cache(**new_kwargs)
+                ## check if dual cache is supported ##
+                cached_result = await litellm.cache.async_get_cache(
+                    dynamic_cache_object=self.dual_cache, **new_kwargs
+                )
             else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
-                cached_result = litellm.cache.get_cache(**new_kwargs)
+                cached_result = litellm.cache.get_cache(
+                    dynamic_cache_object=self.dual_cache, **new_kwargs
+                )
         return cached_result
 
     def _convert_cached_result_to_model_response(
@@ -779,7 +744,6 @@ class LLMCachingHandler:
             logging_obj=logging_obj,
         )
 
-    @llm_caching_handler_wrapper
     async def async_set_cache(
         self,
         result: Any,
@@ -801,6 +765,9 @@ class LLMCachingHandler:
         Raises:
             None
         """
+        from litellm.litellm_core_utils.core_helpers import (
+            _get_parent_otel_span_from_kwargs,
+        )
 
         if litellm.cache is None:
             return
@@ -812,6 +779,8 @@ class LLMCachingHandler:
                 args,
             )
         )
+        parent_otel_span = _get_parent_otel_span_from_kwargs(new_kwargs)
+        new_kwargs["parent_otel_span"] = parent_otel_span
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(
             original_function=original_function, kwargs=new_kwargs
@@ -830,7 +799,9 @@ class LLMCachingHandler:
                     )  # s3 doesn't support bulk writing. Exclude.
                 ):
                     asyncio.create_task(
-                        litellm.cache.async_add_cache_pipeline(result, **new_kwargs)
+                        litellm.cache.async_add_cache_pipeline(
+                            result, dynamic_cache_object=self.dual_cache, **new_kwargs
+                        )
                     )
                 elif isinstance(litellm.cache.cache, S3Cache):
                     threading.Thread(
@@ -841,7 +812,9 @@ class LLMCachingHandler:
                 else:
                     asyncio.create_task(
                         litellm.cache.async_add_cache(
-                            result.model_dump_json(), **new_kwargs
+                            result.model_dump_json(),
+                            dynamic_cache_object=self.dual_cache,
+                            **new_kwargs,
                         )
                     )
             else:
