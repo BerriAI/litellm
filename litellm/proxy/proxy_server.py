@@ -126,6 +126,7 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
@@ -730,6 +731,11 @@ def get_openapi_schema():
             }
         }
 
+    # Add LLM API request schema bodies for documentation
+    from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
+
+    openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
@@ -758,6 +764,9 @@ def custom_openapi():
 
 if os.getenv("DOCS_FILTERED", "False") == "True" and premium_user:
     app.openapi = custom_openapi  # type: ignore
+else:
+    # For regular users, use get_openapi_schema to include LLM API schemas
+    app.openapi = get_openapi_schema  # type: ignore
 
 
 class UserAPIKeyCacheTTLEnum(enum.Enum):
@@ -1591,7 +1600,9 @@ class ProxyConfig:
 
         litellm.cache = Cache(**cache_params)
 
-        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
+        if litellm.cache is not None and isinstance(
+            litellm.cache.cache, (RedisCache, RedisClusterCache)
+        ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
 
@@ -1728,7 +1739,7 @@ class ProxyConfig:
         self._load_environment_variables(config=config)
 
         ## Callback settings
-        callback_settings = config.get("callback_settings", None)
+        callback_settings = config.get("callback_settings", {})
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
         litellm_settings = config.get("litellm_settings", None)
@@ -2670,7 +2681,7 @@ class ProxyConfig:
             proxy_logging_obj: ProxyLogging
         """
         _general_settings = config_data.get("general_settings", {})
-        if "alerting" in _general_settings:
+        if _general_settings is not None and "alerting" in _general_settings:
             if (
                 general_settings is not None
                 and general_settings.get("alerting", None) is not None
@@ -2702,14 +2713,14 @@ class ProxyConfig:
                     "alerting"
                 ]
 
-        if "alert_types" in _general_settings:
+        if _general_settings is not None and "alert_types" in _general_settings:
             general_settings["alert_types"] = _general_settings["alert_types"]
             proxy_logging_obj.alert_types = general_settings["alert_types"]
             proxy_logging_obj.slack_alerting_instance.update_values(
                 alert_types=general_settings["alert_types"], llm_router=llm_router
             )
 
-        if "alert_to_webhook_url" in _general_settings:
+        if _general_settings is not None and "alert_to_webhook_url" in _general_settings:
             general_settings["alert_to_webhook_url"] = _general_settings[
                 "alert_to_webhook_url"
             ]
@@ -3766,105 +3777,104 @@ async def model_list(
                     Defaults to "general" when include_metadata=true
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
-    all_models = []
-    model_access_groups: Dict[str, List[str]] = defaultdict(list)
-    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    if llm_router is None:
-        proxy_model_list = []
-    else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
 
-    ## if only_model_access_groups is True,
-    """
-    1. Get all models key/user/team has access to
-    2. Filter out models that are not model access groups
-    3. Return the models
-    """
-    if only_model_access_groups is True:
-        include_model_access_groups = True
+    from litellm.proxy.utils import (
+        create_model_info_response,
+        get_available_models_for_user,
+    )
 
-    key_models = get_key_models(
+    # Get available models for the user
+    all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-    )
-
-    team_models: List[str] = user_api_key_dict.team_models
-
-    if team_id:
-        key_models = []
-        team_object = await get_team_object(
-            team_id=team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
-        team_models = team_object.models
-
-    team_models = get_team_models(
-        team_models=team_models,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-    )
-
-    all_models = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-        return_wildcard_routes=return_wildcard_routes,
         llm_router=llm_router,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-        only_model_access_groups=only_model_access_groups,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=team_id,
+        include_model_access_groups=include_model_access_groups or False,
+        only_model_access_groups=only_model_access_groups or False,
+        return_wildcard_routes=return_wildcard_routes or False,
+        user_api_key_cache=user_api_key_cache,
     )
 
     # Build response data
     model_data = []
     for model in all_models:
-        model_info = {
-            "id": model,
-            "object": "model",
-            "created": DEFAULT_MODEL_CREATED_AT_TIME,
-            "owned_by": "openai",
-        }
-
-        # Add metadata if requested
-        if include_metadata:
-            metadata = {}
-
-            # Default fallback_type to "general" if include_metadata is true
-            effective_fallback_type = (
-                fallback_type if fallback_type is not None else "general"
-            )
-
-            # Validate fallback_type
-            valid_fallback_types = ["general", "context_window", "content_policy"]
-            if effective_fallback_type not in valid_fallback_types:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid fallback_type. Must be one of: {valid_fallback_types}",
-                )
-
-            fallbacks = get_all_fallbacks(
-                model=model,
-                llm_router=llm_router,
-                fallback_type=effective_fallback_type,
-            )
-            metadata["fallbacks"] = fallbacks
-
-            model_info["metadata"] = metadata
-
+        model_info = create_model_info_response(
+            model_id=model,
+            provider="openai",
+            include_metadata=include_metadata or False,
+            fallback_type=fallback_type,
+            llm_router=llm_router,
+        )
         model_data.append(model_info)
 
     return dict(
         data=model_data,
         object="list",
+    )
+
+
+@router.get(
+    "/v1/models/{model_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["model management"],
+)
+@router.get(
+    "/models/{model_id}",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["model management"],
+)
+async def model_info(
+    model_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Retrieve information about a specific model accessible to your API key.
+
+    Returns model details only if the model is available to your API key/team.
+    Returns 404 if the model doesn't exist or is not accessible.
+
+    Follows OpenAI API specification for individual model retrieval.
+    https://platform.openai.com/docs/api-reference/models/retrieve
+    """
+    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+
+    from litellm.proxy.utils import (
+        create_model_info_response,
+        get_available_models_for_user,
+        validate_model_access,
+    )
+
+    # Get available models for the user
+    all_models = await get_available_models_for_user(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=None,
+        include_model_access_groups=False,
+        only_model_access_groups=False,
+        return_wildcard_routes=False,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    # Validate that the requested model is accessible
+    validate_model_access(model_id=model_id, available_models=all_models)
+
+    # Get provider information
+    _, provider, _, _ = litellm.get_llm_provider(model=model_id)
+
+    # Return the model information in the same format as the list endpoint
+    return create_model_info_response(
+        model_id=model_id,
+        provider=provider,
+        include_metadata=False,
+        fallback_type=None,
+        llm_router=llm_router,
     )
 
 
@@ -3923,7 +3933,7 @@ async def chat_completion(  # noqa: PLR0915
     data = await _read_request_body(request=request)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await base_llm_response_processor.base_process_llm_request(
+        result = await base_llm_response_processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -3941,6 +3951,10 @@ async def chat_completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
+        if isinstance(result, BaseModel):
+            return result.model_dump(exclude_none=True, exclude_unset=True)
+        else:
+            return result
     except RejectedRequestError as e:
         _data = e.request_data
         await proxy_logging_obj.post_call_failure_hook(
@@ -5614,13 +5628,62 @@ async def run_thread(
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 
 
+def _get_provider_token_counter(deployment: dict, model_to_use: str):
+    """
+    Auto-route to the correct provider's token counter based on model/deployment.
+    Uses the existing get_provider_model_info infrastructure with switch-case pattern.
+    """
+    if deployment is None:
+        return None
+
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    full_model = deployment.get("litellm_params", {}).get("model", "")
+
+    try:
+        # Use existing LiteLLM logic to determine provider
+        model, provider, dynamic_api_key, api_base = get_llm_provider(
+            model=full_model,
+            custom_llm_provider=deployment.get("litellm_params", {}).get(
+                "custom_llm_provider"
+            ),
+            api_base=deployment.get("litellm_params", {}).get("api_base"),
+            api_key=deployment.get("litellm_params", {}).get("api_key"),
+        )
+
+        # Switch case pattern using existing get_provider_model_info
+        from litellm.types.utils import LlmProviders
+        from litellm.utils import ProviderConfigManager
+
+        # Convert string provider to LlmProviders enum
+        llm_provider_enum = LlmProviders(provider)
+        # Add more provider mappings as needed
+
+        if llm_provider_enum:
+            provider_model_info = ProviderConfigManager.get_provider_model_info(
+                model=full_model, provider=llm_provider_enum
+            )
+            if provider_model_info is not None:
+                return provider_model_info.get_token_counter()
+
+    except Exception:
+        # If provider detection fails, fall back to manual checks
+        if full_model.startswith("anthropic/") or "anthropic" in full_model.lower():
+            from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+            anthropic_model_info = AnthropicModelInfo()
+            return anthropic_model_info.get_token_counter()
+
+    return None
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountResponse,
 )
-async def token_counter(request: TokenCountRequest):
+async def token_counter(request: TokenCountRequest, is_direct_request: bool = True):
     """ """
     from litellm import token_counter
 
@@ -5653,6 +5716,31 @@ async def token_counter(request: TokenCountRequest):
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
 
+    # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
+    provider_counter = None
+    if deployment is not None and not is_direct_request:
+        # Auto-route to the correct provider based on model
+        provider_counter = _get_provider_token_counter(deployment, model_to_use)
+
+    if provider_counter is not None and provider_counter.supports_provider(
+        deployment=deployment, from_endpoint=not is_direct_request
+    ):
+        result = await provider_counter.count_tokens(
+            model_to_use=model_to_use,
+            messages=messages,  # type: ignore
+            deployment=deployment,
+            request_model=request.model,
+        )
+
+        if result is not None:
+            return TokenCountResponse(
+                total_tokens=result["total_tokens"],
+                request_model=result["request_model"],
+                model_used=result["model_used"],
+                tokenizer_type=result["tokenizer_type"],
+            )
+
+    # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
     if model_info is not None:
         custom_tokenizer = cast(
@@ -6930,56 +7018,21 @@ async def model_group_info(
             status_code=500, detail={"error": "LLM Router is not loaded in"}
         )
 
-    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    model_access_groups: Dict[str, List[str]] = defaultdict(list)
-    if llm_router is None:
-        proxy_model_list = []
-    else:
-        proxy_model_list = llm_router.get_model_names()
-        model_access_groups = llm_router.get_model_access_groups()
+    from litellm.proxy.utils import get_available_models_for_user
 
-    key_models = get_key_models(
+    # Get available models for the user
+    all_models_str = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    team_models = []
-    if (
-        not user_api_key_dict.team_id
-        and user_api_key_dict.user_id is not None
-        and not _user_has_admin_view(user_api_key_dict)
-    ):
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": CommonProxyErrors.db_not_connected_error.value},
-            )
-        user_object = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_id": user_api_key_dict.user_id}
-        )
-        user_object_typed = LiteLLM_UserTable(**user_object.model_dump())
-        user_models = []
-        if user_object is not None:
-            user_models = get_team_models(
-                team_models=user_object_typed.models,
-                proxy_model_list=proxy_model_list,
-                model_access_groups=model_access_groups,
-            )
-        team_models = user_models
-    else:
-        team_models = get_team_models(
-            team_models=user_api_key_dict.team_models,
-            proxy_model_list=proxy_model_list,
-            model_access_groups=model_access_groups,
-        )
-
-    all_models_str = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
+        general_settings=general_settings,
+        user_model=user_model,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        team_id=None,
+        include_model_access_groups=False,
+        only_model_access_groups=False,
+        return_wildcard_routes=False,
+        user_api_key_cache=user_api_key_cache,
     )
     model_groups: List[ModelGroupInfoProxy] = _get_model_group_info(
         llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
@@ -7725,6 +7778,13 @@ async def claim_onboarding_link(data: InvitationClaim):
         )
 
     return user_obj
+
+
+@app.get("/get_logo_url", include_in_schema=False)
+def get_logo_url():
+    """Get the current logo URL from environment"""
+    logo_path = os.getenv("UI_LOGO_PATH", "")
+    return {"logo_url": logo_path}
 
 
 @app.get("/get_image", include_in_schema=False)
@@ -8625,6 +8685,7 @@ async def get_config():  # noqa: PLR0915
                 elif _callback == "braintrust":
                     env_vars = [
                         "BRAINTRUST_API_KEY",
+                        "BRAINTRUST_API_BASE",
                     ]
                 elif _callback == "traceloop":
                     env_vars = ["TRACELOOP_API_KEY"]
@@ -8805,7 +8866,16 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_litellm_model_cost_map():
+async def get_litellm_model_cost_map(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+    
     try:
         _model_cost_map = litellm.model_cost
         return _model_cost_map
@@ -8813,6 +8883,56 @@ async def get_litellm_model_cost_map():
         raise HTTPException(
             status_code=500,
             detail=f"Internal Server Error ({str(e)})",
+        )
+
+
+@router.post(
+    "/reload/model_cost_map",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def reload_model_cost_map(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+    
+    Manually reload the model cost map from the remote source.
+    This will fetch fresh pricing data from the model_prices_and_context_window.json file.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+    
+    try:
+        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+        
+        # Get the current URL from litellm configuration
+        model_cost_map_url = litellm.model_cost_map_url
+        
+        # Reload the model cost map
+        new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+        
+        # Update the global model_cost variable
+        litellm.model_cost = new_model_cost_map
+        
+        verbose_proxy_logger.info("Model cost map reloaded successfully")
+        
+        return {
+            "message": "Model cost map reloaded successfully",
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "models_count": len(new_model_cost_map) if new_model_cost_map else 0
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to reload model cost map: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reload model cost map: {str(e)}"
         )
 
 

@@ -49,6 +49,7 @@ import BudgetDurationDropdown from "./common_components/budget_duration_dropdown
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import ModelAliasManager from "./common_components/ModelAliasManager";
 
 
 const { Option } = Select;
@@ -184,6 +185,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("default");
+  const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
 
   const handleOk = () => {
     setIsModalVisible(false);
@@ -191,6 +193,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setLoggingSettings([]);
     setDisabledCallbacks([]);
     setKeyType("default");
+    setModelAliases({});
   };
 
   const handleCancel = () => {
@@ -201,6 +204,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setLoggingSettings([]);
     setDisabledCallbacks([]);
     setKeyType("default");
+    setModelAliases({});
   };
 
   useEffect(() => {
@@ -371,6 +375,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         // Remove the original field as it's now part of object_permission
         delete formValues.allowed_mcp_access_groups;
       }
+      
+      // Add model_aliases if any are defined
+      if (Object.keys(modelAliases).length > 0) {
+        formValues.aliases = JSON.stringify(modelAliases);
+      }
+      
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -563,6 +573,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               name="team_id"
               initialValue={team ? team.team_id : null}
               className="mt-4"
+              rules={[
+                { 
+                  required: keyOwner === "service_account", 
+                  message: "Please select a team for the service account" 
+                }
+              ]}
+              help={keyOwner === "service_account" ? "required" : ""}
             >
               <TeamDropdown 
                 teams={teams} 
@@ -992,18 +1009,73 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                     />
                   </Form.Item>
 
+                  {premiumUser ? (
+                    <Accordion className="mt-4 mb-4">
+                      <AccordionHeader>
+                        <b>Logging Settings</b>
+                      </AccordionHeader>
+                      <AccordionBody>
+                        <div className="mt-4">
+                          <PremiumLoggingSettings
+                            value={loggingSettings}
+                            onChange={setLoggingSettings}
+                            premiumUser={true}
+                            disabledCallbacks={disabledCallbacks}
+                            onDisabledCallbacksChange={setDisabledCallbacks}
+                          />
+                        </div>
+                      </AccordionBody>
+                    </Accordion>
+                  ) : (
+                    <Tooltip 
+                      title={
+                        <span>
+                          Key-level logging settings is an enterprise feature, get in touch -
+                          <a href="https://www.litellm.ai/enterprise" target="_blank">
+                            https://www.litellm.ai/enterprise
+                          </a>
+                        </span>
+                      }
+                      placement="top"
+                    >
+                      <div style={{ position: 'relative' }}>
+                        <div style={{ opacity: 0.5 }}>
+                          <Accordion className="mt-4 mb-4">
+                            <AccordionHeader>
+                              <b>Logging Settings</b>
+                            </AccordionHeader>
+                            <AccordionBody>
+                              <div className="mt-4">
+                                <PremiumLoggingSettings
+                                  value={loggingSettings}
+                                  onChange={setLoggingSettings}
+                                  premiumUser={false}
+                                  disabledCallbacks={disabledCallbacks}
+                                  onDisabledCallbacksChange={setDisabledCallbacks}
+                                />
+                              </div>
+                            </AccordionBody>
+                          </Accordion>
+                        </div>
+                        <div style={{ position: 'absolute', inset: 0, cursor: 'not-allowed' }} />
+                      </div>
+                    </Tooltip>
+                  )}
+
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
-                      <b>Logging Settings</b>
+                      <b>Model Aliases</b>
                     </AccordionHeader>
                     <AccordionBody>
                       <div className="mt-4">
-                        <PremiumLoggingSettings
-                          value={loggingSettings}
-                          onChange={setLoggingSettings}
-                          premiumUser={premiumUser}
-                          disabledCallbacks={disabledCallbacks}
-                          onDisabledCallbacksChange={setDisabledCallbacks}
+                        <Text className="text-sm text-gray-600 mb-4">
+                          Create custom aliases for models that can be used in API calls. This allows you to create shortcuts for specific models.
+                        </Text>
+                        <ModelAliasManager
+                          accessToken={accessToken}
+                          initialModelAliases={modelAliases}
+                          onAliasUpdate={setModelAliases}
+                          showExampleConfig={false}
                         />
                       </div>
                     </AccordionBody>

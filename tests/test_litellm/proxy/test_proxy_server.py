@@ -21,6 +21,7 @@ sys.path.insert(
 
 import litellm
 from litellm.proxy.proxy_server import app, initialize
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 example_embedding_result = {
     "object": "list",
@@ -1043,3 +1044,313 @@ async def test_async_data_generator_midstream_error():
 
     # Verify that post_call_failure_hook was NOT called (since this is not an exception case)
     mock_proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def _has_nested_none_values(obj, path="root"):
+    """
+    Recursively check if an object contains nested None values.
+
+    Args:
+        obj: The object to check
+        path: Current path in the object tree (for debugging)
+
+    Returns:
+        List of paths where None values were found
+    """
+    none_paths = []
+
+    if obj is None:
+        none_paths.append(path)
+    elif isinstance(obj, dict):
+        for key, value in obj.items():
+            none_paths.extend(_has_nested_none_values(value, f"{path}.{key}"))
+    elif isinstance(obj, (list, tuple)):
+        for i, item in enumerate(obj):
+            none_paths.extend(_has_nested_none_values(item, f"{path}[{i}]"))
+    elif hasattr(obj, "__dict__"):
+        # Handle object attributes
+        for key, value in obj.__dict__.items():
+            if not key.startswith("_"):  # Skip private attributes
+                none_paths.extend(_has_nested_none_values(value, f"{path}.{key}"))
+
+    return none_paths
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_result_no_nested_none_values():
+    """
+    Test that chat_completion result doesn't have nested None values when using exclude_none=True
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi import Request, Response
+    from pydantic import BaseModel
+
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import chat_completion
+
+    # Create a mock ModelResponse with nested None values
+    mock_model_response = litellm.ModelResponse()
+    mock_model_response.id = "test-id"
+    mock_model_response.model = "gpt-3.5-turbo"
+    mock_model_response.object = "chat.completion"
+    mock_model_response.created = 1234567890
+
+    # Create message with None values that should be excluded
+    mock_message = litellm.Message(
+        content="Hello, world!",
+        role="assistant",
+        function_call=None,  # This should be excluded
+        tool_calls=None,  # This should be excluded
+        audio=None,  # This should be excluded
+        reasoning_content=None,  # This should be excluded
+        thinking_blocks=None,  # This should be excluded
+        annotations=None,  # This should be excluded
+    )
+
+    # Create choice with potential None values
+    mock_choice = litellm.Choices(
+        finish_reason="stop",
+        index=0,
+        message=mock_message,
+        logprobs=None,  # This should be excluded when exclude_none=True
+    )
+
+    mock_model_response.choices = [mock_choice]
+    setattr(mock_model_response, "usage", litellm.Usage(
+        prompt_tokens=10, completion_tokens=5, total_tokens=15
+    ))
+
+    # Verify the mock has None values before serialization
+    raw_dict = mock_model_response.model_dump()
+    none_paths_before = _has_nested_none_values(raw_dict)
+    assert (
+        len(none_paths_before) > 0
+    ), "Mock should have None values before exclude_none=True"
+
+    # Mock the request processing to return our mock response
+    mock_base_processor = MagicMock()
+    mock_base_processor.base_process_llm_request = AsyncMock(
+        return_value=mock_model_response
+    )
+
+    # Mock other dependencies
+    mock_request = MagicMock(spec=Request)
+    mock_response = MagicMock(spec=Response)
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+
+    with patch(
+        "litellm.proxy.proxy_server._read_request_body",
+        return_value={"model": "gpt-3.5-turbo", "messages": []},
+    ), patch(
+        "litellm.proxy.proxy_server.ProxyBaseLLMRequestProcessing",
+        return_value=mock_base_processor,
+    ):
+
+        # Call the chat_completion function
+        result = await chat_completion(
+            request=mock_request,
+            fastapi_response=mock_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    # Verify the result is a dict (since isinstance(result, BaseModel) was True)
+    assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
+
+    # Check that there are no nested None values in the result
+    none_paths_after = _has_nested_none_values(result)
+    assert (
+        len(none_paths_after) == 0
+    ), f"Result should not contain nested None values. Found None at: {none_paths_after}"
+
+    # Verify essential fields are present
+    assert "id" in result
+    assert "model" in result
+    assert "object" in result
+    assert "created" in result
+    assert "choices" in result
+    assert "usage" in result
+
+    # Verify that the choices contain the expected message content
+    assert len(result["choices"]) == 1
+    assert result["choices"][0]["message"]["content"] == "Hello, world!"
+    assert result["choices"][0]["message"]["role"] == "assistant"
+
+    # Verify that None fields were excluded (should not be present in the dict)
+    message = result["choices"][0]["message"]
+    excluded_fields = [
+        "function_call",
+        "tool_calls",
+        "audio",
+        "reasoning_content",
+        "thinking_blocks",
+        "annotations",
+    ]
+    for field in excluded_fields:
+        assert (
+            field not in message
+        ), f"Field '{field}' should be excluded when it's None"
+
+
+# ============================================================================
+# Price Data Reload Tests
+# ============================================================================
+
+class TestPriceDataReloadAPI:
+    """Test cases for price data reload API endpoints"""
+    
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with authentication"""
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+        from litellm.proxy._types import LitellmUserRoles
+        
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+        
+        # Mock admin user authentication
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        return TestClient(app)
+    
+    def test_reload_model_cost_map_admin_access(self, client_with_auth):
+        """Test that admin users can access the reload endpoint"""
+        with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
+            mock_get_map.return_value = {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+            
+            response = client_with_auth.post("/reload/model_cost_map")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert "message" in data
+            assert "timestamp" in data
+            assert "models_count" in data
+    
+    def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot access the reload endpoint"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.post("/reload/model_cost_map")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+    
+    def test_get_model_cost_map_admin_access(self, client_with_auth):
+        """Test that admin users can access the get model cost map endpoint"""
+        with patch('litellm.model_cost', {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}):
+            response = client_with_auth.get("/get/litellm_model_cost_map")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "gpt-3.5-turbo" in data
+    
+    def test_get_model_cost_map_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot access the get model cost map endpoint"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.get("/get/litellm_model_cost_map")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+    
+    def test_reload_model_cost_map_error_handling(self, client_with_auth):
+        """Test error handling in the reload endpoint"""
+        with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
+            mock_get_map.side_effect = Exception("Network error")
+            
+            response = client_with_auth.post("/reload/model_cost_map")
+            
+            assert response.status_code == 500
+            data = response.json()
+            assert "Failed to reload model cost map" in data["detail"]
+
+
+class TestPriceDataReloadIntegration:
+    """Integration tests for the complete price data reload feature"""
+    
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with authentication"""
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+        from litellm.proxy._types import LitellmUserRoles
+        
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+        
+        # Mock admin user authentication
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        return TestClient(app)
+    
+    def test_complete_reload_flow(self, client_with_auth):
+        """Test the complete reload flow from API to model cost update"""
+        # Mock the model cost map
+        mock_cost_map = {
+            "gpt-3.5-turbo": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002
+            },
+            "gpt-4": {
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.06
+            }
+        }
+        
+        with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
+            mock_get_map.return_value = mock_cost_map
+            
+            # Test reload endpoint
+            response = client_with_auth.post("/reload/model_cost_map")
+            assert response.status_code == 200
+            
+            # Test get endpoint
+            response = client_with_auth.get("/get/litellm_model_cost_map")
+            assert response.status_code == 200
+    
+    def test_config_file_parsing(self):
+        """Test parsing of config file with reload settings"""
+        config_content = """
+general_settings:
+  master_key: sk-1234
+  model_cost_map_reload_interval: 21600
+
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+"""
+        
+        # Parse the config
+        config = yaml.safe_load(config_content)
+        
+        # Verify the reload setting is present
+        assert "general_settings" in config
+        assert "model_cost_map_reload_interval" in config["general_settings"]
+        assert config["general_settings"]["model_cost_map_reload_interval"] == 21600
+        
+        # Verify models are present
+        assert "model_list" in config
+        assert len(config["model_list"]) == 2

@@ -200,3 +200,80 @@ async def anthropic_response(  # noqa: PLR0915
             param=getattr(e, "param", "None"),
             code=getattr(e, "status_code", 500),
         )
+
+
+@router.post(
+    "/v1/messages/count_tokens",
+    tags=["[beta] Anthropic Messages Token Counting"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def count_tokens(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # Used for auth
+):
+    """
+    Count tokens for Anthropic Messages API format.
+    
+    This endpoint follows the Anthropic Messages API token counting specification.
+    It accepts the same parameters as the /v1/messages endpoint but returns
+    token counts instead of generating a response.
+    
+    Example usage:
+    ```
+    curl -X POST "http://localhost:4000/v1/messages/count_tokens?beta=true" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer your-key" \
+      -d '{
+        "model": "claude-3-sonnet-20240229",
+        "messages": [{"role": "user", "content": "Hello Claude!"}]
+      }'
+    ```
+    
+    Returns: {"input_tokens": <number>}
+    """
+    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    
+    try:
+        request_data = await _read_request_body(request=request)
+        data: dict = {**request_data}
+        
+        # Extract required fields
+        model_name = data.get("model")
+        messages = data.get("messages", [])
+        
+        if not model_name:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model parameter is required"}
+            )
+        
+        if not messages:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "messages parameter is required"}
+            )
+        
+        # Create TokenCountRequest for the internal endpoint
+        from litellm.proxy._types import TokenCountRequest
+        
+        token_request = TokenCountRequest(
+            model=model_name,
+            messages=messages
+        )
+        
+        # Call the internal token counter function with direct request flag set to False
+        token_response = await internal_token_counter(token_request, is_direct_request=False)
+        
+        # Convert the internal response to Anthropic API format
+        return {"input_tokens": token_response.total_tokens}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Internal server error: {str(e)}"}
+        )

@@ -65,6 +65,7 @@ const sidebars = {
       label: "[Beta] Prompt Management",
       items: [
         "proxy/prompt_management",
+        "proxy/native_litellm_prompt",
         "proxy/custom_prompt_management"
       ].sort()
     },
@@ -469,7 +470,8 @@ const sidebars = {
         "providers/featherless_ai",
         "providers/nebius",
         "providers/dashscope",
-        "providers/bytez"
+        "providers/bytez",
+        "providers/oci",
       ],
     },
     {
