@@ -2,6 +2,7 @@ import asyncio
 import copy
 import inspect
 import io
+import json
 import os
 import random
 import secrets
@@ -11,6 +12,7 @@ import time
 import traceback
 import uuid
 import warnings
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
@@ -2933,6 +2935,91 @@ class ProxyConfig:
         await self._init_mcp_servers_in_db()
         await self._init_pass_through_endpoints_in_db()
         await self._init_prompts_in_db(prisma_client=prisma_client)
+        await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+
+    async def _check_and_reload_model_cost_map(self, prisma_client: PrismaClient):
+        """
+        Check if model cost map needs to be reloaded based on database configuration.
+        This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
+        """
+        try:
+            # Get model cost map reload configuration from database
+            config_record = await prisma_client.db.litellm_config.find_unique(
+                where={"param_name": "model_cost_map_reload_config"}
+            )
+            
+            if config_record is None or config_record.param_value is None:
+                return  # No configuration found, skip reload
+            
+            config = config_record.param_value
+            interval_hours = config.get("interval_hours")
+            force_reload = config.get("force_reload", False)
+            
+            if interval_hours is None and force_reload is False: 
+                return  # No interval configured, skip reload
+            
+            current_time = datetime.utcnow()
+            
+            # Check if we need to reload based on interval or force reload
+            should_reload = False
+            
+            if force_reload:
+                should_reload = True
+                verbose_proxy_logger.info("Model cost map reload triggered by force reload flag")
+            elif interval_hours is not None:
+                # Use pod's in-memory last reload time
+                global last_model_cost_map_reload
+                if last_model_cost_map_reload is not None:
+                    try:
+                        last_reload_time = datetime.fromisoformat(last_model_cost_map_reload)
+                        time_since_last_reload = current_time - last_reload_time
+                        hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
+                        
+                        if hours_since_last_reload >= interval_hours:
+                            should_reload = True
+                            verbose_proxy_logger.info(f"Model cost map reload triggered by interval. Hours since last reload: {hours_since_last_reload:.2f}, Interval: {interval_hours}")
+                    except Exception as e:
+                        verbose_proxy_logger.warning(f"Error parsing last reload time: {e}")
+                        # If we can't parse the last reload time, reload anyway
+                        should_reload = True
+                else:
+                    # No last reload time recorded, reload now
+                    should_reload = True
+                    verbose_proxy_logger.info("Model cost map reload triggered - no previous reload time recorded")
+            
+            if should_reload:
+                # Perform the reload
+                from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+                model_cost_map_url = litellm.model_cost_map_url
+                new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+                litellm.model_cost = new_model_cost_map
+                
+                # Update pod's in-memory last reload time
+                last_model_cost_map_reload = current_time.isoformat()
+                
+                # Clear force reload flag in database
+                await prisma_client.db.litellm_config.upsert(
+                    where={"param_name": "model_cost_map_reload_config"},
+                    data={
+                        "create": {
+                            "param_name": "model_cost_map_reload_config",
+                                                    "param_value": safe_dumps({
+                            "interval_hours": interval_hours,
+                            "force_reload": False
+                        })
+                        },
+                        "update": {
+                                                    "param_value": safe_dumps({
+                            "force_reload": False
+                        })
+                        }
+                    }
+                )
+                
+                verbose_proxy_logger.info(f"Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}")
+                
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error in _check_and_reload_model_cost_map: {str(e)}")
 
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
@@ -3524,24 +3611,6 @@ class ProxyStartupEvent:
             args=[prisma_client, db_writer_client, proxy_logging_obj],
         )
 
-        ### RELOAD MODEL COST MAP ###
-        # Reload model cost map every 6 hours (21600 seconds) to keep pricing data fresh
-        model_cost_map_reload_interval = general_settings.get("model_cost_map_reload_interval", 21600)
-        if model_cost_map_reload_interval > 0:
-            async def reload_model_cost_map_job():
-                try:
-                    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-                    model_cost_map_url = litellm.model_cost_map_url
-                    new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
-                    litellm.model_cost = new_model_cost_map
-                    verbose_proxy_logger.info(f"Background job: Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}")
-                except Exception as e:
-                    verbose_proxy_logger.exception(f"Background job: Failed to reload model cost map: {str(e)}")
-            scheduler.add_job(
-                reload_model_cost_map_job,
-                "interval",
-                seconds=model_cost_map_reload_interval,
-            )
 
         ### ADD NEW MODELS ###
         store_model_in_db = (
@@ -8925,24 +8994,51 @@ async def reload_model_cost_map(
         )
     
     try:
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not available"
+            )
+        
+        # Immediately reload the model cost map in the current pod
         from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-        
-        # Get the current URL from litellm configuration
         model_cost_map_url = litellm.model_cost_map_url
-        
-        # Reload the model cost map
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
-        
-        # Update the global model_cost variable
         litellm.model_cost = new_model_cost_map
         
-        verbose_proxy_logger.info("Model cost map reloaded successfully")
+        # Update pod's in-memory last reload time
+        global last_model_cost_map_reload
+        current_time = datetime.utcnow()
+        last_model_cost_map_reload = current_time.isoformat()
+        
+        # Set force reload flag in database for other pods
+        await prisma_client.db.litellm_config.upsert(
+            where={"param_name": "model_cost_map_reload_config"},
+            data={
+                "create": {
+                    "param_name": "model_cost_map_reload_config",
+                    "param_value": safe_dumps({
+                        "interval_hours": None,
+                        "force_reload": True
+                    })
+                },
+                "update": {
+                    "param_value": safe_dumps({
+                        "force_reload": True
+                    })
+                }
+            }
+        )
+        
+        models_count = len(new_model_cost_map) if new_model_cost_map else 0
+        verbose_proxy_logger.info(f"Model cost map reloaded successfully in current pod. Models count: {models_count}")
         
         return {
-            "message": "Model cost map reloaded successfully",
+            "message": f"Price data reloaded successfully! {models_count} models updated.",
             "status": "success",
-            "timestamp": datetime.utcnow().isoformat(),
-            "models_count": len(new_model_cost_map) if new_model_cost_map else 0
+            "models_count": models_count,
+            "timestamp": current_time.isoformat()
         }
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to reload model cost map: {str(e)}")
@@ -8982,75 +9078,32 @@ async def schedule_model_cost_map_reload(
         )
     
     try:
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        
-        # Get the global scheduler instance
-        global scheduler
-        if scheduler is None:
-            scheduler = AsyncIOScheduler()
-            scheduler.start()
-            verbose_proxy_logger.info("Initialized global scheduler for model cost map reload")
-        
-        # Ensure scheduler is running
-        if not scheduler.running:
-            scheduler.start()
-            verbose_proxy_logger.info("Started global scheduler for model cost map reload")
-        
-        # Remove existing model cost map reload job if it exists
-        existing_jobs = scheduler.get_jobs()
-        verbose_proxy_logger.info(f"Found {len(existing_jobs)} existing jobs before scheduling")
-        for job in existing_jobs:
-            verbose_proxy_logger.info(f"Job ID: {job.id}")
-            if job.id == "model_cost_map_reload":
-                verbose_proxy_logger.info("Removing existing model cost map reload job")
-                job.remove()
-        
-        # Create the reload job function
-        def reload_model_cost_map_job():
-            try:
-                import asyncio
-                # Create a new event loop for the async operation
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                async def _reload_job():
-                    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-                    model_cost_map_url = litellm.model_cost_map_url
-                    new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
-                    litellm.model_cost = new_model_cost_map
-                    verbose_proxy_logger.info(f"Scheduled job: Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}")
-                    
-                    # Store the last run timestamp
-                    global last_model_cost_map_reload
-                    last_model_cost_map_reload = datetime.utcnow().isoformat()
-                
-                loop.run_until_complete(_reload_job())
-                loop.close()
-            except Exception as e:
-                verbose_proxy_logger.exception(f"Scheduled job: Failed to reload model cost map: {str(e)}")
-        
-        # Add the new job
-        try:
-            job = scheduler.add_job(
-                reload_model_cost_map_job,
-                "interval",
-                hours=hours,
-                id="model_cost_map_reload",
-                replace_existing=True
+        global prisma_client
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Database connection not available"
             )
-            if job is not None:
-                verbose_proxy_logger.info(f"Job added successfully: {job.id}, Next run: {job.next_run_time}")
-            else:
-                verbose_proxy_logger.warning("Job add returned None, but continuing...")
-        except Exception as e:
-            verbose_proxy_logger.exception(f"Failed to add job: {str(e)}")
-            raise
         
-        # Verify the job was added
-        jobs_after = scheduler.get_jobs()
-        verbose_proxy_logger.info(f"Jobs after scheduling: {len(jobs_after)}")
-        for job in jobs_after:
-            verbose_proxy_logger.info(f"Job ID after scheduling: {job.id}")
+        # Update database with new reload configuration
+        await prisma_client.db.litellm_config.upsert(
+            where={"param_name": "model_cost_map_reload_config"},
+            data={
+                "create": {
+                    "param_name": "model_cost_map_reload_config",
+                    "param_value": safe_dumps({
+                        "interval_hours": hours,
+                        "force_reload": False
+                    })
+                },
+                "update": {
+                    "param_value": safe_dumps({
+                        "interval_hours": hours,
+                        "force_reload": False
+                    })
+                }
+            }
+        )
         
         verbose_proxy_logger.info(f"Model cost map reload scheduled for every {hours} hours")
         
@@ -9090,27 +9143,17 @@ async def cancel_model_cost_map_reload(
         )
     
     try:
-        global scheduler
-        if scheduler is None:
+        global prisma_client
+        if prisma_client is None:
             raise HTTPException(
-                status_code=404,
-                detail="No scheduler found"
+                status_code=500,
+                detail="Database connection not available"
             )
         
-        # Remove the model cost map reload job
-        existing_jobs = scheduler.get_jobs()
-        job_removed = False
-        for job in existing_jobs:
-            if job.id == "model_cost_map_reload":
-                job.remove()
-                job_removed = True
-                break
-        
-        if not job_removed:
-            raise HTTPException(
-                status_code=404,
-                detail="No scheduled model cost map reload job found"
-            )
+        # Remove reload configuration from database
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": "model_cost_map_reload_config"}
+        )
         
         verbose_proxy_logger.info("Model cost map reload schedule cancelled")
         
@@ -9119,8 +9162,6 @@ async def cancel_model_cost_map_reload(
             "status": "success",
             "timestamp": datetime.utcnow().isoformat()
         }
-    except HTTPException:
-        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Failed to cancel model cost map reload: {str(e)}")
         raise HTTPException(
@@ -9151,12 +9192,12 @@ async def get_model_cost_map_reload_status(
         )
     
     try:
-        global scheduler, last_model_cost_map_reload
+        global prisma_client, last_model_cost_map_reload
         
-        verbose_proxy_logger.info(f"Checking model cost map reload status. Scheduler: {scheduler}, Last reload: {last_model_cost_map_reload}")
+        verbose_proxy_logger.info(f"Checking model cost map reload status. Last reload: {last_model_cost_map_reload}")
         
-        if scheduler is None:
-            verbose_proxy_logger.info("No scheduler found, returning not scheduled")
+        if prisma_client is None:
+            verbose_proxy_logger.info("No database connection, returning not scheduled")
             return {
                 "scheduled": False,
                 "interval_hours": None,
@@ -9164,20 +9205,13 @@ async def get_model_cost_map_reload_status(
                 "next_run": None
             }
         
-        # Find the model cost map reload job
-        existing_jobs = scheduler.get_jobs()
-        verbose_proxy_logger.info(f"Found {len(existing_jobs)} existing jobs")
+        # Get reload configuration from database
+        config_record = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "model_cost_map_reload_config"}
+        )
         
-        reload_job = None
-        for job in existing_jobs:
-            verbose_proxy_logger.info(f"Job ID: {job.id}, Type: {type(job)}")
-            if job.id == "model_cost_map_reload":
-                reload_job = job
-                verbose_proxy_logger.info("Found model cost map reload job")
-                break
-        
-        if reload_job is None:
-            verbose_proxy_logger.info("No model cost map reload job found")
+        if config_record is None or config_record.param_value is None:
+            verbose_proxy_logger.info("No model cost map reload configuration found")
             return {
                 "scheduled": False,
                 "interval_hours": None,
@@ -9185,15 +9219,32 @@ async def get_model_cost_map_reload_status(
                 "next_run": None
             }
         
-        # Get job details
-        interval_hours = None
-        if hasattr(reload_job.trigger, 'interval'):
-            if hasattr(reload_job.trigger.interval, 'hours'):
-                interval_hours = reload_job.trigger.interval.hours
-            elif hasattr(reload_job.trigger.interval, 'total_seconds'):
-                # Convert timedelta to hours
-                interval_hours = reload_job.trigger.interval.total_seconds() / 3600
-        next_run = reload_job.next_run_time.isoformat() if reload_job.next_run_time else None
+        config = config_record.param_value
+        interval_hours = config.get("interval_hours")
+        
+        if interval_hours is None:
+            verbose_proxy_logger.info("No interval configured, returning not scheduled")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None
+            }
+        
+        current_time = datetime.utcnow()
+        next_run = None
+        
+        # Use pod's in-memory last reload time
+        if last_model_cost_map_reload is not None:
+            try:
+                last_reload_time = datetime.fromisoformat(last_model_cost_map_reload)
+                time_since_last_reload = current_time - last_reload_time
+                hours_since_last_reload = time_since_last_reload.total_seconds() / 3600
+                
+                if hours_since_last_reload < interval_hours:
+                    next_run = (last_reload_time + timedelta(hours=interval_hours)).isoformat()
+            except Exception as e:
+                verbose_proxy_logger.warning(f"Error parsing last reload time: {e}")
         
         return {
             "scheduled": True,
