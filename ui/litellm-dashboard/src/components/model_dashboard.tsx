@@ -71,6 +71,7 @@ import AddModelTab from "./add_model/add_model_tab";
 
 import { ModelDataTable } from "./model_dashboard/table";
 import { columns } from "./model_dashboard/columns";
+import PriceDataReload from "./price_data_reload";
 import HealthCheckComponent from "./model_dashboard/HealthCheckComponent";
 import PassThroughSettings from "./pass_through_settings";
 import ModelGroupAliasSettings from "./model_group_alias_settings";
@@ -1044,6 +1045,31 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
+          {/* Price Data Reload Section */}
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h2 className="text-lg font-semibold">Model Management</h2>
+              <p className="text-sm text-gray-600">
+                Manage your models and pricing data
+              </p>
+            </div>
+            {all_admin_roles.includes(userRole) && (
+              <PriceDataReload
+                accessToken={accessToken}
+                onReloadSuccess={() => {
+                  // Refresh the model map after successful reload
+                  const fetchModelMap = async () => {
+                    const data = await modelCostMap(accessToken);
+                    setModelMap(data);
+                  };
+                  fetchModelMap();
+                }}
+                buttonText="Reload Price Data"
+                size="small"
+                type="primary"
+              />
+            )}
+          </div>
           {selectedModelId ? (
             <ModelInfoView
               modelId={selectedModelId}
