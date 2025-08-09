@@ -1,5 +1,5 @@
 """
-This contains LLMCachingHandler 
+This contains LLMCachingHandler
 
 This exposes two methods:
     - async_get_cache
@@ -18,6 +18,7 @@ import asyncio
 import datetime
 import inspect
 import threading
+from functools import lru_cache, wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -35,11 +36,12 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import S3Cache
-from litellm.types.caching import CachedEmbedding
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
+from litellm.types.caching import CachedEmbedding
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
@@ -68,7 +70,57 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
-    embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    embedding_all_elements_cache_hit: bool = (
+        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    )
+
+
+def llm_caching_handler_wrapper(
+    original_function: Callable,
+):
+    """
+    Wrapper function to handle caching logic for LLM API requests (completion / embedding / text_completion / transcription etc)
+    """
+    import time
+
+    from litellm.litellm_core_utils.core_helpers import (
+        _get_parent_otel_span_from_kwargs,
+    )
+    from litellm.types.services import ServiceTypes
+
+    service_logger_obj = ServiceLogging()
+
+    @wraps(original_function)
+    async def wrapper(*args, **kwargs):
+        start_time = time.time()
+        try:
+            original_function_kwargs = kwargs.get("kwargs") or kwargs.get(
+                "request_kwargs"
+            )
+            if original_function_kwargs is None:
+                return await original_function(*args, **kwargs)  # skip otel logging
+            parent_otel_span = _get_parent_otel_span_from_kwargs(
+                original_function_kwargs
+            )
+            result = await original_function(*args, **kwargs)
+            end_time = time.time()
+            _duration = end_time - start_time
+            asyncio.create_task(
+                service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.LITELLM,
+                    call_type=f"_llm_caching_handler.{original_function.__name__}",
+                    duration=_duration,
+                    parent_otel_span=parent_otel_span,
+                    start_time=start_time,
+                    end_time=end_time,
+                    event_metadata={},
+                )
+            )
+            return result
+        except Exception as e:
+            raise e
+
+    return wrapper
 
 
 class LLMCachingHandler:
@@ -85,6 +137,7 @@ class LLMCachingHandler:
         self.start_time = start_time
         pass
 
+    @llm_caching_handler_wrapper
     async def _async_get_cache(
         self,
         model: str,
@@ -115,7 +168,17 @@ class LLMCachingHandler:
         Raises:
             None
         """
+        import time
+
+        from litellm.litellm_core_utils.core_helpers import (
+            _get_parent_otel_span_from_kwargs,
+        )
+        from litellm.types.services import ServiceTypes
         from litellm.utils import CustomStreamWrapper
+
+        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
+
+        _llm_caching_handler_start_time = time.time()
 
         args = args or ()
 
@@ -306,13 +369,15 @@ class LLMCachingHandler:
         else:
             raise ValueError("input must be a string or a list")
 
-    def _extract_model_from_cached_results(self, non_null_list: List[Tuple[int, CachedEmbedding]]) -> Optional[str]:
+    def _extract_model_from_cached_results(
+        self, non_null_list: List[Tuple[int, CachedEmbedding]]
+    ) -> Optional[str]:
         """
         Helper method to extract the model name from cached results.
-        
+
         Args:
             non_null_list: List of (idx, cr) tuples where cr is the cached result dict
-            
+
         Returns:
             Optional[str]: The model name if found, None otherwise
         """
@@ -714,6 +779,7 @@ class LLMCachingHandler:
             logging_obj=logging_obj,
         )
 
+    @llm_caching_handler_wrapper
     async def async_set_cache(
         self,
         result: Any,
@@ -933,9 +999,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params[
-                "preset_cache_key"
-            ] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            litellm_params["preset_cache_key"] = (
+                litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            )
         else:
             litellm_params["preset_cache_key"] = None
 
