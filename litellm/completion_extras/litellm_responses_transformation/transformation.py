@@ -461,7 +461,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         elif reasoning_effort == "low":
             return Reasoning(effort="low", summary="auto")
         elif reasoning_effort == "minimal":
-            return Reasoning(effort="minimal", summary="auto")
+            # OpenAI Reasoning.effort does not support 'minimal'; map to 'low'
+            return Reasoning(effort="low", summary="auto")
         return None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
