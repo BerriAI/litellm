@@ -5514,9 +5514,9 @@ async def ahealth_check(
         messages=[],
         stream=False,
         call_type="acompletion",
-        litellm_call_id="1234",
+        litellm_call_id=str(uuid.uuid4()),
         start_time=datetime.datetime.now(),
-        function_id="1234",
+        function_id=str(uuid.uuid4()),
         log_raw_request_response=True,
     )
     model_params["litellm_logging_obj"] = litellm_logging_obj
