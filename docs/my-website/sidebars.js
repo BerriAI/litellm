@@ -65,6 +65,7 @@ const sidebars = {
       label: "[Beta] Prompt Management",
       items: [
         "proxy/prompt_management",
+        "proxy/native_litellm_prompt",
         "proxy/custom_prompt_management"
       ].sort()
     },
