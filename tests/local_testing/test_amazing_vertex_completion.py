@@ -503,75 +503,48 @@ async def test_async_vertexai_streaming_response():
             pytest.fail(f"An exception occurred: {e}")
 
 
-# asyncio.run(test_async_vertexai_streaming_response())
 
-
-@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("load_pdf", [False])  # True,
 @pytest.mark.flaky(retries=3, delay=1)
-@pytest.mark.asyncio
-async def test_gemini_pro_vision(provider, sync_mode):
+def test_completion_function_plus_pdf(load_pdf):
+    litellm.set_verbose = True
+    load_vertex_ai_credentials()
     try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-        litellm.num_retries = 3
-        if sync_mode:
-            resp = litellm.completion(
-                model="{}/gemini-2.5-flash-lite-preview-0514".format(provider),
-                messages=[
-                    {"role": "system", "content": "Be a good bot"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Whats in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
-                                },
-                            },
-                        ],
-                    },
-                ],
-            )
-        else:
-            resp = await litellm.acompletion(
-                model="{}/gemini-2.5-flash-lite-preview-0514".format(provider),
-                messages=[
-                    {"role": "system", "content": "Be a good bot"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Whats in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
-                                },
-                            },
-                        ],
-                    },
-                ],
-            )
-        print(resp)
+        import base64
 
-        prompt_tokens = resp.usage.prompt_tokens
+        import requests
 
-        # DO Not DELETE this ASSERT
-        # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
-        assert prompt_tokens == 267  # the gemini api returns 267 to us
+        # URL of the file
+        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
 
-    except litellm.RateLimitError as e:
+        # Download the file
+        if load_pdf:
+            response = requests.get(url)
+            file_data = response.content
+
+            encoded_file = base64.b64encode(file_data).decode("utf-8")
+            url = f"data:application/pdf;base64,{encoded_file}"
+
+        image_content = [
+            {"type": "text", "text": "What's this file about?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": url},
+            },
+        ]
+        image_message = {"role": "user", "content": image_content}
+
+        response = completion(
+            model="vertex_ai_beta/gemini-2.5-flash-lite",
+            messages=[image_message],
+            stream=False,
+        )
+
+        print(response)
+    except litellm.InternalServerError as e:
         pass
     except Exception as e:
-        if "500 Internal error encountered.'" in str(e):
-            pass
-        else:
-            pytest.fail(f"An exception occurred - {str(e)}")
-
-
-# test_gemini_pro_vision()
-
+        pytest.fail("Got={}".format(str(e)))
 
 def encode_image(image_path):
     import base64

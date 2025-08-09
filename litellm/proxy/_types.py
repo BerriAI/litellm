@@ -16,11 +16,7 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionRequest,
-    OpenAIFileObject,
-)
+from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
 from litellm.types.mcp import (
     MCPAuthType,
     MCPSpecVersion,
@@ -576,13 +572,47 @@ class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
 
 
 ######### Request Class Definition ######
-class ProxyChatCompletionRequest(ChatCompletionRequest):
+class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
+    """
+    Pydantic model for chat completion requests that includes both OpenAI standard fields 
+    and LiteLLM-specific parameters. This replaces the previous TypedDict version.
+    """
+    # Required fields (from ChatCompletionRequest)
+    model: str
+    messages: List[AllMessageValues]
+    
+    # Standard OpenAI completion parameters (all optional)
+    frequency_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[str, float]] = None
+    logprobs: Optional[bool] = None
+    top_logprobs: Optional[int] = None
+    max_tokens: Optional[int] = None
+    n: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    response_format: Optional[Dict[str, Any]] = None
+    seed: Optional[int] = None
+    service_tier: Optional[str] = None
+    stop: Optional[Union[str, List[str]]] = None
+    stream_options: Optional[Dict[str, Any]] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    parallel_tool_calls: Optional[bool] = None
+    function_call: Optional[Union[str, Dict[str, Any]]] = None
+    functions: Optional[List[Dict[str, Any]]] = None
+    user: Optional[str] = None
+    stream: Optional[bool] = None
+    
+    # LiteLLM-specific metadata param (from original ChatCompletionRequest)
+    metadata: Optional[Dict[str, Any]] = None
+    
     # Optional LiteLLM params
-    guardrails: Optional[List[str]]
-    caching: Optional[bool]
-    num_retries: Optional[int]
-    context_window_fallback_dict: Optional[Dict[str, str]]
-    fallbacks: Optional[List[str]]
+    guardrails: Optional[List[str]] = None
+    caching: Optional[bool] = None
+    num_retries: Optional[int] = None
+    context_window_fallback_dict: Optional[Dict[str, str]] = None
+    fallbacks: Optional[List[str]] = None
 
 
 class ModelInfoDelete(LiteLLMPydanticObjectBase):
@@ -2164,6 +2194,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         litellm_callback_params=[
             "LANGFUSE_PUBLIC_KEY",
             "LANGFUSE_SECRET_KEY",
+            "LANGFUSE_HOST",
         ],
     )
 
@@ -2210,7 +2241,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     braintrust: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="braintrust",
-        litellm_callback_params=["BRAINTRUST_API_KEY"],
+        litellm_callback_params=["BRAINTRUST_API_KEY","BRAINTRUST_API_BASE"],
         ui_callback_name="Braintrust",
     )
 
@@ -2264,6 +2295,7 @@ class SpendLogsMetadata(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     usage_object: Optional[dict]
     model_map_information: Optional[StandardLoggingModelInformation]
+    cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
 
 
 class SpendLogsPayload(TypedDict):

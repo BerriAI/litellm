@@ -21,6 +21,7 @@ sys.path.insert(
 
 import litellm
 from litellm.proxy.proxy_server import app, initialize
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 example_embedding_result = {
     "object": "list",
@@ -1117,9 +1118,9 @@ async def test_chat_completion_result_no_nested_none_values():
     )
 
     mock_model_response.choices = [mock_choice]
-    mock_model_response.usage = litellm.Usage(
+    setattr(mock_model_response, "usage", litellm.Usage(
         prompt_tokens=10, completion_tokens=5, total_tokens=15
-    )
+    ))
 
     # Verify the mock has None values before serialization
     raw_dict = mock_model_response.model_dump()
@@ -1190,3 +1191,166 @@ async def test_chat_completion_result_no_nested_none_values():
         assert (
             field not in message
         ), f"Field '{field}' should be excluded when it's None"
+
+
+# ============================================================================
+# Price Data Reload Tests
+# ============================================================================
+
+class TestPriceDataReloadAPI:
+    """Test cases for price data reload API endpoints"""
+    
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with authentication"""
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+        from litellm.proxy._types import LitellmUserRoles
+        
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+        
+        # Mock admin user authentication
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        return TestClient(app)
+    
+    def test_reload_model_cost_map_admin_access(self, client_with_auth):
+        """Test that admin users can access the reload endpoint"""
+        with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
+            mock_get_map.return_value = {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
+            
+            response = client_with_auth.post("/reload/model_cost_map")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert "message" in data
+            assert "timestamp" in data
+            assert "models_count" in data
+    
+    def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot access the reload endpoint"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.post("/reload/model_cost_map")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+    
+    def test_get_model_cost_map_admin_access(self, client_with_auth):
+        """Test that admin users can access the get model cost map endpoint"""
+        with patch('litellm.model_cost', {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}):
+            response = client_with_auth.get("/get/litellm_model_cost_map")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert "gpt-3.5-turbo" in data
+    
+    def test_get_model_cost_map_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot access the get model cost map endpoint"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.get("/get/litellm_model_cost_map")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+    
+    def test_reload_model_cost_map_error_handling(self, client_with_auth):
+        """Test error handling in the reload endpoint"""
+        with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
+            mock_get_map.side_effect = Exception("Network error")
+            
+            response = client_with_auth.post("/reload/model_cost_map")
+            
+            assert response.status_code == 500
+            data = response.json()
+            assert "Failed to reload model cost map" in data["detail"]
+
+
+class TestPriceDataReloadIntegration:
+    """Integration tests for the complete price data reload feature"""
+    
+    @pytest.fixture
+    def client_with_auth(self):
+        """Create a test client with authentication"""
+        from litellm.proxy.proxy_server import cleanup_router_config_variables
+        from litellm.proxy._types import LitellmUserRoles
+        
+        cleanup_router_config_variables()
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        asyncio.run(initialize(config=config_fp, debug=True))
+        
+        # Mock admin user authentication
+        mock_auth = MagicMock()
+        mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        return TestClient(app)
+    
+    def test_complete_reload_flow(self, client_with_auth):
+        """Test the complete reload flow from API to model cost update"""
+        # Mock the model cost map
+        mock_cost_map = {
+            "gpt-3.5-turbo": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002
+            },
+            "gpt-4": {
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.06
+            }
+        }
+        
+        with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
+            mock_get_map.return_value = mock_cost_map
+            
+            # Test reload endpoint
+            response = client_with_auth.post("/reload/model_cost_map")
+            assert response.status_code == 200
+            
+            # Test get endpoint
+            response = client_with_auth.get("/get/litellm_model_cost_map")
+            assert response.status_code == 200
+    
+    def test_config_file_parsing(self):
+        """Test parsing of config file with reload settings"""
+        config_content = """
+general_settings:
+  master_key: sk-1234
+  model_cost_map_reload_interval: 21600
+
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+"""
+        
+        # Parse the config
+        config = yaml.safe_load(config_content)
+        
+        # Verify the reload setting is present
+        assert "general_settings" in config
+        assert "model_cost_map_reload_interval" in config["general_settings"]
+        assert config["general_settings"]["model_cost_map_reload_interval"] == 21600
+        
+        # Verify models are present
+        assert "model_list" in config
+        assert len(config["model_list"]) == 2

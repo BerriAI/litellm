@@ -731,6 +731,11 @@ def get_openapi_schema():
             }
         }
 
+    # Add LLM API request schema bodies for documentation
+    from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
+
+    openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
@@ -759,6 +764,9 @@ def custom_openapi():
 
 if os.getenv("DOCS_FILTERED", "False") == "True" and premium_user:
     app.openapi = custom_openapi  # type: ignore
+else:
+    # For regular users, use get_openapi_schema to include LLM API schemas
+    app.openapi = get_openapi_schema  # type: ignore
 
 
 class UserAPIKeyCacheTTLEnum(enum.Enum):
@@ -8687,6 +8695,7 @@ async def get_config():  # noqa: PLR0915
                 elif _callback == "braintrust":
                     env_vars = [
                         "BRAINTRUST_API_KEY",
+                        "BRAINTRUST_API_BASE",
                     ]
                 elif _callback == "traceloop":
                     env_vars = ["TRACELOOP_API_KEY"]
@@ -8867,7 +8876,16 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_litellm_model_cost_map():
+async def get_litellm_model_cost_map(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+    
     try:
         _model_cost_map = litellm.model_cost
         return _model_cost_map
@@ -8875,6 +8893,56 @@ async def get_litellm_model_cost_map():
         raise HTTPException(
             status_code=500,
             detail=f"Internal Server Error ({str(e)})",
+        )
+
+
+@router.post(
+    "/reload/model_cost_map",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def reload_model_cost_map(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+    
+    Manually reload the model cost map from the remote source.
+    This will fetch fresh pricing data from the model_prices_and_context_window.json file.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+    
+    try:
+        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+        
+        # Get the current URL from litellm configuration
+        model_cost_map_url = litellm.model_cost_map_url
+        
+        # Reload the model cost map
+        new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+        
+        # Update the global model_cost variable
+        litellm.model_cost = new_model_cost_map
+        
+        verbose_proxy_logger.info("Model cost map reloaded successfully")
+        
+        return {
+            "message": "Model cost map reloaded successfully",
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "models_count": len(new_model_cost_map) if new_model_cost_map else 0
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to reload model cost map: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reload model cost map: {str(e)}"
         )
 
 

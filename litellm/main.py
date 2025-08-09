@@ -354,7 +354,7 @@ async def acompletion(
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
     deployment_id=None,
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None,
     # set api_base, api_version, api_key
     base_url: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -893,7 +893,7 @@ def completion(  # type: ignore # noqa: PLR0915
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     # openai v1.0+ new params
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
+    reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None,
     response_format: Optional[Union[dict, Type[BaseModel]]] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
@@ -5514,9 +5514,9 @@ async def ahealth_check(
         messages=[],
         stream=False,
         call_type="acompletion",
-        litellm_call_id="1234",
+        litellm_call_id=str(uuid.uuid4()),
         start_time=datetime.datetime.now(),
-        function_id="1234",
+        function_id=str(uuid.uuid4()),
         log_raw_request_response=True,
     )
     model_params["litellm_logging_obj"] = litellm_logging_obj
