@@ -167,7 +167,6 @@ async def test_get_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-
 @pytest.mark.skip(
     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 )
@@ -574,49 +573,6 @@ async def test_gemini_pro_vision(provider, sync_mode):
 # test_gemini_pro_vision()
 
 
-@pytest.mark.parametrize("load_pdf", [False])  # True,
-@pytest.mark.flaky(retries=3, delay=1)
-def test_completion_function_plus_pdf(load_pdf):
-    litellm.set_verbose = True
-    load_vertex_ai_credentials()
-    try:
-        import base64
-
-        import requests
-
-        # URL of the file
-        url = "https://storage.googleapis.com/cloud-samples-data/generative-ai/pdf/2403.05530.pdf"
-
-        # Download the file
-        if load_pdf:
-            response = requests.get(url)
-            file_data = response.content
-
-            encoded_file = base64.b64encode(file_data).decode("utf-8")
-            url = f"data:application/pdf;base64,{encoded_file}"
-
-        image_content = [
-            {"type": "text", "text": "What's this file about?"},
-            {
-                "type": "image_url",
-                "image_url": {"url": url},
-            },
-        ]
-        image_message = {"role": "user", "content": image_content}
-
-        response = completion(
-            model="vertex_ai_beta/gemini-2.5-flash-lite-preview-0514",
-            messages=[image_message],
-            stream=False,
-        )
-
-        print(response)
-    except litellm.InternalServerError as e:
-        pass
-    except Exception as e:
-        pytest.fail("Got={}".format(str(e)))
-
-
 def encode_image(image_path):
     import base64
 
@@ -834,9 +790,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize(
-    "model", ["vertex_ai_beta/gemini-1.5-pro"]
-)  # "vertex_ai",
+@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-1.5-pro"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)

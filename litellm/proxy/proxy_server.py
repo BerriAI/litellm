@@ -2712,7 +2712,10 @@ class ProxyConfig:
                 alert_types=general_settings["alert_types"], llm_router=llm_router
             )
 
-        if _general_settings is not None and "alert_to_webhook_url" in _general_settings:
+        if (
+            _general_settings is not None
+            and "alert_to_webhook_url" in _general_settings
+        ):
             general_settings["alert_to_webhook_url"] = _general_settings[
                 "alert_to_webhook_url"
             ]
@@ -2932,9 +2935,16 @@ class ProxyConfig:
     async def _init_prompts_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
 
-        prompts_in_db = await prisma_client.db.litellm_prompttable.find_many()
-        for prompt in prompts_in_db:
-            IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt)
+        try:
+            prompts_in_db = await prisma_client.db.litellm_prompttable.find_many()
+            for prompt in prompts_in_db:
+                IN_MEMORY_PROMPT_REGISTRY.initialize_prompt(prompt=prompt)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - {}".format(
+                    str(e)
+                )
+            )
 
     async def _init_guardrails_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.guardrails.guardrail_registry import (
