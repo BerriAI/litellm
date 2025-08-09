@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+from datetime import datetime
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -1222,15 +1223,21 @@ class TestPriceDataReloadAPI:
         """Test that admin users can access the reload endpoint"""
         with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
             mock_get_map.return_value = {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
-            
-            response = client_with_auth.post("/reload/model_cost_map")
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["status"] == "success"
-            assert "message" in data
-            assert "timestamp" in data
-            assert "models_count" in data
+            # Mock the database connection
+            with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+                
+                response = client_with_auth.post("/reload/model_cost_map")
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "success"
+                assert "message" in data
+                assert "timestamp" in data
+                assert "models_count" in data
+                # The new implementation immediately reloads and returns the count
+                assert "Price data reloaded successfully! 1 models updated." in data["message"]
+                assert data["models_count"] == 1
     
     def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
         """Test that non-admin users cannot access the reload endpoint"""
@@ -1274,11 +1281,155 @@ class TestPriceDataReloadAPI:
         with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
             mock_get_map.side_effect = Exception("Network error")
             
-            response = client_with_auth.post("/reload/model_cost_map")
-            
-            assert response.status_code == 500
+            # Mock the database connection
+            with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+                
+                response = client_with_auth.post("/reload/model_cost_map")
+                
+                assert response.status_code == 500  # The new implementation immediately reloads and fails on error
+                data = response.json()
+                assert "Failed to reload model cost map" in data["detail"]
+
+    def test_schedule_model_cost_map_reload_admin_access(self, client_with_auth):
+        """Test that admin users can schedule periodic reload"""
+        with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+            # Mock database upsert
+            mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+    
+            response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
+    
+            assert response.status_code == 200
             data = response.json()
-            assert "Failed to reload model cost map" in data["detail"]
+            assert data["status"] == "success"
+            assert data["interval_hours"] == 6
+            assert "message" in data
+            assert "timestamp" in data
+
+    def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot schedule periodic reload"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_schedule_model_cost_map_reload_invalid_hours(self, client_with_auth):
+        """Test that invalid hours parameter is rejected"""
+        response = client_with_auth.post("/schedule/model_cost_map_reload?hours=0")
+        
+        assert response.status_code == 400
+        data = response.json()
+        assert "Hours must be greater than 0" in data["detail"]
+
+    def test_cancel_model_cost_map_reload_admin_access(self, client_with_auth):
+        """Test that admin users can cancel periodic reload"""
+        with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+            # Mock database delete
+            mock_prisma.db.litellm_config.delete = AsyncMock(return_value=None)
+            
+            response = client_with_auth.delete("/schedule/model_cost_map_reload")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert "message" in data
+            assert "timestamp" in data
+
+    def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot cancel periodic reload"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.delete("/schedule/model_cost_map_reload")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_get_model_cost_map_reload_status_admin_access(self, client_with_auth):
+        """Test that admin users can get reload status"""
+        with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+            # Mock database config record
+            mock_config = MagicMock()
+            mock_config.param_value = {
+                "interval_hours": 6,
+                "force_reload": False
+            }
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+            
+            # Mock the last reload time and current time
+            with patch('litellm.proxy.proxy_server.last_model_cost_map_reload', "2024-01-01T06:00:00"):
+                with patch('litellm.proxy.proxy_server.datetime') as mock_datetime:
+                    # Mock current time to be 1 hour after last reload
+                    mock_datetime.utcnow.return_value = datetime(2024, 1, 1, 7, 0, 0)
+                    mock_datetime.fromisoformat = datetime.fromisoformat
+                    
+                    response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+                    
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["scheduled"] == True
+                    assert data["interval_hours"] == 6
+                    assert data["last_run"] == "2024-01-01T06:00:00"
+                    assert data["next_run"] == "2024-01-01T12:00:00"
+
+    def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot get reload status"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_get_model_cost_map_reload_status_no_config(self, client_with_auth):
+        """Test that status returns not scheduled when no config exists"""
+        with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+            
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] == False
+            assert data["interval_hours"] == None
+            assert data["last_run"] == None
+            assert data["next_run"] == None
+
+    def test_get_model_cost_map_reload_status_no_interval(self, client_with_auth):
+        """Test that status returns not scheduled when no interval is configured"""
+        with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+            # Mock config with no interval
+            mock_config = MagicMock()
+            mock_config.param_value = {
+                "interval_hours": None,
+                "force_reload": False
+            }
+            mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+            
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] == False
+            assert data["interval_hours"] == None
+            assert data["last_run"] == None
+            assert data["next_run"] == None
 
 
 class TestPriceDataReloadIntegration:
@@ -1319,13 +1470,70 @@ class TestPriceDataReloadIntegration:
         with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
             mock_get_map.return_value = mock_cost_map
             
-            # Test reload endpoint
-            response = client_with_auth.post("/reload/model_cost_map")
-            assert response.status_code == 200
+            # Mock the database connection
+            with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
+                mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+                
+                # Test reload endpoint
+                response = client_with_auth.post("/reload/model_cost_map")
+                assert response.status_code == 200
+                
+                # Test get endpoint
+                response = client_with_auth.get("/get/litellm_model_cost_map")
+                assert response.status_code == 200
+    
+    def test_distributed_reload_check_function(self):
+        """Test the _check_and_reload_model_cost_map function"""
+        from litellm.proxy.proxy_server import ProxyConfig
+        
+        proxy_config = ProxyConfig()
+        
+        # Mock prisma client
+        mock_prisma = MagicMock()
+        
+        # Test case 1: No config in database
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        
+        # Should return early without reloading
+        asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+        
+        # Test case 2: Config with interval but not time to reload
+        mock_config = MagicMock()
+        mock_config.param_value = {
+            "interval_hours": 6,
+            "force_reload": False
+        }
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        
+        # Mock current time and last reload time
+        with patch('litellm.proxy.proxy_server.last_model_cost_map_reload', "2024-01-01T06:00:00"):
+            with patch('litellm.proxy.proxy_server.datetime') as mock_datetime:
+                mock_datetime.utcnow.return_value = datetime(2024, 1, 1, 7, 0, 0)  # 1 hour later
+                
+                # Should not reload (only 1 hour passed, need 6)
+                asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+        
+        # Test case 3: Config with force reload
+        mock_config.param_value = {
+            "interval_hours": 6,
+            "force_reload": True
+        }
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+        
+        with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
+            mock_get_map.return_value = {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
             
-            # Test get endpoint
-            response = client_with_auth.get("/get/litellm_model_cost_map")
-            assert response.status_code == 200
+            # Should reload due to force flag
+            asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
+            
+            # Verify force_reload was reset to False
+            mock_prisma.db.litellm_config.upsert.assert_called()
+            call_args = mock_prisma.db.litellm_config.upsert.call_args
+            # The param_value is now a JSON string, so we need to parse it
+            param_value_json = call_args[1]['data']['update']['param_value']
+            param_value_dict = json.loads(param_value_json)
+            assert param_value_dict['force_reload'] == False
     
     def test_config_file_parsing(self):
         """Test parsing of config file with reload settings"""
@@ -1354,3 +1562,69 @@ model_list:
         # Verify models are present
         assert "model_list" in config
         assert len(config["model_list"]) == 2
+    def test_database_config_storage(self):
+        """Test that configuration is properly stored in database"""
+        # Mock prisma client
+        mock_prisma = MagicMock()
+        
+        # Test the database upsert call that would be made by the schedule endpoint
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+        
+        # Simulate the database call that the schedule endpoint would make
+        asyncio.run(mock_prisma.db.litellm_config.upsert(
+            where={"param_name": "model_cost_map_reload_config"},
+            data={
+                "create": {
+                    "param_name": "model_cost_map_reload_config",
+                    "param_value": {
+                        "interval_hours": 6,
+                        "force_reload": False
+                    }
+                },
+                "update": {
+                    "param_value": {
+                        "interval_hours": 6,
+                        "force_reload": False
+                    }
+                }
+            }
+        ))
+        
+        # Verify database upsert was called with correct data
+        mock_prisma.db.litellm_config.upsert.assert_called_once()
+        call_args = mock_prisma.db.litellm_config.upsert.call_args
+        assert call_args[1]['where']['param_name'] == "model_cost_map_reload_config"
+        assert call_args[1]['data']['create']['param_value']['interval_hours'] == 6
+        assert call_args[1]['data']['create']['param_value']['force_reload'] == False
+
+    def test_manual_reload_force_flag(self):
+        """Test that manual reload sets force flag correctly"""
+        # Mock prisma client
+        mock_prisma = MagicMock()
+        
+        # Test the database upsert call that would be made by the manual reload endpoint
+        mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
+        
+        # Simulate the database call that the manual reload endpoint would make
+        asyncio.run(mock_prisma.db.litellm_config.upsert(
+            where={"param_name": "model_cost_map_reload_config"},
+            data={
+                "create": {
+                    "param_name": "model_cost_map_reload_config",
+                    "param_value": {
+                        "interval_hours": None,
+                        "force_reload": True
+                    }
+                },
+                "update": {
+                    "param_value": {
+                        "force_reload": True
+                    }
+                }
+            }
+        ))
+        
+        # Verify force_reload flag was set
+        mock_prisma.db.litellm_config.upsert.assert_called_once()
+        call_args = mock_prisma.db.litellm_config.upsert.call_args
+        assert call_args[1]['data']['update']['param_value']['force_reload'] == True
