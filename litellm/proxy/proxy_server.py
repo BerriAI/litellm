@@ -973,6 +973,11 @@ proxy_logging_obj = ProxyLogging(
 async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
+
+# Global variables for model cost map reload scheduling
+scheduler = None
+last_model_cost_map_reload = None
+
 ### DB WRITER ###
 db_writer_client: Optional[AsyncHTTPHandler] = None
 ### logger ###
@@ -3518,6 +3523,25 @@ class ProxyStartupEvent:
             seconds=batch_writing_interval,
             args=[prisma_client, db_writer_client, proxy_logging_obj],
         )
+
+        ### RELOAD MODEL COST MAP ###
+        # Reload model cost map every 6 hours (21600 seconds) to keep pricing data fresh
+        model_cost_map_reload_interval = general_settings.get("model_cost_map_reload_interval", 21600)
+        if model_cost_map_reload_interval > 0:
+            async def reload_model_cost_map_job():
+                try:
+                    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+                    model_cost_map_url = litellm.model_cost_map_url
+                    new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+                    litellm.model_cost = new_model_cost_map
+                    verbose_proxy_logger.info(f"Background job: Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}")
+                except Exception as e:
+                    verbose_proxy_logger.exception(f"Background job: Failed to reload model cost map: {str(e)}")
+            scheduler.add_job(
+                reload_model_cost_map_job,
+                "interval",
+                seconds=model_cost_map_reload_interval,
+            )
 
         ### ADD NEW MODELS ###
         store_model_in_db = (
@@ -8925,6 +8949,263 @@ async def reload_model_cost_map(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to reload model cost map: {str(e)}"
+        )
+
+
+@router.post(
+    "/schedule/model_cost_map_reload",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def schedule_model_cost_map_reload(
+    hours: int,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+    
+    Schedule periodic reload of the model cost map.
+    This will create a background job that reloads the model cost map every specified hours.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+    
+    if hours <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Hours must be greater than 0"
+        )
+    
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        
+        # Get the global scheduler instance
+        global scheduler
+        if scheduler is None:
+            scheduler = AsyncIOScheduler()
+            scheduler.start()
+            verbose_proxy_logger.info("Initialized global scheduler for model cost map reload")
+        
+        # Ensure scheduler is running
+        if not scheduler.running:
+            scheduler.start()
+            verbose_proxy_logger.info("Started global scheduler for model cost map reload")
+        
+        # Remove existing model cost map reload job if it exists
+        existing_jobs = scheduler.get_jobs()
+        verbose_proxy_logger.info(f"Found {len(existing_jobs)} existing jobs before scheduling")
+        for job in existing_jobs:
+            verbose_proxy_logger.info(f"Job ID: {job.id}")
+            if job.id == "model_cost_map_reload":
+                verbose_proxy_logger.info("Removing existing model cost map reload job")
+                job.remove()
+        
+        # Create the reload job function
+        def reload_model_cost_map_job():
+            try:
+                import asyncio
+                # Create a new event loop for the async operation
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                async def _reload_job():
+                    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+                    model_cost_map_url = litellm.model_cost_map_url
+                    new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
+                    litellm.model_cost = new_model_cost_map
+                    verbose_proxy_logger.info(f"Scheduled job: Model cost map reloaded successfully. Models count: {len(new_model_cost_map) if new_model_cost_map else 0}")
+                    
+                    # Store the last run timestamp
+                    global last_model_cost_map_reload
+                    last_model_cost_map_reload = datetime.utcnow().isoformat()
+                
+                loop.run_until_complete(_reload_job())
+                loop.close()
+            except Exception as e:
+                verbose_proxy_logger.exception(f"Scheduled job: Failed to reload model cost map: {str(e)}")
+        
+        # Add the new job
+        try:
+            job = scheduler.add_job(
+                reload_model_cost_map_job,
+                "interval",
+                hours=hours,
+                id="model_cost_map_reload",
+                replace_existing=True
+            )
+            if job is not None:
+                verbose_proxy_logger.info(f"Job added successfully: {job.id}, Next run: {job.next_run_time}")
+            else:
+                verbose_proxy_logger.warning("Job add returned None, but continuing...")
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Failed to add job: {str(e)}")
+            raise
+        
+        # Verify the job was added
+        jobs_after = scheduler.get_jobs()
+        verbose_proxy_logger.info(f"Jobs after scheduling: {len(jobs_after)}")
+        for job in jobs_after:
+            verbose_proxy_logger.info(f"Job ID after scheduling: {job.id}")
+        
+        verbose_proxy_logger.info(f"Model cost map reload scheduled for every {hours} hours")
+        
+        return {
+            "message": f"Model cost map reload scheduled for every {hours} hours",
+            "status": "success",
+            "interval_hours": hours,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to schedule model cost map reload: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to schedule model cost map reload: {str(e)}"
+        )
+
+
+@router.delete(
+    "/schedule/model_cost_map_reload",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def cancel_model_cost_map_reload(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+    
+    Cancel the scheduled periodic reload of the model cost map.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+    
+    try:
+        global scheduler
+        if scheduler is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No scheduler found"
+            )
+        
+        # Remove the model cost map reload job
+        existing_jobs = scheduler.get_jobs()
+        job_removed = False
+        for job in existing_jobs:
+            if job.id == "model_cost_map_reload":
+                job.remove()
+                job_removed = True
+                break
+        
+        if not job_removed:
+            raise HTTPException(
+                status_code=404,
+                detail="No scheduled model cost map reload job found"
+            )
+        
+        verbose_proxy_logger.info("Model cost map reload schedule cancelled")
+        
+        return {
+            "message": "Model cost map reload schedule cancelled",
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to cancel model cost map reload: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cancel model cost map reload: {str(e)}"
+        )
+
+
+@router.get(
+    "/schedule/model_cost_map_reload/status",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def get_model_cost_map_reload_status(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    ADMIN ONLY / MASTER KEY Only Endpoint
+    
+    Get the status of the scheduled model cost map reload job.
+    """
+    # Check if user is admin
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
+        )
+    
+    try:
+        global scheduler, last_model_cost_map_reload
+        
+        verbose_proxy_logger.info(f"Checking model cost map reload status. Scheduler: {scheduler}, Last reload: {last_model_cost_map_reload}")
+        
+        if scheduler is None:
+            verbose_proxy_logger.info("No scheduler found, returning not scheduled")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None
+            }
+        
+        # Find the model cost map reload job
+        existing_jobs = scheduler.get_jobs()
+        verbose_proxy_logger.info(f"Found {len(existing_jobs)} existing jobs")
+        
+        reload_job = None
+        for job in existing_jobs:
+            verbose_proxy_logger.info(f"Job ID: {job.id}, Type: {type(job)}")
+            if job.id == "model_cost_map_reload":
+                reload_job = job
+                verbose_proxy_logger.info("Found model cost map reload job")
+                break
+        
+        if reload_job is None:
+            verbose_proxy_logger.info("No model cost map reload job found")
+            return {
+                "scheduled": False,
+                "interval_hours": None,
+                "last_run": None,
+                "next_run": None
+            }
+        
+        # Get job details
+        interval_hours = None
+        if hasattr(reload_job.trigger, 'interval'):
+            if hasattr(reload_job.trigger.interval, 'hours'):
+                interval_hours = reload_job.trigger.interval.hours
+            elif hasattr(reload_job.trigger.interval, 'total_seconds'):
+                # Convert timedelta to hours
+                interval_hours = reload_job.trigger.interval.total_seconds() / 3600
+        next_run = reload_job.next_run_time.isoformat() if reload_job.next_run_time else None
+        
+        return {
+            "scheduled": True,
+            "interval_hours": interval_hours,
+            "last_run": last_model_cost_map_reload,
+            "next_run": next_run
+        }
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Failed to get model cost map reload status: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get model cost map reload status: {str(e)}"
         )
 
 

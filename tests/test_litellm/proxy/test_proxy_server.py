@@ -1280,6 +1280,150 @@ class TestPriceDataReloadAPI:
             data = response.json()
             assert "Failed to reload model cost map" in data["detail"]
 
+    def test_schedule_model_cost_map_reload_admin_access(self, client_with_auth):
+        """Test that admin users can schedule periodic reload"""
+        with patch('litellm.proxy.proxy_server.scheduler') as mock_scheduler:
+            # Mock a proper job object
+            mock_job = MagicMock()
+            mock_job.id = "model_cost_map_reload"
+            mock_job.next_run_time = "2024-01-01T12:00:00"
+            
+            mock_scheduler.get_jobs.return_value = []
+            mock_scheduler.add_job.return_value = mock_job
+            mock_scheduler.running = True
+    
+            response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
+    
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert data["interval_hours"] == 6
+            assert "message" in data
+            assert "timestamp" in data
+
+    def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot schedule periodic reload"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_schedule_model_cost_map_reload_invalid_hours(self, client_with_auth):
+        """Test that invalid hours parameter is rejected"""
+        response = client_with_auth.post("/schedule/model_cost_map_reload?hours=0")
+        
+        assert response.status_code == 400
+        data = response.json()
+        assert "Hours must be greater than 0" in data["detail"]
+
+    def test_cancel_model_cost_map_reload_admin_access(self, client_with_auth):
+        """Test that admin users can cancel periodic reload"""
+        with patch('litellm.proxy.proxy_server.scheduler') as mock_scheduler:
+            # Mock existing job
+            mock_job = MagicMock()
+            mock_job.id = "model_cost_map_reload"
+            mock_scheduler.get_jobs.return_value = [mock_job]
+            
+            response = client_with_auth.delete("/schedule/model_cost_map_reload")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "success"
+            assert "message" in data
+            assert "timestamp" in data
+
+    def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot cancel periodic reload"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.delete("/schedule/model_cost_map_reload")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_cancel_model_cost_map_reload_no_job(self, client_with_auth):
+        """Test that cancelling when no job exists returns 404"""
+        with patch('litellm.proxy.proxy_server.scheduler') as mock_scheduler:
+            mock_scheduler.get_jobs.return_value = []
+            
+            response = client_with_auth.delete("/schedule/model_cost_map_reload")
+            
+            assert response.status_code == 404
+            data = response.json()
+            assert "No scheduled model cost map reload job found" in data["detail"]
+
+    def test_get_model_cost_map_reload_status_admin_access(self, client_with_auth):
+        """Test that admin users can get reload status"""
+        with patch('litellm.proxy.proxy_server.scheduler') as mock_scheduler:
+            # Mock scheduled job
+            mock_job = MagicMock()
+            mock_job.id = "model_cost_map_reload"
+            mock_job.trigger.interval.hours = 6
+            mock_job.next_run_time.isoformat.return_value = "2024-01-01T12:00:00"
+            mock_scheduler.get_jobs.return_value = [mock_job]
+            
+            with patch('litellm.proxy.proxy_server.last_model_cost_map_reload', "2024-01-01T06:00:00"):
+                response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+                
+                assert response.status_code == 200
+                data = response.json()
+                assert data["scheduled"] == True
+                assert data["interval_hours"] == 6
+                assert data["last_run"] == "2024-01-01T06:00:00"
+                assert data["next_run"] == "2024-01-01T12:00:00"
+
+    def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
+        """Test that non-admin users cannot get reload status"""
+        # Mock non-admin user
+        mock_auth = MagicMock()
+        mock_auth.user_role = "user"  # Non-admin role
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        
+        response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+        
+        assert response.status_code == 403
+        data = response.json()
+        assert "Access denied" in data["detail"]
+        assert "Admin role required" in data["detail"]
+
+    def test_get_model_cost_map_reload_status_no_scheduler(self, client_with_auth):
+        """Test that status returns not scheduled when no scheduler exists"""
+        with patch('litellm.proxy.proxy_server.scheduler', None):
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] == False
+            assert data["interval_hours"] == None
+            assert data["last_run"] == None
+            assert data["next_run"] == None
+
+    def test_get_model_cost_map_reload_status_no_job(self, client_with_auth):
+        """Test that status returns not scheduled when no job exists"""
+        with patch('litellm.proxy.proxy_server.scheduler') as mock_scheduler:
+            mock_scheduler.get_jobs.return_value = []
+            
+            response = client_with_auth.get("/schedule/model_cost_map_reload/status")
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["scheduled"] == False
+            assert data["interval_hours"] == None
+            assert data["last_run"] == None
+            assert data["next_run"] == None
+
 
 class TestPriceDataReloadIntegration:
     """Integration tests for the complete price data reload feature"""
