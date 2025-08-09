@@ -95,11 +95,15 @@ class TestSwaggerChatCompletions:
             assert "model" in required_fields, "Field 'model' should be required"
             assert "messages" in required_fields, "Field 'messages' should be required"
 
-    def test_chat_completions_endpoints_have_request_body_schema(self, client):
+    def test_chat_completions_endpoints_have_expanded_request_body(self, client):
         """
-        Test that all /chat/completions endpoints reference the ProxyChatCompletionRequest schema
-        in their request body definitions.
+        Test that /chat/completions endpoint has an expanded request body schema 
+        with all individual fields visible (not just a $ref).
         """
+        # Clear any cached schema to ensure we get the latest version
+        from litellm.proxy.proxy_server import app
+        app.openapi_schema = None
+        
         # Get the OpenAPI schema
         response = client.get("/openapi.json")
         assert response.status_code == 200
@@ -107,44 +111,54 @@ class TestSwaggerChatCompletions:
         openapi_schema = response.json()
         paths = openapi_schema["paths"]
         
-        # Check all chat completion paths defined in CustomOpenAPISpec
-        chat_completion_paths = [
-            "/v1/chat/completions",
-            "/chat/completions",
-            "/engines/{model}/chat/completions", 
-            "/openai/deployments/{model}/chat/completions"
-        ]
+        # Check main chat completion path
+        path_to_check = "/chat/completions"
+        assert path_to_check in paths, f"Path {path_to_check} not found in OpenAPI schema"
+        assert "post" in paths[path_to_check], f"POST method not found for path {path_to_check}"
         
-        for path in chat_completion_paths:
-            # Some paths might use parameter syntax differences, check if path exists
-            path_found = False
-            for api_path in paths.keys():
-                # Handle parameter differences between {model} and {model:path}
-                if path.replace("{model}", "{model:path}") == api_path or path == api_path:
-                    path_found = True
-                    path_to_check = api_path
-                    break
-            
-            if not path_found:
-                continue  # Skip if this specific path variant isn't in the current schema
-                
-            assert "post" in paths[path_to_check], f"POST method not found for path {path_to_check}"
-            post_spec = paths[path_to_check]["post"]
-            
-            # Verify request body is defined
-            if "requestBody" in post_spec:
-                request_body = post_spec["requestBody"]
-                assert "content" in request_body
-                assert "application/json" in request_body["content"]
-                
-                json_content = request_body["content"]["application/json"]
-                assert "schema" in json_content
-                
-                # Check that it references ProxyChatCompletionRequest
-                schema_ref = json_content["schema"]
-                expected_ref = "#/components/schemas/ProxyChatCompletionRequest"
-                assert "$ref" in schema_ref and schema_ref["$ref"] == expected_ref, \
-                    f"Path {path_to_check} should reference ProxyChatCompletionRequest schema"
+        post_spec = paths[path_to_check]["post"]
+        
+        # Should have request body with expanded schema (not just $ref)
+        assert "requestBody" in post_spec, f"Path {path_to_check} should have requestBody"
+        request_body = post_spec["requestBody"]
+        
+        # Check request body structure
+        assert "content" in request_body
+        assert "application/json" in request_body["content"]
+        json_content = request_body["content"]["application/json"]
+        assert "schema" in json_content
+        
+        schema_def = json_content["schema"]
+        
+        # Should be an expanded object schema, not a $ref
+        assert schema_def.get("type") == "object", "Schema should be an expanded object type"
+        assert "properties" in schema_def, "Schema should have expanded properties"
+        assert "$ref" not in schema_def, "Schema should not be a reference (should be expanded inline)"
+        
+        # Should have all Pydantic fields as individual properties
+        properties = schema_def["properties"]
+        assert len(properties) >= 25, f"Expected at least 25 properties, got {len(properties)}"
+        
+        # Should have core OpenAI fields
+        core_fields = ["model", "messages", "temperature", "max_tokens", "stream"]
+        for field in core_fields:
+            assert field in properties, f"Core field '{field}' should be in expanded properties"
+        
+        # Should have LiteLLM-specific fields  
+        litellm_fields = ["guardrails", "caching", "fallbacks", "num_retries"]
+        for field in litellm_fields:
+            assert field in properties, f"LiteLLM field '{field}' should be in expanded properties"
+        
+        # Check required fields
+        required_fields = schema_def.get("required", [])
+        assert "model" in required_fields, "Model should be marked as required"
+        assert "messages" in required_fields, "Messages should be marked as required"
+        
+        # Should have minimal parameters (only path parameters)
+        parameters = post_spec.get("parameters", [])
+        # All parameters should be path parameters, no query parameters
+        for param in parameters:
+            assert param.get("in") == "path", f"Only path parameters expected, found {param.get('in')} parameter: {param.get('name')}"
 
     @patch('litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_chat_completion_request_schema')
     def test_add_llm_api_request_schema_body_calls_chat_completion_method(self, mock_add_chat):
@@ -215,3 +229,87 @@ class TestSwaggerChatCompletions:
         litellm_fields = ["guardrails", "caching", "num_retries", "context_window_fallback_dict", "fallbacks"]
         for field in litellm_fields:
             assert field in properties, f"LiteLLM field '{field}' should be in ProxyChatCompletionRequest schema"
+
+    def test_messages_field_has_example(self, client):
+        """
+        Test that the messages field in the expanded request body includes a helpful example.
+        """
+        # Clear any cached schema to ensure we get the latest version
+        from litellm.proxy.proxy_server import app
+        app.openapi_schema = None
+        
+        # Get the OpenAPI schema
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        
+        openapi_schema = response.json()
+        
+        # Navigate to the chat completions request body schema
+        chat_completions_post = openapi_schema["paths"]["/chat/completions"]["post"]
+        request_body = chat_completions_post["requestBody"]
+        schema_def = request_body["content"]["application/json"]["schema"]
+        
+        # Check that messages field has an example
+        messages_field = schema_def["properties"]["messages"]
+        assert "example" in messages_field, "Messages field should have an example"
+        
+        # Verify the example structure
+        example = messages_field["example"]
+        assert isinstance(example, list), "Messages example should be a list"
+        assert len(example) >= 2, "Messages example should have at least 2 messages"
+        
+        # Check that example messages have proper structure
+        for message in example:
+            assert "role" in message, "Each example message should have a role"
+            assert "content" in message, "Each example message should have content"
+            assert message["role"] in ["user", "assistant", "system"], f"Invalid role: {message['role']}"
+            assert isinstance(message["content"], str), "Message content should be a string"
+        
+        # Verify we have a conversation (user and assistant)
+        roles = [msg["role"] for msg in example]
+        assert "user" in roles, "Example should include a user message"
+        assert "assistant" in roles, "Example should include an assistant message"
+
+    def test_request_body_accepts_actual_chat_request(self, client):
+        """
+        Test that the expanded request body schema accepts a real chat completion request.
+        This ensures our schema modifications don't break actual API functionality.
+        """
+        # Test data that should be valid according to our expanded schema
+        test_request = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "Hello, how are you?"},
+                {"role": "assistant", "content": "I'm doing well, thank you!"}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 100,
+            "guardrails": ["no-harmful-content"],
+            "caching": True
+        }
+        
+        # This should validate against our schema without errors
+        # Note: We're not actually calling the endpoint (which would require API keys)
+        # but testing that the request structure is accepted by the schema
+        
+        # Get the OpenAPI schema to verify our test data matches
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        
+        openapi_schema = response.json()
+        chat_completions_post = openapi_schema["paths"]["/chat/completions"]["post"]
+        
+        # Should have expanded request body (not just $ref)
+        assert "requestBody" in chat_completions_post
+        request_body = chat_completions_post["requestBody"]
+        schema_def = request_body["content"]["application/json"]["schema"]
+        
+        # Verify our test request has fields that exist in the schema
+        properties = schema_def["properties"]
+        for field_name in test_request.keys():
+            assert field_name in properties, f"Field '{field_name}' should be in expanded schema properties"
+        
+        # Verify required fields are present in test request
+        required_fields = schema_def.get("required", [])
+        for required_field in required_fields:
+            assert required_field in test_request, f"Required field '{required_field}' should be in test request"
