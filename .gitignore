@@ -94,3 +94,4 @@ test.py
 litellm_config.yaml
 .cursor
 .vscode/launch.json
+scripts/seed_mock_data.py
