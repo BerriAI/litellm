@@ -1401,3 +1401,292 @@ def test_should_include_deployment():
         model_name=model_name,
         team_id=team_id,
     )
+
+
+def test_get_deployment_model_info_base_model_flow():
+    """Test that get_deployment_model_info correctly handles the base model flow"""
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    # Mock data for the test
+    mock_custom_model_info = {
+        "base_model": "gpt-3.5-turbo",
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "custom_field": "custom_value",
+    }
+
+    mock_base_model_info = {
+        "key": "gpt-3.5-turbo",
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 0.0015,  # This should be overridden by custom model info
+        "output_cost_per_token": 0.002,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supported_openai_params": ["temperature", "max_tokens"],
+    }
+
+    mock_litellm_model_name_info = {
+        "key": "test-model",
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.0005,
+        "output_cost_per_token": 0.001,
+        "litellm_provider": "test_provider",
+        "mode": "completion",
+        "supported_openai_params": ["temperature"],
+    }
+
+    # Test Case 1: Base model flow with custom model info that has base_model
+    with patch.object(
+        litellm, "model_cost", {"test-custom-model": mock_custom_model_info}
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            # Configure mock returns
+            mock_get_model_info.side_effect = lambda model: {
+                "gpt-3.5-turbo": mock_base_model_info,
+                "test-model": mock_litellm_model_name_info,
+            }.get(model)
+
+            result = router.get_deployment_model_info(
+                model_id="test-custom-model", model_name="test-model"
+            )
+
+            # Verify that get_model_info was called for both base model and model name
+            assert mock_get_model_info.call_count == 2
+            mock_get_model_info.assert_any_call(
+                model="gpt-3.5-turbo"
+            )  # base model call
+            mock_get_model_info.assert_any_call(model="test-model")  # model name call
+
+            # Verify the result contains merged information
+            assert result is not None
+
+            # Test the correct merging behavior after fix:
+            # 1. base_model_info provides defaults, custom_model_info overrides (correct priority)
+            # 2. The result of step 1 gets merged into litellm_model_name_info (custom+base override litellm)
+
+            # Fields from custom model (should override base model values)
+            assert (
+                result["input_cost_per_token"] == 0.001
+            )  # From custom model (overrides base 0.0015)
+            assert (
+                result["output_cost_per_token"] == 0.002
+            )  # From custom model (same as base)
+            assert result["custom_field"] == "custom_value"  # From custom model
+
+            # Fields from base model that weren't overridden by custom
+            assert result["max_tokens"] == 4096  # From base model
+            assert result["litellm_provider"] == "openai"  # From base model
+            assert (
+                result["mode"] == "chat"
+            )  # From base model (overrides litellm "completion")
+
+            # The key field comes from base model since both base and litellm have it
+            # and base model info overrides litellm model name info in final merge
+            assert (
+                result["key"] == "gpt-3.5-turbo"
+            )  # From base model (overrides litellm key)
+
+    # Test Case 2: Custom model info without base_model
+    mock_custom_model_info_no_base = {
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "custom_field": "custom_value",
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"test-custom-model-no-base": mock_custom_model_info_no_base},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            mock_get_model_info.side_effect = lambda model: {
+                "test-model": mock_litellm_model_name_info,
+            }.get(model)
+
+            result = router.get_deployment_model_info(
+                model_id="test-custom-model-no-base", model_name="test-model"
+            )
+
+            # Should only call get_model_info once for model name (no base model)
+            assert mock_get_model_info.call_count == 1
+            mock_get_model_info.assert_called_with(model="test-model")
+
+            # Verify the result contains merged information
+            assert result is not None
+            assert result["input_cost_per_token"] == 0.001  # From custom model
+            assert result["max_tokens"] == 2048  # From litellm model name info
+            assert result["custom_field"] == "custom_value"  # From custom model
+            assert result["mode"] == "completion"  # From litellm model name info
+
+    # Test Case 3: No custom model info, only litellm model name info
+    with patch.object(litellm, "model_cost", {}):  # Empty model cost
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            mock_get_model_info.side_effect = lambda model: {
+                "test-model": mock_litellm_model_name_info,
+            }.get(model)
+
+            result = router.get_deployment_model_info(
+                model_id="non-existent-model", model_name="test-model"
+            )
+
+            # Should only call get_model_info once for model name
+            assert mock_get_model_info.call_count == 1
+            mock_get_model_info.assert_called_with(model="test-model")
+
+            # Result should be just the litellm model name info
+            assert result is not None
+            assert result == mock_litellm_model_name_info
+
+    # Test Case 4: Base model info retrieval fails (exception handling)
+    mock_custom_model_info_invalid_base = {
+        "base_model": "invalid-base-model",
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"test-custom-model-invalid": mock_custom_model_info_invalid_base},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            # Mock get_model_info to raise exception for invalid base model
+            def mock_get_model_info_side_effect(model):
+                if model == "invalid-base-model":
+                    raise Exception("Model not found")
+                elif model == "test-model":
+                    return mock_litellm_model_name_info
+                return None
+
+            mock_get_model_info.side_effect = mock_get_model_info_side_effect
+
+            result = router.get_deployment_model_info(
+                model_id="test-custom-model-invalid", model_name="test-model"
+            )
+
+            # Should handle exception gracefully and still return merged result
+            assert result is not None
+            assert result["input_cost_per_token"] == 0.001  # From custom model
+            assert result["mode"] == "completion"  # From litellm model name info
+
+    # Test Case 5: Both model_cost.get() and get_model_info() return None
+    with patch.object(litellm, "model_cost", {}):
+        with patch.object(
+            litellm, "get_model_info", side_effect=Exception("Not found")
+        ):
+            result = router.get_deployment_model_info(
+                model_id="non-existent", model_name="non-existent"
+            )
+
+            # Should return None when no model info is found
+            assert result is None
+
+    print("✓ All base model flow test cases passed!")
+
+
+@patch("litellm.model_cost", {})
+def test_get_deployment_model_info_base_model_merge_priority():
+    """Test that base model info merging respects the correct priority order"""
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+    )
+
+    # Test data with overlapping fields to test merge priority
+    mock_custom_model_info = {
+        "base_model": "gpt-4",
+        "input_cost_per_token": 0.01,  # Should override base model value
+        "max_tokens": 8000,  # Should override base model value
+        "custom_only_field": "custom_value",
+    }
+
+    mock_base_model_info = {
+        "key": "gpt-4",
+        "max_tokens": 4096,  # Should be overridden by custom model
+        "input_cost_per_token": 0.03,  # Should be overridden by custom model
+        "output_cost_per_token": 0.06,  # Should be preserved (not in custom)
+        "litellm_provider": "openai",
+        "base_only_field": "base_value",
+    }
+
+    mock_litellm_model_name_info = {
+        "key": "test-model",
+        "max_tokens": 2048,  # Should be overridden by final custom model info
+        "input_cost_per_token": 0.005,  # Should be overridden by final custom model info
+        "output_cost_per_token": 0.01,  # Should be overridden by final custom model info
+        "mode": "completion",
+        "litellm_only_field": "litellm_value",
+    }
+
+    with patch.object(
+        litellm, "model_cost", {"custom-model-id": mock_custom_model_info}
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            mock_get_model_info.side_effect = lambda model: {
+                "gpt-4": mock_base_model_info,
+                "test-model": mock_litellm_model_name_info,
+            }.get(model)
+
+            result = router.get_deployment_model_info(
+                model_id="custom-model-id", model_name="test-model"
+            )
+
+            assert result is not None
+
+            # Test correct merge priority after fix:
+            # 1. base_model_info provides defaults
+            # 2. custom_model_info overrides base_model_info
+            # 3. Result from steps 1-2 overrides litellm_model_name_info
+
+            # Fields that should come from custom model info (highest priority)
+            assert (
+                result["input_cost_per_token"] == 0.01
+            )  # From custom model (overrides base 0.03)
+            assert (
+                result["max_tokens"] == 8000
+            )  # From custom model (overrides base 4096)
+            assert result["custom_only_field"] == "custom_value"  # From custom model
+
+            # Fields that should come from base model (not overridden by custom)
+            assert (
+                result["output_cost_per_token"] == 0.06
+            )  # From base model (not in custom)
+            assert (
+                result["litellm_provider"] == "openai"
+            )  # From base model (not in custom)
+            assert (
+                result["base_only_field"] == "base_value"
+            )  # From base model (not in custom)
+
+            # Fields that should come from litellm model name info (not overridden by custom+base)
+            assert (
+                result["mode"] == "completion"
+            )  # From litellm model name info (not in custom or base)
+            assert (
+                result["litellm_only_field"] == "litellm_value"
+            )  # From litellm model name info (not in custom or base)
+
+            # Key comes from base model since both base and litellm have key fields
+            # and the merged custom+base overrides litellm in the final merge
+            assert result["key"] == "gpt-4"
+
+    print("✓ Base model merge priority test passed!")
