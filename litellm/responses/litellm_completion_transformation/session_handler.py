@@ -245,7 +245,7 @@ class ResponsesSessionHandler:
             return True
         if len(proxy_server_request_dict) == 0:
             return True
-        if LITELLM_TRUNCATED_PAYLOAD_FIELD in proxy_server_request_dict:
+        if LITELLM_TRUNCATED_PAYLOAD_FIELD in str(proxy_server_request_dict):
             return True
         return False
 
