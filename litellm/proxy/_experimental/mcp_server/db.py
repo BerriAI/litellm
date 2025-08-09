@@ -1,6 +1,7 @@
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Set, Union
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -53,11 +54,20 @@ async def get_all_mcp_servers(
     """
     Returns all of the mcp servers from the db
     """
-    mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+    try:
+        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
 
-    return [
-        LiteLLM_MCPServerTable(**mcp_server.model_dump()) for mcp_server in mcp_servers
-    ]
+        return [
+            LiteLLM_MCPServerTable(**mcp_server.model_dump())
+            for mcp_server in mcp_servers
+        ]
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - {}".format(
+                str(e)
+            )
+        )
+        return []
 
 
 async def get_mcp_server(
@@ -91,9 +101,7 @@ async def get_mcp_servers(
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:
-        final_mcp_servers.append(
-            LiteLLM_MCPServerTable(**_mcp_server.model_dump())
-        )
+        final_mcp_servers.append(LiteLLM_MCPServerTable(**_mcp_server.model_dump()))
 
     return final_mcp_servers
 
