@@ -1045,30 +1045,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {/* Price Data Reload Section */}
+          {/* Model Management Header */}
           <div className="flex justify-between items-center mb-4">
             <div>
               <h2 className="text-lg font-semibold">Model Management</h2>
               <p className="text-sm text-gray-600">
-                Manage your models and pricing data
+                Manage your models and configurations
               </p>
             </div>
-            {all_admin_roles.includes(userRole) && (
-              <PriceDataReload
-                accessToken={accessToken}
-                onReloadSuccess={() => {
-                  // Refresh the model map after successful reload
-                  const fetchModelMap = async () => {
-                    const data = await modelCostMap(accessToken);
-                    setModelMap(data);
-                  };
-                  fetchModelMap();
-                }}
-                buttonText="Reload Price Data"
-                size="small"
-                type="primary"
-              />
-            )}
           </div>
           {selectedModelId ? (
             <ModelInfoView
@@ -1133,6 +1117,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                   )}
                   {all_admin_roles.includes(userRole) && (
                     <Tab>Model Group Alias</Tab>
+                  )}
+                  {all_admin_roles.includes(userRole) && (
+                    <Tab>Price Data Reload</Tab>
                   )}
                 </div>
 
@@ -1904,6 +1891,31 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                     initialModelGroupAlias={modelGroupAlias}
                     onAliasUpdate={setModelGroupAlias}
                   />
+                </TabPanel>
+                <TabPanel>
+                  <div className="p-6">
+                    <div className="mb-6">
+                      <Title>Price Data Management</Title>
+                      <Text className="text-tremor-content">
+                        Manage model pricing data and configure automatic reload schedules
+                      </Text>
+                    </div>
+                    <PriceDataReload
+                      accessToken={accessToken}
+                      onReloadSuccess={() => {
+                        // Refresh the model map after successful reload
+                        const fetchModelMap = async () => {
+                          const data = await modelCostMap(accessToken);
+                          setModelMap(data);
+                        };
+                        fetchModelMap();
+                      }}
+                      buttonText="Reload Price Data"
+                      size="middle"
+                      type="primary"
+                      className="w-full"
+                    />
+                  </div>
                 </TabPanel>
               </TabPanels>
             </TabGroup>
