@@ -98,7 +98,16 @@ class CustomOpenAPISpec:
                 
                 # Add all properties with their full definitions
                 for field_name, field_def in schema_properties.items():
-                    expanded_schema["properties"][field_name] = CustomOpenAPISpec._expand_field_definition(field_def)
+                    expanded_field = CustomOpenAPISpec._expand_field_definition(field_def)
+                    
+                    # Add a simple example for the messages field
+                    if field_name == "messages":
+                        expanded_field["example"] = [
+                            {"role": "user", "content": "Hello, how are you?"},
+                            {"role": "assistant", "content": "I'm doing well, thank you! How can I help you today?"}
+                        ]
+                    
+                    expanded_schema["properties"][field_name] = expanded_field
                 
                 # Include $defs from the original schema to support complex types like AllMessageValues
                 # This ensures that message types and other complex union types work properly
