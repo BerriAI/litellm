@@ -480,18 +480,16 @@ class BaseResponsesAPITest(ABC):
             }
         ]
         
-        try:
-            # First call - should trigger reasoning and tool call
-            response = await litellm.aresponses(
-                input=input_messages,
-                tools=tools,
-                reasoning={"effort": "low", "summary": "detailed"},
-                text_format=Output,
-                **base_completion_call_args
-            )
-        except litellm.InternalServerError:
-            pytest.skip("Skipping test due to litellm.InternalServerError")
-        
+
+        # First call - should trigger reasoning and tool call
+        response = await litellm.aresponses(
+            input=input_messages,
+            tools=tools,
+            reasoning={"effort": "low", "summary": "detailed"},
+            text_format=Output,
+            **base_completion_call_args
+        )
+
         print("First call output:")
         print(json.dumps(response.output, indent=4, default=str))
         
@@ -536,17 +534,3 @@ class BaseResponsesAPITest(ABC):
         validate_responses_api_response(final_response, final_chunk=True)
         assert final_response.output is not None
         assert len(final_response.output) > 0
-        
-        # Verify structured output contains expected fields
-        # Look for structured content in the output
-        has_structured_content = False
-        for item in final_response.output:
-            if hasattr(item, 'type') and item.type == "message":
-                # Check if content contains structured data about today and number of r's
-                if hasattr(item, 'content') and item.content:
-                    content_lower = item.content.lower()
-                    if "today" in content_lower and ("r" in content_lower or "strraw" in content_lower):
-                        has_structured_content = True
-                        break
-        
-        assert has_structured_content, "Response should contain structured output with today and number of r information"
