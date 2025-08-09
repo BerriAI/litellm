@@ -6963,6 +6963,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.GRADIENT_AI == provider:
+            return litellm.GradientAIConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
         elif litellm.LlmProviders.OCI == provider:
@@ -7074,7 +7076,11 @@ class ProviderConfigManager:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
-            return litellm.AzureOpenAIResponsesAPIConfig()
+            # Check if it's an O-series model
+            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+                return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
+            else:
+                return litellm.AzureOpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
