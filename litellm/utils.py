@@ -6843,6 +6843,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.COMETAPI == provider:
+            return litellm.CometAPIConfig()
         elif litellm.LlmProviders.DATAROBOT == provider:
             return litellm.DataRobotConfig()
         elif litellm.LlmProviders.GEMINI == provider:
