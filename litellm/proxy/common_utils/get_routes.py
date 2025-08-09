@@ -74,6 +74,6 @@ class GetRoutes:
                 return getattr(endpoint_function.__class__, '__name__')
             else:
                 return None
-        except Exception as e:
+        except Exception:
             verbose_logger.exception(f"Error getting endpoint name for route: {endpoint_function}")
             return None
