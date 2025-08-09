@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-
 request_test_data = {
     "model": "gpt-3.5-turbo",
     "messages": [{"role": "user", "content": "Hello"}]
@@ -52,6 +51,7 @@ def mock_patch_acompletion():
         "litellm.acompletion",
         new_callable=lambda: mock_obj,
     )
+
 
 @pytest.fixture(scope="function")
 def client_with_selected_origins_and_security_headers():
