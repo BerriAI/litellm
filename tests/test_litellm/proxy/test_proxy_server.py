@@ -1119,9 +1119,9 @@ async def test_chat_completion_result_no_nested_none_values():
     )
 
     mock_model_response.choices = [mock_choice]
-    mock_model_response.usage = litellm.Usage(
+    setattr(mock_model_response, "usage", litellm.Usage(
         prompt_tokens=10, completion_tokens=5, total_tokens=15
-    )
+    ))
 
     # Verify the mock has None values before serialization
     raw_dict = mock_model_response.model_dump()
@@ -1223,7 +1223,6 @@ class TestPriceDataReloadAPI:
         """Test that admin users can access the reload endpoint"""
         with patch('litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map') as mock_get_map:
             mock_get_map.return_value = {"gpt-3.5-turbo": {"input_cost_per_token": 0.001}}
-            
             # Mock the database connection
             with patch('litellm.proxy.proxy_server.prisma_client') as mock_prisma:
                 mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
@@ -1563,7 +1562,6 @@ model_list:
         # Verify models are present
         assert "model_list" in config
         assert len(config["model_list"]) == 2
-
     def test_database_config_storage(self):
         """Test that configuration is properly stored in database"""
         # Mock prisma client

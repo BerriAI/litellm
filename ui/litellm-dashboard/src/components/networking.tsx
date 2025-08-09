@@ -350,7 +350,6 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
     throw error;
   }
 };
-
 export const modelCreateCall = async (
   accessToken: string,
   formValues: Model

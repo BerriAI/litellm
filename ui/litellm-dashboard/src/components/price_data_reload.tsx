@@ -12,6 +12,7 @@ interface ReloadStatus {
   next_run: string | null;
 }
 
+
 interface PriceDataReloadProps {
   accessToken: string;
   onReloadSuccess?: () => void;
@@ -101,7 +102,6 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       setIsLoading(false);
     }
   };
-
   const handleScheduleReload = async () => {
     if (!accessToken) {
       message.error("No access token available");

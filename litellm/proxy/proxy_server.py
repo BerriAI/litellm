@@ -9259,7 +9259,6 @@ async def get_model_cost_map_reload_status(
             detail=f"Failed to get model cost map reload status: {str(e)}"
         )
 
-
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
