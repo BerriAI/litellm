@@ -257,6 +257,27 @@ export const modelCostMap = async (accessToken: string) => {
     throw error;
   }
 };
+
+export const reloadModelCostMap = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/reload/model_cost_map`
+      : `/reload/model_cost_map`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to reload model cost map:", error);
+    throw error;
+  }
+};
 export const modelCreateCall = async (
   accessToken: string,
   formValues: Model
