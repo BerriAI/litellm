@@ -1467,17 +1467,17 @@ async def test_openai_gpt5_reasoning_effort_parameter():
         response = await litellm.aresponses(
             model="openai/gpt-5-mini",
             input="What is the capital of France?",
-            reasoning_effort="minimal",
+            reasoning={"effort": "minimal"},
         )
 
         # Verify the request was made correctly
         mock_post.assert_called_once()
         request_body = mock_post.call_args.kwargs["json"]
         print("request_body=", json.dumps(request_body, indent=4, default=str))
-        
+        print("reasoning=", request_body["reasoning"])
         # Validate that reasoning_effort is present in the request body
-        assert "reasoning_effort" in request_body, "reasoning_effort should be present in request body"
-        assert request_body["reasoning_effort"] == "minimal", "reasoning_effort should be 'minimal' in request body"
+        assert "reasoning" in request_body, "reasoning should be present in request body"
+        assert request_body["reasoning"]["effort"] == "minimal", "reasoning_effort should be 'minimal' in request body"
         assert request_body["model"] == "gpt-5-mini"
         assert request_body["input"] == "What is the capital of France?"
 
