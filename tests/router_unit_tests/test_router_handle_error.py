@@ -111,3 +111,47 @@ async def test_send_llm_exception_alert_when_proxy_server_request_in_kwargs():
     # Assert that no exception was raised and the function completed successfully
 
     mock_router.slack_alerting_logger.send_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_raise_no_deployment_exception_no_debug_info_leak():
+    """
+    Test that async_raise_no_deployment_exception does not leak debug information 
+    in the RouterRateLimitError cooldown_list. It should only contain deployment IDs as strings,
+    not debug information tuples.
+    """
+    from litellm.router_utils.handle_error import async_raise_no_deployment_exception
+    
+    # Create a mock router instance
+    mock_router = MagicMock()
+    mock_router.get_model_ids.return_value = ["deployment-1", "deployment-2"]
+    
+    # Mock cooldown cache
+    mock_cooldown_cache = MagicMock()
+    mock_cooldown_cache.async_get_active_cooldowns = AsyncMock(
+        return_value=[
+            ("deployment-1", {"error": "rate limit"}),
+            ("deployment-2", {"error": "timeout"})
+        ]
+    )
+    mock_router.cooldown_cache = mock_cooldown_cache
+    
+    # Call the function
+    error = await async_raise_no_deployment_exception(
+        litellm_router_instance=mock_router,
+        model="gpt-4",
+        parent_otel_span=None
+    )
+    
+    # Verify the error is a RouterRateLimitError
+    from litellm.types.router import RouterRateLimitError
+    assert isinstance(error, RouterRateLimitError)
+    
+    # Verify cooldown_list contains only deployment IDs (strings), not debug info tuples
+    assert error.cooldown_list == ["deployment-1", "deployment-2"]
+    
+    # Verify no debug information is present in the cooldown_list
+    for item in error.cooldown_list:
+        assert isinstance(item, str), f"Expected string, got {type(item)}: {item}"
+        # Ensure it's just the deployment ID, not a tuple with debug info
+        assert not isinstance(item, tuple), f"Found debug info tuple in cooldown_list: {item}"
