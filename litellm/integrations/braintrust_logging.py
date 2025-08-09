@@ -26,16 +26,6 @@ global_braintrust_sync_http_handler = HTTPHandler()
 API_BASE = "https://api.braintrustdata.com/v1"
 
 
-def get_utc_datetime():
-    import datetime as dt
-    from datetime import datetime
-
-    if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
-    else:
-        return datetime.utcnow()  # type: ignore
-
-
 class BraintrustLogger(CustomLogger):
     def __init__(
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
