@@ -56,6 +56,28 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
       onConfirm={handleReload}
       okText="Yes"
       cancelText="No"
+      okButtonProps={{
+        style: {
+          backgroundColor: "#6366f1",
+          borderColor: "#6366f1",
+          color: "white",
+          fontWeight: "500",
+          borderRadius: "0.375rem",
+          padding: "0.375rem 0.75rem",
+          height: "auto",
+          fontSize: "0.875rem",
+          lineHeight: "1.25rem",
+          transition: "all 0.2s ease-in-out",
+        },
+        onMouseEnter: (e) => {
+          e.currentTarget.style.backgroundColor = "#4f46e5";
+          e.currentTarget.style.borderColor = "#4f46e5";
+        },
+        onMouseLeave: (e) => {
+          e.currentTarget.style.backgroundColor = "#6366f1";
+          e.currentTarget.style.borderColor = "#6366f1";
+        },
+      }}
     >
       <Tooltip title="Reload latest pricing data from remote source">
         <Button
