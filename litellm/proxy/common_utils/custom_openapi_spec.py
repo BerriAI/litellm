@@ -103,8 +103,7 @@ class CustomOpenAPISpec:
                     # Add a simple example for the messages field
                     if field_name == "messages":
                         expanded_field["example"] = [
-                            {"role": "user", "content": "Hello, how are you?"},
-                            {"role": "assistant", "content": "I'm doing well, thank you! How can I help you today?"}
+                            {"role": "user", "content": "Hello, how are you?"}
                         ]
                     
                     expanded_schema["properties"][field_name] = expanded_field
