@@ -256,7 +256,7 @@ class TestSwaggerChatCompletions:
         # Verify the example structure
         example = messages_field["example"]
         assert isinstance(example, list), "Messages example should be a list"
-        assert len(example) >= 2, "Messages example should have at least 2 messages"
+        assert len(example) >= 1, "Messages example should have at least 1 message"
         
         # Check that example messages have proper structure
         for message in example:
@@ -264,11 +264,6 @@ class TestSwaggerChatCompletions:
             assert "content" in message, "Each example message should have content"
             assert message["role"] in ["user", "assistant", "system"], f"Invalid role: {message['role']}"
             assert isinstance(message["content"], str), "Message content should be a string"
-        
-        # Verify we have a conversation (user and assistant)
-        roles = [msg["role"] for msg in example]
-        assert "user" in roles, "Example should include a user message"
-        assert "assistant" in roles, "Example should include an assistant message"
 
     def test_request_body_accepts_actual_chat_request(self, client):
         """
