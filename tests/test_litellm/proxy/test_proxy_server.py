@@ -1117,9 +1117,9 @@ async def test_chat_completion_result_no_nested_none_values():
     )
 
     mock_model_response.choices = [mock_choice]
-    mock_model_response.usage = litellm.Usage(
+    setattr(mock_model_response, "usage", litellm.Usage(
         prompt_tokens=10, completion_tokens=5, total_tokens=15
-    )
+    ))
 
     # Verify the mock has None values before serialization
     raw_dict = mock_model_response.model_dump()
