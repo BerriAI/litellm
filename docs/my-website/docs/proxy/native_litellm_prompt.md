@@ -1,8 +1,12 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # LiteLLM Prompt Management (GitOps)
 
 Store prompts as `.prompt` files in your repository and use them directly with LiteLLM. No external services required.
 
-### Quick Start
+## Quick Start
 
 <Tabs>
 
