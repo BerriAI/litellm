@@ -5591,7 +5591,7 @@ class Router:
                     )
                 else:
                     model_info = None
-            except Exception as e:
+            except Exception:
                 model_info = None
 
             # get llm provider
