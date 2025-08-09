@@ -16,11 +16,7 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm.types.integrations.slack_alerting import AlertType
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionRequest,
-    OpenAIFileObject,
-)
+from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
 from litellm.types.mcp import (
     MCPAuthType,
     MCPSpecVersion,
