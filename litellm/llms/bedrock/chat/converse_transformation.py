@@ -1154,3 +1154,21 @@ class AmazonConverseConfig(BaseConfig):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+    
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Returns True if the model/provider should fake stream
+        """
+        if stream is True:
+            if model is not None:
+                if "gpt-oss" in model:
+                    return True
+                if "ai21" in model:
+                    return True
+        return False
