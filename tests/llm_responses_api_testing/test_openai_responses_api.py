@@ -30,6 +30,10 @@ class TestOpenAIResponsesAPITest(BaseResponsesAPITest):
         return {
             "model": "openai/gpt-4o",
         }
+    def get_base_completion_reasoning_call_args(self):
+        return {
+            "model": "openai/gpt-5-mini",
+        }
 
 
 class TestCustomLogger(CustomLogger):
