@@ -5,7 +5,17 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 ### INIT VARIABLES ####################
 import threading
 import os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args, TYPE_CHECKING
+from typing import (
+    Callable,
+    List,
+    Optional,
+    Dict,
+    Union,
+    Any,
+    Literal,
+    get_args,
+    TYPE_CHECKING,
+)
 from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
@@ -259,6 +269,12 @@ blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+include_cost_in_streaming_usage: bool = False
+### PROMPTS ###
+from litellm.types.prompts.init_prompts import PromptSpec
+
+prompt_name_config_map: Dict[str, PromptSpec] = {}
+
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False
@@ -341,7 +357,7 @@ disable_copilot_system_to_assistant: bool = (
 )
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION #####
+#### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
 
 
@@ -414,6 +430,9 @@ project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
 BEDROCK_CONVERSE_MODELS = [
+    "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
     "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -514,6 +533,7 @@ morph_models: List = []
 lambda_ai_models: List = []
 hyperbolic_models: List = []
 recraft_models: List = []
+oci_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -703,6 +723,8 @@ def add_known_models():
             hyperbolic_models.append(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
+        elif value.get("litellm_provider") == "oci":
+            oci_models.append(key)
 
 
 add_known_models()
@@ -791,6 +813,7 @@ model_list = (
     + morph_models
     + lambda_ai_models
     + recraft_models
+    + oci_models
 )
 
 model_list_set = set(model_list)
@@ -864,6 +887,7 @@ models_by_provider: dict = {
     "lambda_ai": lambda_ai_models,
     "hyperbolic": hyperbolic_models,
     "recraft": recraft_models,
+    "oci": oci_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1121,6 +1145,9 @@ openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
+from .llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
+)
 from .llms.openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
 )
@@ -1134,6 +1161,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 )
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
@@ -1184,6 +1212,7 @@ from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
+from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig

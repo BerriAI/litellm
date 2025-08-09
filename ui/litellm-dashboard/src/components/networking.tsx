@@ -1,3 +1,10 @@
+// Shared date formatter for daily activity endpoints
+export const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -73,6 +80,33 @@ export interface Model {
   model_name: string;
   litellm_params: Object;
   model_info: Object | null;
+}
+
+interface PromptInfo {
+  prompt_type: string;
+}
+
+export interface PromptSpec {
+  prompt_id: string;
+  litellm_params: Object;
+  prompt_info: PromptInfo;
+  created_at?: string
+  updated_at?: string
+}
+
+export interface PromptTemplateBase {
+  litellm_prompt_id: string;
+  content: string;
+  metadata?: Record<string, any> | null;
+}
+
+export interface PromptInfoResponse {
+  prompt_spec: PromptSpec;
+  raw_prompt_template: PromptTemplateBase | null;
+}
+
+export interface ListPromptsResponse {
+  prompts: PromptSpec[];
 }
 
 export interface Organization {
@@ -1430,13 +1464,6 @@ export const userDailyActivityCall = async (
       ? `${proxyBaseUrl}/user/daily/activity`
       : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1483,13 +1510,6 @@ export const tagDailyActivityCall = async (
       ? `${proxyBaseUrl}/tag/daily/activity`
       : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1539,13 +1559,6 @@ export const teamDailyActivityCall = async (
       ? `${proxyBaseUrl}/team/daily/activity`
       : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -3171,6 +3184,55 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
+export const userDailyActivityAggregatedCall = async (
+  accessToken: String,
+  startTime: Date,
+  endTime: Date
+) => {
+  /**
+   * Get aggregated daily user activity (no pagination)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/daily/activity/aggregated`
+      : `/user/daily/activity/aggregated`;
+    const queryParams = new URLSearchParams();
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
 export const userGetAllUsersCall = async (
   accessToken: String,
   role: String
@@ -4202,9 +4264,6 @@ export const serviceHealthCheck = async (
     }
 
     const data = await response.json();
-    message.success(
-      `Test request to ${service} made - check logs/alerts on ${service} to verify`
-    );
     // You can add additional logic here based on the response if needed
     return data;
   } catch (error) {
@@ -4880,6 +4939,212 @@ export const getGuardrailsList = async (accessToken: String) => {
   }
 };
 
+export const getPromptsList = async (accessToken: String) : Promise<ListPromptsResponse> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/prompts/list`
+      : `/prompts/list`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompts list:", error);
+    throw error;
+  }
+};
+
+export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptInfoResponse> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompt info:", error);
+    throw error;
+  }
+};
+
+export const createPromptCall = async (
+  accessToken: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts` : `/prompts`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create prompt:", error);
+    throw error;
+  }
+};
+
+export const updatePromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update prompt:", error);
+    throw error;
+  }
+};
+
+export const deletePromptCall = async (
+  accessToken: string,
+  promptId: string
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to delete prompt:", error);
+    throw error;
+  }
+};
+
+export const convertPromptFileToJson = async (
+  accessToken: string,
+  file: File
+): Promise<{ prompt_id: string; json_data: any }> => {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/utils/dotprompt_json_converter` 
+      : `/utils/dotprompt_json_converter`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to convert prompt file:", error);
+    throw error;
+  }
+};
+
+export const patchPromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to patch prompt:", error);
+    throw error;
+  }
+};
+
 export const createGuardrailCall = async (
   accessToken: string,
   guardrailData: any
@@ -5177,7 +5442,7 @@ export const deleteMCPServer = async (
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string) => {
+export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -5186,12 +5451,22 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 
     console.log("Fetching MCP tools from:", url);
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias && authValue) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else if (authValue) {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+      headers,
     });
 
     const data = await response.json();

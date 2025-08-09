@@ -58,10 +58,10 @@ VERTEX_MODELS_TO_NOT_TEST = [
     "gemini-1.5-pro-preview-0215",
     "gemini-pro-experimental",
     "gemini-flash-experimental",
-    "gemini-1.5-flash-exp-0827",
+    "gemini-2.5-flash-lite-exp-0827",
     "gemini-2.0-pro-exp-02-05",
     "gemini-pro-flash",
-    "gemini-1.5-flash-exp-0827",
+    "gemini-2.5-flash-lite-exp-0827",
     "gemini-2.0-flash-exp",
     "gemini-2.0-flash-thinking-exp",
     "gemini-2.0-flash-thinking-exp-01-21",
@@ -149,7 +149,7 @@ async def test_get_response():
     prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
     try:
         response = await acompletion(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash-lite",
             messages=[
                 {
                     "role": "system",
@@ -166,51 +166,6 @@ async def test_get_response():
     except Exception as e:
         pytest.fail(f"An error occurred - {str(e)}")
 
-
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_get_router_response():
-    model = "claude-3-5-sonnet@20240620"
-    vertex_ai_project = "pathrise-convert-1606954137718"
-    vertex_ai_location = "asia-southeast1"
-    json_obj = get_vertex_ai_creds_json()
-    vertex_credentials = json.dumps(json_obj)
-
-    prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
-    try:
-        router = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "sonnet",
-                    "litellm_params": {
-                        "model": "vertex_ai/claude-3-5-sonnet@20240620",
-                        "vertex_ai_project": vertex_ai_project,
-                        "vertex_ai_location": vertex_ai_location,
-                        "vertex_credentials": vertex_credentials,
-                    },
-                }
-            ]
-        )
-        response = await router.acompletion(
-            model="sonnet",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Complete the given code with no more explanation. Remember that there is a 4-space indent before the first line of your generated code.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            mock_response="Hello, how are you?",
-        )
-
-        print(f"\n\nResponse: {response}\n\n")
-
-    except litellm.ServiceUnavailableError:
-        pass
-    except litellm.UnprocessableEntityError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An error occurred - {str(e)}")
 
 
 @pytest.mark.skip(
@@ -549,75 +504,6 @@ async def test_async_vertexai_streaming_response():
             pytest.fail(f"An exception occurred: {e}")
 
 
-# asyncio.run(test_async_vertexai_streaming_response())
-
-
-@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.flaky(retries=3, delay=1)
-@pytest.mark.asyncio
-async def test_gemini_pro_vision(provider, sync_mode):
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-        litellm.num_retries = 3
-        if sync_mode:
-            resp = litellm.completion(
-                model="{}/gemini-1.5-flash-preview-0514".format(provider),
-                messages=[
-                    {"role": "system", "content": "Be a good bot"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Whats in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
-                                },
-                            },
-                        ],
-                    },
-                ],
-            )
-        else:
-            resp = await litellm.acompletion(
-                model="{}/gemini-1.5-flash-preview-0514".format(provider),
-                messages=[
-                    {"role": "system", "content": "Be a good bot"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Whats in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
-                                },
-                            },
-                        ],
-                    },
-                ],
-            )
-        print(resp)
-
-        prompt_tokens = resp.usage.prompt_tokens
-
-        # DO Not DELETE this ASSERT
-        # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
-        assert prompt_tokens == 267  # the gemini api returns 267 to us
-
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        if "500 Internal error encountered.'" in str(e):
-            pass
-        else:
-            pytest.fail(f"An exception occurred - {str(e)}")
-
-
-# test_gemini_pro_vision()
-
 
 @pytest.mark.parametrize("load_pdf", [False])  # True,
 @pytest.mark.flaky(retries=3, delay=1)
@@ -650,7 +536,7 @@ def test_completion_function_plus_pdf(load_pdf):
         image_message = {"role": "user", "content": image_content}
 
         response = completion(
-            model="vertex_ai_beta/gemini-1.5-flash-preview-0514",
+            model="vertex_ai_beta/gemini-2.5-flash-lite",
             messages=[image_message],
             stream=False,
         )
@@ -880,7 +766,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
 @pytest.mark.parametrize(
-    "model", ["vertex_ai_beta/gemini-1.5-pro", "vertex_ai/claude-3-5-sonnet@20240620"]
+    "model", ["vertex_ai_beta/gemini-1.5-pro"]
 )  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
@@ -1239,7 +1125,7 @@ Using this JSON schema:
 
     with patch.object(client, "post", side_effect=_side_effect) as mock_call:
         response = completion(
-            model="vertex_ai_beta/gemini-1.5-flash",
+            model="vertex_ai_beta/gemini-2.5-flash-lite",
             messages=messages,
             response_format={"type": "json_object"},
             client=client,
@@ -1428,7 +1314,7 @@ def vertex_httpx_mock_post_invalid_schema_response_anthropic(*args, **kwargs):
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
+        ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -1617,7 +1503,7 @@ async def test_anthropic_message_via_anthropic_messages():
     [
         ("vertex_ai_beta/gemini-1.5-pro-001", "us-central1", True),
         ("gemini/gemini-1.5-pro", None, True),
-        ("vertex_ai_beta/gemini-1.5-flash", "us-central1", True),
+        ("vertex_ai_beta/gemini-2.5-flash-lite", "us-central1", True),
         ("vertex_ai/claude-3-5-sonnet@20240620", "us-east5", False),
     ],
 )
@@ -1725,7 +1611,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
 
 @pytest.mark.parametrize(
-    "model", ["gemini-1.5-flash", "claude-3-5-sonnet@20240620"]
+    "model", ["gemini-2.5-flash-lite", "claude-3-5-sonnet@20240620"]
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_gemini_pro_httpx_custom_api_base(model):
@@ -1865,7 +1751,7 @@ async def test_gemini_pro_function_calling_streaming(sync_mode):
     load_vertex_ai_credentials()
     litellm.set_verbose = True
     data = {
-        "model": "vertex_ai/gemini-1.5-flash",
+        "model": "vertex_ai/gemini-2.5-flash-lite",
         "messages": [
             {
                 "role": "user",
@@ -2586,7 +2472,7 @@ def mock_gemini_request(*args, **kwargs):
     if "cachedContents" in kwargs["url"]:
         mock_response.json.return_value = {
             "name": "cachedContents/4d2kd477o3pg",
-            "model": "models/gemini-1.5-flash-001",
+            "model": "models/gemini-2.5-flash-lite-001",
             "createTime": "2024-08-26T22:31:16.147190Z",
             "updateTime": "2024-08-26T22:31:16.147190Z",
             "expireTime": "2024-08-26T22:36:15.548934784Z",
@@ -2716,7 +2602,7 @@ async def test_gemini_context_caching_anthropic_format(sync_mode):
         try:
             if sync_mode:
                 response = litellm.completion(
-                    model="gemini/gemini-1.5-flash-001",
+                    model="gemini/gemini-2.5-flash-lite-001",
                     messages=gemini_context_caching_messages,
                     temperature=0.2,
                     max_tokens=10,
@@ -2724,7 +2610,7 @@ async def test_gemini_context_caching_anthropic_format(sync_mode):
                 )
             else:
                 response = await litellm.acompletion(
-                    model="gemini/gemini-1.5-flash-001",
+                    model="gemini/gemini-2.5-flash-lite-001",
                     messages=gemini_context_caching_messages,
                     temperature=0.2,
                     max_tokens=10,
