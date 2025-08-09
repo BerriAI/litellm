@@ -41,7 +41,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         )
 
         # CometAPI-specific parameters (if any)
-        extra_body = {}
+        extra_body: dict[str, Any] = {}
         # TODO: Add CometAPI-specific parameter handling here
         # Example:
         # custom_param = non_default_params.pop("custom_param", None)
