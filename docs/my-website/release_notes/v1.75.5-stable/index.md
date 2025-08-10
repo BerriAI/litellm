@@ -1,6 +1,6 @@
 ---
-title: "v1.74.15-stable"
-slug: "v1-74-15"
+title: "[PRE-RELEASE]v1.75.5-stable"
+slug: "v1-75-5"
 date: 2025-08-02T10:00:00
 authors:
   - name: Krrish Dholakia
@@ -205,7 +205,7 @@ This release is not out yet.
 #### Features
 
 - **Models**
-    - Support /v1/models/{model_id} retrieval - [PR #13268](https://github.com/BerriAI/litellm/pull/13268)
+    - Support /v1/models/\{model_id\} retrieval - [PR #13268](https://github.com/BerriAI/litellm/pull/13268)
 - **Multi-instance**
     - Ensure disable_llm_api_endpoints works - [PR #13278](https://github.com/BerriAI/litellm/pull/13278)
 - **Logs**
