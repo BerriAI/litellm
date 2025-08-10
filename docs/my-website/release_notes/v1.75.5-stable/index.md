@@ -1,7 +1,7 @@
 ---
 title: "[PRE-RELEASE]v1.75.5-stable"
 slug: "v1-75-5"
-date: 2025-08-02T10:00:00
+date: 2025-08-10T10:00:00
 authors:
   - name: Krrish Dholakia
     title: CEO, LiteLLM
