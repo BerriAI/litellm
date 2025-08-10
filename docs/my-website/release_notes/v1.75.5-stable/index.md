@@ -136,54 +136,54 @@ This release is not out yet.
 
 #### Features
 
-- **Usage Analytics**
-    - New tab for user agent activity tracking - [PR #13146](https://github.com/BerriAI/litellm/pull/13146)
-    - Daily usage per user analytics - [PR #13147](https://github.com/BerriAI/litellm/pull/13147)
-    - Default usage chart date range set to last 7 days - [PR #12917](https://github.com/BerriAI/litellm/pull/12917)
-    - New advanced date range picker component - [PR #13141](https://github.com/BerriAI/litellm/pull/13141), [PR #13221](https://github.com/BerriAI/litellm/pull/13221)
-    - Show loader on usage cost charts after date selection - [PR #13113](https://github.com/BerriAI/litellm/pull/13113)
+- **Teams**
+    - Add team deletion check for teams with keys - [PR #12953](https://github.com/BerriAI/litellm/pull/12953)
 - **Models**
-    - Added Voyage, Jinai, Deepinfra and VolcEngine providers on UI - [PR #13131](https://github.com/BerriAI/litellm/pull/13131)
-    - Added Sagemaker on UI - [PR #13117](https://github.com/BerriAI/litellm/pull/13117)
-    - Preserve model order in `/v1/models` and `/model_group/info` endpoints - [PR #13178](https://github.com/BerriAI/litellm/pull/13178)
-
-- **Key Management**
-    - Properly parse JSON options for key generation in UI - [PR #12989](https://github.com/BerriAI/litellm/pull/12989)
-- **Authentication**
-    - **JWT Fields**  
-        - Add dot notation support for all JWT fields - [PR #13013](https://github.com/BerriAI/litellm/pull/13013)
+    - Add ability to set model alias per key/team - [PR #13276](https://github.com/BerriAI/litellm/pull/13276)
+    - New button to reload model pricing from model cost map - [PR #13464](https://github.com/BerriAI/litellm/pull/13464), [PR #13470](https://github.com/BerriAI/litellm/pull/13470)
+- **Keys**
+    - Make ‘team’ field required when creating service account keys - [PR #13302](https://github.com/BerriAI/litellm/pull/13302)
+    - Gray out key-based logging settings for non-enterprise users - prevents confusion on if ‘logging’ all up is supported - [PR #13431](https://github.com/BerriAI/litellm/pull/13431)
+- **Navbar**
+    - Add logo customization for LiteLLM admin UI - [PR #12958](https://github.com/BerriAI/litellm/pull/12958)
+- **Logs**
+    - Add token breakdowns on logs + session page - [PR #13357](https://github.com/BerriAI/litellm/pull/13357)
+- **Usage**
+    - Ensure Usage Page loads after the DB has large entries - [PR #13400](https://github.com/BerriAI/litellm/pull/13400)
+- **Test Key Page**
+    - allow uploading images for /chat/completions and /responses - [PR #13445](https://github.com/BerriAI/litellm/pull/13445)
+- **MCP**
+    - Add auth tokens to local storage auth - [PR #13473](https://github.com/BerriAI/litellm/pull/13473)
 
 #### Bugs
 
-- **Permissions**
-    - Fix object permission for organizations - [PR #13142](https://github.com/BerriAI/litellm/pull/13142)
-    - Fix list team v2 security check - [PR #13094](https://github.com/BerriAI/litellm/pull/13094)
-- **Models**
-    - Fix model reload on model update - [PR #13216](https://github.com/BerriAI/litellm/pull/13216)
-- **Router Settings**
-    - Fix displaying models for fallbacks in UI - [PR #13191](https://github.com/BerriAI/litellm/pull/13191)
-    - Fix wildcard model name handling with custom values - [PR #13116](https://github.com/BerriAI/litellm/pull/13116)
-    - Fix fallback delete functionality - [PR #12606](https://github.com/BerriAI/litellm/pull/12606)
-
+- **Custom Root Path**
+    - Fix login route when SSO is enabled - [PR #13267](https://github.com/BerriAI/litellm/pull/13267)
+- **Customers/End-users**
+    - Allow calling /v1/models when end user over budget - allows model listing to work on OpenWebUI when customer over budget - [PR #13320](https://github.com/BerriAI/litellm/pull/13320)
+- **Teams**
+    - Remove user - team membership, when user removed from team - [PR #13433](https://github.com/BerriAI/litellm/pull/13433)
+- **Errors**
+    - Bubble up network errors to user for Logging and Alerts page - [PR #13427](https://github.com/BerriAI/litellm/pull/13427)
+- **Model Hub**
+    - Show pricing for azure models, when base model is set - [PR #13418](https://github.com/BerriAI/litellm/pull/13418)
 ---
 
 ## Logging / Guardrail Integrations
 
 #### Features
 
-- **[MLFlow](../../docs/proxy/logging#mlflow)**
-    - Allow adding tags for MLFlow logging requests - [PR #13108](https://github.com/BerriAI/litellm/pull/13108)
-- **[Langfuse OTEL](../../docs/proxy/logging#langfuse)**
-    - Add comprehensive metadata support to Langfuse OpenTelemetry integration - [PR #12956](https://github.com/BerriAI/litellm/pull/12956)
-- **[Datadog LLM Observability](../../docs/proxy/logging#datadog)**
-    - Allow redacting message/response content for specific logging integrations - [PR #13158](https://github.com/BerriAI/litellm/pull/13158)
+- **Bedrock Guardrails**
+    - Redacted sensitive information in bedrock guardrails error message - [PR #13356](https://github.com/BerriAI/litellm/pull/13356)
+- **Standard Logging Payload**
+    - Fix ‘can’t register atextexit’ bug - [PR #13436](https://github.com/BerriAI/litellm/pull/13436)
 
 #### Bugs
 
-- **API Key Logging**
-    - Fix API Key being logged inappropriately - [PR #12978](https://github.com/BerriAI/litellm/pull/12978)
-- **MCP Spend Tracking**
-    - Set default value for MCP namespace tool name in spend table - [PR #12894](https://github.com/BerriAI/litellm/pull/12894)
+- **Braintrust**
+    - Allow setting of braintrust callback base url - [PR #13368](https://github.com/BerriAI/litellm/pull/13368)
+- **OTEL**
+    - Track pre_call hook latency  - [PR #13362](https://github.com/BerriAI/litellm/pull/13362)
 
 ---
 
@@ -191,21 +191,12 @@ This release is not out yet.
 
 #### Features
 
-- **Background Health Checks**
-    - Allow disabling background health checks for specific deployments - [PR #13186](https://github.com/BerriAI/litellm/pull/13186)
-- **Database Connection Management**
-    - Ensure stale Prisma clients disconnect DB connections properly - [PR #13140](https://github.com/BerriAI/litellm/pull/13140)
-- **Jitter Improvements**
-    - Fix jitter calculation (should be added not multiplied) - [PR #12901](https://github.com/BerriAI/litellm/pull/12901)
-
-#### Bugs
-
-- **Anthropic Streaming**
-    - Always use choice index=0 for Anthropic streaming responses - [PR #12666](https://github.com/BerriAI/litellm/pull/12666)
-- **Custom Auth**
-    - Bubble up custom exceptions properly - [PR #13093](https://github.com/BerriAI/litellm/pull/13093)
-- **OTEL with Managed Files**
-    - Fix using managed files with OTEL integration - [PR #13171](https://github.com/BerriAI/litellm/pull/13171)
+- **Team-BYOK models**
+    - Add wildcard model support - [PR #13278](https://github.com/BerriAI/litellm/pull/13278)
+- **Caching**
+    - GCP IAM auth support for caching - [PR #13275](https://github.com/BerriAI/litellm/pull/13275)
+- **Latency**
+    - reduce p99 latency w/ redis enabled by 50% - only updates model usage if tpm/rpm limits set - [PR #13362](https://github.com/BerriAI/litellm/pull/13362)
 
 ---
 
@@ -213,49 +204,39 @@ This release is not out yet.
 
 #### Features
 
-- **Database Migration**
-    - Move to use_prisma_migrate by default - [PR #13117](https://github.com/BerriAI/litellm/pull/13117)
-    - Resolve team-only models on auth checks - [PR #13117](https://github.com/BerriAI/litellm/pull/13117)
-- **Infrastructure**
-    - Loosened MCP Python version restrictions - [PR #13102](https://github.com/BerriAI/litellm/pull/13102)
-    - Migrate build_and_test to CI/CD Postgres DB - [PR #13166](https://github.com/BerriAI/litellm/pull/13166)
-- **Helm Charts**
-    - Allow Helm hooks for migration jobs - [PR #13174](https://github.com/BerriAI/litellm/pull/13174)
-    - Fix Helm migration job schema updates - [PR #12809](https://github.com/BerriAI/litellm/pull/12809)
+- **Models**
+    - Support /v1/models/{model_id} retrieval - [PR #13268](https://github.com/BerriAI/litellm/pull/13268)
+- **Multi-instance**
+    - Ensure disable_llm_api_endpoints works - [PR #13278](https://github.com/BerriAI/litellm/pull/13278)
+- **Logs**
+    - Add apscheduler log suppress - [PR #13299](https://github.com/BerriAI/litellm/pull/13299)
+- **Helm**
+    - Add labels to migrations job template - [PR #13343](https://github.com/BerriAI/litellm/pull/13343) s/o [@unique-jakub](https://github.com/unique-jakub)
 
 #### Bugs
 
-- **Docker**
-    - Remove obsolete `version` attribute in docker-compose - [PR #13172](https://github.com/BerriAI/litellm/pull/13172)
-    - Add openssl in runtime stage for non-root Dockerfile - [PR #13168](https://github.com/BerriAI/litellm/pull/13168)
-- **Database Configuration**
-    - Fix DB config through environment variables - [PR #13111](https://github.com/BerriAI/litellm/pull/13111)
-- **Logging**
-    - Suppress httpx logging - [PR #13217](https://github.com/BerriAI/litellm/pull/13217)
-- **Token Counting**
-    - Ignore unsupported keys like prefix in token counter - [PR #11954](https://github.com/BerriAI/litellm/pull/11954)
+- **Non-root image**
+    - Fix non-root image for migration - [PR #13379](https://github.com/BerriAI/litellm/pull/13379)
+- **Get Routes**
+    - Load get routes when using fastapi-offline - [PR #13466](https://github.com/BerriAI/litellm/pull/13466)
+- **Health checks**
+    - Generate unique trace IDs for Langfuse health checks - [PR #13468](https://github.com/BerriAI/litellm/pull/13468)
+- **Swagger**
+    - Allow using Swagger for /chat/completions - [PR #13469](https://github.com/BerriAI/litellm/pull/13469)
+- **Auth**
+    - Fix JWTs access not working with model access groups - [PR #13474](https://github.com/BerriAI/litellm/pull/13474)
+    
 ---
 
 ## New Contributors
-* @5731la made their first contribution in https://github.com/BerriAI/litellm/pull/12989
-* @restato made their first contribution in https://github.com/BerriAI/litellm/pull/12980
-* @strickvl made their first contribution in https://github.com/BerriAI/litellm/pull/12956
-* @Ne0-1 made their first contribution in https://github.com/BerriAI/litellm/pull/12995
-* @maxrabin made their first contribution in https://github.com/BerriAI/litellm/pull/13079
-* @lvuna made their first contribution in https://github.com/BerriAI/litellm/pull/12894
-* @Maximgitman made their first contribution in https://github.com/BerriAI/litellm/pull/12666
-* @pathikrit made their first contribution in https://github.com/BerriAI/litellm/pull/12901
-* @huetterma made their first contribution in https://github.com/BerriAI/litellm/pull/12809
-* @betterthanbreakfast made their first contribution in https://github.com/BerriAI/litellm/pull/13029
-* @phosae made their first contribution in https://github.com/BerriAI/litellm/pull/12606
-* @sahusiddharth made their first contribution in https://github.com/BerriAI/litellm/pull/12507
-* @Amit-kr26 made their first contribution in https://github.com/BerriAI/litellm/pull/11954
-* @kowyo made their first contribution in https://github.com/BerriAI/litellm/pull/13172
-* @AnandKhinvasara made their first contribution in https://github.com/BerriAI/litellm/pull/13187
-* @unique-jakub made their first contribution in https://github.com/BerriAI/litellm/pull/13174
-* @tyumentsev4 made their first contribution in https://github.com/BerriAI/litellm/pull/13134
-* @aayush-malviya-acquia made their first contribution in https://github.com/BerriAI/litellm/pull/12978
-* @kankute-sameer made their first contribution in https://github.com/BerriAI/litellm/pull/13225
-* @AlexanderYastrebov made their first contribution in https://github.com/BerriAI/litellm/pull/13178
 
-## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.9-stable...v1.74.15.rc)**
+* @bbartels made their first contribution in https://github.com/BerriAI/litellm/pull/13244
+* @breno-aumo made their first contribution in https://github.com/BerriAI/litellm/pull/13206
+* @pascalwhoop made their first contribution in https://github.com/BerriAI/litellm/pull/13122
+* @ZPerling made their first contribution in https://github.com/BerriAI/litellm/pull/13045
+* @zjx20 made their first contribution in https://github.com/BerriAI/litellm/pull/13181
+* @edwarddamato made their first contribution in https://github.com/BerriAI/litellm/pull/13368
+* @msannan2 made their first contribution in https://github.com/BerriAI/litellm/pull/12169
+
+
+## **[Full Changelog](https://github.com/BerriAI/litellm/compare/v1.74.15-stable...v1.75.5-stable.rc-draft)**
