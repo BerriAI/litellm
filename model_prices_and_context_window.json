@@ -2457,7 +2457,7 @@
     },
     "azure/gpt-5-chat": {
         "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -2490,7 +2490,7 @@
     },
     "azure/gpt-5-chat-latest": {
         "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -12582,8 +12582,8 @@
     },
     "openai.gpt-oss-20b-1:0": {
         "max_tokens": 128000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 32000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 7e-08,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
@@ -12596,8 +12596,8 @@
     },
     "openai.gpt-oss-120b-1:0": {
         "max_tokens": 128000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 32000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
@@ -15605,7 +15605,7 @@
         "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/glm-4p5": {
-        "max_tokens": 128000,
+        "max_tokens": 96000,
         "max_input_tokens": 128000,
         "max_output_tokens": 96000,
         "input_cost_per_token": 5.5e-07,
@@ -15618,7 +15618,7 @@
         "source": "https://fireworks.ai/models/fireworks/glm-4p5"
     },
     "fireworks_ai/accounts/fireworks/models/glm-4p5-air": {
-        "max_tokens": 128000,
+        "max_tokens": 96000,
         "max_input_tokens": 128000,
         "max_output_tokens": 96000,
         "input_cost_per_token": 2.2e-07,
