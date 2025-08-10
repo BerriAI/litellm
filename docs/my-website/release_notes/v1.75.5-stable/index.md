@@ -33,30 +33,25 @@ This release is not out yet.
 
 #### New Model Support
 
-| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Cost per Image |
-| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | -------------- |
-| OpenRouter | `openrouter/x-ai/grok-4` | 256k | $3 | $15 | N/A |
-| Google AI Studio | `gemini/imagen-4.0-generate-preview-06-06` | N/A | N/A | N/A | $0.04 |
-| Google AI Studio | `gemini/imagen-4.0-ultra-generate-preview-06-06` | N/A | N/A | N/A | $0.06 |
-| Google AI Studio | `gemini/imagen-4.0-fast-generate-preview-06-06` | N/A | N/A | N/A | $0.02 |
-| Google AI Studio | `gemini/imagen-3.0-generate-002` | N/A | N/A | N/A | $0.04 |
-| Google AI Studio | `gemini/imagen-3.0-generate-001` | N/A | N/A | N/A | $0.04 |
-| Google AI Studio | `gemini/imagen-3.0-fast-generate-001` | N/A | N/A | N/A | $0.02 |
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | 
+| Bedrock | `bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0` | 200k | $15 | $75 |
+| Bedrock | `bedrock/openai.gpt-oss-20b-1:0` | 200k | 0.07 | 0.3 |
+| Bedrock | `bedrock/openai.gpt-oss-120b-1:0` | 200k | 0.15 | 0.6 |
+| Fireworks AI | `fireworks_ai/accounts/fireworks/models/glm-4p5` | 128k | 0.55 | 2.19 |
+| Fireworks AI | `fireworks_ai/accounts/fireworks/models/glm-4p5-air` | 128k | 0.22 | 0.88 |
+| Fireworks AI | `fireworks_ai/accounts/fireworks/models/gpt-oss-120b` | 131072 | 0.15 | 0.6 |
+| Fireworks AI | `fireworks_ai/accounts/fireworks/models/gpt-oss-20b` | 131072 | 0.05 | 0.2 |
+| Groq | `groq/openai/gpt-oss-20b` | 131072 | 0.1 | 0.5 |
+| Groq | `groq/openai/gpt-oss-120b` | 131072 | 0.15 | 0.75 |
+
 
 #### Features
 
-- **[Bedrock](../../docs/providers/bedrock)**
-    - add bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0 - [PR #13295](https://github.com/BerriAI/litellm/pull/13295)
-    - Add Bedrock gpt oss models - [PR #13342](https://github.com/BerriAI/litellm/pull/13342)
-- **[Fireworks AI](../../docs/providers/fireworks_ai)**
-    - Add fireworks_ai/glm-4p5 - [PR #13297](https://github.com/BerriAI/litellm/pull/13297)
-    - Add fireworks gpt-oss models - [PR #13303](https://github.com/BerriAI/litellm/pull/13303)
 - **[OCI](../../docs/providers/oci)**
     - New LLM provider - [PR #13206](https://github.com/BerriAI/litellm/pull/13206)
 - **[JinaAI](../../docs/providers/jina_ai)**
     - support multimodal embedding models - [PR #13181](https://github.com/BerriAI/litellm/pull/13181)
-- **[Groq](../../docs/providers/groq)**
-    - add groq/openai/gpt-oss - [PR #13363](https://github.com/BerriAI/litellm/pull/13363)
 - **[GPT-5 (OpenAI/Azure)](../../docs/providers/openai)**
     - Add gpt-5 models - [PR #13377](https://github.com/BerriAI/litellm/pull/13377) s/o @lowjiansheng
     - Add azure/gpt-5 model family - [PR #13385](https://github.com/BerriAI/litellm/pull/13385)
