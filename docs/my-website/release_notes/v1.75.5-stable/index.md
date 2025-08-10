@@ -92,15 +92,28 @@ This release is not out yet.
 
 ## LLM API Endpoints
 
+#### Features
+
+- `/responses` 
+    - Responses API Session Handling w/ support for images - [PR #13347](https://github.com/BerriAI/litellm/pull/13347)
+    - failed if input containing ResponseReasoningItem - [PR #13465](https://github.com/BerriAI/litellm/pull/13465)
+    - Support custom tools - [PR #13418](https://github.com/BerriAI/litellm/pull/13418)
+
 #### Bugs
 
-- **[/generateContent](../../docs/generateContent)**
-    - Support for query_params in generateContent routes for API Key setting - [PR #13100](https://github.com/BerriAI/litellm/pull/13100)
-    - Ensure "x-goog-api-key" is used for auth to google ai studio when using /generateContent on LiteLLM - [PR #13098](https://github.com/BerriAI/litellm/pull/13098)
-    - Ensure tool calling works as expected on generateContent - [PR #13189](https://github.com/BerriAI/litellm/pull/13189)
-- **[/vertex_ai (Passthrough)](../../docs/pass_through/vertex_ai)**
-    - Ensure multimodal embedding responses are logged properly - [PR #13050](https://github.com/BerriAI/litellm/pull/13050)
-
+- `/chat/completions` 
+    - Fix completion_token_details usage object missing ‘text’ tokens - [PR #13234](https://github.com/BerriAI/litellm/pull/13234)
+    - (SDK) handle tool being a pydantic object - [PR #13274](https://github.com/BerriAI/litellm/pull/13274)
+    - include cost in streaming usage object - [PR #13418](https://github.com/BerriAI/litellm/pull/13418)
+    - Exclude none fields on /chat/completion - allows usage with n8n - [PR #13320](https://github.com/BerriAI/litellm/pull/13320)
+- `/responses` 
+    - Transform function call in response for non-openai models (gemini/anthropic) - [PR #13260](https://github.com/BerriAI/litellm/pull/13260)
+    - Fix unsupported operand error with model groups - [PR #13293](https://github.com/BerriAI/litellm/pull/13293)
+    - Responses api session management for streaming responses - [PR #13396](https://github.com/BerriAI/litellm/pull/13396)
+- `/v1/messages`
+    - Added litellm claude code count tokens - [PR #13261](https://github.com/BerriAI/litellm/pull/13261)
+- `/vector_stores`
+    - Fix create/search vector store errors - [PR #13285](https://github.com/BerriAI/litellm/pull/13285)
 ---
 
 ## [MCP Gateway](../../docs/mcp)
