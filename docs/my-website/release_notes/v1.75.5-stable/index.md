@@ -27,43 +27,6 @@ This release is not out yet.
 
 :::
 
-
----
-
-## Key Highlights
-
-- **User Agent Activity Tracking** - Track how much usage each coding tool gets.
-- **Prompt Management** - Use Git-Ops style prompt management with prompt templates.
-- **MCP Gateway: Guardrails** - Support for using Guardrails with MCP servers.
-- **Google AI Studio Imagen4** - Support for using Imagen4 models on Google AI Studio.
-
----
-
-## User Agent Activity Tracking
-
-<Image 
-  img={require('../../img/agent_1.png')}
-  style={{width: '100%', display: 'block', margin: '2rem auto'}}
-/>
-
-<br/>
-
-This release brings support for tracking usage and costs for AI-powered coding tools like Claude Code, Roo Code, Gemini CLI through LiteLLM. You can now track LLM cost, total tokens used, and DAU/WAU/MAU for each coding tool.
-
-This is great to central AI Platform teams looking to track how they are helping developer productivity. 
-
-[Read More](https://docs.litellm.ai/docs/tutorials/cost_tracking_coding)
-
----
-
-## Prompt Management
-
-<br/>
-
-
-
-[Read More](../../docs/proxy/prompt_management)
-
 ---
 
 ## New Models / Updated Models
@@ -82,30 +45,41 @@ This is great to central AI Platform teams looking to track how they are helping
 
 #### Features
 
-- **[Google AI Studio](../../docs/providers/gemini)**
-    - Added Google AI Studio Imagen4 model family support - [PR #13065](https://github.com/BerriAI/litellm/pull/13065), [Get Started](../../docs/providers/google_ai_studio/image_gen)
-- **[Azure OpenAI](../../docs/providers/azure/azure)**
-    - Azure `api_version="preview"` support - [PR #13072](https://github.com/BerriAI/litellm/pull/13072), [Get Started](../../docs/providers/azure/azure#setting-api-version)
-    - Password protected certificate files support - [PR #12995](https://github.com/BerriAI/litellm/pull/12995), [Get Started](../../docs/providers/azure/azure#authentication)
-- **[AWS Bedrock](../../docs/providers/bedrock)**
-    - Cost tracking via Anthropic `/v1/messages` - [PR #13072](https://github.com/BerriAI/litellm/pull/13072)
-    - Computer use support - [PR #13150](https://github.com/BerriAI/litellm/pull/13150)
-- **[OpenRouter](../../docs/providers/openrouter)**
-    - Added Grok4 model support - [PR #13018](https://github.com/BerriAI/litellm/pull/13018)
+- **[Bedrock](../../docs/providers/bedrock)**
+    - add bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0 - [PR #13295](https://github.com/BerriAI/litellm/pull/13295)
+    - Add Bedrock gpt oss models - [PR #13342](https://github.com/BerriAI/litellm/pull/13342)
+- **[Fireworks AI](../../docs/providers/fireworks_ai)**
+    - Add fireworks_ai/glm-4p5 - [PR #13297](https://github.com/BerriAI/litellm/pull/13297)
+    - Add fireworks gpt-oss models - [PR #13303](https://github.com/BerriAI/litellm/pull/13303)
+- **[OCI](../../docs/providers/oci)**
+    - New LLM provider - [PR #13206](https://github.com/BerriAI/litellm/pull/13206)
+- **[JinaAI](../../docs/providers/jina_ai)**
+    - support multimodal embedding models - [PR #13181](https://github.com/BerriAI/litellm/pull/13181)
+- **[Groq](../../docs/providers/groq)**
+    - add groq/openai/gpt-oss - [PR #13363](https://github.com/BerriAI/litellm/pull/13363)
+- **[GPT-5 (OpenAI/Azure)](../../docs/providers/openai)**
+    - Add gpt-5 models - [PR #13377](https://github.com/BerriAI/litellm/pull/13377) s/o @lowjiansheng
+    - Add azure/gpt-5 model family - [PR #13385](https://github.com/BerriAI/litellm/pull/13385)
+    - Support drop_params for temperature - [PR #13390](https://github.com/BerriAI/litellm/pull/13390)
+    - Map max_tokens to max_completion_tokens - [PR #13390](https://github.com/BerriAI/litellm/pull/13390)
 - **[Anthropic](../../docs/providers/anthropic)**
-    - Auto Cache Control Injection - Improved cache_control_injection_points with negative index support - [PR #13187](https://github.com/BerriAI/litellm/pull/13187), [Get Started](../../docs/tutorials/prompt_caching)
-    - Working mid-stream fallbacks with token usage tracking - [PR #13149](https://github.com/BerriAI/litellm/pull/13149), [PR #13170](https://github.com/BerriAI/litellm/pull/13170)
-- **[Perplexity](../../docs/providers/perplexity)**
-    - Citation annotations support - [PR #13225](https://github.com/BerriAI/litellm/pull/13225)
+    - Add claude-opus-4-1 on model cost map - [PR #13384](https://github.com/BerriAI/litellm/pull/13384)
+- **[OpenRouter](../../docs/providers/openrouter)**
+    - Add gpt-oss to model cost map - [PR #13442](https://github.com/BerriAI/litellm/pull/13442)
+- **[Cerebras](../../docs/providers/cerebras)**
+    - Add gpt-oss to model cost map - [PR #13442](https://github.com/BerriAI/litellm/pull/13442)
+- **[Azure](../../docs/providers/azure)**
+    - Support drop params for ‘temperature’ on o-series models - [PR #13353](https://github.com/BerriAI/litellm/pull/13353)
+- **[GradientAI](../../docs/providers/gradient_ai)**
+    - New LLM Provider - [PR #12169](https://github.com/BerriAI/litellm/pull/12169)
 
 #### Bugs
 
-- **[Gemini](../../docs/providers/gemini)**
-    - Fix merge_reasoning_content_in_choices parameter issue - [PR #13066](https://github.com/BerriAI/litellm/pull/13066), [Get Started](../../docs/tutorials/openweb_ui#render-thinking-content-on-open-webui)
-    - Added support for using `GOOGLE_API_KEY` environment variable for Google AI Studio - [PR #12507](https://github.com/BerriAI/litellm/pull/12507)
-- **[vLLM/OpenAI-like](../../docs/providers/vllm)**
-    - Fix missing extra_headers support for embeddings - [PR #13198](https://github.com/BerriAI/litellm/pull/13198)
-
+- **[OpenAI](../../docs/providers/openai)**
+    - Add ‘service_tier’ and ‘safety_identifier’ as supported responses api params - [PR #13258](https://github.com/BerriAI/litellm/pull/13258)
+    - Correct pricing for web search on 4o-mini - [PR #13269](https://github.com/BerriAI/litellm/pull/13269)
+- **[Mistral](../../docs/providers/mistral)**
+    - Handle $id and $schema fields when calling mistral - [PR #13389](https://github.com/BerriAI/litellm/pull/13389)
 ---
 
 ## LLM API Endpoints
