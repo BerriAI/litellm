@@ -120,26 +120,14 @@ This release is not out yet.
 
 #### Features
 
-- **Health Check Improvements**
-    - Add health check endpoints for MCP servers - [PR #13106](https://github.com/BerriAI/litellm/pull/13106)
-- **Guardrails Integration**
-    - Add pre and during call hooks initialization - [PR #13067](https://github.com/BerriAI/litellm/pull/13067)
-    - Move pre and during hooks to ProxyLogging - [PR #13109](https://github.com/BerriAI/litellm/pull/13109)
-    - MCP pre and during guardrails implementation - [PR #13188](https://github.com/BerriAI/litellm/pull/13188)
-- **Protocol & Header Support**
-    - Add protocol headers support - [PR #13062](https://github.com/BerriAI/litellm/pull/13062)
-- **URL & Namespacing**
-    - Improve MCP server URL validation for internal/Kubernetes URLs - [PR #13099](https://github.com/BerriAI/litellm/pull/13099)
+- Add route check for internal users - [PR #13350](https://github.com/BerriAI/litellm/pull/13350)
+- MCP Guardrails - docs - [PR #13392](https://github.com/BerriAI/litellm/pull/13392)
 
 
 #### Bugs
 
-- **UI**
-    - Fix scrolling issue with MCP tools - [PR #13015](https://github.com/BerriAI/litellm/pull/13015)
-    - Fix MCP client list failure - [PR #13114](https://github.com/BerriAI/litellm/pull/13114)
-
-
-[Read More](../../docs/mcp)
+- Fix auth on UI for bearer token servers - [PR #13312](https://github.com/BerriAI/litellm/pull/13312)
+- allow access group on mcp tool retrieval - [PR #13425](https://github.com/BerriAI/litellm/pull/13425)
 
 
 ---
