@@ -44,7 +44,22 @@ This release is not out yet.
 | Fireworks AI | `fireworks_ai/accounts/fireworks/models/gpt-oss-20b` | 131072 | 0.05 | 0.2 |
 | Groq | `groq/openai/gpt-oss-20b` | 131072 | 0.1 | 0.5 |
 | Groq | `groq/openai/gpt-oss-120b` | 131072 | 0.15 | 0.75 |
-
+| OpenAI | `openai/gpt-5` | 400k | 1.25 | 10 | 
+| OpenAI | `openai/gpt-5-2025-08-07` | 400k | 1.25 | 10 | 
+| OpenAI | `openai/gpt-5-mini` | 400k | 0.25 | 2 |
+| OpenAI | `openai/gpt-5-mini-2025-08-07` | 400k | 0.25 | 2 | 
+| OpenAI | `openai/gpt-5-nano` | 400k | 0.05 | 0.4 | 
+| OpenAI | `openai/gpt-5-nano-2025-08-07` | 400k | 0.05 | 0.4 | 
+| OpenAI | `openai/gpt-5-chat` | 400k | 1.25 | 10 | 
+| OpenAI | `openai/gpt-5-chat-latest` | 400k | 1.25 | 10 | 
+| Azure | `azure/gpt-5` | 400k | 1.25 | 10 | 
+| Azure | `azure/gpt-5-2025-08-07` | 400k | 1.25 | 10 | 
+| Azure | `azure/gpt-5-mini` | 400k | 0.25 | 2 | 
+| Azure | `azure/gpt-5-mini-2025-08-07` | 400k | 0.25 | 2 | 
+| Azure | `azure/gpt-5-nano-2025-08-07` | 400k | 0.05 | 0.4 | 
+| Azure | `azure/gpt-5-nano` | 400k | 0.05 | 0.4 | 
+| Azure | `azure/gpt-5-chat` | 400k | 1.25 | 10 | 
+| Azure | `azure/gpt-5-chat-latest` | 400k | 1.25 | 10 | 
 
 #### Features
 
@@ -52,9 +67,7 @@ This release is not out yet.
     - New LLM provider - [PR #13206](https://github.com/BerriAI/litellm/pull/13206)
 - **[JinaAI](../../docs/providers/jina_ai)**
     - support multimodal embedding models - [PR #13181](https://github.com/BerriAI/litellm/pull/13181)
-- **[GPT-5 (OpenAI/Azure)](../../docs/providers/openai)**
-    - Add gpt-5 models - [PR #13377](https://github.com/BerriAI/litellm/pull/13377) s/o @lowjiansheng
-    - Add azure/gpt-5 model family - [PR #13385](https://github.com/BerriAI/litellm/pull/13385)
+- **GPT-5 ([OpenAI](../../docs/providers/openai)/[Azure](../../docs/providers/azure))**
     - Support drop_params for temperature - [PR #13390](https://github.com/BerriAI/litellm/pull/13390)
     - Map max_tokens to max_completion_tokens - [PR #13390](https://github.com/BerriAI/litellm/pull/13390)
 - **[Anthropic](../../docs/providers/anthropic)**
