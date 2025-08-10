@@ -15605,7 +15605,7 @@
         "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/glm-4p5": {
-        "max_tokens": 128000,
+        "max_tokens": 96000,
         "max_input_tokens": 128000,
         "max_output_tokens": 96000,
         "input_cost_per_token": 5.5e-07,
@@ -15618,7 +15618,7 @@
         "source": "https://fireworks.ai/models/fireworks/glm-4p5"
     },
     "fireworks_ai/accounts/fireworks/models/glm-4p5-air": {
-        "max_tokens": 128000,
+        "max_tokens": 96000,
         "max_input_tokens": 128000,
         "max_output_tokens": 96000,
         "input_cost_per_token": 2.2e-07,
