@@ -17,6 +17,7 @@ export enum Providers {
   ElevenLabs = "ElevenLabs",            
   FireworksAI = "Fireworks AI",         
   Google_AI_Studio = "Google AI Studio",
+  GradientAI = "GradientAI",
   Groq = "Groq",                       
   JinaAI = "Jina AI",                 
   MistralAI = "Mistral AI",             
@@ -35,7 +36,7 @@ export enum Providers {
   Voyage = "Voyage AI",                
   xAI = "xAI",                          
 }
-  
+
 export const provider_map: Record<string, string> = {
     OpenAI: "openai",
     OpenAI_Text: "text-completion-openai",
@@ -61,6 +62,7 @@ export const provider_map: Record<string, string> = {
     TogetherAI: "together_ai",
     Openrouter: "openrouter",
     FireworksAI: "fireworks_ai",
+    GradientAI: "gradient_ai",
     Triton: "triton",
     Deepgram: "deepgram",
     ElevenLabs: "elevenlabs",
@@ -99,6 +101,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
+    [Providers.GradientAI]: `${asset_logos_folder}gradientai.svg`,
     [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
     [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
     [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
@@ -169,9 +172,9 @@ export const getPlaceholder = (selectedProvider: string): string => {
     console.log(`Provider key: ${providerKey}`);
     let custom_llm_provider = provider_map[providerKey];
     console.log(`Provider mapped to: ${custom_llm_provider}`);
-    
+
     let providerModels: Array<string> = [];
-    
+
     if (providerKey && typeof modelMap === "object") {
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
@@ -184,7 +187,6 @@ export const getPlaceholder = (selectedProvider: string): string => {
           providerModels.push(key);
         }
       });
-  
       // Special case for cohere
       // we need both cohere_chat and cohere models to show on dropdown
       if (providerKey == Providers.Cohere) {
@@ -217,6 +219,6 @@ export const getPlaceholder = (selectedProvider: string): string => {
         });
       }
     }
-  
+
     return providerModels;
   };
