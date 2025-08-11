@@ -1200,6 +1200,7 @@ from .llms.azure.azure import (
 )
 
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig
