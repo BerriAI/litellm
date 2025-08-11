@@ -14,7 +14,7 @@ from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
 )
-from litellm.types.utils import Message, ModelResponse
+from litellm.types.utils import Message, ModelResponse, ModelResponseStream
 
 
 class TestOllamaConfig:
@@ -178,11 +178,10 @@ class TestOllamaTextCompletionResponseIterator:
 
         result = iterator.chunk_parser(chunk_with_thinking)
 
-        # Should return empty text and not be finished
-        assert result["text"] == ""
-        assert result["is_finished"] is False
-        assert result["finish_reason"] == ""
-        assert result["usage"] is None
+        # Should return a ModelResponseStream with reasoning content
+        assert isinstance(result, ModelResponseStream)
+        assert result.choices and result.choices[0].delta is not None
+        assert getattr(result.choices[0].delta, "reasoning_content") == "User"
 
     def test_chunk_parser_normal_response(self):
         """Test that normal response chunks still work."""
