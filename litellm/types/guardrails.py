@@ -40,6 +40,7 @@ class SupportedGuardrailIntegrations(Enum):
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
     MODEL_ARMOR = "model_armor"
     OPENAI_MODERATION = "openai_moderation"
+    NOMA = "noma"
 
 class Role(Enum):
     SYSTEM = "system"
@@ -359,6 +360,23 @@ class PillarGuardrailConfigModel(BaseModel):
     )
 
 
+class NomaGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the Noma Security guardrail"""
+
+    application_id: Optional[str] = Field(
+        default=None,
+        description="Application ID for Noma Security. Defaults to 'litellm' if not provided",
+    )
+    monitor_mode: Optional[bool] = Field(
+        default=None,
+        description="If True, logs violations without blocking. Defaults to False if not provided",
+    )
+    block_failures: Optional[bool] = Field(
+        default=None,
+        description="If True, blocks requests on API failures. Defaults to True if not provided",
+    )
+
+
 class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
@@ -445,6 +463,7 @@ class LitellmParams(
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
+    NomaGuardrailConfigModel,
     BaseLitellmParams,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
