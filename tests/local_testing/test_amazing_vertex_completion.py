@@ -167,7 +167,6 @@ async def test_get_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-
 @pytest.mark.skip(
     reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
 )
@@ -504,75 +503,6 @@ async def test_async_vertexai_streaming_response():
             pytest.fail(f"An exception occurred: {e}")
 
 
-# asyncio.run(test_async_vertexai_streaming_response())
-
-
-@pytest.mark.parametrize("provider", ["vertex_ai"])  # "vertex_ai_beta"
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.flaky(retries=3, delay=1)
-@pytest.mark.asyncio
-async def test_gemini_pro_vision(provider, sync_mode):
-    try:
-        load_vertex_ai_credentials()
-        litellm.set_verbose = True
-        litellm.num_retries = 3
-        if sync_mode:
-            resp = litellm.completion(
-                model="{}/gemini-2.5-flash-lite".format(provider),
-                messages=[
-                    {"role": "system", "content": "Be a good bot"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Whats in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
-                                },
-                            },
-                        ],
-                    },
-                ],
-            )
-        else:
-            resp = await litellm.acompletion(
-                model="{}/gemini-2.5-flash-lite".format(provider),
-                messages=[
-                    {"role": "system", "content": "Be a good bot"},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Whats in this image?"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
-                                },
-                            },
-                        ],
-                    },
-                ],
-            )
-        print(resp)
-
-        prompt_tokens = resp.usage.prompt_tokens
-
-        # DO Not DELETE this ASSERT
-        # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
-        assert prompt_tokens == 267  # the gemini api returns 267 to us
-
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        if "500 Internal error encountered.'" in str(e):
-            pass
-        else:
-            pytest.fail(f"An exception occurred - {str(e)}")
-
-
-# test_gemini_pro_vision()
-
 
 @pytest.mark.parametrize("load_pdf", [False])  # True,
 @pytest.mark.flaky(retries=3, delay=1)
@@ -615,7 +545,6 @@ def test_completion_function_plus_pdf(load_pdf):
         pass
     except Exception as e:
         pytest.fail("Got={}".format(str(e)))
-
 
 def encode_image(image_path):
     import base64
@@ -834,9 +763,7 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize(
-    "model", ["vertex_ai_beta/gemini-1.5-pro"]
-)  # "vertex_ai",
+@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-1.5-pro"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
