@@ -1,8 +1,9 @@
 """
-This is a rate limiter implementation based on a similar one by Envoy proxy. 
+This is a rate limiter implementation based on a similar one by Envoy proxy.
 
 This is currently in development and not yet ready for production.
 """
+
 import os
 from datetime import datetime
 from typing import (
@@ -309,13 +310,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 continue
 
             key_metadata[window_key] = {
-                "requests_limit": int(requests_limit)
-                if requests_limit is not None
-                else None,
+                "requests_limit": (
+                    int(requests_limit) if requests_limit is not None else None
+                ),
                 "tokens_limit": int(tokens_limit) if tokens_limit is not None else None,
-                "max_parallel_requests_limit": int(max_parallel_requests_limit)
-                if max_parallel_requests_limit is not None
-                else None,
+                "max_parallel_requests_limit": (
+                    int(max_parallel_requests_limit)
+                    if max_parallel_requests_limit is not None
+                    else None
+                ),
                 "window_size": int(window_size),
                 "descriptor_key": descriptor_key,
             }
@@ -394,7 +397,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors = []
 
         # API Key rate limits
-        if user_api_key_dict.api_key:
+        if user_api_key_dict.api_key and (
+            user_api_key_dict.rpm_limit is not None
+            or user_api_key_dict.tpm_limit is not None
+            or user_api_key_dict.max_parallel_requests is not None
+        ):
             descriptors.append(
                 RateLimitDescriptor(
                     key="api_key",
@@ -409,7 +416,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         # User rate limits
-        if user_api_key_dict.user_id:
+        if user_api_key_dict.user_id and (
+            user_api_key_dict.user_rpm_limit is not None
+            or user_api_key_dict.user_tpm_limit is not None
+        ):
             descriptors.append(
                 RateLimitDescriptor(
                     key="user",
@@ -423,7 +433,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         # Team rate limits
-        if user_api_key_dict.team_id:
+        if user_api_key_dict.team_id and (
+            user_api_key_dict.team_rpm_limit is not None
+            or user_api_key_dict.team_tpm_limit is not None
+        ):
             descriptors.append(
                 RateLimitDescriptor(
                     key="team",
@@ -437,7 +450,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         # End user rate limits
-        if user_api_key_dict.end_user_id:
+        if user_api_key_dict.end_user_id and (
+            user_api_key_dict.end_user_rpm_limit is not None
+            or user_api_key_dict.end_user_tpm_limit is not None
+        ):
             descriptors.append(
                 RateLimitDescriptor(
                     key="end_user",
@@ -483,28 +499,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
-        # Check rate limits
-        response = await self.should_rate_limit(
-            descriptors=descriptors,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-        )
+        # Only check rate limits if we have descriptors with actual limits
+        if descriptors:
+            response = await self.should_rate_limit(
+                descriptors=descriptors,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
 
-        if response["overall_code"] == "OVER_LIMIT":
-            # Find which descriptor hit the limit
-            for i, status in enumerate(response["statuses"]):
-                if status["code"] == "OVER_LIMIT":
-                    descriptor = descriptors[i]
-                    raise HTTPException(
-                        status_code=429,
-                        detail=f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. Remaining: {status['limit_remaining']}",
-                        headers={
-                            "retry-after": str(self.window_size)
-                        },  # Retry after 1 minute
-                    )
+            if response["overall_code"] == "OVER_LIMIT":
+                # Find which descriptor hit the limit
+                for i, status in enumerate(response["statuses"]):
+                    if status["code"] == "OVER_LIMIT":
+                        descriptor = descriptors[i]
+                        raise HTTPException(
+                            status_code=429,
+                            detail=f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. Remaining: {status['limit_remaining']}",
+                            headers={
+                                "retry-after": str(self.window_size)
+                            },  # Retry after 1 minute
+                        )
 
-        else:
-            # add descriptors to request headers
-            data["litellm_proxy_rate_limit_response"] = response
+            else:
+                # add descriptors to request headers
+                data["litellm_proxy_rate_limit_response"] = response
 
     def _create_pipeline_operations(
         self,
@@ -690,9 +707,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[
-                Span, None
-            ] = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Union[Span, None] = (
+                _get_parent_otel_span_from_kwargs(kwargs)
+            )
             user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key")
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 

@@ -9,6 +9,7 @@ Docs - https://docs.mistral.ai/api/
 from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
+
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -147,7 +148,8 @@ class MistralConfig(OpenAIGPTConfig):
             if param == "max_completion_tokens":  # max_completion_tokens should take priority
                 optional_params["max_tokens"] = value
             if param == "tools":
-                optional_params["tools"] = value
+                # Clean tools to remove problematic schema fields for Mistral API
+                optional_params["tools"] = self._clean_tool_schema_for_mistral(value)
             if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "temperature":
@@ -195,7 +197,8 @@ class MistralConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
 
     @overload
     def _transform_messages(
@@ -203,7 +206,8 @@ class MistralConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]: ...
+    ) -> List[AllMessageValues]:
+        ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -285,6 +289,38 @@ class MistralConfig(OpenAIGPTConfig):
         # Remove the internal flag
         optional_params.pop("_add_reasoning_prompt", None)
         return messages
+
+    @classmethod
+    def _clean_tool_schema_for_mistral(cls, tools: list) -> list:
+        """
+        Clean tool schemas to remove fields that cause issues with Mistral API.
+        
+        Removes:
+        - $id and $schema fields (cause grammar validation errors)
+        - additionalProperties=False (causes OpenAI API schema errors)
+        - strict field (not supported by Mistral)
+        
+        Args:
+            tools: List of tool definitions
+            max_depth: Maximum recursion depth for schema cleaning (default: 10)
+        
+        Returns:
+            Cleaned tools list
+        """
+        if not tools:
+            return tools
+            
+        import copy
+
+        from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+        from litellm.utils import _remove_json_schema_refs
+
+        cleaned_tools = copy.deepcopy(tools)
+        
+        # Apply all cleaning functions with max_depth protection
+        cleaned_tools = _remove_json_schema_refs(cleaned_tools, max_depth=DEFAULT_MAX_RECURSE_DEPTH)
+        
+        return cleaned_tools
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
