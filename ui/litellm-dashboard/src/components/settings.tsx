@@ -30,8 +30,8 @@ import {
   Input,
   Select,
   Button as Button2,
-  message,
 } from "antd";
+import NotificationsManager from "./molecules/notifications_manager";
 import EmailSettings from "./email_settings";
 
 const { Title, Paragraph } = Typography;
@@ -49,6 +49,7 @@ import {
   callbackInfo,
   Callbacks,
 } from "./callback_info_helpers";
+import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -186,7 +187,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     try {
       await setCallbacksCall(accessToken, payload);
-      message.success(`Callback updated successfully`);
+      NotificationsManager.success("Callback updated successfully");
       setShowEditCallback(false);
       editForm.resetFields();
       setSelectedEditCallback(null);
@@ -197,7 +198,7 @@ const Settings: React.FC<SettingsPageProps> = ({
         setCallbacks(updatedData.callbacks);
       }
     } catch (error) {
-      message.error("Failed to update callback: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -224,7 +225,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     try {
       await setCallbacksCall(accessToken, payload);
-      message.success(`Callback ${new_callback} added successfully`);
+      NotificationsManager.success(`Callback ${new_callback} added successfully`);
       setShowAddCallbacksModal(false);
       addForm.resetFields();
       setSelectedCallback(null);
@@ -234,7 +235,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       const updatedData = await getCallbacksCall(accessToken, userID || "", userRole || "");
       setCallbacks(updatedData.callbacks);
     } catch (error) {
-      message.error("Failed to add callback: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -250,7 +251,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     }
   };
 
-  const handleSaveAlerts = () => {
+  const handleSaveAlerts = async () => {
     if (!accessToken) {
       return;
     }
@@ -272,12 +273,11 @@ const Settings: React.FC<SettingsPageProps> = ({
     };
 
     try {
-      setCallbacksCall(accessToken, payload);
+      await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      message.error("Failed to update alerts: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
-
-    message.success("Alerts updated successfully");
+    NotificationsManager.success("Alerts updated successfully");
   };
   const handleSaveChanges = (callback: any) => {
     if (!accessToken) {
@@ -302,10 +302,9 @@ const Settings: React.FC<SettingsPageProps> = ({
     try {
       setCallbacksCall(accessToken, payload);
     } catch (error) {
-      message.error("Failed to update callback: " + error, 20);
+      NotificationsManager.fromBackend(error);
     }
-
-    message.success("Callback updated successfully");
+    NotificationsManager.success("Callback updated successfully");
   };
 
   const handleOk = () => {
@@ -407,7 +406,7 @@ const Settings: React.FC<SettingsPageProps> = ({
 
     try {
       await deleteCallback(accessToken, callbackToDelete);
-      message.success(`Callback ${callbackToDelete} deleted successfully`);
+      NotificationsManager.success(`Callback ${callbackToDelete} deleted successfully`);
 
       // Refresh the callbacks list
       if (userID && userRole) {
@@ -419,7 +418,7 @@ const Settings: React.FC<SettingsPageProps> = ({
       setCallbackToDelete(null);
     } catch (error) {
       console.error("Failed to delete callback:", error);
-      message.error(`Failed to delete callback: ${error}`);
+      NotificationsManager.fromBackend(error);
     }
   };
 
@@ -475,9 +474,14 @@ const Settings: React.FC<SettingsPageProps> = ({
                                 className="text-red-500 hover:text-red-700 cursor-pointer"
                               />
                               <Button
-                                onClick={() =>
-                                  serviceHealthCheck(accessToken, callback.name)
-                                }
+                                onClick={async () => {
+                                  try {
+                                    await serviceHealthCheck(accessToken, callback.name);
+                                    NotificationsManager.success("Health check triggered");
+                                  } catch (error) {
+                                    NotificationsManager.fromBackend(parseErrorMessage(error));
+                                  }
+                                }}
                                 className="ml-2"
                                 variant="secondary"
                               >
@@ -576,7 +580,14 @@ const Settings: React.FC<SettingsPageProps> = ({
                 </Button>
 
                 <Button
-                  onClick={() => serviceHealthCheck(accessToken, "slack")}
+                  onClick={async () => {
+                    try {
+                      await serviceHealthCheck(accessToken, "slack");
+                      NotificationsManager.success("Alert test triggered. Test request to slack made - check logs/alerts on slack to verify");
+                    } catch (error) {
+                      NotificationsManager.fromBackend(parseErrorMessage(error));
+                    }
+                  }}
                   className="mx-2"
                 >
                   Test Alerts

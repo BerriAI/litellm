@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
+    "@docusaurus/theme-mermaid": "^3.8.1",
     "@headlessui/react": "^1.7.18",
     "@headlessui/tailwindcss": "^0.2.0",
     "@heroicons/react": "^1.0.6",
@@ -55,6 +56,7 @@
     "typescript": "5.3.3"
   },
   "overrides": {
-    "prismjs": ">=1.30.0"
+    "prismjs": ">=1.30.0",
+    "webpack-dev-server": ">=5.2.1"
   }
 }
