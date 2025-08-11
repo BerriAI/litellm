@@ -19,6 +19,7 @@ import {
   TableBody,
   Table,
   Icon,
+  TextInput,
 } from "@tremor/react";
 import TeamMembersComponent from "./team_member_view";
 import MemberPermissions from "./member_permissions";
@@ -29,6 +30,7 @@ import {
   teamMemberUpdateCall,
   Member,
   teamUpdateCall,
+  getGuardrailsList,
 } from "@/components/networking";
 import { Button, Form, Input, Select, message, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -46,7 +48,6 @@ import { isAdminRole } from "@/utils/roles";
 import ObjectPermissionsView from "../object_permissions_view";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import PremiumVectorStoreSelector from "../common_components/PremiumVectorStoreSelector";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingSettingsView from "../logging_settings_view";
@@ -146,6 +147,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({})
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
 
   console.log("userModels in team info", userModels);
 
@@ -180,6 +182,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       console.error("Failed to fetch MCP access groups:", error);
     }
   };
+
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      try {
+        if (!accessToken) return;
+        const response = await getGuardrailsList(accessToken);
+        const guardrailNames = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(guardrailNames);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+
+    fetchGuardrails();
+  }, [accessToken]);
 
   const handleMemberCreate = async (values: any) => {
     try {
@@ -478,6 +497,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </div>
               </Card>
 
+              <Card>
+                <Text className="font-semibold text-gray-900">Virtual Keys</Text>
+                <div className="mt-2">
+                    <Text>
+                      User Keys: {teamData.keys.filter(key => key.user_id).length}
+                    </Text>
+                    <Text>
+                      Service Account Keys: {teamData.keys.filter(key => !key.user_id).length}
+                    </Text>
+                    <Text className="text-gray-500">
+                      Total: {teamData.keys.length}
+                    </Text>
+                  </div>
+              </Card>
+
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
                 variant="card"
@@ -486,6 +520,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
+                disabledCallbacks={[]}
                 variant="card"
               />
             </Grid>
@@ -550,10 +585,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     organization_id: info.organization_id,
                     vector_stores: info.object_permission?.vector_stores || [],
                     mcp_servers: info.object_permission?.mcp_servers || [],
-                    mcp_access_groups:
-                      info.object_permission?.mcp_servers || [],
-                    mcp_servers_and_groups:
-                      info.object_permission?.mcp_servers || [],
+                    mcp_access_groups: info.object_permission?.mcp_access_groups || [],
+                    mcp_servers_and_groups: {
+                      servers: info.object_permission?.mcp_servers || [],
+                      accessGroups: info.object_permission?.mcp_access_groups || [],
+                    },
                   }}
                   layout="vertical"
                 >
@@ -604,15 +640,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item
-                    label="Team Member Key Duration"
+                    label="Team Member Key Duration (eg: 1d, 1mo)"
                     name="team_member_key_duration"
-                    tooltip="Set a limit to the duration of a team member's key."
+                    tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                   >
-                    <Select placeholder="n/a">
-                      <Select.Option value="1d">1 day</Select.Option>
-                      <Select.Option value="1w">1 week</Select.Option>
-                      <Select.Option value="1mo">1 month</Select.Option>
-                    </Select>
+                    <TextInput placeholder="e.g., 30d" />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -659,13 +691,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Select
                       mode="tags"
                       placeholder="Select or enter guardrails"
+                      options={guardrailsList.map(name => ({ value: name, label: name }))}
                     />
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores">
                     <VectorStoreSelector
-                      onChange={(values) =>
-                        form.setFieldValue("vector_stores", values)
+                      onChange={(values: string[]) =>
+                         form.setFieldValue("vector_stores", values)
                       }
                       value={form.getFieldValue("vector_stores")}
                       accessToken={accessToken || ""}
@@ -790,6 +823,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                   <LoggingSettingsView
                     loggingConfigs={info.metadata?.logging || []}
+                    disabledCallbacks={[]}
                     variant="inline"
                     className="pt-4 border-t border-gray-200"
                   />

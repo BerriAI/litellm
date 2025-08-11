@@ -1245,3 +1245,4 @@ class TestCustomUISSO:
                     # Verify the result is the redirect response
                     assert result == mock_redirect_response
                     assert result.status_code == 303
+

@@ -24,6 +24,7 @@ import { Team } from "./key_team_helpers/key_list"
 import { jwtDecode } from "jwt-decode"
 import { Typography } from "antd"
 import { clearTokenCookies } from "@/utils/cookieUtils"
+import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage"
 
 export interface ProxySettings {
   PROXY_BASE_URL: string | null
@@ -109,6 +110,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     window.addEventListener("beforeunload", function () {
       // Clear session storage
       sessionStorage.clear()
+      // Note: MCP auth tokens are persistent and should not be cleared on page refresh
+      // They are only cleared on logout
     })
   }
 
@@ -381,6 +384,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             setCurrentOrg={setCurrentOrg}
             organizations={organizations}
             createClicked={createClicked}
+            setAccessToken={setAccessToken}
           />
         </Col>
       </Grid>

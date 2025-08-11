@@ -105,7 +105,7 @@ async def test_router_provider_wildcard_routing():
     print("router model list = ", router.get_model_list())
 
     response1 = await router.acompletion(
-        model="anthropic/claude-3-sonnet-20240229",
+        model="anthropic/claude-3-5-sonnet-latest",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -126,7 +126,7 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-3-5-sonnet-latest",
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -2133,7 +2133,7 @@ def test_router_correctly_reraise_error():
     """
     User feedback: There is a problem with my messages array, but the error exception thrown is a Rate Limit error.
     ```
-    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-1.5-flash..
+    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-2.5-flash-lite..
     ```
     What they want? Propagation of the real error.
     """

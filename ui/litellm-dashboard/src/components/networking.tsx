@@ -1,3 +1,10 @@
+// Shared date formatter for daily activity endpoints
+export const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -17,6 +24,7 @@ import {
   EmailEventSettingsResponse,
   EmailEventSettingsUpdateRequest,
 } from "./email_events/types";
+import { jsonFields } from "./common_components/check_openapi_schema"
 
 const isLocal = process.env.NODE_ENV === "development";
 export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -72,6 +80,33 @@ export interface Model {
   model_name: string;
   litellm_params: Object;
   model_info: Object | null;
+}
+
+interface PromptInfo {
+  prompt_type: string;
+}
+
+export interface PromptSpec {
+  prompt_id: string;
+  litellm_params: Object;
+  prompt_info: PromptInfo;
+  created_at?: string
+  updated_at?: string
+}
+
+export interface PromptTemplateBase {
+  litellm_prompt_id: string;
+  content: string;
+  metadata?: Record<string, any> | null;
+}
+
+export interface PromptInfoResponse {
+  prompt_spec: PromptSpec;
+  raw_prompt_template: PromptTemplateBase | null;
+}
+
+export interface ListPromptsResponse {
+  prompts: PromptSpec[];
 }
 
 export interface Organization {
@@ -219,6 +254,99 @@ export const modelCostMap = async (accessToken: string) => {
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map:", error);
+    throw error;
+  }
+};
+
+export const reloadModelCostMap = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/reload/model_cost_map`
+      : `/reload/model_cost_map`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to reload model cost map:", error);
+    throw error;
+  }
+};
+
+export const scheduleModelCostMapReload = async (accessToken: string, hours: number) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload?hours=${hours}`
+      : `/schedule/model_cost_map_reload?hours=${hours}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Schedule model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to schedule model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const cancelModelCostMapReload = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload`
+      : `/schedule/model_cost_map_reload`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Cancel model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to cancel model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const getModelCostMapReloadStatus = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload/status`
+      : `/schedule/model_cost_map_reload/status`;
+    console.log("Fetching status from URL:", url);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (!response.ok) {
+      console.error(`Status request failed with status: ${response.status}`);
+      const errorText = await response.text();
+      console.error("Error response:", errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    const jsonData = await response.json();
+    console.log(`Model cost map reload status:`, jsonData);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to get model cost map reload status:", error);
     throw error;
   }
 };
@@ -573,14 +701,16 @@ export const keyCreateServiceAccountCall = async (
       delete formValues.description;
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
-    // if formValues.metadata is not undefined, make it a valid dict
-    if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        throw new Error("Failed to parse metadata: " + error);
+    // Parse JSON fields if they exist
+    for (const field of jsonFields) {
+      if (formValues[field]) {
+        console.log(`formValues.${field}:`, formValues[field]);
+        // if there's an exception JSON.parse, show it in the message
+        try {
+          formValues[field] = JSON.parse(formValues[field]);
+        } catch (error) {
+          throw new Error(`Failed to parse ${field}: ` + error);
+        }
       }
     }
 
@@ -624,7 +754,7 @@ export const keyCreateCall = async (
 
     // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
     if (formValues.description) {
-      // add to formValues.metadata
+      // add to formValues.metadat
       if (!formValues.metadata) {
         formValues.metadata = {};
       }
@@ -634,14 +764,16 @@ export const keyCreateCall = async (
       delete formValues.description;
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
-    // if formValues.metadata is not undefined, make it a valid dict
-    if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        throw new Error("Failed to parse metadata: " + error);
+    // Parse JSON fields if they exist
+    for (const field of jsonFields) {
+      if (formValues[field]) {
+        console.log(`formValues.${field}:`, formValues[field]);
+        // if there's an exception JSON.parse, show it in the message
+        try {
+          formValues[field] = JSON.parse(formValues[field]);
+        } catch (error) {
+          throw new Error(`Failed to parse ${field}: ` + error);
+        }
       }
     }
 
@@ -1425,13 +1557,6 @@ export const userDailyActivityCall = async (
       ? `${proxyBaseUrl}/user/daily/activity`
       : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1478,13 +1603,6 @@ export const tagDailyActivityCall = async (
       ? `${proxyBaseUrl}/tag/daily/activity`
       : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1534,13 +1652,6 @@ export const teamDailyActivityCall = async (
       ? `${proxyBaseUrl}/team/daily/activity`
       : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -2098,6 +2209,29 @@ export const modelExceptionsCall = async (
     // message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const updateUsefulLinksCall = async (accessToken: String, useful_links: Record<string, string>) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ useful_links: useful_links }),
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+    return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -3143,6 +3277,55 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
+export const userDailyActivityAggregatedCall = async (
+  accessToken: String,
+  startTime: Date,
+  endTime: Date
+) => {
+  /**
+   * Get aggregated daily user activity (no pagination)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/daily/activity/aggregated`
+      : `/user/daily/activity/aggregated`;
+    const queryParams = new URLSearchParams();
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
 export const userGetAllUsersCall = async (
   accessToken: String,
   role: String
@@ -3674,6 +3857,70 @@ export const teamMemberAddCall = async (
   }
 };
 
+export const teamBulkMemberAddCall = async (
+  accessToken: string,
+  teamId: string,
+  members: Member[] | null,
+  maxBudgetInTeam?: number,
+  allUsers?: boolean
+) => {
+  try {
+    console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/bulk_member_add`
+      : `/team/bulk_member_add`;
+
+    let requestBody: any = {
+      team_id: teamId,
+    };
+
+    if (allUsers) {
+      requestBody.all_users = true;
+    } else {
+      requestBody.members = members;
+    }
+
+    if (maxBudgetInTeam !== undefined && maxBudgetInTeam !== null) {
+      requestBody.max_budget_in_team = maxBudgetInTeam;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage =
+        parsedError?.detail?.error || "Failed to bulk add team members";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
+    }
+
+    const data = await response.json();
+    console.log("Bulk team member add API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to bulk add team members:", error);
+    throw error;
+  }
+};
+
 export const teamMemberUpdateCall = async (
   accessToken: string,
   teamId: string,
@@ -3933,6 +4180,81 @@ export const userUpdateUserCall = async (
   }
 };
 
+export const userBulkUpdateUserCall = async (
+  accessToken: string,
+  formValues: any, // Assuming formValues is an object
+  userIds?: string[], // Optional - if not provided, will update all users
+  allUsers: boolean = false // Flag to update all users
+) => {
+  try {
+    console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/bulk_update`
+      : `/user/bulk_update`;
+    
+    let request_body_json: string;
+    
+    if (allUsers) {
+      // Update all users mode
+      request_body_json = JSON.stringify({
+        all_users: true,
+        user_updates: formValues,
+      });
+    } else if (userIds && userIds.length > 0) {
+      // Update specific users mode
+      let request_body = [] 
+      for (const user_id of userIds) {
+        request_body.push({
+          user_id: user_id,
+          ...formValues,
+        });
+      }
+      request_body_json = JSON.stringify({
+        users: request_body,
+      });
+    } else {
+      throw new Error("Must provide either userIds or set allUsers=true");
+    }
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: request_body_json,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = (await response.json()) as {
+      results: Array<{
+        user_id?: string;
+        user_email?: string;
+        success: boolean;
+        error?: string;
+        updated_user?: any;
+      }>;
+      total_requested: number;
+      successful_updates: number;
+      failed_updates: number;
+    };
+    console.log("API Response:", data);
+    //message.success("User role updated");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
 export const PredictedSpendLogsCall = async (
   accessToken: string,
   requestData: any
@@ -4035,9 +4357,6 @@ export const serviceHealthCheck = async (
     }
 
     const data = await response.json();
-    message.success(
-      `Test request to ${service} made - check logs/alerts on ${service} to verify`
-    );
     // You can add additional logic here based on the response if needed
     return data;
   } catch (error) {
@@ -4713,6 +5032,212 @@ export const getGuardrailsList = async (accessToken: String) => {
   }
 };
 
+export const getPromptsList = async (accessToken: String) : Promise<ListPromptsResponse> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/prompts/list`
+      : `/prompts/list`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompts list:", error);
+    throw error;
+  }
+};
+
+export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptInfoResponse> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompt info:", error);
+    throw error;
+  }
+};
+
+export const createPromptCall = async (
+  accessToken: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts` : `/prompts`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create prompt:", error);
+    throw error;
+  }
+};
+
+export const updatePromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update prompt:", error);
+    throw error;
+  }
+};
+
+export const deletePromptCall = async (
+  accessToken: string,
+  promptId: string
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to delete prompt:", error);
+    throw error;
+  }
+};
+
+export const convertPromptFileToJson = async (
+  accessToken: string,
+  file: File
+): Promise<{ prompt_id: string; json_data: any }> => {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/utils/dotprompt_json_converter` 
+      : `/utils/dotprompt_json_converter`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to convert prompt file:", error);
+    throw error;
+  }
+};
+
+export const patchPromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to patch prompt:", error);
+    throw error;
+  }
+};
+
 export const createGuardrailCall = async (
   accessToken: string,
   guardrailData: any
@@ -5010,7 +5535,7 @@ export const deleteMCPServer = async (
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string) => {
+export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -5019,12 +5544,22 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 
     console.log("Fetching MCP tools from:", url);
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias && authValue) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else if (authValue) {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
+      headers,
     });
 
     const data = await response.json();
@@ -5058,6 +5593,7 @@ export const callMCPTool = async (
   toolName: string,
   toolArguments: Record<string, any>,
   authValue: string,
+  serverAlias?: string,
 ) => {
   try {
     // Construct base URL
@@ -5072,13 +5608,23 @@ export const callMCPTool = async (
       toolArguments
     );
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        [MCP_AUTH_HEADER]: authValue,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         name: toolName,
         arguments: toolArguments,
@@ -5086,9 +5632,43 @@ export const callMCPTool = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      let errorMessage = "Network response was not ok";
+      let errorDetails = null;
+      
+      // First, try to get the response as text to see what we're dealing with
+      const responseText = await response.text();
+      
+      try {
+        // Try to parse as JSON
+        const errorData = JSON.parse(responseText);
+        
+        if (errorData.detail) {
+          if (typeof errorData.detail === 'string') {
+            errorMessage = errorData.detail;
+          } else if (typeof errorData.detail === 'object') {
+            errorMessage = errorData.detail.message || errorData.detail.error || "An error occurred";
+            errorDetails = errorData.detail;
+          }
+        } else {
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        }
+        
+      } catch (parseError) {
+        console.error("Failed to parse JSON error response:", parseError);
+        // If JSON parsing fails, use the raw text
+        if (responseText) {
+          errorMessage = responseText;
+        }
+      }
+      
+      // Create a more informative error object
+      const enhancedError = new Error(errorMessage);
+      (enhancedError as any).status = response.status;
+      (enhancedError as any).statusText = response.statusText;
+      (enhancedError as any).details = errorDetails;
+      
+      handleError(errorMessage);
+      throw enhancedError;
     }
 
     const data = await response.json();
@@ -5096,6 +5676,11 @@ export const callMCPTool = async (
     return data;
   } catch (error) {
     console.error("Failed to call MCP tool:", error);
+    console.error("Error type:", typeof error);
+    if (error instanceof Error) {
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+    }
     throw error;
   }
 };
@@ -5532,6 +6117,36 @@ export const vectorStoreInfoCall = async (
     return await response.json();
   } catch (error) {
     console.error("Error getting vector store info:", error);
+    throw error;
+  }
+};
+
+export const vectorStoreUpdateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/update`
+      : `/vector_store/update`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to update vector store");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating vector store:", error);
     throw error;
   }
 };
@@ -6196,3 +6811,432 @@ export const testMCPToolsListRequest = async (
     throw error;
   }
 };
+
+export const vectorStoreSearchCall = async (
+  accessToken: string,
+  vectorStoreId: string,
+  query: string
+): Promise<any> => {
+  try {
+    const url = `${getProxyBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: query
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error testing vector store search:", error);
+    throw error;
+  }
+};
+
+export const userAgentAnalyticsCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  pageSize: number = 50,
+  userAgentFilter?: string
+) => {
+  /**
+   * Get user agent analytics data including DAU, WAU, MAU, successful requests, and completed tokens
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/user-agent/analytics`
+      : `/tag/user-agent/analytics`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", pageSize.toString());
+    
+    if (userAgentFilter) {
+      queryParams.append("user_agent_filter", userAgentFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user agent analytics:", error);
+    throw error;
+  }
+};
+
+// New endpoint functions for DAU, WAU, MAU
+export const tagDauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get Daily Active Users (DAU) for last 7 days ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/dau`
+      : `/tag/dau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch DAU:", error);
+    throw error;
+  }
+};
+
+export const tagWauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/wau`
+      : `/tag/wau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch WAU:", error);
+    throw error;
+  }
+};
+
+export const tagMauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get Monthly Active Users (MAU) for last 7 months ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/mau`
+      : `/tag/mau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MAU:", error);
+    throw error;
+  }
+};
+
+export const tagDistinctCall = async (
+  accessToken: string
+) => {
+  /**
+   * Get all distinct user agent tags (up to 250)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/distinct`
+      : `/tag/distinct`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch distinct tags:", error);
+    throw error;
+  }
+};
+
+export const userAgentSummaryCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get user agent summary statistics
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/summary`
+      : `/tag/summary`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    
+    // Handle multiple tag filters
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user agent summary:", error);
+    throw error;
+  }
+};
+
+export const perUserAnalyticsCall = async (
+  accessToken: string,
+  page: number = 1,
+  pageSize: number = 50,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get per-user analytics data for the last 30 days
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics`
+      : `/tag/user-agent/per-user-analytics`;
+    
+    const queryParams = new URLSearchParams();
+    
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", pageSize.toString());
+    
+    // Handle multiple tag filters
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch per-user analytics:", error);
+    throw error;
+  }
+};
+

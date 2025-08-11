@@ -48,7 +48,7 @@ The admin instance handles all management operations and provides the UI.
 # Keep admin capabilities enabled (default behavior)
 # DISABLE_ADMIN_UI=false          # Admin UI available
 # DISABLE_ADMIN_ENDPOINTS=false   # Management APIs available
-DISABLE_LLM_ENDPOINTS=true      # LLM APIs disabled
+DISABLE_LLM_API_ENDPOINTS=true      # LLM APIs disabled
 DATABASE_URL=postgresql://user:pass@global-db:5432/litellm
 LITELLM_MASTER_KEY=your-master-key
 ```
@@ -124,7 +124,7 @@ DISABLE_ADMIN_ENDPOINTS=true
 - All other LLM API endpoints
 
 
-### `DISABLE_LLM_ENDPOINTS`
+### `DISABLE_LLM_API_ENDPOINTS`
 
 :::info
 
@@ -144,7 +144,7 @@ Disables all LLM API endpoints.
 
 ```bash
 # Admin instance
-DISABLE_LLM_ENDPOINTS=true
+DISABLE_LLM_API_ENDPOINTS=true
 ```
 
 

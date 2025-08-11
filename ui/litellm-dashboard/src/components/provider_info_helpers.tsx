@@ -2,36 +2,41 @@ import OpenAI from "openai";
 import React from "react";
 
 export enum Providers {
-    OpenAI = "OpenAI",
-    OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
-    OpenAI_Text = "OpenAI Text Completion",
-    OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
-    Azure = "Azure",
-    Azure_AI_Studio = "Azure AI Foundry (Studio)",
-    Anthropic = "Anthropic",
-    Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
-    Google_AI_Studio = "Google AI Studio",
-    Bedrock = "Amazon Bedrock",
-    Groq = "Groq",
-    MistralAI = "Mistral AI",
-    Deepseek = "Deepseek",
-    Cohere = "Cohere",
-    Databricks = "Databricks",
-    Ollama = "Ollama",
-    xAI = "xAI",
-    AssemblyAI = "AssemblyAI",
-    Cerebras = "Cerebras",
-    Sambanova = "Sambanova",
-    Perplexity = "Perplexity",
-    TogetherAI = "TogetherAI",
-    Openrouter = "Openrouter",
-    FireworksAI = "Fireworks AI",
-    Triton = "Triton",
-    Deepgram = "Deepgram",
-    ElevenLabs = "ElevenLabs"
+  Bedrock = "Amazon Bedrock",           
+  Anthropic = "Anthropic",              
+  AssemblyAI = "AssemblyAI",            
+  SageMaker = "AWS SageMaker",         
+  Azure = "Azure",                     
+  Azure_AI_Studio = "Azure AI Foundry (Studio)", 
+  Cerebras = "Cerebras",                
+  Cohere = "Cohere",                    
+  Databricks = "Databricks",            
+  DeepInfra = "DeepInfra",             
+  Deepgram = "Deepgram",                
+  Deepseek = "Deepseek",               
+  ElevenLabs = "ElevenLabs",            
+  FireworksAI = "Fireworks AI",         
+  Google_AI_Studio = "Google AI Studio",
+  GradientAI = "GradientAI",
+  Groq = "Groq",                       
+  JinaAI = "Jina AI",                 
+  MistralAI = "Mistral AI",             
+  Ollama = "Ollama",                   
+  OpenAI = "OpenAI",                    
+  OpenAI_Compatible = "OpenAI-Compatible Endpoints (Together AI, etc.)",
+  OpenAI_Text = "OpenAI Text Completion",
+  OpenAI_Text_Compatible = "OpenAI-Compatible Text Completion Models (Together AI, etc.)",
+  Openrouter = "Openrouter",            
+  Perplexity = "Perplexity",           
+  Sambanova = "Sambanova",              
+  TogetherAI = "TogetherAI",            
+  Triton = "Triton",                    
+  Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)", 
+  VolcEngine = "VolcEngine",           
+  Voyage = "Voyage AI",                
+  xAI = "xAI",                          
+}
 
-  }
-  
 export const provider_map: Record<string, string> = {
     OpenAI: "openai",
     OpenAI_Text: "text-completion-openai",
@@ -57,9 +62,15 @@ export const provider_map: Record<string, string> = {
     TogetherAI: "together_ai",
     Openrouter: "openrouter",
     FireworksAI: "fireworks_ai",
+    GradientAI: "gradient_ai",
     Triton: "triton",
     Deepgram: "deepgram",
-    ElevenLabs: "elevenlabs"
+    ElevenLabs: "elevenlabs",
+    SageMaker: "sagemaker_chat",
+    Voyage: "voyage",
+    JinaAI: "jina_ai",
+    VolcEngine: "volcengine",
+    DeepInfra: "deepinfra"
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -70,6 +81,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
     [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
     [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
+    [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
     [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
     [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
     [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
@@ -89,9 +101,14 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
+    [Providers.GradientAI]: `${asset_logos_folder}gradientai.svg`,
     [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
     [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
-    [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`
+    [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
+    [Providers.Voyage]: `${asset_logos_folder}voyage.webp`, 
+    [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
+    [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
+    [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
@@ -129,12 +146,22 @@ export const getPlaceholder = (selectedProvider: string): string => {
       return "claude-3-opus";
     } else if (selectedProvider == Providers.Bedrock) {
       return "claude-3-opus";
+    } else if (selectedProvider == Providers.SageMaker) {
+      return "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b";
     } else if (selectedProvider == Providers.Google_AI_Studio) {
       return "gemini-pro";
     } else if (selectedProvider == Providers.Azure_AI_Studio) {
       return "azure_ai/command-r-plus";
     } else if (selectedProvider == Providers.Azure) {
       return "azure/my-deployment";
+    } else if (selectedProvider == Providers.Voyage) {
+      return "voyage/";
+    } else if (selectedProvider == Providers.JinaAI) {
+      return "jina_ai/";
+    } else if (selectedProvider == Providers.VolcEngine) {
+      return "volcengine/<any-model-on-volcengine>";
+    } else if (selectedProvider == Providers.DeepInfra) {
+      return "deepinfra/<any-model-on-deepinfra>";
     } else {
       return "gpt-3.5-turbo";
     }
@@ -145,9 +172,9 @@ export const getPlaceholder = (selectedProvider: string): string => {
     console.log(`Provider key: ${providerKey}`);
     let custom_llm_provider = provider_map[providerKey];
     console.log(`Provider mapped to: ${custom_llm_provider}`);
-    
+
     let providerModels: Array<string> = [];
-    
+
     if (providerKey && typeof modelMap === "object") {
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
@@ -160,7 +187,6 @@ export const getPlaceholder = (selectedProvider: string): string => {
           providerModels.push(key);
         }
       });
-  
       // Special case for cohere
       // we need both cohere_chat and cohere models to show on dropdown
       if (providerKey == Providers.Cohere) {
@@ -176,7 +202,23 @@ export const getPlaceholder = (selectedProvider: string): string => {
           }
         });
       }
+      
+      // Special case for sagemaker
+      // we need both sagemaker and sagemaker_chat models to show on dropdown
+      if (providerKey == Providers.SageMaker) {
+        console.log("Adding sagemaker chat models");
+        Object.entries(modelMap).forEach(([key, value]) => {
+          if (
+            value !== null &&
+            typeof value === "object" &&
+            "litellm_provider" in (value as object) &&
+            ((value as any)["litellm_provider"] === "sagemaker_chat")
+          ) {
+            providerModels.push(key);
+          }
+        });
+      }
     }
-  
+
     return providerModels;
   };

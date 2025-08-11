@@ -267,7 +267,8 @@ class TestProxySettingEndpoints:
         assert "google_client_id" in data["field_schema"]["properties"]
         assert "description" in data["field_schema"]["properties"]["google_client_id"]
 
-    def test_update_sso_settings(self, mock_proxy_config, mock_auth):
+    def test_update_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
         """Test updating the SSO settings"""
         # New SSO settings to update
         new_sso_settings = {
@@ -308,11 +309,11 @@ class TestProxySettingEndpoints:
         updated_config = mock_proxy_config["config"]
         assert (
             updated_config["environment_variables"]["GOOGLE_CLIENT_ID"]
-            == new_sso_settings["google_client_id"]
+            != new_sso_settings["google_client_id"]
         )
         assert (
             updated_config["environment_variables"]["GOOGLE_CLIENT_SECRET"]
-            == new_sso_settings["google_client_secret"]
+            != new_sso_settings["google_client_secret"]
         )
         assert (
             updated_config["general_settings"]["proxy_admin_email"]

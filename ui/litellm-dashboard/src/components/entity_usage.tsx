@@ -21,7 +21,7 @@ import {
   TabPanels,
   Subtitle,
 } from "@tremor/react";
-import UsageDatePicker from "./shared/usage_date_picker";
+import AdvancedDatePicker from "./shared/advanced_date_picker";
 import { Select } from 'antd';
 import { ActivityMetrics, processActivityData } from './activity_metrics';
 import { DailyData, BreakdownMetrics, KeyMetricWithMetadata, EntityMetricWithMetadata } from './usage/types';
@@ -29,6 +29,7 @@ import { tagDailyActivityCall, teamDailyActivityCall } from './networking';
 import TopKeyView from "./top_key_view";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { valueFormatterSpend } from "./usage/utils/value_formatters";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 
 interface EntityMetrics {
   metrics: {
@@ -328,7 +329,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div style={{ width: "100%" }}>
       <Grid numItems={2} className="gap-2 w-full mb-4">
         <Col>
-          <UsageDatePicker value={dateValue} onValueChange={setDateValue} />
+          <AdvancedDatePicker value={dateValue} onValueChange={setDateValue} />
         </Col>
         {entityList && entityList.length > 0 && (
           <Col>
@@ -514,8 +515,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                       <Col numColSpan={1}>
                         <BarChart
                           className="mt-4 h-52"
-                          data={getEntityBreakdown()}
-                          index="metadata.alias"
+                          data={getProcessedEntityBreakdownForChart()}
+                          index="metadata.alias_display"
                           categories={["metrics.spend"]}
                           colors={["cyan"]}
                           valueFormatter={valueFormatterSpend}
@@ -633,7 +634,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   <BarChart
                     className="mt-4 h-40"
                     data={getTopModels()}
-                    index="key"
+                    index="display_key"
                     categories={["spend"]}
                     colors={["cyan"]}
                     valueFormatter={(value) =>
@@ -688,7 +689,28 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                           <TableBody>
                             {getProviderSpend().map((provider) => (
                               <TableRow key={provider.provider}>
-                                <TableCell>{provider.provider}</TableCell>
+                                <TableCell>
+                                  <div className="flex items-center space-x-2">
+                                    {provider.provider && (
+                                      <img
+                                        src={getProviderLogoAndName(provider.provider).logo}
+                                        alt={`${provider.provider} logo`}
+                                        className="w-4 h-4"
+                                        onError={(e) => {
+                                          const target = e.target as HTMLImageElement;
+                                          const parent = target.parentElement;
+                                          if (parent) {
+                                            const fallbackDiv = document.createElement('div');
+                                            fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                                            fallbackDiv.textContent = provider.provider?.charAt(0) || '-';
+                                            parent.replaceChild(fallbackDiv, target);
+                                          }
+                                        }}
+                                      />
+                                    )}
+                                    <span>{provider.provider}</span>
+                                  </div>
+                                </TableCell>
                                 <TableCell>
                                   ${formatNumberWithCommas(provider.spend, 2)}
                                 </TableCell>

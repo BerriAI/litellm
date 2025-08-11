@@ -17,6 +17,7 @@ class AnthropicInputSchema(TypedDict, total=False):
     type: Optional[str]
     properties: Optional[dict]
     additionalProperties: Optional[bool]
+    required: Optional[List[str]]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -173,6 +174,7 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
 class AnthropicMessagesToolResultContent(TypedDict):
     type: Literal["text"]
     text: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolResultParam(TypedDict, total=False):
