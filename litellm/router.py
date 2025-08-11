@@ -4308,6 +4308,8 @@ class Router:
         """
         Track remaining tpm/rpm quota for model in model_list
         """
+        from litellm.types.caching import RedisPipelineIncrementOperation
+
         try:
             standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
@@ -4326,6 +4328,39 @@ class Router:
                     return
                 elif isinstance(id, int):
                     id = str(id)
+
+                ## get deployment info
+                deployment_info = self.get_deployment(model_id=id)
+
+                if deployment_info is None:
+                    return
+                else:
+                    deployment_model_info = self.get_router_model_info(
+                        deployment=deployment_info.model_dump(),
+                        received_model_name=model_group,
+                    )
+                    # get tpm/rpm from deployment info
+                    tpm = deployment_info.get("tpm", None)
+                    rpm = deployment_info.get("rpm", None)
+
+                    ## check tpm/rpm in litellm_params
+                    tpm_litellm_params = deployment_info.litellm_params.tpm
+                    rpm_litellm_params = deployment_info.litellm_params.rpm
+
+                    ## check tpm/rpm in model_info
+                    tpm_model_info = deployment_model_info.get("tpm", None)
+                    rpm_model_info = deployment_model_info.get("rpm", None)
+
+                    ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                    if (
+                        tpm is None
+                        and rpm is None
+                        and tpm_litellm_params is None
+                        and rpm_litellm_params is None
+                        and tpm_model_info is None
+                        and rpm_model_info is None
+                    ):
+                        return
 
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 total_tokens: float = standard_logging_object.get("total_tokens", 0)
@@ -4346,23 +4381,32 @@ class Router:
                 # ------------
                 # update cache
 
+                pipeline_operations: List[RedisPipelineIncrementOperation] = []
+
                 ## TPM
-                await self.cache.async_increment_cache(
-                    key=tpm_key,
-                    value=total_tokens,
-                    parent_otel_span=parent_otel_span,
-                    ttl=RoutingArgs.ttl.value,
+                pipeline_operations.append(
+                    RedisPipelineIncrementOperation(
+                        key=tpm_key,
+                        increment_value=total_tokens,
+                        ttl=RoutingArgs.ttl.value,
+                    )
                 )
 
                 ## RPM
                 rpm_key = RouterCacheEnum.RPM.value.format(
                     id=id, current_minute=current_minute, model=deployment_name
                 )
-                await self.cache.async_increment_cache(
-                    key=rpm_key,
-                    value=1,
+                pipeline_operations.append(
+                    RedisPipelineIncrementOperation(
+                        key=rpm_key,
+                        increment_value=1,
+                        ttl=RoutingArgs.ttl.value,
+                    )
+                )
+
+                await self.cache.async_increment_cache_pipeline(
+                    increment_list=pipeline_operations,
                     parent_otel_span=parent_otel_span,
-                    ttl=RoutingArgs.ttl.value,
                 )
 
                 increment_deployment_successes_for_current_minute(
@@ -5493,6 +5537,23 @@ class Router:
 
         try:
             litellm_model_name_model_info = litellm.get_model_info(model=model_name)
+        except Exception:
+            pass
+
+        ## check for base model
+        try:
+            if custom_model_info is not None:
+                base_model = custom_model_info.get("base_model", None)
+                if base_model is not None:
+                    ## update litellm model info with base model info
+                    base_model_info = litellm.get_model_info(model=base_model)
+                    if base_model_info is not None:
+                        custom_model_info = custom_model_info or {}
+                        # Base model provides defaults, custom model info overrides
+                        custom_model_info = _update_dictionary(
+                            cast(dict, base_model_info),
+                            custom_model_info,
+                        )
         except Exception:
             pass
 

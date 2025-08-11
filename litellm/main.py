@@ -3303,6 +3303,25 @@ def completion(  # type: ignore # noqa: PLR0915
                     additional_args={"headers": headers},
                 )
                 raise e
+        elif custom_llm_provider == "gradient_ai":
+
+            api_base = litellm.api_base or api_base
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="gradient_ai",
+                timeout=timeout,
+                headers=headers,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+            )
 
         elif custom_llm_provider == "bytez":
             api_key = (
@@ -5514,9 +5533,9 @@ async def ahealth_check(
         messages=[],
         stream=False,
         call_type="acompletion",
-        litellm_call_id="1234",
+        litellm_call_id=str(uuid.uuid4()),
         start_time=datetime.datetime.now(),
-        function_id="1234",
+        function_id=str(uuid.uuid4()),
         log_raw_request_response=True,
     )
     model_params["litellm_logging_obj"] = litellm_logging_obj

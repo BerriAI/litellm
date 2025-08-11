@@ -2457,7 +2457,7 @@
     },
     "azure/gpt-5-chat": {
         "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -2490,7 +2490,7 @@
     },
     "azure/gpt-5-chat-latest": {
         "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
         "output_cost_per_token": 1e-05,
@@ -6073,6 +6073,36 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "source": "https://inference-docs.cerebras.ai/support/pricing"
+    },
+    "cerebras/openai/gpt-oss-20b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://inference-docs.cerebras.ai/support/pricing"
+    },
+    "cerebras/openai/gpt-oss-120b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 6.9e-07,
+        "litellm_provider": "cerebras",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://www.cerebras.ai/blog/openai-gpt-oss-120b-runs-fastest-on-cerebras"
     },
     "friendliai/meta-llama-3.1-8b-instruct": {
         "max_tokens": 8192,
@@ -11658,6 +11688,36 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "openrouter/openai/gpt-oss-20b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 8e-07,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://openrouter.ai/openai/gpt-oss-20b"
+    },
+    "openrouter/openai/gpt-oss-120b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 8e-07,
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://openrouter.ai/openai/gpt-oss-120b"
+    },
     "openrouter/anthropic/claude-instant-v1": {
         "max_tokens": 100000,
         "max_output_tokens": 8191,
@@ -12522,8 +12582,8 @@
     },
     "openai.gpt-oss-20b-1:0": {
         "max_tokens": 128000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 32000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 7e-08,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
@@ -12536,8 +12596,8 @@
     },
     "openai.gpt-oss-120b-1:0": {
         "max_tokens": 128000,
-        "max_input_tokens": 200000,
-        "max_output_tokens": 32000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
@@ -15545,7 +15605,7 @@
         "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/glm-4p5": {
-        "max_tokens": 128000,
+        "max_tokens": 96000,
         "max_input_tokens": 128000,
         "max_output_tokens": 96000,
         "input_cost_per_token": 5.5e-07,
@@ -15558,7 +15618,7 @@
         "source": "https://fireworks.ai/models/fireworks/glm-4p5"
     },
     "fireworks_ai/accounts/fireworks/models/glm-4p5-air": {
-        "max_tokens": 128000,
+        "max_tokens": 96000,
         "max_input_tokens": 128000,
         "max_output_tokens": 96000,
         "input_cost_per_token": 2.2e-07,
@@ -17037,6 +17097,130 @@
         "max_output_tokens": 8192,
         "litellm_provider": "snowflake",
         "mode": "chat"
+    },
+    "gradient_ai/anthropic-claude-3.7-sonnet": {
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 15e-06,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 1024,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/anthropic-claude-3.5-sonnet": {
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 15e-06,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 1024,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/anthropic-claude-3.5-haiku": {
+        "input_cost_per_token": 8e-07,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 1024,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/anthropic-claude-3-opus": {
+        "input_cost_per_token": 15e-06,
+        "output_cost_per_token": 75e-06,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 1024,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/deepseek-r1-distill-llama-70b": {
+        "input_cost_per_token": 99e-08,
+        "output_cost_per_token": 99e-08,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 8000,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/llama3.3-70b-instruct": {
+        "input_cost_per_token": 65e-08,
+        "output_cost_per_token": 65e-08,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 2048,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/llama3-8b-instruct": {
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 2e-07,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 512,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/mistral-nemo-instruct-2407": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 512,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/openai-o3": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 100000,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/openai-o3-mini": {
+        "input_cost_per_token": 11e-07,
+        "output_cost_per_token": 44e-07,
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 100000,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/openai-gpt-4o": {
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 16384,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/openai-gpt-4o-mini": {
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 16384,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
+    },
+    "gradient_ai/alibaba-qwen3-32b": {
+        "litellm_provider": "gradient_ai",
+        "mode": "chat",
+        "max_tokens": 2048,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supported_modalities": ["text"],
+        "supports_tool_choice": false
     },
     "nscale/meta-llama/Llama-4-Scout-17B-16E-Instruct": {
         "input_cost_per_token": 9e-08,
