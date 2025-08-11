@@ -664,3 +664,13 @@ async def test_openai_gpt5_reasoning():
     )
     print("response: ", response)
     assert response.choices[0].message.content is not None
+
+@pytest.mark.asyncio
+async def test_openai_gpt5_verbosity():
+    response = await litellm.acompletion(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        verbosity="low",
+    )
+    print("response: ", response)
+    assert response.choices[0].message.content is not None

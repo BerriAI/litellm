@@ -11,6 +11,12 @@ def config() -> OpenAIConfig:
 def test_gpt5_supports_reasoning_effort(config: OpenAIConfig):
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5")
     assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-mini")
+    assert "reasoning_effort" in config.get_supported_openai_params(model="gpt-5-nano")
+
+def test_gpt5_supports_verbosity(config: OpenAIConfig):
+    assert "verbosity" in config.get_supported_openai_params(model="gpt-5")
+    assert "verbosity" in config.get_supported_openai_params(model="gpt-5-mini")
+    assert "verbosity" in config.get_supported_openai_params(model="gpt-5-nano")
 
 def test_gpt5_maps_max_tokens(config: OpenAIConfig):
     params = config.map_openai_params(

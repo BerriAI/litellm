@@ -3258,6 +3258,7 @@ def get_optional_params(  # noqa: PLR0915
     drop_params=None,
     allowed_openai_params: Optional[List[str]] = None,
     reasoning_effort=None,
+    verbosity=None,
     additional_drop_params=None,
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,

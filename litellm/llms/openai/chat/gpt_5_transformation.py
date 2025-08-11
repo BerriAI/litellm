@@ -21,7 +21,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     
     def get_supported_openai_params(self, model: str) -> list:
         base_gpt_series_params = super().get_supported_openai_params(model=model)
-        gpt_5_only_params = ["reasoning_effort"]
+        gpt_5_only_params = ["reasoning_effort", "verbosity"]
         base_gpt_series_params.extend(gpt_5_only_params)
         return base_gpt_series_params
 
