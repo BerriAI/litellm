@@ -3967,8 +3967,22 @@ async def model_info(
     # Validate that the requested model is accessible
     validate_model_access(model_id=model_id, available_models=all_models)
 
-    # Get provider information
-    _, provider, _, _ = litellm.get_llm_provider(model=model_id)
+    # Get provider information from the router deployment
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Router not initialized"
+        )
+    
+    deployment = llm_router.get_deployment_by_model_group_name(model_id)
+    if deployment is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model_id}' not found in router configuration"
+        )
+    
+    # Use the actual litellm model from the deployment to get provider info
+    _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
 
     # Return the model information in the same format as the list endpoint
     return create_model_info_response(
