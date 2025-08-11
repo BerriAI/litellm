@@ -137,14 +137,6 @@ model_list:
       model: openai/my-fake-model
       api_key: my-fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.appxxxx/
-  - model_name: gemini-1.5-flash
-    litellm_params:
-      model: gemini/gemini-1.5-flash
-      api_key: os.environ/GOOGLE_API_KEY
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
 
 
 litellm_settings:
