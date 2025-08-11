@@ -307,6 +307,7 @@ async def test_azure_gpt5_reasoning(model):
         model="azure/gpt5_series/gpt-5",
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         reasoning_effort="minimal",
+        max_tokens=10,
         api_base=os.getenv("AZURE_GPT5_API_BASE"),
         api_key=os.getenv("AZURE_GPT5_API_KEY"),
     )
