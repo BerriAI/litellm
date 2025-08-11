@@ -1,8 +1,7 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
-from typing import List, Optional
+from typing import List
 
-import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.types.llms.openai import AllMessageValues
 
