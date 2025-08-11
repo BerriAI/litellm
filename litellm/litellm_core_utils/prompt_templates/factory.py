@@ -3527,7 +3527,15 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         tool_content: List[BedrockContentBlock] = []
         while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-
+            _cache_point_block = (
+                litellm.AmazonConverseConfig()._get_cache_point_block(
+                    message_block=cast(
+                        OpenAIMessageContentListBlock, messages[msg_i]
+                    ),
+                    block_type="content_block",
+                )
+            )
+      
             tool_content.append(tool_call_result)
             msg_i += 1
         if tool_content:
