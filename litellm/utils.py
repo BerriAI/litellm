@@ -171,6 +171,7 @@ from litellm.types.utils import (
     ImageResponse,
     LlmProviders,
     LlmProvidersSet,
+    LLMResponseTypes,
     Message,
     ModelInfo,
     ModelInfoBase,
@@ -252,6 +253,7 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 
 from ._logging import _is_debugging_on, verbose_logger
 from .caching.caching import (
+    AzureBlobCache,
     Cache,
     QdrantSemanticCache,
     RedisCache,
@@ -539,9 +541,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, CustomLogger]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -679,7 +681,9 @@ def function_setup(  # noqa: PLR0915
 
         if add_breadcrumb:
             try:
-                details_to_log = copy.deepcopy(kwargs)
+                from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+                details_to_log = safe_deep_copy(kwargs)
             except Exception:
                 details_to_log = kwargs
 
@@ -901,6 +905,7 @@ def client(original_function):  # noqa: PLR0915
             typed_call_type = None  # unknown call type
 
         modified_kwargs = kwargs.copy()
+
         for callback in litellm.callbacks:
             if isinstance(callback, CustomLogger):
                 result = await callback.async_pre_call_deployment_hook(
@@ -910,6 +915,27 @@ def client(original_function):  # noqa: PLR0915
                     modified_kwargs = result
 
         return modified_kwargs
+
+    async def async_post_call_success_deployment_hook(
+        request_data: dict, response: Any, call_type: Optional[CallTypes]
+    ) -> Optional[Any]:
+        """
+        Allow modifying / reviewing the response just after it's received from the deployment.
+        """
+        try:
+            typed_call_type = CallTypes(call_type)
+        except ValueError:
+            typed_call_type = None  # unknown call type
+
+        for callback in litellm.callbacks:
+            if isinstance(callback, CustomLogger):
+                result = await callback.async_post_call_success_deployment_hook(
+                    request_data, cast(LLMResponseTypes, response), typed_call_type
+                )
+                if result is not None:
+                    return result
+
+        return response
 
     def post_call_processing(original_response, model, optional_params: Optional[dict]):
         try:
@@ -1261,9 +1287,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1331,6 +1357,7 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -1439,6 +1466,13 @@ def client(original_function):  # noqa: PLR0915
             post_call_processing(
                 original_response=result, model=model, optional_params=kwargs
             )
+            # Only run if call_type is a valid value in CallTypes
+            if call_type in [ct.value for ct in CallTypes]:
+                await async_post_call_success_deployment_hook(
+                    request_data=kwargs,
+                    response=result,
+                    call_type=CallTypes(call_type),
+                )
 
             ## Add response to cache
             await _llm_caching_handler.async_set_cache(
@@ -1620,7 +1654,6 @@ def _is_streaming_request(
     ):
         return True
     #########################################################
-
     return False
 
 
@@ -2451,6 +2484,7 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    input_fidelity: Optional[str] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[bool] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -2487,6 +2521,7 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
+        "input_fidelity": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -2755,7 +2790,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
         _check_valid_arg(supported_params=supported_params)
         optional_params = litellm.JinaAIEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params, optional_params={}
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
         )
     elif custom_llm_provider == "voyage":
         supported_params = get_supported_openai_params(
@@ -2870,6 +2908,39 @@ def _remove_strict_from_schema(schema):
         # Recursively process all items in the list
         for item in schema:
             _remove_strict_from_schema(item)
+
+    return schema
+
+
+def _remove_json_schema_refs(schema, max_depth=10):
+    """
+    Remove JSON schema reference fields like '$id' and '$schema' that can cause issues with some providers.
+    
+    These fields are used for schema validation but can cause problems when the schema references
+    are not accessible to the provider's validation system.
+    
+    Args:
+        schema: The schema object to clean (dict, list, or other)
+        max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
+    
+    Relevant Issues: Mistral API grammar validation fails when schema contains $id and $schema references
+    """
+    if max_depth <= 0:
+        return schema
+        
+    if isinstance(schema, dict):
+        # Remove JSON schema reference fields
+        schema.pop("$id", None)
+        schema.pop("$schema", None)
+
+        # Recursively process all dictionary values
+        for key, value in schema.items():
+            _remove_json_schema_refs(value, max_depth - 1)
+
+    elif isinstance(schema, list):
+        # Recursively process all items in the list
+        for item in schema:
+            _remove_json_schema_refs(item, max_depth - 1)
 
     return schema
 
@@ -2997,10 +3068,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3127,16 +3198,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4219,9 +4290,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     response_str = ""
     for choice in _choices:
@@ -4386,7 +4457,7 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
 
 
 def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
-    if custom_llm_provider and custom_llm_provider == "bedrock":
+    if custom_llm_provider and custom_llm_provider in ["bedrock", "bedrock_converse"]:
         stripped_bedrock_model = _get_base_bedrock_model(model_name=model)
         return stripped_bedrock_model
     elif custom_llm_provider and (
@@ -5246,9 +5317,10 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("FEATHERLESS_AI_API_KEY")
         elif custom_llm_provider == "gemini":
-            if "GEMINI_API_KEY" in os.environ:
+            if ("GOOGLE_API_KEY" in os.environ) or ("GEMINI_API_KEY" in os.environ):
                 keys_in_environment = True
             else:
+                missing_keys.append("GOOGLE_API_KEY")
                 missing_keys.append("GEMINI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
@@ -5352,6 +5424,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("DASHSCOPE_API_KEY")
+        elif custom_llm_provider == "moonshot":
+            if "MOONSHOT_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("MOONSHOT_API_KEY")
     else:
         ## openai - chatcompletion + text completion
         if (
@@ -5602,21 +5679,22 @@ def _calculate_retry_after(
 ) -> Union[float, int]:
     retry_after = _get_retry_after_from_exception_header(response_headers)
 
+    # Add some jitter (default JITTER is 0.75 - so upto 0.75s)
+    jitter = JITTER * random.random()
+
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
     if retry_after is not None and 0 < retry_after <= 60:
-        return retry_after
+        return retry_after + jitter
 
-    initial_retry_delay = INITIAL_RETRY_DELAY
-    max_retry_delay = MAX_RETRY_DELAY
-    nb_retries = max_retries - remaining_retries
+    # Calculate exponential backoff
+    num_retries = max_retries - remaining_retries
+    sleep_seconds = INITIAL_RETRY_DELAY * pow(2.0, num_retries)
 
-    # Apply exponential backoff, but not more than the max.
-    sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
+    # Make sure sleep_seconds is boxed between min_timeout and MAX_RETRY_DELAY
+    sleep_seconds = max(sleep_seconds, min_timeout)
+    sleep_seconds = min(sleep_seconds, MAX_RETRY_DELAY)
 
-    # Apply some jitter, plus-or-minus half a second.
-    jitter = JITTER * random.random()
-    timeout = sleep_seconds * jitter
-    return timeout if timeout >= min_timeout else min_timeout
+    return sleep_seconds + jitter
 
 
 # custom prompt helper function
@@ -6000,6 +6078,7 @@ def trim_messages(
     """
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
+    original_messages = messages
     messages = copy.deepcopy(messages)
     try:
         if max_tokens is None:
@@ -6028,6 +6107,7 @@ def trim_messages(
             if message["role"] != "tool":
                 break
             tool_messages.append(message)
+        tool_messages.reverse()
         # # Remove the collected tool messages from the original list
         if len(tool_messages):
             messages = messages[: -len(tool_messages)]
@@ -6037,7 +6117,7 @@ def trim_messages(
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
-            return messages
+            return messages + tool_messages
 
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(
@@ -6082,7 +6162,7 @@ def trim_messages(
         verbose_logger.exception(
             "Got exception while token trimming - {}".format(str(e))
         )
-        return messages
+        return original_messages
 
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -6560,6 +6640,19 @@ def validate_and_fix_openai_messages(messages: List):
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
 
+def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]: 
+    """
+    Ensure tools is List[dict] and not List[BaseModel]
+    """
+    new_tools = []
+    if tools is None:
+        return tools
+    for tool in tools:
+        if isinstance(tool, BaseModel):
+            new_tools.append(tool.model_dump())
+        elif isinstance(tool, dict):
+            new_tools.append(tool)
+    return new_tools
 
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
@@ -6656,19 +6749,29 @@ class ProviderConfigManager:
         """
         Returns the provider config for a given provider.
         """
+
         if (
             provider == LlmProviders.OPENAI
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
             return litellm.openaiOSeriesConfig
+        elif (
+            provider == LlmProviders.OPENAI
+            and litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+        ):
+            return litellm.OpenAIGPT5Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
             return litellm.GroqChatConfig()
+        elif litellm.LlmProviders.BYTEZ == provider:
+            return litellm.BytezChatConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
             return litellm.DatabricksConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIChatConfig()
+        elif litellm.LlmProviders.LAMBDA_AI == provider:
+            return litellm.LambdaAIChatConfig()
         elif litellm.LlmProviders.LLAMA == provider:
             return litellm.LlamaAPIConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
@@ -6719,6 +6822,8 @@ class ProviderConfigManager:
             return litellm.EmpowerChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            return litellm.GithubCopilotConfig()
         elif (
             litellm.LlmProviders.CUSTOM == provider
             or litellm.LlmProviders.CUSTOM_OPENAI == provider
@@ -6811,11 +6916,18 @@ class ProviderConfigManager:
             return litellm.NebiusConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             return litellm.DashScopeChatConfig()
+        elif litellm.LlmProviders.MOONSHOT == provider:
+            return litellm.MoonshotChatConfig()
+        elif litellm.LlmProviders.V0 == provider:
+            return litellm.V0ChatConfig()
+        elif litellm.LlmProviders.MORPH == provider:
+            return litellm.MorphChatConfig()
         elif litellm.LlmProviders.BEDROCK == provider:
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
             bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
                 model=model
             )
+
             base_model = BedrockModelInfo.get_base_model(model)
 
             if bedrock_route == "converse" or bedrock_route == "converse_like":
@@ -6829,10 +6941,13 @@ class ProviderConfigManager:
             elif bedrock_invoke_provider == "amazon":  # amazon titan llms
                 return litellm.AmazonTitanConfig()
             elif bedrock_invoke_provider == "anthropic":
-                if base_model.startswith("anthropic.claude-3"):
-                    return litellm.AmazonAnthropicClaude3Config()
-                else:
+                if (
+                    base_model
+                    in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
+                ):
                     return litellm.AmazonAnthropicConfig()
+                else:
+                    return litellm.AmazonAnthropicClaude3Config()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
@@ -6853,8 +6968,14 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.GRADIENT_AI == provider:
+            return litellm.GradientAIConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
+        elif litellm.LlmProviders.OCI == provider:
+            return litellm.OCIChatConfig()
+        elif litellm.LlmProviders.HYPERBOLIC == provider:
+            return litellm.HyperbolicChatConfig()
         return None
 
     @staticmethod
@@ -6877,6 +6998,12 @@ class ProviderConfigManager:
             from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
 
             return CohereEmbeddingConfig()
+        elif litellm.LlmProviders.JINA_AI == provider:
+            from litellm.llms.jina_ai.embedding.transformation import (
+                JinaAIEmbeddingConfig,
+            )
+
+            return JinaAIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -6954,7 +7081,11 @@ class ProviderConfigManager:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
-            return litellm.AzureOpenAIResponsesAPIConfig()
+            # Check if it's an O-series model
+            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+                return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
+            else:
+                return litellm.AzureOpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
@@ -7079,6 +7210,24 @@ class ProviderConfigManager:
             )
 
             return AzureOpenAIVectorStoreConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.vector_stores.transformation import (
+                VertexVectorStoreConfig,
+            )
+
+            return VertexVectorStoreConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.vector_stores.transformation import (
+                BedrockVectorStoreConfig,
+            )
+
+            return BedrockVectorStoreConfig()
+        elif litellm.LlmProviders.PG_VECTOR == provider:
+            from litellm.llms.pg_vector.vector_stores.transformation import (
+                PGVectorStoreConfig,
+            )
+
+            return PGVectorStoreConfig()
         return None
 
     @staticmethod
@@ -7104,6 +7253,18 @@ class ProviderConfigManager:
             )
 
             return get_xinference_image_generation_config(model)
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_generation import (
+                get_recraft_image_generation_config,
+            )
+
+            return get_recraft_image_generation_config(model)
+        elif LlmProviders.GEMINI == provider:
+            from litellm.llms.gemini.image_generation import (
+                get_gemini_image_generation_config,
+            )
+
+            return get_gemini_image_generation_config(model)
         return None
 
     @staticmethod
@@ -7128,12 +7289,18 @@ class ProviderConfigManager:
             )
 
             return OpenAIImageEditConfig()
-        if LlmProviders.AZURE == provider:
+        elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,
             )
 
             return AzureImageEditConfig()
+        elif LlmProviders.RECRAFT == provider:
+            from litellm.llms.recraft.image_edit.transformation import (
+                RecraftImageEditConfig,
+            )
+
+            return RecraftImageEditConfig()
         return None
 
     @staticmethod

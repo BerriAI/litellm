@@ -288,11 +288,6 @@ def _is_api_route_allowed(
     if valid_token is None:
         raise Exception("Invalid proxy server token passed. valid_token=None.")
 
-    # Check if Virtual Key is allowed to call the route - Applies to all Roles
-    RouteChecks.is_virtual_key_allowed_to_call_route(
-        route=route, valid_token=valid_token
-    )
-
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
@@ -442,6 +437,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    route: str,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
@@ -458,6 +454,8 @@ async def get_end_user_object(
     _key = "end_user_id:{}".format(end_user_id)
 
     def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
+        if route in LiteLLMRoutes.info_routes.value:  # allow calling info routes
+            return
         if end_user_obj.litellm_budget_table is None:
             return
         end_user_budget = end_user_obj.litellm_budget_table.max_budget
@@ -1027,7 +1025,9 @@ class ExperimentalUIJWTToken:
             decrypt_value_helper,
         )
 
-        decrypted_token = decrypt_value_helper(hashed_token, exception_type="debug")
+        decrypted_token = decrypt_value_helper(
+            hashed_token, key="ui_hash_key", exception_type="debug"
+        )
         if decrypted_token is None:
             return None
         try:
@@ -1152,6 +1152,7 @@ def _can_object_call_model(
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
+    team_id: Optional[str] = None,
     object_type: Literal["user", "team", "key", "org"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
@@ -1184,6 +1185,7 @@ def _can_object_call_model(
                 llm_router=llm_router,
                 models=models,
                 team_model_aliases=team_model_aliases,
+                team_id=team_id,
                 object_type=object_type,
                 fallback_depth=fallback_depth + 1,
             )
@@ -1202,7 +1204,9 @@ def _can_object_call_model(
     access_groups: Dict[str, List[str]] = defaultdict(list)
 
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model)
+        access_groups = llm_router.get_model_access_groups(
+            model_name=model, team_id=team_id
+        )
 
     if (
         len(access_groups) > 0 and llm_router is not None
@@ -1288,6 +1292,7 @@ async def can_key_call_model(
         llm_router=llm_router,
         models=valid_token.models,
         team_model_aliases=valid_token.team_model_aliases,
+        team_id=valid_token.team_id,
         object_type="key",
     )
 
@@ -1326,6 +1331,7 @@ def can_team_access_model(
         llm_router=llm_router,
         models=team_object.models if team_object else [],
         team_model_aliases=team_model_aliases,
+        team_id=team_object.team_id if team_object else None,
         object_type="team",
     )
 

@@ -38,15 +38,16 @@ class BaseVectorStoreTest(ABC):
         litellm._turn_on_debug()
         litellm.set_verbose = True
         base_request_args = self.get_base_request_args()
+        default_query = base_request_args.pop("query", "Basic ping")
         try: 
             if sync_mode:
                 response = litellm.vector_stores.search(
-                    query="Basic ping", 
+                    query=default_query, 
                     **base_request_args
                 )
             else:
                 response = await litellm.vector_stores.asearch(
-                    query="Basic ping", 
+                    query=default_query, 
                     **base_request_args
                 )
         except litellm.InternalServerError: 
@@ -106,7 +107,7 @@ class BaseVectorStoreTest(ABC):
             f"Expected object to be 'vector_store.search_results.page', got '{response['object']}'"
         
         # Validate search_query field
-        assert isinstance(response['search_query'], list), \
+        assert isinstance(response['search_query'], str), \
             f"search_query should be a list, got {type(response['search_query'])}"
         assert len(response['search_query']) > 0, "search_query should not be empty"
         assert all(isinstance(query, str) for query in response['search_query']), \

@@ -122,10 +122,12 @@ export interface InputSchemaProperty {
     auth_type?: string | null;
     userRole: string | null;
     userID: string | null;
+    serverAlias?: string | null;
   }
 
 export interface MCPServer {
   server_id: string;
+  server_name?: string | null;
   alias?: string | null;
   description?: string | null;
   url: string;

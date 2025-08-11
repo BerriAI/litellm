@@ -5,7 +5,18 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 ### INIT VARIABLES ####################
 import threading
 import os
-from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
+from typing import (
+    Callable,
+    List,
+    Optional,
+    Dict,
+    Union,
+    Any,
+    Literal,
+    get_args,
+    TYPE_CHECKING,
+)
+from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -60,6 +71,11 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
+from litellm.integrations.dotprompt import (
+    global_prompt_manager,
+    global_prompt_directory,
+    set_global_prompt_directory,
+)
 from litellm.types.guardrails import GuardrailItem
 from litellm.types.secret_managers.main import (
     KeyManagementSystem,
@@ -82,11 +98,10 @@ if litellm_mode == "DEV":
 
 # Register async client cleanup to prevent resource leaks
 register_async_client_cleanup()
-
-##################################################
+####################################################
 if set_verbose == True:
     _turn_on_debug()
-##################################################
+####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
 CALLBACK_TYPES = Union[str, Callable, CustomLogger]
 input_callback: List[CALLBACK_TYPES] = []
@@ -122,13 +137,14 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gcs_pubsub",
     "agentops",
     "anthropic_cache_control_hook",
-    "bedrock_vector_store",
     "generic_api",
     "resend_email",
     "smtp_email",
     "deepeval",
     "s3_v2",
     "aws_sqs",
+    "vector_store_pre_call_hook",
+    "dotprompt",
 ]
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
@@ -193,6 +209,7 @@ openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
+bytez_key: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None
@@ -214,6 +231,7 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
@@ -252,6 +270,12 @@ blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+include_cost_in_streaming_usage: bool = False
+### PROMPTS ###
+from litellm.types.prompts.init_prompts import PromptSpec
+
+prompt_name_config_map: Dict[str, PromptSpec] = {}
+
 ##################
 ### PREVIEW FEATURES ###
 enable_preview_features: bool = False
@@ -259,7 +283,7 @@ return_response_headers: bool = (
     False  # get response headers from LLM Api providers - example x-remaining-requests,
 )
 enable_json_schema_validation: bool = False
-##################
+####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
 enable_caching_on_provider_specific_optional_params: bool = (
@@ -279,6 +303,7 @@ default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
+model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
@@ -303,6 +328,7 @@ model_cost_map_url: str = (
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -327,9 +353,12 @@ prometheus_metrics_config: Optional[List] = None
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
+disable_copilot_system_to_assistant: bool = (
+    False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
+)
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION #####
+#### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
 
 
@@ -402,6 +431,9 @@ project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
 BEDROCK_CONVERSE_MODELS = [
+    "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
     "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -489,6 +521,7 @@ sambanova_models: List = []
 novita_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
+gradient_ai_models: List = []
 llama_models: List = []
 nscale_models: List = []
 nebius_models: List = []
@@ -496,6 +529,13 @@ nebius_embedding_models: List = []
 deepgram_models: List = []
 elevenlabs_models: List = []
 dashscope_models: List = []
+moonshot_models: List = []
+v0_models: List = []
+morph_models: List = []
+lambda_ai_models: List = []
+hyperbolic_models: List = []
+recraft_models: List = []
+oci_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -665,6 +705,8 @@ def add_known_models():
             jina_ai_models.append(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.append(key)
+        elif value.get("litellm_provider") == "gradient_ai":
+            gradient_ai_models.append(key)
         elif value.get("litellm_provider") == "featherless_ai":
             featherless_ai_models.append(key)
         elif value.get("litellm_provider") == "deepgram":
@@ -673,6 +715,20 @@ def add_known_models():
             elevenlabs_models.append(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.append(key)
+        elif value.get("litellm_provider") == "moonshot":
+            moonshot_models.append(key)
+        elif value.get("litellm_provider") == "v0":
+            v0_models.append(key)
+        elif value.get("litellm_provider") == "morph":
+            morph_models.append(key)
+        elif value.get("litellm_provider") == "lambda_ai":
+            lambda_ai_models.append(key)
+        elif value.get("litellm_provider") == "hyperbolic":
+            hyperbolic_models.append(key)
+        elif value.get("litellm_provider") == "recraft":
+            recraft_models.append(key)
+        elif value.get("litellm_provider") == "oci":
+            oci_models.append(key)
 
 
 add_known_models()
@@ -701,7 +757,6 @@ petals_models = [
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
-
 
 model_list = (
     open_ai_chat_completion_models
@@ -751,12 +806,19 @@ model_list = (
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
+    + gradient_ai_models
     + llama_models
     + featherless_ai_models
     + nscale_models
     + deepgram_models
     + elevenlabs_models
     + dashscope_models
+    + moonshot_models
+    + v0_models
+    + morph_models
+    + lambda_ai_models
+    + recraft_models
+    + oci_models
 )
 
 model_list_set = set(model_list)
@@ -785,6 +847,7 @@ models_by_provider: dict = {
     "bedrock": bedrock_models + bedrock_converse_models,
     "petals": petals_models,
     "ollama": ollama_models,
+    "ollama_chat": ollama_models,
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
     "maritalk": maritalk_models,
@@ -817,12 +880,20 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "gradient_ai": gradient_ai_models,
     "meta_llama": llama_models,
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
     "dashscope": dashscope_models,
+    "moonshot": moonshot_models,
+    "v0": v0_models,
+    "morph": morph_models,
+    "lambda_ai": lambda_ai_models,
+    "hyperbolic": hyperbolic_models,
+    "recraft": recraft_models,
+    "oci": oci_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -919,6 +990,7 @@ ALL_LITELLM_RESPONSE_TYPES = [
     TextCompletionResponse,
 ]
 
+from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.custom_llm import CustomLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from .llms.openai_like.chat.handler import OpenAILikeChatConfig
@@ -1068,16 +1140,20 @@ from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
-
+from .llms.gradient_ai.chat.transformation import GradientAIConfig
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
+)
+from .llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
 )
 from .llms.openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
@@ -1092,6 +1168,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 )
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
@@ -1140,6 +1217,12 @@ from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from .llms.github_copilot.chat.transformation import GithubCopilotConfig
 from .llms.nebius.chat.transformation import NebiusConfig
 from .llms.dashscope.chat.transformation import DashScopeChatConfig
+from .llms.moonshot.chat.transformation import MoonshotChatConfig
+from .llms.v0.chat.transformation import V0ChatConfig
+from .llms.oci.chat.transformation import OCIChatConfig
+from .llms.morph.chat.transformation import MorphChatConfig
+from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
+from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients

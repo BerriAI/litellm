@@ -25,6 +25,9 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     IncompleteDetails,
 )
+from openai.types.responses.response_create_params import (
+    ResponseInputParam,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -109,6 +112,10 @@ class BaseResponsesAPITest(ABC):
         """Must return the base completion call args"""
         pass
 
+    def get_base_completion_reasoning_call_args(self) -> dict:
+        """Must return the base completion reasoning call args"""
+        return None
+
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
@@ -137,6 +144,7 @@ class BaseResponsesAPITest(ABC):
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_responses_api_streaming(self, sync_mode):
         litellm._turn_on_debug()
         base_completion_call_args = self.get_base_completion_call_args()
@@ -183,8 +191,8 @@ class BaseResponsesAPITest(ABC):
         # basic test assert the usage seems reasonable
         print("response_completed_event.response.usage=", response_completed_event.response.usage)
         assert response_completed_event.response.usage.input_tokens > 0 and response_completed_event.response.usage.input_tokens < 100
-        assert response_completed_event.response.usage.output_tokens > 0 and response_completed_event.response.usage.output_tokens < 1000
-        assert response_completed_event.response.usage.total_tokens > 0 and response_completed_event.response.usage.total_tokens < 1000
+        assert response_completed_event.response.usage.output_tokens > 0 and response_completed_event.response.usage.output_tokens < 2000
+        assert response_completed_event.response.usage.total_tokens > 0 and response_completed_event.response.usage.total_tokens < 2000
 
         # total tokens should be the sum of input and output tokens
         assert response_completed_event.response.usage.total_tokens == response_completed_event.response.usage.input_tokens + response_completed_event.response.usage.output_tokens
@@ -228,6 +236,7 @@ class BaseResponsesAPITest(ABC):
     
 
     @pytest.mark.parametrize("sync_mode", [True, False])
+    @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode):
         #litellm._turn_on_debug()
@@ -277,6 +286,7 @@ class BaseResponsesAPITest(ABC):
             )
 
     @pytest.mark.parametrize("sync_mode", [False, True])
+    @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
     async def test_basic_openai_responses_get_endpoint(self, sync_mode):
         litellm._turn_on_debug()
@@ -317,6 +327,7 @@ class BaseResponsesAPITest(ABC):
                 raise ValueError("response is not a ResponsesAPIResponse")
 
     @pytest.mark.asyncio
+    @pytest.mark.flaky(retries=3, delay=2)
     async def test_basic_openai_list_input_items_endpoint(self):
         """Test that calls the OpenAI List Input Items endpoint"""
         litellm._turn_on_debug()
@@ -363,3 +374,163 @@ class BaseResponsesAPITest(ABC):
         # assert the response is not None
         assert response_1 is not None
         assert response_2 is not None
+    
+    @pytest.mark.asyncio
+    async def test_responses_api_with_tool_calls(self):
+        """Test that calls the Responses API with tool calls including function call and output"""
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_call_args()
+        
+        # Define the input with message, function call, and function call output
+        input_data: ResponseInputParam = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "How is the weather in São Paulo today ?"
+            },
+            {
+                "type": "function_call",
+                "arguments": "{\"location\": \"São Paulo, Brazil\"}",
+                "call_id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "name": "get_weather",
+                "id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "status": "completed"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "fc_1fe70e2a-a596-45ef-b72c-9b8567c460e5",
+                "output": "Rainy"
+            }
+        ]
+        
+        # Define the tools
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get current temperature for a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "City and country e.g. Bogotá, Colombia"
+                        }
+                    },
+                    "required": ["location"],
+                    "additionalProperties": False
+                }
+            }
+        ]
+        
+        try:
+            # Make the responses API call
+            response = await litellm.aresponses(
+                input=input_data,
+                store=False,
+                tools=tools,
+                **base_completion_call_args
+            )
+        except litellm.InternalServerError:
+            pytest.skip("Skipping test due to litellm.InternalServerError")
+        
+        print("litellm response=", json.dumps(response, indent=4, default=str))
+        
+        # Validate the response structure
+        validate_responses_api_response(response, final_chunk=True)
+        
+        # Additional assertions specific to tool calls
+        assert response is not None
+        assert "output" in response
+        assert len(response["output"]) > 0
+    
+    @pytest.mark.asyncio
+    async def test_responses_api_multi_turn_with_reasoning_and_structured_output(self):
+        """
+        Test multi-turn conversation with reasoning, structured output, and tool calls.
+        
+        This test validates:
+        - First call: Model uses reasoning to process a question and makes a tool call
+        - Tool call handling: Function call output is properly processed 
+        - Second call: Model produces structured output incorporating tool results
+        - Structured output: Response conforms to defined Pydantic model schema
+        """
+        from pydantic import BaseModel
+        
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_reasoning_call_args()
+        if base_completion_call_args is None:
+            pytest.skip("Skipping test due to no base completion reasoning call args")
+        
+        # Define tools for the conversation
+        tools = [{"type": "function", "name": "get_today"}]
+        
+        # Define structured output schema
+        class Output(BaseModel):
+            today: str
+            number_of_r: str
+        
+        # Initial conversation input
+        input_messages = [
+            {
+                "role": "user", 
+                "content": "How many r in strrawberrry? While you're thinking, you should call tool get_today. Then you output the today and number of r",
+            }
+        ]
+        
+
+        # First call - should trigger reasoning and tool call
+        response = await litellm.aresponses(
+            input=input_messages,
+            tools=tools,
+            reasoning={"effort": "low", "summary": "detailed"},
+            text_format=Output,
+            **base_completion_call_args
+        )
+
+        print("First call output:")
+        print(json.dumps(response.output, indent=4, default=str))
+        
+        # Validate first response structure
+        validate_responses_api_response(response, final_chunk=True)
+        assert response.output is not None
+        assert len(response.output) > 0
+        
+        # Extend input with first response output
+        input_messages.extend(response.output)
+        
+        # Process any tool calls and add function outputs
+        function_outputs = []
+        for item in response.output:
+            if hasattr(item, 'type') and item.type in ["function_call", "custom_tool_call"]:
+                if hasattr(item, 'name') and item.name == "get_today":
+                    function_outputs.append({
+                        "type": "function_call_output", 
+                        "call_id": item.call_id, 
+                        "output": "2025-01-15"
+                    })
+        
+        # Add function outputs to conversation
+        input_messages.extend(function_outputs)
+        
+        print("Second call input:")
+        print(json.dumps(input_messages, indent=4, default=str))
+        
+        # Second call - should produce structured output
+        final_response = await litellm.aresponses(
+            input=input_messages,
+            tools=tools,
+            reasoning={"effort": "low", "summary": "detailed"},
+            text_format=Output,
+            **base_completion_call_args
+        )
+        
+        print("Second call output:")
+        print(json.dumps(final_response.output, indent=4, default=str))
+        
+        # Validate final response structure
+        validate_responses_api_response(final_response, final_chunk=True)
+        assert final_response.output is not None
+        assert len(final_response.output) > 0

@@ -5,19 +5,23 @@ import { MCPServer, MCPServerCostInfo } from "./types";
 import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
   accessToken: string | null;
   onCancel: () => void;
   onSuccess: (server: MCPServer) => void;
+  availableAccessGroups: string[];
 }
 
-const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, onCancel, onSuccess }) => {
+const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, onCancel, onSuccess, availableAccessGroups }) => {
   const [form] = Form.useForm();
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
+  const [searchValue, setSearchValue] = useState<string>("");
+  const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false)
 
   // Initialize cost config from existing server data
   useEffect(() => {
@@ -51,7 +55,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       // Prepare the MCP server config from existing server data
       const mcpServerConfig = {
         server_id: mcpServer.server_id,
-        alias: mcpServer.alias,
+        server_name: mcpServer.server_name,
         url: mcpServer.url,
         transport: mcpServer.transport,
         spec_version: mcpServer.spec_version,
@@ -75,6 +79,35 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
     }
   };
 
+  // Generate options with existing groups and potential new group
+  const getAccessGroupOptions = () => {
+    const existingOptions = availableAccessGroups.map((group: string) => ({
+      value: group,
+      label: (
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+          <span className="font-medium">{group}</span>
+        </div>
+      ),
+    }))
+
+    // If search value doesn't match any existing group and is not empty, add "create new group" option
+    if (searchValue && !availableAccessGroups.some(group => group.toLowerCase().includes(searchValue.toLowerCase()))) {
+      existingOptions.push({
+        value: searchValue,
+        label: (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+            <span className="font-medium">{searchValue}</span>
+            <span className="text-gray-400 text-xs ml-1">create new group</span>
+          </div>
+        ),
+      })
+    }
+
+    return existingOptions
+  }
+
   const handleSave = async (values: Record<string, any>) => {
     if (!accessToken) return;
     try {
@@ -86,11 +119,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
         ...values,
         server_id: mcpServer.server_id,
         mcp_info: {
-          server_name: values.alias || values.url,
+          server_name: values.server_name || values.url,
           description: values.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null
         },
-        mcp_access_groups: accessGroups
+        mcp_access_groups: accessGroups,
+        alias: values.alias,
       };
 
       const updated = await updateMCPServer(accessToken, payload);
@@ -110,18 +144,24 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       <TabPanels className="mt-6">
         <TabPanel>
           <Form form={form} onFinish={handleSave} initialValues={mcpServer} layout="vertical">
-            <Form.Item label="MCP Server Name" name="alias" rules={[{
-              validator: (_, value) =>
-                value && value.includes('-')
-                  ? Promise.reject("Server name cannot contain '-' (hyphen). Please use '_' (underscore) instead.")
-                  : Promise.resolve(),
+            <Form.Item label="MCP Server Name" name="server_name" rules={[{
+              validator: (_, value) => validateMCPServerName(value),
             }]}>
               <TextInput />
+            </Form.Item>
+            <Form.Item label="Alias" name="alias" rules={[{
+                validator: (_, value) => validateMCPServerName(value),
+              }]}
+            >
+              <TextInput onChange={() => setAliasManuallyEdited(true)} />
             </Form.Item>
             <Form.Item label="Description" name="description">
               <TextInput />
             </Form.Item>
-            <Form.Item label="MCP Server URL" name="url" rules={[{ required: true, message: "Please enter a server URL" }]}> 
+            <Form.Item label="MCP Server URL" name="url" rules={[
+              { required: true, message: "Please enter a server URL" },
+              { validator: (_, value) => validateMCPServerUrl(value) },
+            ]}> 
               <TextInput />
             </Form.Item>
             <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}> 
@@ -140,7 +180,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
             </Form.Item>
             <Form.Item label="MCP Version" name="spec_version" rules={[{ required: true }]}> 
               <Select>
-                <Select.Option value="2025-03-26">2025-03-26 (Latest)</Select.Option>
+                <Select.Option value="2025-06-18">2025-06-18 (Latest)</Select.Option>
+                <Select.Option value="2025-03-26">2025-03-26</Select.Option>
                 <Select.Option value="2024-11-05">2024-11-05</Select.Option>
               </Select>
             </Form.Item>
@@ -160,8 +201,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
               <Select
                 mode="tags"
                 style={{ width: '100%' }}
+                showSearch
                 placeholder="Add or select access groups"
                 tokenSeparators={[',']}
+                optionFilterProp="value"
+                filterOption={(input, option) =>
+                  (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                onSearch={(value) => setSearchValue(value)}
+                options={getAccessGroupOptions()}
                 // Ensure value is always an array of strings
                 getPopupContainer={trigger => trigger.parentNode}
               />

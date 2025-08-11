@@ -8,12 +8,15 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     UserProvisionerHelpers,
     _handle_team_membership_changes,
     create_user,
+    get_service_provider_config,
     patch_user,
     update_user,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIMFeature,
     SCIMPatchOp,
     SCIMPatchOperation,
+    SCIMServiceProviderConfig,
     SCIMUser,
     SCIMUserEmail,
     SCIMUserGroup,
@@ -557,3 +560,22 @@ async def test_patch_user_not_found(mocker):
     # Should raise ProxyException (which wraps the HTTPException)
     with pytest.raises(ProxyException):
         await patch_user(user_id="nonexistent-user", patch_ops=patch_ops)
+
+
+@pytest.mark.asyncio
+async def test_get_service_provider_config(mocker):
+    """Test the get_service_provider_config endpoint"""
+    # Mock the Request object
+    mock_request = mocker.MagicMock()
+    mock_request.url = "https://example.com/scim/v2/ServiceProviderConfig"
+    
+    # Call the endpoint
+    result = await get_service_provider_config(mock_request)
+    
+    # Verify it returns the correct response
+    assert isinstance(result, SCIMServiceProviderConfig)
+    assert result.schemas == ["urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"]
+    assert result.patch.supported is True
+    assert result.bulk.supported is False
+    assert result.meta is not None
+    assert result.meta["resourceType"] == "ServiceProviderConfig"

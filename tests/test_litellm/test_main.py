@@ -1097,3 +1097,28 @@ def test_stream_chunk_builder_thinking_blocks():
     assert response is not None
     assert response.choices[0].message.content is not None
     assert response.choices[0].message.thinking_blocks is not None
+
+
+from litellm.llms.openai.openai import OpenAIChatCompletion
+
+
+def throw_retryable_error(*_, **__):
+    raise RuntimeError("BOOM")
+
+
+@pytest.mark.asyncio
+async def test_retrying() -> None:
+    litellm.num_retries = 10
+    with (
+        patch.object(
+            OpenAIChatCompletion,
+            "make_openai_chat_completion_request",
+            side_effect=throw_retryable_error,
+        ) as mock_request,
+        pytest.raises(litellm.InternalServerError, match="LiteLLM Retried: 10 times"),
+    ):
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+    assert mock_request.call_count >= 10, "Expected retrying to be used"

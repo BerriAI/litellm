@@ -132,6 +132,23 @@ class Authenticator:
                 status_code=401,
             )
 
+    def get_api_base(self) -> Optional[str]:
+        """
+        Get the API endpoint from the api-key.json file.
+
+        Returns:
+            Optional[str]: The GitHub Copilot API endpoint, or None if not found.
+        """
+        try:
+            with open(self.api_key_file, "r") as f:
+                api_key_info = json.load(f)
+                endpoints = api_key_info.get("endpoints", {})
+                api_endpoint = endpoints.get("api")
+                return api_endpoint
+        except (IOError, json.JSONDecodeError, KeyError) as e:
+            verbose_logger.warning(f"Error reading API endpoint from file: {str(e)}")
+            return None
+
     def _refresh_api_key(self) -> Dict[str, Any]:
         """
         Refresh the API key using the access token.
@@ -339,7 +356,11 @@ class Authenticator:
         verification_uri = device_code_info["verification_uri"]
 
         print(  # noqa: T201
-            f"Please visit {verification_uri} and enter code {user_code} to authenticate."
+            f"Please visit {verification_uri} and enter code {user_code} to authenticate.",
+
+            # When this is running in docker, it may not be flushed immediately
+            # so we force flush to ensure the user sees the message
+            flush=True,
         )
 
         return self._poll_for_access_token(device_code)

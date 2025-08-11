@@ -6,6 +6,7 @@ import { jwtDecode } from "jwt-decode";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
 import Navbar from "@/components/navbar";
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import UserDashboard from "@/components/user_dashboard";
 import ModelDashboard from "@/components/model_dashboard";
 import ViewUserDashboard from "@/components/view_users";
@@ -18,7 +19,6 @@ import GeneralSettings from "@/components/general_settings";
 import PassThroughSettings from "@/components/pass_through_settings";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import SpendLogsTable from "@/components/view_logs";
-import ModelHub from "@/components/model_hub";
 import ModelHubTable from "@/components/model_hub_table";
 import NewUsagePage from "@/components/new_usage";
 import APIRef from "@/components/api_ref";
@@ -33,12 +33,14 @@ import {
 } from "@/components/networking";
 import { Organization } from "@/components/networking";
 import GuardrailsPanel from "@/components/guardrails";
+import PromptsPanel from "@/components/prompts";
 import TransformRequestPanel from "@/components/transform_request";
 import { fetchUserModels } from "@/components/create_key_button";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import { MCPServers } from "@/components/mcp_tools";
 import TagManagement from "@/components/tag_management";
 import VectorStoreManagement from "@/components/vector_store_management";
+import UIThemeSettings from "@/components/ui_theme_settings";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cx } from "@/lib/cva.config";
 
@@ -232,8 +234,9 @@ export default function CreateKeyPage() {
   return (
     <Suspense fallback={<LoadingScreen />}>
       <QueryClientProvider client={queryClient}>
-        {invitation_id ? (
-          <UserDashboard
+        <ThemeProvider accessToken={accessToken}>
+          {invitation_id ? (
+            <UserDashboard
             userID={userID}
             userRole={userRole}
             premiumUser={premiumUser}
@@ -258,6 +261,7 @@ export default function CreateKeyPage() {
               setProxySettings={setProxySettings}
               proxySettings={proxySettings}
               accessToken={accessToken}
+              isPublicPage={false}
             />
             <div className="flex flex-1 overflow-auto">
               <div className="mt-8">
@@ -361,6 +365,11 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   userRole={userRole}
                 />
+              ) : page == "prompts" ? (
+                <PromptsPanel
+                  accessToken={accessToken}
+                  userRole={userRole}
+                />
               ) : page == "transform-request" ? (
                 <TransformRequestPanel accessToken={accessToken} />
               ) : page == "general-settings" ? (
@@ -370,17 +379,18 @@ export default function CreateKeyPage() {
                   accessToken={accessToken}
                   modelData={modelData}
                 />
-              ) : page == "model-hub" ? (
-                <ModelHub
+              ) : page == "ui-theme" ? (
+                <UIThemeSettings
+                  userID={userID}
+                  userRole={userRole}
                   accessToken={accessToken}
-                  publicPage={false}
-                  premiumUser={premiumUser}
                 />
               ) : page == "model-hub-table" ? (
                 <ModelHubTable
                   accessToken={accessToken}
                   publicPage={false}
                   premiumUser={premiumUser}
+                  userRole={userRole}
                 />
               ) : page == "caching" ? (
                 <CacheDashboard
@@ -445,6 +455,7 @@ export default function CreateKeyPage() {
             </div>
           </div>
         )}
+        </ThemeProvider>
       </QueryClientProvider>
     </Suspense>
   );

@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Open WebUI with LiteLLM
+# Open WebUI
 
 This guide walks you through connecting Open WebUI to LiteLLM. Using LiteLLM with Open WebUI allows teams to 
 - Access 100+ LLMs on Open WebUI
@@ -119,11 +119,16 @@ Example litellm config.yaml:
 
 ```yaml
 model_list:
-  - model_name: thinking-anthropic-claude-3-7-sonnet
+  - model_name: thinking-anthropic-claude-3-7-sonnet # Bedrock Anthropic
     litellm_params:
       model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
       thinking: {"type": "enabled", "budget_tokens": 1024}
       max_tokens: 1080
+      merge_reasoning_content_in_choices: true
+  - model_name: vertex_ai/gemini-2.5-pro # Vertex AI Gemini
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      thinking: {"type": "enabled", "budget_tokens": 1024}
       merge_reasoning_content_in_choices: true
 ```
 

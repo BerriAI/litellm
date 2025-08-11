@@ -1,10 +1,13 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, proxyBaseUrl } from "./networking";
+import { modelHubCall, makeModelGroupPublic, modelHubPublicModelsCall, getProxyBaseUrl } from "./networking";
 import { getConfigFieldSetting, updateConfigFieldSetting } from "./networking";
 import { ModelDataTable } from "./model_dashboard/table";
 import { modelHubColumns } from "./model_hub_table_columns";
 import PublicModelHub from "./public_model_hub";
+import MakeModelPublicForm from "./make_model_public_form";
+import ModelFilters from "./model_filters";
+import UsefulLinksManagement from "./useful_links_management";
 import {
   Card,
   Text,
@@ -13,14 +16,17 @@ import {
   Badge,
   Flex,
 } from "@tremor/react";
-import { Modal, message } from "antd";
+import { Modal, message, Tooltip } from "antd";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from '@tanstack/react-table';
+import { Copy } from "lucide-react";
+import { isAdminRole } from "../utils/roles";
 
 interface ModelHubTableProps {
   accessToken: string | null;
   publicPage: boolean;
   premiumUser: boolean;
+  userRole: string | null;
 }
 
 interface ModelGroupInfo {
@@ -37,7 +43,7 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
-  public?: boolean; // Whether the model is public (defaults to false)
+  is_public_model_group: boolean;
   // Allow any additional properties for flexibility
   [key: string]: any;
 }
@@ -46,6 +52,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   accessToken,
   publicPage,
   premiumUser,
+  userRole,
 }) => {
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
@@ -53,11 +60,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isPublicPageModalVisible, setIsPublicPageModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelGroupInfo>(null);
-  const [searchTerm, setSearchTerm] = useState<string>("");
-  const [selectedProvider, setSelectedProvider] = useState<string>("");
-  const [selectedMode, setSelectedMode] = useState<string>("");
-  const [selectedFeature, setSelectedFeature] = useState<string>("");
-  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [filteredData, setFilteredData] = useState<ModelGroupInfo[]>([]);
+  const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   const router = useRouter();
   const tableRef = useRef<TableInstance<any>>(null);
 
@@ -119,34 +123,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     router.replace(`/model_hub_table?key=${accessToken}`);
   };
 
-  const handleMakePublicPage = async () => {
+  const handleMakePublicPage = () => {
     if (!accessToken) {
       return;
     }
     
-    try {
-      // Get the selected model groups or use all if none are selected
-      const modelGroupsToMakePublic = selectedModels.size > 0 
-        ? Array.from(selectedModels)
-        : modelHubData?.map(model => model.model_group) || [];
-      
-      if (modelGroupsToMakePublic.length > 0) {
-        // Call the endpoint to make the selected model groups public
-        await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
-        
-        // Show success message
-        message.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
-        
-        // Route to the model hub table
-        router.push(`/ui/model_hub_table`);
-      } else {
-        // Show the modal if no model groups available
-        setIsPublicPageModalVisible(true);
-      }
-    } catch (error) {
-      console.error("Error making model groups public:", error);
-      message.error("Failed to make model groups public. Please try again.");
-    }
+    // Show the modal for selecting models to make public
+    setIsMakePublicModalVisible(true);
   };
 
   const handleOk = () => {
@@ -186,90 +169,24 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     return `$${(cost * 1_000_000).toFixed(2)}`;
   };
 
-  const getUniqueProviders = (data: ModelGroupInfo[]) => {
-    const providers = new Set<string>();
-    data.forEach(model => {
-      model.providers.forEach(provider => providers.add(provider));
-    });
-    return Array.from(providers);
-  };
-
-  const getUniqueModes = (data: ModelGroupInfo[]) => {
-    const modes = new Set<string>();
-    data.forEach(model => {
-      if (model.mode) modes.add(model.mode);
-    });
-    return Array.from(modes);
-  };
-
-  const getUniqueFeatures = (data: ModelGroupInfo[]) => {
-    const features = new Set<string>();
-    data.forEach(model => {
-      // Find all properties that start with 'supports_' and are true
-      Object.entries(model)
-        .filter(([key, value]) => key.startsWith('supports_') && value === true)
-        .forEach(([key]) => {
-          // Format the feature name (remove 'supports_' prefix and convert to title case)
-          const featureName = key
-            .replace(/^supports_/, '')
-            .split('_')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-          features.add(featureName);
-        });
-    });
-    return Array.from(features).sort();
-  };
-
-  const filteredData = modelHubData?.filter(model => {
-    const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
-    const matchesMode = selectedMode === "" || model.mode === selectedMode;
-    
-    // Check if model has the selected feature
-    const matchesFeature = selectedFeature === "" || 
-      Object.entries(model)
-        .filter(([key, value]) => key.startsWith('supports_') && value === true)
-        .some(([key]) => {
-          const featureName = key
-            .replace(/^supports_/, '')
-            .split('_')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-          return featureName === selectedFeature;
-        });
-    
-    return matchesSearch && matchesProvider && matchesMode && matchesFeature;
-  }) || [];
-
-  const handleRowSelection = (modelGroup: string, isSelected: boolean) => {
-    const newSelection = new Set(selectedModels);
-    if (isSelected) {
-      newSelection.add(modelGroup);
-    } else {
-      newSelection.delete(modelGroup);
-    }
-    setSelectedModels(newSelection);
-  };
-
-  const handleSelectAll = (checked: boolean) => {
-    console.log("checked", checked);
-    if (checked) {
-      const allModelGroups = filteredData.map(model => model.model_group);
-      setSelectedModels(new Set(allModelGroups));
-    } else {
-      setSelectedModels(new Set());
+  const handleMakePublicSuccess = () => {
+    // Refresh the model hub data after successful public operation
+    if (accessToken) {
+      const fetchData = async () => {
+        try {
+          const _modelHubData = await modelHubCall(accessToken);
+          setModelHubData(_modelHubData.data);
+        } catch (error) {
+          console.error("Error refreshing model data:", error);
+        }
+      };
+      fetchData();
     }
   };
 
-  // Use the same logic as health check columns
-  const allModelsSelected = filteredData.length > 0 && filteredData.every(model => selectedModels.has(model.model_group));
-  const isIndeterminate = selectedModels.size > 0 && !allModelsSelected;
-
-  // Clear selections when filters change to avoid confusion
-  useEffect(() => {
-    setSelectedModels(new Set());
-  }, [searchTerm, selectedProvider, selectedMode, selectedFeature]);
+  const handleFilteredDataChange = useCallback((newFilteredData: ModelGroupInfo[]) => {
+    setFilteredData(newFilteredData);
+  }, []);
 
   console.log("publicPage: ", publicPage);
   console.log("publicPageAllowed: ", publicPageAllowed);
@@ -284,129 +201,82 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
       {publicPage == false ? (
         <div className="w-full m-2 mt-2 p-8">
           <div className="flex justify-between items-center mb-6">
-            <Title className="text-center">Model Hub - Table View</Title>
-            <div className="flex items-center space-x-4">
-              <Text>Model Hub URL:</Text>
-              <Text className="bg-gray-200 px-2 py-1 rounded">{`${proxyBaseUrl}/ui/model_hub_table`}</Text>
-            
-            {publicPage == false ? (
-              premiumUser ? (
-                <Button 
-                  className="ml-4" 
-                  onClick={() => handleMakePublicPage()}
-                  disabled={selectedModels.size === 0}
-                >
-                  ✨ Make Public
-                </Button>
-              ) : (
-                <Button className="ml-4">
-                  <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                    ✨ Make Public
-                  </a>
-                </Button>
-              )
-            ) : (
-              <div className="flex items-center space-x-4">
-                <Text>Filter by key:</Text>
-                <Text className="bg-gray-200 px-2 py-1 rounded">{`/ui/model_hub_table?key=<YOUR_KEY>`}</Text>
-              </div>
+            <div className="flex flex-col items-start">
+            <Title className="text-center">Model Hub</Title>
+            {isAdminRole(userRole || "") ? (
+              <p className="text-sm text-gray-600">
+                Make models public for developers to know what models are available on the proxy.
+              </p>
+            ): (
+            <p className="text-sm text-gray-600">
+              A list of all public model names personally available to you.
+            </p>
             )}
-          </div>
-          </div>
-
-          {/* Filters */}
-          <Card className="mb-6">
-            <div className="flex flex-wrap gap-4 items-center">
-              <div>
-                <Text className="text-sm font-medium mb-2">Search Models:</Text>
-                <input
-                  type="text"
-                  placeholder="Search model names..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="border rounded px-3 py-2 w-64 h-10 text-sm"
-                />
-              </div>
-              <div>
-                <Text className="text-sm font-medium mb-2">Provider:</Text>
-                <select
-                  value={selectedProvider}
-                  onChange={(e) => setSelectedProvider(e.target.value)}
-                  className="border rounded px-3 py-2 text-sm text-gray-600 w-40 h-10"
-                >
-                  <option value="" className="text-sm text-gray-600">All Providers</option>
-                  {modelHubData && getUniqueProviders(modelHubData).map(provider => (
-                    <option key={provider} value={provider} className="text-sm text-gray-800">{provider}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <Text className="text-sm font-medium mb-2">Mode:</Text>
-                <select
-                  value={selectedMode}
-                  onChange={(e) => setSelectedMode(e.target.value)}
-                  className="border rounded px-3 py-2 text-sm text-gray-600 w-32 h-10"
-                >
-                  <option value="" className="text-sm text-gray-600">All Modes</option>
-                  {modelHubData && getUniqueModes(modelHubData).map(mode => (
-                    <option key={mode} value={mode} className="text-sm text-gray-800">{mode}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <Text className="text-sm font-medium mb-2">Features:</Text>
-                <select
-                  value={selectedFeature}
-                  onChange={(e) => setSelectedFeature(e.target.value)}
-                  className="border rounded px-3 py-2 text-sm text-gray-600 w-48 h-10"
-                >
-                  <option value="" className="text-sm text-gray-600">All Features</option>
-                  {modelHubData && getUniqueFeatures(modelHubData).map(feature => (
-                    <option key={feature} value={feature} className="text-sm text-gray-800">{feature}</option>
-                  ))}
-                </select>
-              </div>
             </div>
-          </Card>
-
-          {/* Model Table */}
-          <ModelDataTable
-            columns={modelHubColumns(
-              selectedModels,
-              allModelsSelected,
-              isIndeterminate,
-              handleRowSelection,
-              handleSelectAll,
-              showModal,
-              copyToClipboard,
-              publicPage,
+                          <div className="flex items-center space-x-4">
+                <Text>Model Hub URL:</Text>
+                <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
+                  <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
+                  <button
+                    onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                    className="p-1 hover:bg-gray-300 rounded transition-colors"
+                    title="Copy URL"
+                  >
+                    <Copy size={16} className="text-gray-600" />
+                  </button>
+                </div>
+            
+            {publicPage == false && isAdminRole(userRole || "") && (
+              <Button 
+                className="ml-4" 
+                onClick={() => handleMakePublicPage()}
+              >
+                Make Public
+              </Button>
             )}
-            data={filteredData}
-            isLoading={loading}
-            table={tableRef}
-            defaultSorting={[{ id: "model_group", desc: false }]}
-          />
+          </div>
+          </div>
+
+
+          {/* Useful Links Management Section for Admins */}
+          {isAdminRole(userRole || "") && (
+            <div className="mt-8 mb-2">
+              <UsefulLinksManagement 
+                accessToken={accessToken}
+                userRole={userRole}
+              />
+            </div>
+          )}
+
+          {/* Model Filters and Table */}
+          <Card>
+            {/* Filters */}
+            <ModelFilters
+              modelHubData={modelHubData || []}
+              onFilteredDataChange={handleFilteredDataChange}
+            />
+
+            {/* Model Table */}
+            <ModelDataTable
+              columns={modelHubColumns(
+                showModal,
+                copyToClipboard,
+                publicPage,
+              )}
+              data={filteredData}
+              isLoading={loading}
+              table={tableRef}
+              defaultSorting={[{ id: "model_group", desc: false }]}
+            />
+          </Card>
 
           <div className="mt-4 text-center space-y-2">
             <Text className="text-sm text-gray-600">
               Showing {filteredData.length} of {modelHubData?.length || 0} models
             </Text>
-            {selectedModels.size > 0 && (
-              <div className="flex items-center justify-center space-x-4">
-                <Text className="text-sm text-blue-600">
-                  {selectedModels.size} model{selectedModels.size !== 1 ? 's' : ''} selected
-                </Text>
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  onClick={() => setSelectedModels(new Set())}
-                  className="text-xs"
-                >
-                  Unselect All
-                </Button>
-              </div>
-            )}
           </div>
+
+          
         </div>
       ) : (
         <Card className="mx-auto max-w-xl mt-10">
@@ -432,7 +302,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
           <div className="flex justify-between mb-4">
             <Text className="text-base mr-2">Shareable Link:</Text>
             <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
-              {`${proxyBaseUrl}/model_hub_table`}
+              {`${getProxyBaseUrl()}/ui/model_hub_table`}
             </Text>
           </div>
           <div className="flex justify-end">
@@ -582,6 +452,15 @@ print(response.choices[0].message.content)`}
           </div>
         )}
       </Modal>
+
+      {/* Make Model Public Form */}
+      <MakeModelPublicForm
+        visible={isMakePublicModalVisible}
+        onClose={() => setIsMakePublicModalVisible(false)}
+        accessToken={accessToken || ""}
+        modelHubData={modelHubData || []}
+        onSuccess={handleMakePublicSuccess}
+      />
     </div>
   );
 };

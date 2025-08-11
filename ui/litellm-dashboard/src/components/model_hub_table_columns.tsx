@@ -1,6 +1,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
-import { Tooltip, Checkbox, Tag } from "antd";
+import { Tooltip, Tag } from "antd";
 import { 
   CopyOutlined, 
   InfoCircleOutlined
@@ -20,7 +20,7 @@ interface ModelHubData {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
-  public?: boolean;
+  is_public_model_group: boolean;
   [key: string]: any;
 }
 
@@ -52,42 +52,13 @@ const formatTokens = (tokens: number) => {
 };
 
 export const modelHubColumns = (
-  selectedModels: Set<string>,
-  allModelsSelected: boolean,
-  isIndeterminate: boolean,
-  handleModelSelection: (modelGroup: string, checked: boolean) => void,
-  handleSelectAll: (checked: boolean) => void,
   showModal: (model: ModelHubData) => void,
   copyToClipboard: (text: string) => void,
   publicPage: boolean = false,
 ): ColumnDef<ModelHubData>[] => {
   const allColumns: ColumnDef<ModelHubData>[] = [
   {
-    header: () => (
-      <Checkbox
-        checked={allModelsSelected}
-        indeterminate={isIndeterminate}
-        onChange={(e) => handleSelectAll(e.target.checked)}
-        onClick={(e) => e.stopPropagation()}
-      />
-    ),
-    id: "select",
-    enableSorting: false,
-    cell: ({ row }) => {
-      const model = row.original;
-      const isSelected = selectedModels.has(model.model_group);
-      
-      return (
-        <Checkbox
-          checked={isSelected}
-          onChange={(e) => handleModelSelection(model.model_group, e.target.checked)}
-          onClick={(e) => e.stopPropagation()}
-        />
-      );
-    },
-  },
-  {
-    header: "Model",
+    header: "Public Model Name",
     accessorKey: "model_group",
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -240,7 +211,7 @@ export const modelHubColumns = (
   },
   {
     header: "Public",
-    accessorKey: "public",
+    accessorKey: "is_public_model_group",
     enableSorting: true,
     sortingFn: (rowA, rowB) => {
       const publicA = rowA.original.is_public_model_group === true ? 1 : 0;
@@ -285,11 +256,8 @@ export const modelHubColumns = (
   // Filter out columns based on publicPage setting
   if (publicPage) {
     return allColumns.filter(column => {
-      // Remove the select/checkbox column
-      if (column.id === "select") return false;
-      
       // Remove the public column
-      if ('accessorKey' in column && column.accessorKey === "public") return false;
+      if ('accessorKey' in column && column.accessorKey === "is_public_model_group") return false;
       
       return true;
     });

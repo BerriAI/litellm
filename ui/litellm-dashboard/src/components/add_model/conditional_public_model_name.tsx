@@ -1,17 +1,17 @@
 import React, { useEffect, useState } from "react";
-import { Form, Table, Input } from "antd";
+import { Form, Table } from "antd";
 import { TextInput } from "@tremor/react";
+import { Tooltip } from "../atoms/index";
 
 const ConditionalPublicModelName: React.FC = () => {
-  // Access the form instance
   const form = Form.useFormInstance();
-  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
+  const [tableKey, setTableKey] = useState(0);// Add a key to force table re-render
 
   // Watch the 'model' field for changes and ensure it's always an array
   const modelValue = Form.useWatch("model", form) || [];
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
-  const customModelName = Form.useWatch("custom_model_name", form);
-  const showPublicModelName = !selectedModels.includes("all-wildcard");
+  const customModelName = Form.useWatch('custom_model_name', form);
+  const showPublicModelName = !selectedModels.includes('all-wildcard');
 
   // Force table to re-render when custom model name changes
   useEffect(() => {
@@ -79,11 +79,41 @@ const ConditionalPublicModelName: React.FC = () => {
 
   if (!showPublicModelName) return null;
 
+  const publicNameTooltipContent = (
+    <>
+      <div className="mb-2 font-normal">
+        The name you specify in your API calls to LiteLLM Proxy
+      </div>
+        <div className="mb-2 font-normal">
+          <strong>Example:</strong> If you name your public model <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">example-name</code> 
+           , and choose <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">openai/qwen-plus-latest</code> as the LiteLLM model 
+      </div>
+      <div className="mb-2 font-normal">
+        <strong>Usage:</strong> You make an API call to the LiteLLM proxy with <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">model = &quot;example-name&quot;</code>
+      </div>
+      <div className="font-normal">
+        <strong>Result:</strong> LiteLLM sends <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">qwen-plus-latest</code> to the provider
+      </div>
+    </>
+  );
+
+  const liteLLMModelTooltipContent = (
+    <div>The model name LiteLLM will send to the LLM API</div>
+  );
+
   const columns = [
     {
-      title: "Public Name",
-      dataIndex: "public_name",
-      key: "public_name",
+      title: (
+        <span className="flex items-center">
+          Public Model Name
+          <Tooltip 
+            content={publicNameTooltipContent}
+            width="500px"
+          />
+        </span>
+      ),
+      dataIndex: 'public_name',
+      key: 'public_name',
       render: (text: string, record: any, index: number) => {
         return (
           <TextInput
@@ -98,10 +128,18 @@ const ConditionalPublicModelName: React.FC = () => {
       },
     },
     {
-      title: "LiteLLM Model",
-      dataIndex: "litellm_model",
-      key: "litellm_model",
-    },
+      title: (
+        <span className="flex items-center">
+          LiteLLM Model Name
+          <Tooltip 
+            content={liteLLMModelTooltipContent}
+            width="360px"
+          />
+        </span>
+      ),
+      dataIndex: 'litellm_model',
+      key: 'litellm_model',
+    }
   ];
 
   return (
@@ -113,7 +151,23 @@ const ConditionalPublicModelName: React.FC = () => {
         labelCol={{ span: 10 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
-        required={true}
+        rules={[
+          {
+            required: true,
+            validator: async (_, value) => {
+              if (!value || value.length === 0) {
+                throw new Error('At least one model mapping is required');
+              }
+              // Check if all mappings have valid public names
+              const invalidMappings = value.filter((mapping: any) => 
+                !mapping.public_name || mapping.public_name.trim() === ''
+              );
+              if (invalidMappings.length > 0) {
+                throw new Error('All model mappings must have valid public names');
+              }
+            }
+          }
+        ]}
       >
         <Table
           key={tableKey} // Add key to force re-render
