@@ -1,5 +1,5 @@
 """
-This contains LLMCachingHandler
+This contains LLMCachingHandler 
 
 This exposes two methods:
     - async_get_cache
@@ -18,7 +18,6 @@ import asyncio
 import datetime
 import inspect
 import threading
-from functools import lru_cache, wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -36,13 +35,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm._service_logger import ServiceLogging
-from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
+from litellm.types.caching import CachedEmbedding
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
-from litellm.types.caching import CachedEmbedding
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
@@ -71,12 +68,7 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
-    embedding_all_elements_cache_hit: bool = (
-        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    )
-
-
-in_memory_cache_obj = InMemoryCache()
+    embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
 
 
 class LLMCachingHandler:
@@ -86,20 +78,11 @@ class LLMCachingHandler:
         request_kwargs: Dict[str, Any],
         start_time: datetime.datetime,
     ):
-        from litellm.caching import DualCache, RedisCache
-
         self.async_streaming_chunks: List[ModelResponse] = []
         self.sync_streaming_chunks: List[ModelResponse] = []
         self.request_kwargs = request_kwargs
         self.original_function = original_function
         self.start_time = start_time
-        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
-            self.dual_cache: Optional[DualCache] = DualCache(
-                redis_cache=litellm.cache.cache,
-                in_memory_cache=in_memory_cache_obj,
-            )
-        else:
-            self.dual_cache = None
         pass
 
     async def _async_get_cache(
@@ -132,16 +115,10 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
-        )
         from litellm.utils import CustomStreamWrapper
 
-        kwargs = kwargs.copy()
         args = args or ()
 
-        parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
-        kwargs["parent_otel_span"] = parent_otel_span
         final_embedding_cached_response: Optional[EmbeddingResponse] = None
         embedding_all_elements_cache_hit: bool = False
         cached_result: Optional[Any] = None
@@ -329,15 +306,13 @@ class LLMCachingHandler:
         else:
             raise ValueError("input must be a string or a list")
 
-    def _extract_model_from_cached_results(
-        self, non_null_list: List[Tuple[int, CachedEmbedding]]
-    ) -> Optional[str]:
+    def _extract_model_from_cached_results(self, non_null_list: List[Tuple[int, CachedEmbedding]]) -> Optional[str]:
         """
         Helper method to extract the model name from cached results.
-
+        
         Args:
             non_null_list: List of (idx, cr) tuples where cr is the cached result dict
-
+            
         Returns:
             Optional[str]: The model name if found, None otherwise
         """
@@ -583,12 +558,7 @@ class LLMCachingHandler:
                 preset_cache_key = litellm.cache.get_cache_key(
                     **{**new_kwargs, "input": i}
                 )
-                tasks.append(
-                    litellm.cache.async_get_cache(
-                        cache_key=preset_cache_key,
-                        dynamic_cache_object=self.dual_cache,
-                    )
-                )
+                tasks.append(litellm.cache.async_get_cache(cache_key=preset_cache_key))
             cached_result = await asyncio.gather(*tasks)
             ## check if cached result is None ##
             if cached_result is not None and isinstance(cached_result, list):
@@ -597,14 +567,9 @@ class LLMCachingHandler:
                     cached_result = None
         else:
             if litellm.cache._supports_async() is True:
-                ## check if dual cache is supported ##
-                cached_result = await litellm.cache.async_get_cache(
-                    dynamic_cache_object=self.dual_cache, **new_kwargs
-                )
+                cached_result = await litellm.cache.async_get_cache(**new_kwargs)
             else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
-                cached_result = litellm.cache.get_cache(
-                    dynamic_cache_object=self.dual_cache, **new_kwargs
-                )
+                cached_result = litellm.cache.get_cache(**new_kwargs)
         return cached_result
 
     def _convert_cached_result_to_model_response(
@@ -770,9 +735,6 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
-        )
 
         if litellm.cache is None:
             return
@@ -784,8 +746,6 @@ class LLMCachingHandler:
                 args,
             )
         )
-        parent_otel_span = _get_parent_otel_span_from_kwargs(new_kwargs)
-        new_kwargs["parent_otel_span"] = parent_otel_span
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(
             original_function=original_function, kwargs=new_kwargs
@@ -804,9 +764,7 @@ class LLMCachingHandler:
                     )  # s3 doesn't support bulk writing. Exclude.
                 ):
                     asyncio.create_task(
-                        litellm.cache.async_add_cache_pipeline(
-                            result, dynamic_cache_object=self.dual_cache, **new_kwargs
-                        )
+                        litellm.cache.async_add_cache_pipeline(result, **new_kwargs)
                     )
                 elif isinstance(litellm.cache.cache, S3Cache):
                     threading.Thread(
@@ -817,9 +775,7 @@ class LLMCachingHandler:
                 else:
                     asyncio.create_task(
                         litellm.cache.async_add_cache(
-                            result.model_dump_json(),
-                            dynamic_cache_object=self.dual_cache,
-                            **new_kwargs,
+                            result.model_dump_json(), **new_kwargs
                         )
                     )
             else:
@@ -977,9 +933,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params["preset_cache_key"] = (
-                litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
-            )
+            litellm_params[
+                "preset_cache_key"
+            ] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
         else:
             litellm_params["preset_cache_key"] = None
 
