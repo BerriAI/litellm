@@ -47,7 +47,7 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 > [!IMPORTANT]
-> LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)  
+> LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
 > LiteLLM v1.40.14+ now requires `pydantic>=2.0.0`. No changes required.
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
@@ -132,7 +132,7 @@ print(response)
 
 ## Streaming ([Docs](https://docs.litellm.ai/docs/completion/stream))
 
-liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.  
+liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, OpenAI, etc.)
 
 ```python
@@ -234,7 +234,7 @@ $ litellm --model huggingface/bigcode/starcoder
 
 
 > [!IMPORTANT]
-> 💡 [Use LiteLLM Proxy with Langchain (Python, JS), OpenAI SDK (Python, JS) Anthropic SDK, Mistral SDK, LlamaIndex, Instructor, Curl](https://docs.litellm.ai/docs/proxy/user_keys)  
+> 💡 [Use LiteLLM Proxy with Langchain (Python, JS), OpenAI SDK (Python, JS) Anthropic SDK, Mistral SDK, LlamaIndex, Instructor, Curl](https://docs.litellm.ai/docs/proxy/user_keys)
 
 ```python
 import openai # openai v1.0.0+
@@ -266,7 +266,7 @@ echo 'LITELLM_MASTER_KEY="sk-1234"' > .env
 
 # Add the litellm salt key - you cannot change this after adding a model
 # It is used to encrypt / decrypt your LLM API Key credentials
-# We recommend - https://1password.com/password-generator/ 
+# We recommend - https://1password.com/password-generator/
 # password generator to get a random hash for litellm salt key
 echo 'LITELLM_SALT_KEY="sk-1234"' >> .env
 
@@ -340,6 +340,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference) |                                                         |                                                                                 |                                                                                     |                                                                                   | ✅                                                                             |                                                                         |
 | [FriendliAI](https://docs.litellm.ai/docs/providers/friendliai)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [Galadriel](https://docs.litellm.ai/docs/providers/galadriel)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
+| [GradientAI](https://docs.litellm.ai/docs/providers/gradient_ai)                              | ✅                                                       | ✅                                                                               |                                                                                   |                                                                                  |                                                                               |                                                                         |
 | [Novita AI](https://novita.ai/models/llm?utm_source=github_litellm&utm_medium=github_readme&utm_campaign=github_link)                     | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [Featherless AI](https://docs.litellm.ai/docs/providers/featherless_ai)                              | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 |                                                                               |                                                                         |
 | [Nebius AI Studio](https://docs.litellm.ai/docs/providers/nebius)                             | ✅                                                       | ✅                                                                               | ✅                                                                                   | ✅                                                                                 | ✅                                                                             |                                                                         |
@@ -349,7 +350,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 
 ## Contributing
 
-Interested in contributing? Contributions to LiteLLM Python SDK, Proxy Server, and LLM integrations are both accepted and highly encouraged! 
+Interested in contributing? Contributions to LiteLLM Python SDK, Proxy Server, and LLM integrations are both accepted and highly encouraged!
 
 **Quick start:** `git clone` → `make install-dev` → `make format` → `make lint` → `make test-unit`
 
@@ -360,7 +361,7 @@ For companies that need better security, user management and professional suppor
 
 [Talk to founders](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat)
 
-This covers: 
+This covers:
 - ✅ **Features under the [LiteLLM Commercial License](https://docs.litellm.ai/docs/proxy/enterprise):**
 - ✅ **Feature Prioritization**
 - ✅ **Custom Integrations**
