@@ -6524,4 +6524,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.8.1,<4.0, !=3.9.7"
-content-hash = "1be89745d648fd61387e2856d44ed70e632f5c98c9d847a8a548551a86ff479d"
+content-hash = "a0250f2041d671b770ebcdb081ce09baab7364c6e7f91b0b1f39ff64e94a7f22"
