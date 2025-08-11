@@ -2912,6 +2912,39 @@ def _remove_strict_from_schema(schema):
     return schema
 
 
+def _remove_json_schema_refs(schema, max_depth=10):
+    """
+    Remove JSON schema reference fields like '$id' and '$schema' that can cause issues with some providers.
+    
+    These fields are used for schema validation but can cause problems when the schema references
+    are not accessible to the provider's validation system.
+    
+    Args:
+        schema: The schema object to clean (dict, list, or other)
+        max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
+    
+    Relevant Issues: Mistral API grammar validation fails when schema contains $id and $schema references
+    """
+    if max_depth <= 0:
+        return schema
+        
+    if isinstance(schema, dict):
+        # Remove JSON schema reference fields
+        schema.pop("$id", None)
+        schema.pop("$schema", None)
+
+        # Recursively process all dictionary values
+        for key, value in schema.items():
+            _remove_json_schema_refs(value, max_depth - 1)
+
+    elif isinstance(schema, list):
+        # Recursively process all items in the list
+        for item in schema:
+            _remove_json_schema_refs(item, max_depth - 1)
+
+    return schema
+
+
 def _remove_unsupported_params(
     non_default_params: dict, supported_openai_params: Optional[List[str]]
 ) -> dict:
@@ -6722,6 +6755,11 @@ class ProviderConfigManager:
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
             return litellm.openaiOSeriesConfig
+        elif (
+            provider == LlmProviders.OPENAI
+            and litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+        ):
+            return litellm.OpenAIGPT5Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
@@ -6930,6 +6968,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.GRADIENT_AI == provider:
+            return litellm.GradientAIConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
         elif litellm.LlmProviders.HEROKU == provider:
@@ -7043,7 +7083,11 @@ class ProviderConfigManager:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
-            return litellm.AzureOpenAIResponsesAPIConfig()
+            # Check if it's an O-series model
+            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+                return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
+            else:
+                return litellm.AzureOpenAIResponsesAPIConfig()
         return None
 
     @staticmethod
