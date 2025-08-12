@@ -694,6 +694,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_base: Optional[str],
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
         route: Literal["/openai/responses", "/openai/vector_stores"],
+        default_api_version: Optional[str] = None,
     ) -> str:
         from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 
@@ -708,14 +709,14 @@ class BaseAzureLLM(BaseOpenAILLM):
         litellm_params = litellm_params or {}
         api_version = (
             cast(Optional[str], litellm_params.get("api_version"))
-            or AZURE_DEFAULT_RESPONSES_API_VERSION
+            or default_api_version
         )
 
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)
 
         # Add api_version if needed
-        if "api-version" not in query_params:
+        if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
 
         # Add the path to the base URL
