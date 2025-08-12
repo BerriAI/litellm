@@ -76,5 +76,3 @@ response = completion(
 > Include the `heroku/` prefix in the model name so LiteLLM knows the model provider to use.
 
 ## Misc
-
-Note that in both of the above examples, the model name has the `heroku/` prefix. This is necessary, as it allows LiteLLM to know what model provider to use.
