@@ -37,7 +37,7 @@ The Heroku provider is aware of the following config variables, and will use the
 - `HEROKU_API_KEY`: This value corresponds to the [`api_key` param](https://docs.litellm.ai/docs/set_keys#litellmapi_key). Set this to the value of Heroku's `INFERENCE_KEY` config variable.
 - `HEROKU_API_BASE`: This value corresponds to the [`api_base` param](https://docs.litellm.ai/docs/set_keys#litellmapi_base). Set this to the value of Heroku's `INFERENCE_URL` config variable.
 
-In this example, we don't explicitly pass the `api_key` and `api_base`. We, instead, set the config variables which will be used by the Heroku provider.
+In this example, we don't explicitly pass the `api_key` and `api_base` variables. Instead, we set the config variables which will be used by Heroku:
 
 ```python
 import os
