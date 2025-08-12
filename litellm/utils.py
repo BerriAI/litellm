@@ -3927,6 +3927,17 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
         else:
             verbose_logger.debug(
                 "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
@@ -6848,6 +6859,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.COMETAPI == provider:
+            return litellm.CometAPIConfig()
         elif litellm.LlmProviders.DATAROBOT == provider:
             return litellm.DataRobotConfig()
         elif litellm.LlmProviders.GEMINI == provider:
@@ -6860,6 +6873,8 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.AZURE == provider:
             if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
                 return litellm.AzureOpenAIO1Config()
+            if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+                return litellm.AzureOpenAIGPT5Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIStudioConfig()

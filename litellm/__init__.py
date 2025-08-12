@@ -234,6 +234,7 @@ snowflake_key: Optional[str] = None
 gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
 heroku_key: Optional[str] = None
+cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -537,6 +538,7 @@ morph_models: List = []
 lambda_ai_models: List = []
 hyperbolic_models: List = []
 recraft_models: List = []
+cometapi_models: List = []
 oci_models: List = []
 
 
@@ -731,6 +733,8 @@ def add_known_models():
             hyperbolic_models.append(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
+        elif value.get("litellm_provider") == "cometapi":
+            cometapi_models.append(key)
         elif value.get("litellm_provider") == "oci":
             oci_models.append(key)
 
@@ -823,6 +827,7 @@ model_list = (
     + morph_models
     + lambda_ai_models
     + recraft_models
+    + cometapi_models
     + oci_models
 )
 
@@ -899,6 +904,7 @@ models_by_provider: dict = {
     "lambda_ai": lambda_ai_models,
     "hyperbolic": hyperbolic_models,
     "recraft": recraft_models,
+    "cometapi": cometapi_models,
     "oci": oci_models,
 }
 
@@ -1204,9 +1210,10 @@ from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
-
 from .llms.heroku.chat.transformation import HerokuChatConfig
+from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig

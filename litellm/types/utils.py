@@ -2331,6 +2331,7 @@ class LlmProviders(str, Enum):
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
     HEROKU = "heroku"
+    COMETAPI = "cometapi"
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     DOTPROMPT = "dotprompt"
