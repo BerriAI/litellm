@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.google_genai.main import TokenCountDetailsResponse
 
 router = APIRouter(
     tags=["google genai endpoints"],
@@ -145,8 +146,16 @@ async def google_stream_generate_content(
 
 
 
-@router.post("/v1beta/models/{model_name}:countTokens", dependencies=[Depends(user_api_key_auth)])
-@router.post("/models/{model_name}:countTokens", dependencies=[Depends(user_api_key_auth)])
+@router.post(
+    "/v1beta/models/{model_name}:countTokens",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountDetailsResponse,
+)
+@router.post(
+    "/models/{model_name}:countTokens",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountDetailsResponse,
+)
 async def google_count_tokens(request: Request, model_name: str):
     """
     ```json
@@ -180,5 +189,16 @@ async def google_count_tokens(request: Request, model_name: str):
         request=token_request,
         call_endpoint=True,
     )
-
-    return token_response
+    if token_response is not None:
+        # cast the response to the well known format
+        return TokenCountDetailsResponse(
+            **token_response.model_dump(),
+        )
+    
+    #########################################################
+    # Return the response in the well known format
+    #########################################################
+    return TokenCountDetailsResponse(
+        totalTokens=0,
+        promptTokensDetails=[],
+    )
