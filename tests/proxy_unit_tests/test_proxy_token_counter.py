@@ -174,7 +174,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         assert request.model == "claude-3-sonnet-20240229"
         assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
         
-        from litellm.proxy._types import TokenCountResponse
+        from litellm.types.utils import TokenCountResponse
         return TokenCountResponse(
             total_tokens=15,
             request_model="claude-3-sonnet-20240229",
@@ -241,7 +241,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         assert request.model == "gpt-4"
         assert request.messages == [{"role": "user", "content": "Hello GPT!"}]
         
-        from litellm.proxy._types import TokenCountResponse
+        from litellm.types.utils import TokenCountResponse
         return TokenCountResponse(
             total_tokens=12,
             request_model="gpt-4", 
@@ -300,7 +300,7 @@ async def test_internal_token_counter_anthropic_provider_detection():
             model="claude-test",
             messages=[{"role": "user", "content": "hello"}],
         ),
-        is_direct_request=False
+        call_endpoint=True
     )
     
     print("Anthropic provider test response:", response)
@@ -330,7 +330,7 @@ async def test_internal_token_counter_anthropic_provider_detection():
             model="gpt-test",
             messages=[{"role": "user", "content": "hello"}],
         ),
-        is_direct_request=False
+        call_endpoint=True
     )
     
     print("Non-Anthropic provider test response:", response)
