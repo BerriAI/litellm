@@ -2,7 +2,7 @@ import os
 from typing import List, Literal
 
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(
-    os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "2025-04-01-preview")
+    os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
 )
 ROUTER_MAX_FALLBACKS = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
