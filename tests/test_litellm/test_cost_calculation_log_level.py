@@ -35,13 +35,8 @@ def test_cost_calculation_uses_debug_level(caplog):
         }
     }
     
-    # Ensure the LiteLLM logger is enabled and set to DEBUG
-    logger = logging.getLogger("LiteLLM")
-    logger.setLevel(logging.DEBUG)
-    logger.disabled = False
-
     # Test that cost calculation logs are at DEBUG level
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+    with caplog.at_level(logging.DEBUG):
         try:
             cost = completion_cost(
                 completion_response=mock_response,
