@@ -86,7 +86,7 @@ async def async_raise_no_deployment_exception(
         f"No deployment found for model: {model}, cooldown_list with debug info: {_cooldown_list}"
     )
 
-    cooldown_list_ids = [cooldown_model[0] for cooldown_model in _cooldown_list]
+    cooldown_list_ids = [cooldown_model[0] for cooldown_model in (_cooldown_list or [])]
     return RouterRateLimitError(
         model=model,
         cooldown_time=_cooldown_time,
