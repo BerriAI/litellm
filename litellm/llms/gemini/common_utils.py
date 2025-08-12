@@ -6,7 +6,7 @@ import httpx
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -89,6 +89,16 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return GeminiError(
             status_code=status_code, message=error_message, headers=headers
         )
+    
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+        """
+        Factory method to create a token counter for this provider.
+        
+        Returns:
+            Optional TokenCounterInterface implementation for this provider,
+            or None if token counting is not supported.
+        """
+        return GoogleAIStudioTokenCounter()
 
 
 def encode_unserializable_types(
@@ -139,7 +149,7 @@ def get_api_key_from_env() -> Optional[str]:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
 
 
-class GoogleAIStudioTokenCounter:
+class GoogleAIStudioTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider."""
     
     def supports_provider(
@@ -161,6 +171,7 @@ class GoogleAIStudioTokenCounter:
     async def count_tokens(
         self,
         model_to_use: str,
+        messages: Optional[List[Dict[str, Any]]],
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",

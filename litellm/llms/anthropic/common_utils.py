@@ -10,7 +10,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool
 from litellm.types.llms.openai import AllMessageValues
@@ -229,7 +229,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names
 
-    def get_token_counter(self) -> Optional["AnthropicTokenCounter"]:
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create an Anthropic token counter.
         
@@ -239,7 +239,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-class AnthropicTokenCounter:
+class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider."""
     
     def supports_provider(
@@ -262,6 +262,7 @@ class AnthropicTokenCounter:
         self,
         model_to_use: str,
         messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
     ) -> Optional[Dict[str, Any]]:
