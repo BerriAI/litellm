@@ -34,7 +34,7 @@ const CredentialDeleteModal: React.FC<CredentialDeleteModalProps> = ({
       <div className="mt-4">
         <p className="text-gray-900 mb-4">
           Deleting this credential may break existing model integrations that reference it. 
-          Are you sure you want to delete the credential <strong>"{credentialName}"</strong>?
+          Are you sure you want to delete the credential <strong>&ldquo;{credentialName}&rdquo;</strong>?
         </p>
         <p className="text-sm text-gray-600 mb-6">
           This action cannot be undone.
