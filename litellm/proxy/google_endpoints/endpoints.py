@@ -168,13 +168,18 @@ async def google_count_tokens(request: Request, model_name: str):
 
     data = await _read_request_body(request=request)
     contents = data.get("contents", [])
-    # Create TokenCountRequest for the internal endpoint
-    # from litellm.proxy._types import TokenCountRequest
+    #Create TokenCountRequest for the internal endpoint
+    from litellm.proxy._types import TokenCountRequest
 
-    # token_request = TokenCountRequest(
-    #     model=model_name,
-    #     messages=messages
-    # )
+    token_request = TokenCountRequest(
+        model=model_name,
+        contents=contents,
+    )
 
-    # # Call the internal token counter function with direct request flag set to False
-    # token_response = await internal_token_counter(token_request, is_direct_request=False)
+    # Call the internal token counter function with direct request flag set to False
+    token_response = await internal_token_counter(
+        request=token_request,
+        is_direct_request=False,
+    )
+
+    return token_response

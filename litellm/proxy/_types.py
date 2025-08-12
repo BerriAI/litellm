@@ -2094,6 +2094,15 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     model: str
     prompt: Optional[str] = None
     messages: Optional[List[dict]] = None
+    """
+    Anthropic token counting endpoint uses /messages
+    """
+
+    
+    contents: Optional[List[dict]] = None
+    """
+    Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
+    """
 
 
 class TokenCountResponse(LiteLLMPydanticObjectBase):
