@@ -170,8 +170,8 @@ async def test_anthropic_messages_count_tokens_endpoint():
     anthropic_endpoints._read_request_body = mock_read_request_body
     
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, is_direct_request=True):
-        assert is_direct_request == False, "Should be called with is_direct_request=False for Anthropic endpoint"
+    async def mock_token_counter(request, call_endpoint=False):
+        assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
         assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
         
@@ -524,16 +524,14 @@ async def test_factory_registration():
     }
     
     # Test Anthropic counter supports provider
-    assert counter.supports_provider(anthropic_deployment, from_endpoint=True)
-    assert not counter.supports_provider(anthropic_deployment, from_endpoint=False)
+    assert counter.should_use_token_counting_api(custom_llm_provider="anthropic")
+    assert not counter.should_use_token_counting_api(custom_llm_provider="openai")
     
     # Test non-Anthropic provider
-    assert not counter.supports_provider(non_anthropic_deployment, from_endpoint=True)
-    assert not counter.supports_provider(non_anthropic_deployment, from_endpoint=False)
+    assert not counter.should_use_token_counting_api(custom_llm_provider="openai")
     
     # Test None deployment
-    assert not counter.supports_provider(None, from_endpoint=True)
-    assert not counter.supports_provider(None, from_endpoint=False)
+    assert not counter.should_use_token_counting_api(custom_llm_provider=None)
 
 
 @pytest.mark.asyncio 
