@@ -200,8 +200,81 @@ def test_bedrock_get_document_format_mimetypes_success():
     )
     assert result == "docx", f"Expected 'docx', got '{result}'"
 
+def test_bedrock_converse_messages_pt():
+    """
+    Test that the _bedrock_converse_messages_pt method transforms the tool result prompt cache correctly.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    messages = [
+        {
+            'role': 'user',
+            'content': 'query the data of user_id:10000'
+        },
+        {
+            'role': 'assistant',
+            'content': '<thinking> I need to call the function to query the PV power generation data for the user with ID 10000. </thinking> ',
+            'tool_calls': [
+                {
+                    'id': 'tooluse_Tx3Zhu0RTLawyVv7yfsAYg',
+                    'type': 'function',
+                    'function': {'name': 'query_pv_power', 'arguments': '{"user_id":"10000"}'}
+                }
+            ]
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'tooluse_Tx3Zhu0RTLawyVv7yfsAYg',
+            'content': '1000kw',
+            'cache_control': {'type': 'ephemeral'}
+        }
+    ]
+    bedrock_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model='bedrock/eu.amazon.nova-pro-v1:0',
+        llm_provider='bedrock_converse')
 
+    cache_point = bedrock_messages[-1]['content'][-1].get('cachePoint')
+    assert cache_point == {'type': 'default'}, f"Expected {{'type': 'default'}}, got {cache_point}"
 
+def test_bedrock_converse_messages_pt_async():
+    """
+    Test that the _bedrock_converse_messages_pt_async method in BedrockConverseMessagesProcessor class transforms the tool result prompt cache correctly.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
+    import asyncio
+    messages = [
+        {
+            'role': 'user',
+            'content': 'query the data of user_id:10000'
+        },
+        {
+            'role': 'assistant',
+            'content': '<thinking> I need to call the function to query the PV power generation data for the user with ID 10000. </thinking> ',
+            'tool_calls': [
+                {
+                    'id': 'tooluse_Tx3Zhu0RTLawyVv7yfsAYg',
+                    'type': 'function',
+                    'function': {'name': 'query_pv_power', 'arguments': '{"user_id":"10000"}'}
+                }
+            ]
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'tooluse_Tx3Zhu0RTLawyVv7yfsAYg',
+            'content': '1000kw',
+            'cache_control': {'type': 'ephemeral'}
+        }
+    ]
+    processor = BedrockConverseMessagesProcessor()
+
+    async_func = processor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model='bedrock/eu.amazon.nova-pro-v1:0',
+        llm_provider='bedrock_converse')
+    bedrock_messages = asyncio.run(async_func)
+    cache_point = bedrock_messages[-1]['content'][-1].get('cachePoint')
+    assert cache_point == {'type': 'default'}, f"Expected {{'type': 'default'}}, got {cache_point}"
+     
 
 
 # def test_ollama_pt_consecutive_system_messages():
