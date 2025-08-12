@@ -131,7 +131,6 @@ from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
-from ..integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from ..integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.literal_ai import LiteralAILogger
