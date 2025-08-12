@@ -109,9 +109,6 @@ CometAPI offers access to 500+ AI models through a unified API. Some popular mod
 | cometapi/gpt-5 | `completion('cometapi/gpt-5', messages)` |
 | cometapi/gpt-5-mini | `completion('cometapi/gpt-5-mini', messages)` |
 | cometapi/gpt-5-nano | `completion('cometapi/gpt-5-nano', messages)` |
-| cometapi/claude-opus-4.1 | `completion('cometapi/claude-opus-4.1', messages)` |
-| cometapi/o4-mini-deep-research | `completion('cometapi/o4-mini-deep-research', messages)` |
-| cometapi/o3-deep-research | `completion('cometapi/o3-deep-research', messages)` |
 | cometapi/gpt-oss-20b | `completion('cometapi/gpt-oss-20b', messages)` |
 | cometapi/gpt-oss-120b | `completion('cometapi/gpt-oss-120b', messages)` |
 | cometapi/chatgpt-4o-latest | `completion('cometapi/chatgpt-4o-latest', messages)` |
