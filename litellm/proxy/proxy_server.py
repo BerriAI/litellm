@@ -39,6 +39,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
+    TokenCountResponse,
 )
 
 if TYPE_CHECKING:
