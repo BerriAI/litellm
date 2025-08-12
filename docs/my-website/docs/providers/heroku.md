@@ -2,7 +2,7 @@
 
 ## Provision a Model
 
-To use the Heroku provider for LiteLLM, you must first configure a Heroku app, and attach one of the models listed in the [Supported Models](#supported-models) section.
+To use Heroku with LiteLLM, [configure a Heroku app and attach a supported model](https://devcenter.heroku.com/articles/heroku-inference#provision-access-to-an-ai-model-resource).
 
 To get configure a Heroku app with an attached model, please refer to [Heroku's documentation](https://devcenter.heroku.com/articles/heroku-inference).
 
