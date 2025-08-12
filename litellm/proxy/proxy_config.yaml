@@ -5,7 +5,6 @@ model_list:
   - model_name: anthropic/*
     litellm_params:
       model: anthropic/*
-
-litellm_settings:
-  callbacks:
-    - langfuse_otel
+  - model_name: vertex_ai/*
+    litellm_params:
+      model: gemini/*

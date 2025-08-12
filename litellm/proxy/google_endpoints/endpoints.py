@@ -173,12 +173,13 @@ async def google_count_tokens(request: Request, model_name: str):
     token_request = TokenCountRequest(
         model=model_name,
         contents=contents,
+        passthrough_response=True,
     )
 
     # Call the internal token counter function with direct request flag set to False
     token_response = await internal_token_counter(
         request=token_request,
-        is_direct_request=False,
+        call_endpoint=True,
     )
 
     return token_response
