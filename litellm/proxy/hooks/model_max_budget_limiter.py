@@ -4,6 +4,7 @@ from typing import List, Optional
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.cost_calculator import convert_budget_to_askii_coins
 from litellm.integrations.custom_logger import Span
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -73,13 +74,15 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             if (
                 _current_spend is not None
                 and _current_model_budget_info.max_budget is not None
-                and _current_spend > _current_model_budget_info.max_budget
             ):
-                raise litellm.BudgetExceededError(
-                    message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}",
-                    current_cost=_current_spend,
-                    max_budget=_current_model_budget_info.max_budget,
-                )
+                # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+                model_budget_askii_coins = convert_budget_to_askii_coins(_current_model_budget_info.max_budget)
+                if model_budget_askii_coins is not None and _current_spend > model_budget_askii_coins:
+                    raise litellm.BudgetExceededError(
+                        message=f"LiteLLM Virtual Key: {user_api_key_dict.token}, key_alias: {user_api_key_dict.key_alias}, exceeded budget for model={model}. Current spend: {_current_spend} Askii Coins, Budget: {model_budget_askii_coins} Askii Coins (${_current_model_budget_info.max_budget} USD)",
+                        current_cost=_current_spend,
+                        max_budget=model_budget_askii_coins,
+                    )
 
         return True
 

@@ -40,6 +40,8 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
+
+from litellm.cost_calculator import convert_budget_to_askii_coins
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
@@ -133,24 +135,29 @@ async def common_checks(
         and user_object is not None
         and user_object.max_budget is not None
     ):
-        user_budget = user_object.max_budget
-        if user_budget < user_object.spend:
+        user_budget_usd = user_object.max_budget
+        # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+        user_budget_askii_coins = convert_budget_to_askii_coins(user_budget_usd)
+        if user_budget_askii_coins is not None and user_budget_askii_coins < user_object.spend:
             raise litellm.BudgetExceededError(
                 current_cost=user_object.spend,
-                max_budget=user_budget,
-                message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend}, Budget={user_budget}",
+                max_budget=user_budget_askii_coins,
+                message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_object.spend} Askii Coins, Budget={user_budget_askii_coins} Askii Coins (${user_budget_usd} USD)",
             )
 
     ## 4.2 check team member budget, if team key
     # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
     if end_user_object is not None and end_user_object.litellm_budget_table is not None:
-        end_user_budget = end_user_object.litellm_budget_table.max_budget
-        if end_user_budget is not None and end_user_object.spend > end_user_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=end_user_object.spend,
-                max_budget=end_user_budget,
-                message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
-            )
+        end_user_budget_usd = end_user_object.litellm_budget_table.max_budget
+        if end_user_budget_usd is not None:
+            # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+            end_user_budget_askii_coins = convert_budget_to_askii_coins(end_user_budget_usd)
+            if end_user_budget_askii_coins is not None and end_user_object.spend > end_user_budget_askii_coins:
+                raise litellm.BudgetExceededError(
+                    current_cost=end_user_object.spend,
+                    max_budget=end_user_budget_askii_coins,
+                    message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend} Askii Coins, Budget={end_user_budget_askii_coins} Askii Coins (${end_user_budget_usd} USD)",
+                )
 
     # 6. [OPTIONAL] If 'enforce_user_param' enabled - did developer pass in 'user' param for openai endpoints
     if (
@@ -171,9 +178,12 @@ async def common_checks(
         and route != "/v1/models"
         and route != "/models"
     ):
-        if global_proxy_spend > litellm.max_budget:
+        # Convert USD global budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+        global_budget_askii_coins = convert_budget_to_askii_coins(litellm.max_budget)
+        if global_budget_askii_coins is not None and global_proxy_spend > global_budget_askii_coins:
             raise litellm.BudgetExceededError(
-                current_cost=global_proxy_spend, max_budget=litellm.max_budget
+                current_cost=global_proxy_spend,
+                max_budget=global_budget_askii_coins
             )
 
     _request_metadata: dict = request_body.get("metadata", {}) or {}
@@ -442,11 +452,15 @@ async def get_end_user_object(
     def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
         if end_user_obj.litellm_budget_table is None:
             return
-        end_user_budget = end_user_obj.litellm_budget_table.max_budget
-        if end_user_budget is not None and end_user_obj.spend > end_user_budget:
-            raise litellm.BudgetExceededError(
-                current_cost=end_user_obj.spend, max_budget=end_user_budget
-            )
+        end_user_budget_usd = end_user_obj.litellm_budget_table.max_budget
+        if end_user_budget_usd is not None:
+            # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+            end_user_budget_askii_coins = convert_budget_to_askii_coins(end_user_budget_usd)
+            if end_user_budget_askii_coins is not None and end_user_obj.spend > end_user_budget_askii_coins:
+                raise litellm.BudgetExceededError(
+                    current_cost=end_user_obj.spend,
+                    max_budget=end_user_budget_askii_coins
+                )
 
     # check if in cache
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
@@ -1293,10 +1307,12 @@ async def _virtual_key_max_budget_check(
         # collect information for alerting #
         ####################################
 
-        if valid_token.spend >= valid_token.max_budget:
+        # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+        max_budget_askii_coins = convert_budget_to_askii_coins(valid_token.max_budget)
+        if max_budget_askii_coins is not None and valid_token.spend >= max_budget_askii_coins:
             raise litellm.BudgetExceededError(
                 current_cost=valid_token.spend,
-                max_budget=valid_token.max_budget,
+                max_budget=max_budget_askii_coins,
             )
 
 
@@ -1309,30 +1325,33 @@ async def _virtual_key_soft_budget_check(
 
     """
 
-    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
-        verbose_proxy_logger.debug(
-            "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
-            valid_token.token,
-            valid_token.spend,
-            valid_token.soft_budget,
-        )
-        call_info = CallInfo(
-            token=valid_token.token,
-            spend=valid_token.spend,
-            max_budget=valid_token.max_budget,
-            soft_budget=valid_token.soft_budget,
-            user_id=valid_token.user_id,
-            team_id=valid_token.team_id,
-            team_alias=valid_token.team_alias,
-            user_email=None,
-            key_alias=valid_token.key_alias,
-        )
-        asyncio.create_task(
-            proxy_logging_obj.budget_alerts(
-                type="soft_budget",
-                user_info=call_info,
+    if valid_token.soft_budget:
+        # Convert USD soft budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+        soft_budget_askii_coins = convert_budget_to_askii_coins(valid_token.soft_budget)
+        if soft_budget_askii_coins is not None and valid_token.spend >= soft_budget_askii_coins:
+            verbose_proxy_logger.debug(
+                "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
+                valid_token.token,
+                valid_token.spend,
+                valid_token.soft_budget,
             )
-        )
+            call_info = CallInfo(
+                token=valid_token.token,
+                spend=valid_token.spend,
+                max_budget=valid_token.max_budget,
+                soft_budget=valid_token.soft_budget,
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                user_email=None,
+                key_alias=valid_token.key_alias,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="soft_budget",
+                    user_info=call_info,
+                )
+            )
 
 
 async def _team_max_budget_check(
@@ -1351,29 +1370,31 @@ async def _team_max_budget_check(
         team_object is not None
         and team_object.max_budget is not None
         and team_object.spend is not None
-        and team_object.spend > team_object.max_budget
     ):
-        if valid_token:
-            call_info = CallInfo(
-                token=valid_token.token,
-                spend=team_object.spend,
-                max_budget=team_object.max_budget,
-                user_id=valid_token.user_id,
-                team_id=valid_token.team_id,
-                team_alias=valid_token.team_alias,
-            )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="team_budget",
-                    user_info=call_info,
+        # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+        team_budget_askii_coins = convert_budget_to_askii_coins(team_object.max_budget)
+        if team_budget_askii_coins is not None and team_object.spend > team_budget_askii_coins:
+            if valid_token:
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=team_object.spend,
+                    max_budget=team_object.max_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
                 )
-            )
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="team_budget",
+                        user_info=call_info,
+                    )
+                )
 
-        raise litellm.BudgetExceededError(
-            current_cost=team_object.spend,
-            max_budget=team_object.max_budget,
-            message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend}, Max budget: {team_object.max_budget}",
-        )
+            raise litellm.BudgetExceededError(
+                current_cost=team_object.spend,
+                max_budget=team_budget_askii_coins,
+                message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {team_object.spend} Askii Coins, Max budget: {team_budget_askii_coins} Askii Coins (${team_object.max_budget} USD)",
+            )
 
 
 def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
