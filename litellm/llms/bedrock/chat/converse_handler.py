@@ -276,8 +276,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             modelId = self.encode_model_id(model_id=model)
 
-
         fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
+            fake_stream=fake_stream,
             model=model,
             stream=stream,
             custom_llm_provider="bedrock",
