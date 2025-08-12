@@ -27,7 +27,7 @@ When you attach a model to a Heroku app, three config variables are set:
 
 Both `INFERENCE_KEY` and `INFERENCE_URL` are required to make calls to your model.
 
-For a deeper explanation of these variables, see the official [Heroku documentation](https://devcenter.heroku.com/articles/heroku-inference#model-resource-config-vars).
+For more information on these variables, see the [Heroku documentation](https://devcenter.heroku.com/articles/heroku-inference#model-resource-config-vars).
 
 ## Usage Examples
 ### Using Config Variables
