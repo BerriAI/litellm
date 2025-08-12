@@ -35,7 +35,6 @@ LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
 
 class LangfuseOtelLogger(OpenTelemetry):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
