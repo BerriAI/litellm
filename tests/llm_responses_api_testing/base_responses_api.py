@@ -112,6 +112,10 @@ class BaseResponsesAPITest(ABC):
         """Must return the base completion call args"""
         pass
 
+    def get_base_completion_reasoning_call_args(self) -> dict:
+        """Must return the base completion reasoning call args"""
+        return None
+
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
@@ -440,3 +444,93 @@ class BaseResponsesAPITest(ABC):
         assert response is not None
         assert "output" in response
         assert len(response["output"]) > 0
+    
+    @pytest.mark.asyncio
+    async def test_responses_api_multi_turn_with_reasoning_and_structured_output(self):
+        """
+        Test multi-turn conversation with reasoning, structured output, and tool calls.
+        
+        This test validates:
+        - First call: Model uses reasoning to process a question and makes a tool call
+        - Tool call handling: Function call output is properly processed 
+        - Second call: Model produces structured output incorporating tool results
+        - Structured output: Response conforms to defined Pydantic model schema
+        """
+        from pydantic import BaseModel
+        
+        litellm._turn_on_debug()
+        litellm.set_verbose = True
+        base_completion_call_args = self.get_base_completion_reasoning_call_args()
+        if base_completion_call_args is None:
+            pytest.skip("Skipping test due to no base completion reasoning call args")
+        
+        # Define tools for the conversation
+        tools = [{"type": "function", "name": "get_today"}]
+        
+        # Define structured output schema
+        class Output(BaseModel):
+            today: str
+            number_of_r: str
+        
+        # Initial conversation input
+        input_messages = [
+            {
+                "role": "user", 
+                "content": "How many r in strrawberrry? While you're thinking, you should call tool get_today. Then you output the today and number of r",
+            }
+        ]
+        
+
+        # First call - should trigger reasoning and tool call
+        response = await litellm.aresponses(
+            input=input_messages,
+            tools=tools,
+            reasoning={"effort": "low", "summary": "detailed"},
+            text_format=Output,
+            **base_completion_call_args
+        )
+
+        print("First call output:")
+        print(json.dumps(response.output, indent=4, default=str))
+        
+        # Validate first response structure
+        validate_responses_api_response(response, final_chunk=True)
+        assert response.output is not None
+        assert len(response.output) > 0
+        
+        # Extend input with first response output
+        input_messages.extend(response.output)
+        
+        # Process any tool calls and add function outputs
+        function_outputs = []
+        for item in response.output:
+            if hasattr(item, 'type') and item.type in ["function_call", "custom_tool_call"]:
+                if hasattr(item, 'name') and item.name == "get_today":
+                    function_outputs.append({
+                        "type": "function_call_output", 
+                        "call_id": item.call_id, 
+                        "output": "2025-01-15"
+                    })
+        
+        # Add function outputs to conversation
+        input_messages.extend(function_outputs)
+        
+        print("Second call input:")
+        print(json.dumps(input_messages, indent=4, default=str))
+        
+        # Second call - should produce structured output
+        final_response = await litellm.aresponses(
+            input=input_messages,
+            tools=tools,
+            reasoning={"effort": "low", "summary": "detailed"},
+            text_format=Output,
+            **base_completion_call_args
+        )
+        
+        print("Second call output:")
+        print(json.dumps(final_response.output, indent=4, default=str))
+        
+        # Validate final response structure
+        validate_responses_api_response(final_response, final_chunk=True)
+        assert final_response.output is not None
+        assert len(final_response.output) > 0

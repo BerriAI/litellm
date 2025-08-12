@@ -1,6 +1,6 @@
+import json
 import os
 from unittest.mock import MagicMock, patch
-import json
 
 import pytest
 
@@ -108,7 +108,8 @@ class TestLangfuseOtelIntegration:
 
     def test_extract_langfuse_metadata_with_header_enrichment(self, monkeypatch):
         """_extract_langfuse_metadata should call LangFuseLogger.add_metadata_from_header when available."""
-        import sys, types
+        import sys
+        import types
 
         # Build a stub module + class on-the-fly
         stub_module = types.ModuleType("litellm.integrations.langfuse.langfuse")
@@ -185,6 +186,49 @@ class TestLangfuseOtelIntegration:
             }
 
             assert actual == expected, "Mismatch between expected and actual OTEL attribute mapping."
+
+    def test_construct_dynamic_otel_headers_with_langfuse_keys(self):
+        """Test that construct_dynamic_otel_headers creates proper auth headers when langfuse keys are provided."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        # Create dynamic params with langfuse keys
+        dynamic_params = StandardCallbackDynamicParams(
+            langfuse_public_key="test_public_key",
+            langfuse_secret_key="test_secret_key"
+        )
+        
+        logger = LangfuseOtelLogger()
+        result = logger.construct_dynamic_otel_headers(dynamic_params)
+        
+        # Should return a dict with otlp_auth_headers
+        assert result is not None
+        assert "Authorization" in result
+        
+        # The auth header should contain the basic auth format
+        auth_header = result["Authorization"]
+        assert auth_header.startswith("Basic ")
+        
+        # Verify the header format by decoding
+        import base64
+
+        # Extract the base64 part from "Authorization=Basic <base64>"
+        base64_part = auth_header.replace("Basic ", "")
+        decoded = base64.b64decode(base64_part).decode()
+        
+        assert decoded == "test_public_key:test_secret_key"
+
+    def test_construct_dynamic_otel_headers_empty_params(self):
+        """Test that construct_dynamic_otel_headers returns empty dict when no langfuse keys are provided."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        # Create dynamic params without langfuse keys
+        dynamic_params = StandardCallbackDynamicParams()
+        
+        logger = LangfuseOtelLogger()
+        result = logger.construct_dynamic_otel_headers(dynamic_params)
+        
+        # Should return an empty dict
+        assert result == {}
 
 
 if __name__ == "__main__":
