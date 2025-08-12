@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 import httpx
 
 import litellm
-from litellm.llms.custom_httpx.httpx_client import get_async_httpx_client
-from litellm.llms.gemini.common_utils import get_api_key_from_env
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.types.google_genai.main import GenerateContentContentListUnionDict
@@ -88,7 +88,7 @@ class GoogleAIStudioTokenCounter:
         }
         
         async_httpx_client = get_async_httpx_client(
-            llm_provider="gemini",
+            llm_provider=LlmProviders.GEMINI,
         )
         
         try:
