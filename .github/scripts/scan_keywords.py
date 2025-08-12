@@ -4,7 +4,6 @@ import os
 import sys
 import urllib.request
 import urllib.error
-import re
 
 
 def read_event_payload() -> dict:
