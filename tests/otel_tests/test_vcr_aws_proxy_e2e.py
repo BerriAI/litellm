@@ -71,12 +71,25 @@ def start_proxy(tracer_provider, event_logger_provider, meter_provider):
     Configures in-memory OTEL exporters and launches the proxy server.
     """
 
+    # Set fake AWS credentials for VCR playback
+    os.environ["AWS_ACCESS_KEY_ID"] = "fake_access_key"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "fake_secret_key"
+    os.environ["AWS_SESSION_TOKEN"] = "fake_session_token"
+
+    # enable logging and metrics
+    os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS"] = "true"
+    os.environ["LITELLM_OTEL_INTEGRATION_ENABLE_METRICS"] = "true"
+
     ### The instance will add itself to the module litellm.service_callback list to register the OTEL callbacks
-    OpenTelemetry(
+    otel_instance = OpenTelemetry(
         tracer_provider=tracer_provider,
         event_logger_provider=event_logger_provider,
         meter_provider=meter_provider,
     )
+
+    # IMPORTANT: Add our instance to _in_memory_loggers so it gets reused instead of creating a new one
+    from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
+    _in_memory_loggers.append(otel_instance)
 
     config = {
         "model_list": [
@@ -149,6 +162,7 @@ def get_genai_spans(span_exporter):
 
 def assert_spans_have_expected(spans):
     assert spans, "Expected at least one gen_ai span"
+    
     span = spans[0]
     assert span.attributes[GenAIAttributes.GEN_AI_SYSTEM] == SYSTEM
     assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == BEDROCK_MODEL_ARN
@@ -165,7 +179,7 @@ def get_event_logs(log_exporter, event_name):
 def assert_logs_correct(log_exporter, response):
     user_logs = get_event_logs(log_exporter, "gen_ai.user.message")
     choice_logs = get_event_logs(log_exporter, "gen_ai.choice")
-
+    
     assert user_logs, "User message log not found"
     assert user_logs[0].log_record.attributes[GenAIAttributes.GEN_AI_SYSTEM] == SYSTEM
     assert user_logs[0].log_record.body["content"] == "What is the capital of France?"
@@ -178,6 +192,8 @@ def assert_logs_correct(log_exporter, response):
 
 
 def find_metric(metrics_data, name):
+    if metrics_data is None:
+        return None
     for rm in metrics_data.resource_metrics:
         for sm in rm.scope_metrics:
             for m in sm.metrics:
@@ -209,6 +225,7 @@ def assert_metric_has_attr(metric, attr, expected):
     cassette_library_dir=CASSETTE_DIR,
     record_mode="once",
     ignore_localhost=True,
+    ignore_hosts=["169.254.169.254"],  # Ignore AWS metadata service
 )
 async def test_litellm_proxy_otel_telemetry(span_exporter, log_exporter, metric_reader):
     # 1) call the proxy and await the response

@@ -15,23 +15,7 @@ from litellm.types.utils import (
     StandardLoggingPayload,
 )
 
-# opentelemetry
-from opentelemetry._events import (
-    Event,
-    get_event_logger,
-    get_event_logger_provider,
-    set_event_logger_provider,
-)
-from opentelemetry._logs import set_logger_provider
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.metrics import get_meter
-from opentelemetry.sdk._events import EventLoggerProvider as OTEventLoggerProvider
-from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
-from opentelemetry.trace import SpanKind
+# OpenTelemetry imports moved to individual functions to avoid import errors when not installed
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
@@ -186,10 +170,10 @@ class OpenTelemetry(CustomLogger):
         config: Optional[OpenTelemetryConfig] = None,
         callback_name: Optional[str] = None,
         # injection points for testing
-        tracer_provider: Optional[TracerProvider] = None,
-        logger_provider: Optional[OTLoggerProvider] = None,
-        event_logger_provider: Optional[OTEventLoggerProvider] = None,
-        meter_provider: Optional[MeterProvider] = None,
+        tracer_provider: Optional[Any] = None,
+        logger_provider: Optional[Any] = None,
+        event_logger_provider: Optional[Any] = None,
+        meter_provider: Optional[Any] = None,
         **kwargs,
     ):
 
@@ -245,10 +229,12 @@ class OpenTelemetry(CustomLogger):
     def _init_tracing(self, tracer_provider):
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.trace import SpanKind
 
         # use provided tracer or create a new one
         if tracer_provider is None:
             tracer_provider = TracerProvider(resource=_get_litellm_resource())
+            # Only add OTLP span processor if we created the tracer provider ourselves
             tracer_provider.add_span_processor(self._get_span_processor())
 
         # register global provider and grab our tracer
@@ -264,30 +250,34 @@ class OpenTelemetry(CustomLogger):
             return
 
         from opentelemetry import metrics
-        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-            OTLPMetricExporter,
-        )
         from opentelemetry.sdk.metrics import Histogram, MeterProvider
-        from opentelemetry.sdk.metrics.export import (
-            AggregationTemporality,
-            PeriodicExportingMetricReader,
-        )
+        from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
-        _metric_exporter = OTLPMetricExporter(
-            endpoint=self.config.endpoint,
-            headers=OpenTelemetry._get_headers_dictionary(self.config.headers),
-            preferred_temporality={Histogram: AggregationTemporality.DELTA},
-        )
-        _metric_reader = PeriodicExportingMetricReader(
-            _metric_exporter, export_interval_millis=10000
-        )
-
+        # Only create OTLP infrastructure if no custom meter provider is provided
         if meter_provider is None:
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter,
+            )
+            from opentelemetry.sdk.metrics.export import (
+                AggregationTemporality,
+                PeriodicExportingMetricReader,
+            )
+
+            _metric_exporter = OTLPMetricExporter(
+                endpoint=self.config.endpoint,
+                headers=OpenTelemetry._get_headers_dictionary(self.config.headers),
+                preferred_temporality={Histogram: AggregationTemporality.DELTA},
+            )
+            _metric_reader = PeriodicExportingMetricReader(
+                _metric_exporter, export_interval_millis=10000
+            )
+
             meter_provider = MeterProvider(
                 metric_readers=[_metric_reader], resource=_get_litellm_resource()
             )
             meter = meter_provider.get_meter(__name__)
         else:
+            # Use the provided meter provider as-is, without creating additional OTLP infrastructure
             meter = meter_provider.get_meter(__name__)
 
         metrics.set_meter_provider(meter_provider)
@@ -316,18 +306,30 @@ class OpenTelemetry(CustomLogger):
             self._event_logger = None
             return
 
+        from opentelemetry._events import (
+            get_event_logger,
+            get_event_logger_provider,
+            set_event_logger_provider,
+        )
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+        from opentelemetry.sdk._events import EventLoggerProvider as OTEventLoggerProvider
+        from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
         # set up log pipeline
         if logger_provider is None:
             logger_provider = OTLoggerProvider()
-        set_logger_provider(logger_provider)
-        logger_provider.add_log_record_processor(
-            BatchLogRecordProcessor(
-                OTLPLogExporter(
-                    endpoint=self.config.endpoint,
-                    headers=self._get_headers_dictionary(self.config.headers),
+            # Only add OTLP exporter if we created the logger provider ourselves
+            logger_provider.add_log_record_processor(
+                BatchLogRecordProcessor(
+                    OTLPLogExporter(
+                        endpoint=self.config.endpoint,
+                        headers=self._get_headers_dictionary(self.config.headers),
+                    )
                 )
             )
-        )
+        set_logger_provider(logger_provider)
 
         # set up event logger
         if event_logger_provider is None:
@@ -699,6 +701,8 @@ class OpenTelemetry(CustomLogger):
     def _emit_semantic_events(self, kwargs, response_obj, span):
         if not self._event_logger:
             return
+
+        from opentelemetry._events import Event
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
