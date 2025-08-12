@@ -150,5 +150,31 @@ async def google_stream_generate_content(
 async def google_count_tokens(request: Request, model_name: str):
     """
     Not Implemented, this is a placeholder for the google genai countTokens endpoint.
+    ```json
+    return {
+        "totalTokens": 31,
+        "totalBillableCharacters": 96,
+        "promptTokensDetails": [
+            {
+            "modality": "TEXT",
+            "tokenCount": 31
+            }
+        ]
+    }
+    ```
     """
-    return {}
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+
+    data = await _read_request_body(request=request)
+    contents = data.get("contents", [])
+    # Create TokenCountRequest for the internal endpoint
+    # from litellm.proxy._types import TokenCountRequest
+
+    # token_request = TokenCountRequest(
+    #     model=model_name,
+    #     messages=messages
+    # )
+
+    # # Call the internal token counter function with direct request flag set to False
+    # token_response = await internal_token_counter(token_request, is_direct_request=False)
