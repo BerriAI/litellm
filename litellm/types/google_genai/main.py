@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.llms.vertex_ai import PromptTokensDetails
 
 ContentListUnion = _genai_types.ContentListUnion
 ContentListUnionDict = _genai_types.ContentListUnionDict
@@ -27,14 +26,3 @@ class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type:
 class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
     _hidden_params: dict = {}
     pass
-
-
-class TokenCountDetailsResponse(TypedDict):
-    """
-    Response structure for token count details with modality breakdown.
-    
-    Example:
-        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
-    """
-    totalTokens: int
-    promptTokensDetails: List[PromptTokensDetails]
