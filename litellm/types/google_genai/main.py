@@ -1,11 +1,12 @@
 # Import types from the Google GenAI SDK
-from typing import TYPE_CHECKING, Any, Optional, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, List, Optional, TypeAlias, TypedDict
 
 # During static type-checking we can rely on the real google-genai types.
 from google.genai import types as _genai_types  # type: ignore
 from pydantic import BaseModel
 
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.vertex_ai import PromptTokensDetails
 
 ContentListUnion = _genai_types.ContentListUnion
 ContentListUnionDict = _genai_types.ContentListUnionDict
@@ -19,9 +20,20 @@ ToolConfigDict = _genai_types.ToolConfigDict
 
 class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
     generationConfig: Optional[Any]
-    tools: Optional[ToolConfigDict]
+    tools: Optional[ToolConfigDict] # type: ignore[assignment]
 
 
 class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
     _hidden_params: dict = {}
     pass
+
+
+class TokenCountDetailsResponse(TypedDict):
+    """
+    Response structure for token count details with modality breakdown.
+    
+    Example:
+        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+    """
+    totalTokens: int
+    promptTokensDetails: List[PromptTokensDetails]
