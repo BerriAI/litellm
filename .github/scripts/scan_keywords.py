@@ -108,9 +108,10 @@ def main() -> int:
         preview_block = f"\n{body_preview}" if body_preview else ""
         payload = {
             "text": (
-                f":memo: New issue in {repo_full} #{number}{author_part}\n"
-                f"{title_part}{preview_block}\n"
-                f"<{html_url}|View issue>"
+                f"New issue 🚨\n"
+                f"{title_part}\n\n{preview_block}\n"
+                f"<{html_url}|View issue>\n"
+                f"Author: {author}"
             )
         }
         send_webhook(webhook_url, payload)
