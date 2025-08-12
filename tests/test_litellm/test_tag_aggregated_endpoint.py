@@ -46,8 +46,8 @@ async def test_tag_daily_activity_aggregated_smoke(prisma_client):
         entity_id_field="tag",
         entity_id=None,
         entity_metadata_field=None,
-        start_date=str(start),
-        end_date=str(end),
+        start_date=start.strftime("%Y-%m-%d"),
+        end_date=end.strftime("%Y-%m-%d"),
         model=None,
         api_key=None,
     )
