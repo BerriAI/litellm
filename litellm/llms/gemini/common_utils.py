@@ -165,11 +165,16 @@ class GoogleAIStudioTokenCounter:
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
     ) -> Optional[Dict[str, Any]]:
-        from litellm.llms.gemini.count_tokens.handler import acount_tokens
-        
-        result = await acount_tokens(
-            contents=contents,
-            model=model_to_use,
+        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        deployment = deployment or {}
+        deployment_litellm_params = deployment.get("litellm_params", {})
+        count_tokens_params = {
+            "model": model_to_use,
+            "contents": contents,
+        }
+        count_tokens_params.update(deployment_litellm_params)
+        result = await GoogleAIStudioTokenCounter().acount_tokens(
+            **count_tokens_params,
         )
         
         if result is not None:
