@@ -3457,6 +3457,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(langfuse_logger)
             return langfuse_logger  # type: ignore
         elif logging_integration == "langfuse_otel":
+            from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
                 OpenTelemetryConfig,
@@ -3471,11 +3472,11 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
 
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, LangfuseOtelLogger)
                     and callback.callback_name == "langfuse_otel"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(
+            _otel_logger = LangfuseOtelLogger(
                 config=otel_config, callback_name="langfuse_otel"
             )
             _in_memory_loggers.append(_otel_logger)

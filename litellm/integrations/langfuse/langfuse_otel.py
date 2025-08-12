@@ -2,10 +2,10 @@ import base64
 import json  # <--- NEW
 import os
 from typing import TYPE_CHECKING, Any, Optional, Union
-from urllib.parse import quote
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
+from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.langfuse_otel import (
     LangfuseOtelConfig,
     LangfuseSpanAttributes,
@@ -34,7 +34,12 @@ LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
 
 
 
-class LangfuseOtelLogger:
+class LangfuseOtelLogger(OpenTelemetry):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+
     @staticmethod
     def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
         """
@@ -175,10 +180,11 @@ class LangfuseOtelLogger:
             endpoint = LANGFUSE_CLOUD_US_ENDPOINT
             verbose_logger.debug(f"Using Langfuse US cloud endpoint: {endpoint}")
 
-        otlp_auth_headers = LangfuseOtelLogger._get_langfuse_authorization_header(
+        auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key,
             secret_key=secret_key
         )
+        otlp_auth_headers = f"Authorization={auth_header}"
 
         # Set standard OTEL environment variables
         os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
@@ -195,7 +201,7 @@ class LangfuseOtelLogger:
         """
         auth_string = f"{public_key}:{secret_key}"
         auth_header = base64.b64encode(auth_string.encode()).decode()
-        return f"Authorization={quote(f'Basic {auth_header}')}"
+        return f'Basic {auth_header}'
     
     def construct_dynamic_otel_headers(
         self, 
@@ -214,9 +220,10 @@ class LangfuseOtelLogger:
         dynamic_langfuse_public_key = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key = standard_callback_dynamic_params.get("langfuse_secret_key")
         if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
-            dynamic_headers["otlp_auth_headers"] = LangfuseOtelLogger._get_langfuse_authorization_header(
+            auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key
             )
+            dynamic_headers["Authorization"] = auth_header
         
         return dynamic_headers
