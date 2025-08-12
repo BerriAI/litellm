@@ -151,23 +151,13 @@ def get_api_key_from_env() -> Optional[str]:
 
 
 class GoogleAIStudioTokenCounter(BaseTokenCounter):
-    """Token counter implementation for Anthropic provider."""
-    
-    def supports_provider(
+    """Token counter implementation for Google AI Studio provider."""
+    def should_use_token_counting_api(
         self, 
-        deployment: Optional[Dict[str, Any]] = None,
-        from_endpoint: bool = False
+        custom_llm_provider: Optional[str] = None,
     ) -> bool:
-        if not from_endpoint:
-            return False
-            
-        if deployment is None:
-            return False
-            
-        full_model = deployment.get("litellm_params", {}).get("model", "")
-        is_gemini_provider = full_model.startswith("gemini/") or "gemini" in full_model.lower()
-        
-        return is_gemini_provider
+        from litellm.types.utils import LlmProviders
+        return custom_llm_provider == LlmProviders.GEMINI.value
     
     async def count_tokens(
         self,
