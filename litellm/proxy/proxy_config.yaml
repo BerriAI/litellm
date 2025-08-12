@@ -6,3 +6,6 @@ model_list:
     litellm_params:
       model: anthropic/*
 
+litellm_settings:
+  callbacks:
+    - langfuse_otel
