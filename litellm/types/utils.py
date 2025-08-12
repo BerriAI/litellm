@@ -2356,6 +2356,13 @@ class LiteLLMLoggingBaseClass:
         pass
 
 
+class TokenCountResponse(LiteLLMPydanticObjectBase):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+
+
 class CustomHuggingfaceTokenizer(TypedDict):
     identifier: str
     revision: str  # usually 'main'
