@@ -202,17 +202,17 @@ class TestLangfuseOtelIntegration:
         
         # Should return a dict with otlp_auth_headers
         assert result is not None
-        assert "otlp_auth_headers" in result
+        assert "Authorization" in result
         
         # The auth header should contain the basic auth format
-        auth_header = result["otlp_auth_headers"]
-        assert auth_header.startswith("Authorization=Basic ")
+        auth_header = result["Authorization"]
+        assert auth_header.startswith("Basic ")
         
         # Verify the header format by decoding
         import base64
 
         # Extract the base64 part from "Authorization=Basic <base64>"
-        base64_part = auth_header.replace("Authorization=Basic ", "")
+        base64_part = auth_header.replace("Basic ", "")
         decoded = base64.b64decode(base64_part).decode()
         
         assert decoded == "test_public_key:test_secret_key"
