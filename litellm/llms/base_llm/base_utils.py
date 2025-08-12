@@ -28,6 +28,17 @@ class BaseTokenCounter(ABC):
     ) -> Optional[TokenCountResponse]:
         pass
 
+    @abstractmethod
+    def should_use_token_counting_api(
+        self,
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Returns True if we should the this API for token counting for the selected `custom_llm_provider`
+        """
+        return False
+
+
 class BaseLLMModelInfo(ABC):
     def get_provider_info(
         self,
