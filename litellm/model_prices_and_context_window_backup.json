@@ -12588,8 +12588,6 @@
         "output_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
@@ -12602,8 +12600,6 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
