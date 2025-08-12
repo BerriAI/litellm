@@ -2356,6 +2356,17 @@ class LiteLLMLoggingBaseClass:
         pass
 
 
+class TokenCountResponse(LiteLLMPydanticObjectBase):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+    original_response: Optional[dict] = None
+    """
+    Original Response from upstream API call - if an API call was made for token counting
+    """
+
+
 class CustomHuggingfaceTokenizer(TypedDict):
     identifier: str
     revision: str  # usually 'main'
