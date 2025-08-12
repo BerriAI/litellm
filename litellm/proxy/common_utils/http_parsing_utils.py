@@ -1,4 +1,5 @@
 import json
+import weakref
 from typing import Any, Dict, List, Optional
 
 import orjson
@@ -7,6 +8,10 @@ from fastapi import Request, UploadFile, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException
 from litellm.types.router import Deployment
+
+# Use a regular dictionary with manual cleanup
+# WeakValueDictionary doesn't work well with our setup since request objects may be kept alive
+_request_body_cache: Dict[int, Dict] = {}
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
@@ -90,16 +95,50 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         return {}
 
 
+def clear_request_cache(request: Optional[Request] = None) -> None:
+    """
+    Clear cached request bodies to free memory.
+    
+    Parameters:
+    - request: If provided, only clear cache for this specific request.
+               If None, clear entire cache.
+    """
+    global _request_body_cache
+    
+    if request is not None:
+        request_id = id(request)
+        if request_id in _request_body_cache:
+            try:
+                del _request_body_cache[request_id]
+            except KeyError:
+                pass
+    else:
+        # Clear entire cache
+        _request_body_cache.clear()
+
+
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
+    
+    # Try to get from cache first
+    request_id = id(request)
+    if request_id in _request_body_cache:
+        return _request_body_cache[request_id]
+    
+    # Fallback to checking request.scope for backward compatibility
     if (
         hasattr(request, "scope")
         and "parsed_body" in request.scope
         and isinstance(request.scope["parsed_body"], tuple)
     ):
         accepted_keys, parsed_body = request.scope["parsed_body"]
-        return {key: parsed_body[key] for key in accepted_keys}
+        result = {key: parsed_body[key] for key in accepted_keys}
+        # Clean up the scope to free memory
+        del request.scope["parsed_body"]
+        # Store in our cache for consistency
+        _request_body_cache[request_id] = result
+        return result
     return None
 
 def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
@@ -122,7 +161,18 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
+        
+        # Store in cache with size limit to prevent unbounded growth
+        request_id = id(request)
+        _request_body_cache[request_id] = parsed_body
+        
+        # If cache gets too large, remove oldest entries
+        if len(_request_body_cache) > 1000:  # Maximum 1000 cached requests
+            # Remove the oldest 100 entries
+            keys_to_remove = list(_request_body_cache.keys())[:100]
+            for key in keys_to_remove:
+                del _request_body_cache[key]
+        
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
