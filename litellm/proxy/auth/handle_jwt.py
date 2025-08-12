@@ -763,6 +763,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
+        from litellm.proxy.proxy_server import llm_router
 
         if not team_ids:
             if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
@@ -789,7 +790,7 @@ class JWTAuthManager:
                         or can_team_access_model(
                             model=requested_model,
                             team_object=team_object,
-                            llm_router=None,
+                            llm_router=llm_router,
                             team_model_aliases=None,
                         )
                     ):

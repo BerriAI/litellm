@@ -211,3 +211,38 @@ response = litellm.completion(
     use_litellm_proxy=True
 )
 ```
+
+## Sending `tags` to LiteLLM Proxy
+
+Tags allow you to categorize and track your API requests for monitoring, debugging, and analytics purposes. You can send tags as a list of strings to the LiteLLM Proxy using the `extra_body` parameter.
+
+### Usage
+
+Send tags by including them in the `extra_body` parameter of your completion request:
+
+```python showLineNumbers title="Usage"
+import litellm
+
+response = litellm.completion(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    api_base="http://localhost:4000",
+    api_key="sk-1234",
+    extra_body={"tags": ["user:ishaan", "department:engineering", "priority:high"]}
+)
+```
+
+### Async Usage
+
+```python showLineNumbers title="Async Usage"
+import litellm
+
+response = await litellm.acompletion(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    api_base="http://localhost:4000", 
+    api_key="sk-1234",
+    extra_body={"tags": ["user:ishaan", "department:engineering"]}
+)
+```
+
