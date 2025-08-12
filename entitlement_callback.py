@@ -217,7 +217,7 @@ class EntitlementCallback(CustomLogger):
                 "external_customer_id": customer_id,
                 "emit_event": False,
                 "publisher_id": self.config.publisher_id,
-                "action_name": "read",
+                "action_name": self.config.action_name,
                 "context": [],
                 "resource": {
                     "id": 1, 
@@ -228,7 +228,7 @@ class EntitlementCallback(CustomLogger):
                 },
                 "timestamp": int(time.time())
             }
-
+            print(f"authorization payload: {payload}")
             async with httpx.AsyncClient(timeout=self.config.timeout) as client:
                 response = await client.post(
                     self.config.get_entitlement_url(),
@@ -274,10 +274,10 @@ class EntitlementCallback(CustomLogger):
                 "event": {
                     "transaction_id": str(uuid.uuid4()),
                     "external_subscription_id": external_subscription_id,
-                    "code": "credits_in_cent",
+                    "code": "askii_coin",
                     "timestamp": int(time.time()),
                     "properties": {
-                        "credits_in_cent": int(cost * 100),  # Convert to cents
+                        "askii_coin": int(cost),  # Convert to cents
                         "call_id": call_id
                     }
                 }
@@ -291,7 +291,7 @@ class EntitlementCallback(CustomLogger):
                 )
 
                 if response.status_code in [200, 201]:
-                    print(f"Usage event sent for subscription {external_subscription_id}: ${cost:.4f}")
+                    print(f"Usage event sent for subscription {external_subscription_id}: ${cost}")
                 else:
                     print(f"Usage event failed: {response.status_code}")
 

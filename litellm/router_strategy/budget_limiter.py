@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
+from litellm.cost_calculator import convert_budget_to_askii_coins
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -180,11 +181,14 @@ class RouterBudgetLimiting(CustomLogger):
                         budget_limit=config.max_budget,
                     )
 
-                    if config.max_budget and current_spend >= config.max_budget:
-                        debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.max_budget}"
-                        deployment_above_budget_info += f"{debug_msg}\n"
-                        is_within_budget = False
-                        continue
+                    if config.max_budget:
+                        # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+                        max_budget_askii_coins = convert_budget_to_askii_coins(config.max_budget)
+                        if max_budget_askii_coins is not None and current_spend >= max_budget_askii_coins:
+                            debug_msg = f"Exceeded budget for provider {provider}: {current_spend} Askii Coins >= {max_budget_askii_coins} Askii Coins (${config.max_budget} USD)"
+                            deployment_above_budget_info += f"{debug_msg}\n"
+                            is_within_budget = False
+                            continue
 
             # Check deployment budget
             if self.deployment_budget_config and is_within_budget:
@@ -197,12 +201,15 @@ class RouterBudgetLimiting(CustomLogger):
                     current_spend = spend_map.get(
                         f"deployment_spend:{model_id}:{config.budget_duration}", 0.0
                     )
-                    if config.max_budget and current_spend >= config.max_budget:
-                        debug_msg = f"Exceeded budget for deployment model_name: {_model_name}, litellm_params.model: {_litellm_model_name}, model_id: {model_id}: {current_spend} >= {config.budget_duration}"
-                        verbose_router_logger.debug(debug_msg)
-                        deployment_above_budget_info += f"{debug_msg}\n"
-                        is_within_budget = False
-                        continue
+                    if config.max_budget:
+                        # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+                        max_budget_askii_coins = convert_budget_to_askii_coins(config.max_budget)
+                        if max_budget_askii_coins is not None and current_spend >= max_budget_askii_coins:
+                            debug_msg = f"Exceeded budget for deployment model_name: {_model_name}, litellm_params.model: {_litellm_model_name}, model_id: {model_id}: {current_spend} Askii Coins >= {max_budget_askii_coins} Askii Coins (${config.max_budget} USD)"
+                            verbose_router_logger.debug(debug_msg)
+                            deployment_above_budget_info += f"{debug_msg}\n"
+                            is_within_budget = False
+                            continue
             # Check tag budget
             if self.tag_budget_config and is_within_budget:
                 for _tag in request_tags:
@@ -212,15 +219,15 @@ class RouterBudgetLimiting(CustomLogger):
                             f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}",
                             0.0,
                         )
-                        if (
-                            _tag_budget_config.max_budget
-                            and _tag_spend >= _tag_budget_config.max_budget
-                        ):
-                            debug_msg = f"Exceeded budget for tag='{_tag}', tag_spend={_tag_spend}, tag_budget_limit={_tag_budget_config.max_budget}"
-                            verbose_router_logger.debug(debug_msg)
-                            deployment_above_budget_info += f"{debug_msg}\n"
-                            is_within_budget = False
-                            continue
+                        if _tag_budget_config.max_budget:
+                            # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+                            tag_budget_askii_coins = convert_budget_to_askii_coins(_tag_budget_config.max_budget)
+                            if tag_budget_askii_coins is not None and _tag_spend >= tag_budget_askii_coins:
+                                debug_msg = f"Exceeded budget for tag='{_tag}', tag_spend={_tag_spend} Askii Coins, tag_budget_limit={tag_budget_askii_coins} Askii Coins (${_tag_budget_config.max_budget} USD)"
+                                verbose_router_logger.debug(debug_msg)
+                                deployment_above_budget_info += f"{debug_msg}\n"
+                                is_within_budget = False
+                                continue
             if is_within_budget:
                 potential_deployments.append(deployment)
 

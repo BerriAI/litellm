@@ -22,7 +22,7 @@ class LagoConfig:
         # Optional configuration with defaults
         self.timeout = int(os.getenv("LAGO_TIMEOUT", "5"))
         self.fallback_allow = os.getenv("LAGO_FALLBACK_ALLOW", "true").lower() == "true"
-        
+        self.action_name = os.getenv("ENTITLEMENT_ACTION", "read")
         # Validate required configuration
         self._validate_config()
     

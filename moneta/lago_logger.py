@@ -277,7 +277,7 @@ class LagoLogger(CustomLogger):
 
         Args:
             external_subscription_id: External subscription identifier from Lago authorization
-            cost: Actual cost of the API call
+            cost: Actual cost of the API call in Askii Coins
             call_id: Unique identifier for the API call
         """
         try:
@@ -285,15 +285,15 @@ class LagoLogger(CustomLogger):
                 "event": {
                     "transaction_id": str(uuid.uuid4()),
                     "external_subscription_id": external_subscription_id,
-                    "code": "credits_in_cent",
+                    "code": "askii_coins",
                     "timestamp": int(time.time()),
                     "properties": {
-                        "credits_in_cent": int(cost * 100),  # Convert to cents
+                        "askii_coins": int(cost),  # Cost is already in Askii Coins
                         "call_id": call_id
                     }
                 }
             }
-            print(f"Sending usage event for subscription {external_subscription_id}: ${cost:.4f}")
+            print(f"Sending usage event for subscription {external_subscription_id}: {int(cost)} Askii Coins")
             async with httpx.AsyncClient(timeout=self.config.timeout) as client:
                 response = await client.post(
                     self.config.get_events_url(),
@@ -302,7 +302,7 @@ class LagoLogger(CustomLogger):
                 )
 
                 if response.status_code in [200, 201]:
-                    print(f"Usage event sent for subscription {external_subscription_id}: ${cost:.4f}")
+                    print(f"Usage event sent for subscription {external_subscription_id}: {int(cost)} Askii Coins")
                 else:
                     print(f"Usage event failed: {response.status_code}")
 

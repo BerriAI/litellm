@@ -1,5 +1,6 @@
 # What is this?
 ## File for 'response_cost' calculation in Logging
+import os
 import time
 from functools import lru_cache
 from typing import Any, List, Literal, Optional, Tuple, Union, cast
@@ -23,6 +24,237 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
+
+# Askii Coin Currency Configuration
+DEFAULT_ASKII_COIN_EXCHANGE_RATE = 1000000.0  # 1 USD = 1,000,000 Askii Coins
+
+
+def get_askii_coin_exchange_rate() -> float:
+    """
+    Get the USD to Askii Coin exchange rate from environment variable.
+
+    Reads the ASKII_COIN_EXCHANGE_RATE environment variable and validates it.
+    Falls back to default value if the environment variable is not set or invalid.
+
+    Returns:
+        float: Exchange rate (default: 1,000,000 Askii Coins per USD)
+
+    Environment Variables:
+        ASKII_COIN_EXCHANGE_RATE: USD to Askii Coin exchange rate (must be positive)
+    """
+    try:
+        rate_str = os.getenv("ASKII_COIN_EXCHANGE_RATE")
+
+        # If environment variable is not set, use default
+        if rate_str is None:
+            verbose_logger.debug(
+                f"ASKII_COIN_EXCHANGE_RATE not set, using default: {DEFAULT_ASKII_COIN_EXCHANGE_RATE}"
+            )
+            return DEFAULT_ASKII_COIN_EXCHANGE_RATE
+
+        # Parse the rate
+        rate = float(rate_str.strip())
+
+        # Validate the exchange rate
+        if not validate_exchange_rate(rate):
+            verbose_logger.warning(
+                f"Invalid ASKII_COIN_EXCHANGE_RATE: {rate}. "
+                f"Using default: {DEFAULT_ASKII_COIN_EXCHANGE_RATE}"
+            )
+            return DEFAULT_ASKII_COIN_EXCHANGE_RATE
+
+        verbose_logger.debug(f"Using ASKII_COIN_EXCHANGE_RATE: {rate}")
+        return rate
+
+    except (ValueError, TypeError) as e:
+        verbose_logger.warning(
+            f"Invalid ASKII_COIN_EXCHANGE_RATE: '{rate_str}' (error: {e}). "
+            f"Using default: {DEFAULT_ASKII_COIN_EXCHANGE_RATE}"
+        )
+        return DEFAULT_ASKII_COIN_EXCHANGE_RATE
+    except Exception as e:
+        verbose_logger.error(
+            f"Unexpected error reading ASKII_COIN_EXCHANGE_RATE: {e}. "
+            f"Using default: {DEFAULT_ASKII_COIN_EXCHANGE_RATE}"
+        )
+        return DEFAULT_ASKII_COIN_EXCHANGE_RATE
+
+
+def validate_exchange_rate(rate: float) -> bool:
+    """
+    Validate that an exchange rate is valid for Askii Coin conversion.
+
+    Args:
+        rate: The exchange rate to validate
+
+    Returns:
+        bool: True if the rate is valid, False otherwise
+
+    Validation Rules:
+        - Must be a finite number (not NaN or infinity)
+        - Must be positive (> 0)
+        - Should be reasonable (not extremely large to avoid overflow)
+    """
+    try:
+        # Check if rate is a valid number
+        if not isinstance(rate, (int, float)):
+            verbose_logger.debug(f"Exchange rate is not a number: {type(rate)}")
+            return False
+
+        # Check for NaN or infinity
+        if not (rate == rate):  # NaN check (NaN != NaN)
+            verbose_logger.debug("Exchange rate is NaN")
+            return False
+
+        if rate == float('inf') or rate == float('-inf'):
+            verbose_logger.debug("Exchange rate is infinity")
+            return False
+
+        # Check if positive
+        if rate <= 0:
+            verbose_logger.debug(f"Exchange rate must be positive: {rate}")
+            return False
+
+        # Check for reasonable upper bound to prevent overflow issues
+        # Max reasonable rate: 1 USD = 1 trillion Askii Coins
+        MAX_REASONABLE_RATE = 1e12
+        if rate > MAX_REASONABLE_RATE:
+            verbose_logger.warning(
+                f"Exchange rate {rate} is extremely large (>{MAX_REASONABLE_RATE}). "
+                "This may cause overflow issues."
+            )
+            return False
+
+        return True
+
+    except Exception as e:
+        verbose_logger.debug(f"Error validating exchange rate {rate}: {e}")
+        return False
+
+
+def usd_to_askii_coins(usd_amount: float) -> float:
+    """
+    Convert USD amount to Askii Coins using the configured exchange rate.
+
+    Args:
+        usd_amount: Amount in USD dollars
+
+    Returns:
+        float: Amount in Askii Coins based on configured exchange rate
+
+    Environment Variables:
+        ASKII_COIN_EXCHANGE_RATE: USD to Askii Coin exchange rate
+
+    Examples:
+        >>> # With default rate (1 USD = 1,000,000 Askii Coins)
+        >>> usd_to_askii_coins(1.0)
+        1000000.0
+        >>> usd_to_askii_coins(0.001)
+        1000.0
+    """
+    try:
+        # Handle edge cases
+        if usd_amount == 0:
+            return 0.0
+
+        # Get the current exchange rate
+        exchange_rate = get_askii_coin_exchange_rate()
+
+        # Convert USD to Askii Coins
+        askii_coins = usd_amount * exchange_rate
+
+        # Check for potential overflow or underflow
+        if askii_coins == float('inf'):
+            verbose_logger.warning(
+                f"USD to Askii Coin conversion resulted in infinity: "
+                f"{usd_amount} USD * {exchange_rate} rate"
+            )
+            return float('inf')
+
+        if askii_coins == float('-inf'):
+            verbose_logger.warning(
+                f"USD to Askii Coin conversion resulted in negative infinity: "
+                f"{usd_amount} USD * {exchange_rate} rate"
+            )
+            return float('-inf')
+
+        # Check for NaN
+        if askii_coins != askii_coins:  # NaN check
+            verbose_logger.warning(
+                f"USD to Askii Coin conversion resulted in NaN: "
+                f"{usd_amount} USD * {exchange_rate} rate"
+            )
+            return 0.0
+
+        verbose_logger.debug(
+            f"Converted {usd_amount} USD to {askii_coins} Askii Coins "
+            f"(rate: {exchange_rate})"
+        )
+
+        return askii_coins
+
+    except Exception as e:
+        verbose_logger.error(
+            f"Error converting {usd_amount} USD to Askii Coins: {e}. "
+            "Returning 0.0"
+        )
+        return 0.0
+
+
+def convert_budget_to_askii_coins(budget_usd: Optional[float]) -> Optional[float]:
+    """
+    Convert USD budget limit to Askii Coins using the configured exchange rate.
+
+    This function is used for budget enforcement to convert USD budget limits
+    stored in the database to Askii Coins for comparison against spend amounts
+    that are now calculated in Askii Coins.
+
+    Args:
+        budget_usd: Budget limit in USD dollars, or None if no budget is set
+
+    Returns:
+        Optional[float]: Budget limit in Askii Coins, or None if no budget is set
+
+    Environment Variables:
+        ASKII_COIN_EXCHANGE_RATE: USD to Askii Coin exchange rate
+
+    Examples:
+        >>> # With default rate (1 USD = 1,000,000 Askii Coins)
+        >>> convert_budget_to_askii_coins(100.0)
+        100000000.0
+        >>> convert_budget_to_askii_coins(None)
+        None
+        >>> convert_budget_to_askii_coins(0.0)
+        0.0
+    """
+    try:
+        # Handle None budget (no budget limit set)
+        if budget_usd is None:
+            verbose_logger.debug("Budget is None, returning None")
+            return None
+
+        # Handle zero budget (budget limit is zero)
+        if budget_usd == 0.0:
+            verbose_logger.debug("Budget is 0.0 USD, returning 0.0 Askii Coins")
+            return 0.0
+
+        # Convert USD budget to Askii Coins using the same conversion function
+        budget_askii_coins = usd_to_askii_coins(budget_usd)
+
+        verbose_logger.debug(
+            f"Converted budget from {budget_usd} USD to {budget_askii_coins} Askii Coins"
+        )
+
+        return budget_askii_coins
+
+    except Exception as e:
+        verbose_logger.error(
+            f"Error converting budget {budget_usd} USD to Askii Coins: {e}. "
+            "Returning None (no budget limit)"
+        )
+        return None
+
+
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
@@ -103,10 +335,12 @@ def _cost_per_token_custom_pricing_helper(
     if custom_cost_per_token is not None:
         input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
         output_cost = custom_cost_per_token["output_cost_per_token"] * completion_tokens
-        return input_cost, output_cost
+        # Convert USD to Askii Coins before returning
+        return usd_to_askii_coins(input_cost), usd_to_askii_coins(output_cost)
     elif custom_cost_per_second is not None:
         output_cost = custom_cost_per_second * response_time_ms / 1000  # type: ignore
-        return 0, output_cost
+        # Convert USD to Askii Coins before returning
+        return 0, usd_to_askii_coins(output_cost)
 
     return None
 
@@ -153,7 +387,7 @@ def cost_per_token(  # noqa: PLR0915
         call_type: Optional[str]: the call type
 
     Returns:
-        tuple: A tuple containing the cost in USD dollars for prompt tokens and completion tokens, respectively.
+        tuple: A tuple containing the cost in Askii Coins for prompt tokens and completion tokens, respectively.
     """
     if model is None:
         raise Exception("Invalid arg. Model cannot be none.")
@@ -180,6 +414,7 @@ def cost_per_token(  # noqa: PLR0915
     )
 
     if response_cost is not None:
+        # response_cost is already converted to Askii Coins by the helper function
         return response_cost[0], response_cost[1]
 
     # given
@@ -295,21 +530,28 @@ def cost_per_token(  # noqa: PLR0915
                 usage=usage_block,
             )
     elif custom_llm_provider == "anthropic":
-        return anthropic_cost_per_token(model=model, usage=usage_block)
+        prompt_cost, completion_cost = anthropic_cost_per_token(model=model, usage=usage_block)
+        return usd_to_askii_coins(prompt_cost), usd_to_askii_coins(completion_cost)
     elif custom_llm_provider == "openai":
-        return openai_cost_per_token(model=model, usage=usage_block)
+        prompt_cost, completion_cost = openai_cost_per_token(model=model, usage=usage_block)
+        return usd_to_askii_coins(prompt_cost), usd_to_askii_coins(completion_cost)
     elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block)
+        prompt_cost, completion_cost = databricks_cost_per_token(model=model, usage=usage_block)
+        return usd_to_askii_coins(prompt_cost), usd_to_askii_coins(completion_cost)
     elif custom_llm_provider == "fireworks_ai":
-        return fireworks_ai_cost_per_token(model=model, usage=usage_block)
+        prompt_cost, completion_cost = fireworks_ai_cost_per_token(model=model, usage=usage_block)
+        return usd_to_askii_coins(prompt_cost), usd_to_askii_coins(completion_cost)
     elif custom_llm_provider == "azure":
-        return azure_openai_cost_per_token(
+        prompt_cost, completion_cost = azure_openai_cost_per_token(
             model=model, usage=usage_block, response_time_ms=response_time_ms
         )
+        return usd_to_askii_coins(prompt_cost), usd_to_askii_coins(completion_cost)
     elif custom_llm_provider == "gemini":
-        return gemini_cost_per_token(model=model, usage=usage_block)
+        prompt_cost, completion_cost = gemini_cost_per_token(model=model, usage=usage_block)
+        return usd_to_askii_coins(prompt_cost), usd_to_askii_coins(completion_cost)
     elif custom_llm_provider == "deepseek":
-        return deepseek_cost_per_token(model=model, usage=usage_block)
+        prompt_cost, completion_cost = deepseek_cost_per_token(model=model, usage=usage_block)
+        return usd_to_askii_coins(prompt_cost), usd_to_askii_coins(completion_cost)
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -360,7 +602,10 @@ def cost_per_token(  # noqa: PLR0915
             prompt_tokens_cost_usd_dollar,
             completion_tokens_cost_usd_dollar,
         )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+        # Convert USD to Askii Coins before returning
+        prompt_tokens_cost_askii_coins = usd_to_askii_coins(prompt_tokens_cost_usd_dollar)
+        completion_tokens_cost_askii_coins = usd_to_askii_coins(completion_tokens_cost_usd_dollar)
+        return prompt_tokens_cost_askii_coins, completion_tokens_cost_askii_coins
 
 
 def get_replicate_completion_pricing(completion_response: dict, total_time=0.0):
@@ -582,7 +827,7 @@ def completion_cost(  # noqa: PLR0915
         custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
 
     Returns:
-        float: The cost in USD dollars for the completion based on the provided parameters.
+        float: The cost in Askii Coins for the completion based on the provided parameters.
 
     Exceptions:
         Raises exception if model not in the litellm model cost map. Register model, via custom pricing or PR - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
