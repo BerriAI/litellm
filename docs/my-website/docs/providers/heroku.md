@@ -7,7 +7,7 @@ To use Heroku with LiteLLM, [configure a Heroku app and attach a supported model
 
 ## Supported Models
 
-The Heroku provider for LiteLLM currently, only supports [chat](https://devcenter.heroku.com/articles/heroku-inference-api-v1-chat-completions). Supported chat models are:
+Heroku for LiteLLM supports various [chat](https://devcenter.heroku.com/articles/heroku-inference-api-v1-chat-completions) models:
 
 | Model                             | Region  |
 |-----------------------------------|---------|
