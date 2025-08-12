@@ -5833,15 +5833,21 @@ async def token_counter(
             status_code=400, detail="prompt or messages or contents must be provided"
         )
 
-    deployment = None
+    deployment: Optional[Dict[str, Any]] = None
     litellm_model_name = None
     model_info: Optional[ModelMapInfo] = None
     if llm_router is not None:
         # get 1 deployment corresponding to the model
-        deployment = await llm_router.async_get_available_deployment(
-            model=request.model,
-            request_kwargs={},
-        )
+        try:
+            deployment = await llm_router.async_get_available_deployment(
+                model=request.model,
+                request_kwargs={},
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
+            )
+            pass
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         # remove the custom_llm_provider_prefix in the litellm_model_name
