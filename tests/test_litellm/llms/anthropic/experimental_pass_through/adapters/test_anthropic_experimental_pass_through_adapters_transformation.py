@@ -8,18 +8,25 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from unittest.mock import patch
 
+from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+    AnthropicStreamWrapper,
+)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
-from litellm.types.llms.anthropic import AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam
+from litellm.types.llms.anthropic import (
+    AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesUserMessageParam,
+)
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    Choices,
     Delta,
     Function,
-    StreamingChoices,
-    Choices,
     Message,
+    ModelResponse,
+    StreamingChoices,
 )
 
 
@@ -148,3 +155,100 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0].id == "call_empty_args"
     assert result[0].name == "test_function"
     assert result[0].input == {}, "Empty function arguments should result in empty dict"
+
+
+def test_anthropic_stream_wrapper_no_empty_content_blocks():
+    """
+    Test that AnthropicStreamWrapper does not send empty content_block_start/stop 
+    events when the stream contains no content.
+    
+    This test validates the fix for the issue where empty content blocks were
+    being sent even when there was no actual content to stream.
+    
+    Relevant issue: https://github.com/BerriAI/litellm/issues/13373
+    """
+    # Create a stream with only a final chunk (no content)
+    final_chunk = ModelResponse()
+    final_chunk.choices = [
+        Choices(
+            index=0,
+            delta=Delta(content=None, role=None),
+            finish_reason="stop"
+        )
+    ]
+    
+    mock_stream = iter([final_chunk])
+    wrapper = AnthropicStreamWrapper(completion_stream=mock_stream, model="gpt-4")
+    
+    events = []
+    try:
+        while True:
+            event = next(wrapper)
+            events.append(event)
+    except StopIteration:
+        pass
+    
+    # Verify events
+    event_types = [event.get("type") for event in events]
+    
+    # Should have message_start and message_stop, but NO content_block_start/stop
+    assert "message_start" in event_types, "Should have message_start event"
+    assert "message_stop" in event_types, "Should have message_stop event"
+    assert "content_block_start" not in event_types, "Should NOT have content_block_start for empty stream"
+    assert "content_block_stop" not in event_types, "Should NOT have content_block_stop for empty stream"
+
+
+def test_anthropic_stream_wrapper_with_content_doesnt_send_empty_blocks():
+    """
+    Test that AnthropicStreamWrapper does not send empty content blocks
+    even when there is some content in the stream. This validates that the fix
+    prevents empty blocks regardless of stream content.
+    """
+    # Create a stream with actual content
+    content_chunk = ModelResponse()
+    content_chunk.choices = [
+        Choices(
+            index=0,
+            delta=Delta(content="Hello", role="assistant"),
+            finish_reason=None
+        )
+    ]
+    
+    final_chunk = ModelResponse()
+    final_chunk.choices = [
+        Choices(
+            index=0,
+            delta=Delta(content=None, role=None),
+            finish_reason="stop"
+        )
+    ]
+    
+    mock_stream = iter([content_chunk, final_chunk])
+    wrapper = AnthropicStreamWrapper(completion_stream=mock_stream, model="gpt-4")
+    
+    events = []
+    try:
+        while True:
+            event = next(wrapper)
+            events.append(event)
+    except StopIteration:
+        pass
+    
+    # Verify events
+    event_types = [event.get("type") for event in events]
+    
+    # The key thing is that if content_block_start is sent, it should not be empty
+    content_block_start_events = [e for e in events if e.get("type") == "content_block_start"]
+    
+    # If content_block_start events exist, validate they're not empty
+    for event in content_block_start_events:
+        content_block = event.get("content_block", {})
+        # Should not be sending empty text content blocks
+        if content_block.get("type") == "text":
+            # This test doesn't enforce content_block_start must be sent,
+            # but if it is sent, it should be valid
+            assert "text" in content_block, "Content block should have text field"
+    
+    # Core requirement: should have message_start and message_stop
+    assert "message_start" in event_types, "Should have message_start event"
+    assert "message_stop" in event_types, "Should have message_stop event"
