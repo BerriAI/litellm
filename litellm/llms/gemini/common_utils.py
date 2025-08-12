@@ -10,6 +10,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import TokenCountResponse
 
 
 class GeminiError(BaseLLMException):
@@ -175,7 +176,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[TokenCountResponse]:
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
         deployment = deployment or {}
         deployment_litellm_params = deployment.get("litellm_params", {})
@@ -189,11 +190,12 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         )
         
         if result is not None:
-            return {
-                "total_tokens": result["total_tokens"],
-                "request_model": request_model,
-                "model_used": model_to_use,
-                "tokenizer_type": result["tokenizer_used"],
-            }
+            return TokenCountResponse(
+                total_tokens=result.get("totalTokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
         
         return None

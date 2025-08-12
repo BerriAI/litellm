@@ -14,6 +14,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import TokenCountResponse
 
 
 class AnthropicError(BaseLLMException):
@@ -265,7 +266,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         contents: Optional[List[Dict[str, Any]]],
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[TokenCountResponse]:
         from litellm.proxy.utils import count_tokens_with_anthropic_api
         
         result = await count_tokens_with_anthropic_api(
@@ -275,12 +276,13 @@ class AnthropicTokenCounter(BaseTokenCounter):
         )
         
         if result is not None:
-            return {
-                "total_tokens": result["total_tokens"],
-                "request_model": request_model,
-                "model_used": model_to_use,
-                "tokenizer_type": result["tokenizer_used"],
-            }
+            return TokenCountResponse(
+                total_tokens=result.get("total_tokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
         
         return None
 
