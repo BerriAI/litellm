@@ -7125,6 +7125,9 @@ class ProviderConfigManager:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.GEMINI == provider:
             return litellm.GeminiModelInfo()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.common_utils import VertexAIModelInfo
+            return VertexAIModelInfo()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif LlmProviders.TOPAZ == provider:

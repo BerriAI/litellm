@@ -12,7 +12,7 @@ else:
     GenerateContentContentListUnionDict = Any
 
 class GoogleAIStudioTokenCounter:
-    def validate_environment(
+    async def validate_environment(
         self,
         api_key: Optional[str] = None,
         headers: Optional[Dict[str, Any]] = None,
@@ -74,7 +74,7 @@ class GoogleAIStudioTokenCounter:
         url = f"{base_url}/v1beta/models/{model}:countTokens"
         
         # Prepare headers
-        headers = self.validate_environment(
+        headers = await self.validate_environment(
             api_key=api_key,
             headers={},
             model=model,

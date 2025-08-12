@@ -9,6 +9,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import PartType, Schema
 from litellm.types.utils import TokenCountResponse
 
@@ -535,6 +536,48 @@ class VertexAIModelInfo(BaseLLMModelInfo):
             or None if token counting is not supported.
         """
         return VertexAITokenCounter()
+    
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+    
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        """
+        Returns a list of models supported by this provider.
+        """
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+    @staticmethod
+    def get_api_base(
+        api_base: Optional[str] = None,
+    ) -> Optional[str]:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+
+
+    @staticmethod
+    def get_base_model(model: str) -> Optional[str]:
+        """
+        Returns the base model name from the given model name.
+
+        Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
+            This function will return `anthropic.claude-3-opus-20240229-v1:0`
+        """
+        raise NotImplementedError("Vertex AI models are not supported yet")
 
 
 class VertexAITokenCounter(BaseTokenCounter):
