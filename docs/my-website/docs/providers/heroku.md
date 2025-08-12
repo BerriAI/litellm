@@ -19,7 +19,7 @@ Heroku for LiteLLM supports various [chat](https://devcenter.heroku.com/articles
 
 ## Environment Variables
 
-When a model is attached to a Heroku app, three config variables are set:
+When you attach a model to a Heroku app, three config variables are set:
 
 - `INFERENCE_KEY`: The API key used for authenticating requests to the model.
 - `INFERENCE_MODEL_ID`: The name of the model. E.g. `claude-3-5-haiku`.
