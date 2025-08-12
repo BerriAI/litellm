@@ -694,9 +694,17 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_base: Optional[str],
         litellm_params: Optional[Union[GenericLiteLLMParams, Dict[str, Any]]],
         route: Literal["/openai/responses", "/openai/vector_stores"],
-        default_api_version: Optional[str] = None,
+        default_api_version: Optional[Union[str, Literal["latest", "preview"]]] = None,
     ) -> str:
-        from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+        """
+        Get the base Azure URL for the given route and API version.
+
+        Args:
+            api_base: The base URL of the Azure API.
+            litellm_params: The litellm parameters.
+            route: The route to the API.
+            default_api_version: The default API version to use if no api_version is provided. If 'latest', it will use `openai/v1/...` route.
+        """
 
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         if api_base is None:
