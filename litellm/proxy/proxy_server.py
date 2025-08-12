@@ -5843,7 +5843,7 @@ async def token_counter(
                 model=request.model,
                 request_kwargs={},
             )
-        except Exception as e:
+        except Exception:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
             )
