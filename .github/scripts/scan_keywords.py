@@ -90,6 +90,7 @@ def main() -> int:
 
     # Optional webhook notification
     webhook_url = os.environ.get("PROVIDER_ISSUE_WEBHOOK_URL", "").strip()
+    print(f"Webhook URL detected")
     if found and webhook_url:
         repo_full = (event.get("repository") or {}).get("full_name", "")
         payload = {
