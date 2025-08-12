@@ -1,6 +1,6 @@
 import base64
 import datetime
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -137,3 +137,47 @@ def encode_unserializable_types(
 
 def get_api_key_from_env() -> Optional[str]:
     return get_secret_str("GOOGLE_API_KEY") or get_secret_str("GEMINI_API_KEY")
+
+
+class GoogleAIStudioTokenCounter:
+    """Token counter implementation for Anthropic provider."""
+    
+    def supports_provider(
+        self, 
+        deployment: Optional[Dict[str, Any]] = None,
+        from_endpoint: bool = False
+    ) -> bool:
+        if not from_endpoint:
+            return False
+            
+        if deployment is None:
+            return False
+            
+        full_model = deployment.get("litellm_params", {}).get("model", "")
+        is_gemini_provider = full_model.startswith("gemini/") or "gemini" in full_model.lower()
+        
+        return is_gemini_provider
+    
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
+        request_model: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        from litellm.llms.gemini.count_tokens.handler import acount_tokens
+        
+        result = await acount_tokens(
+            contents=contents,
+            model=model_to_use,
+        )
+        
+        if result is not None:
+            return {
+                "total_tokens": result["total_tokens"],
+                "request_model": request_model,
+                "model_used": model_to_use,
+                "tokenizer_type": result["tokenizer_used"],
+            }
+        
+        return None
