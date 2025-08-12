@@ -1,15 +1,17 @@
 model_list:
-  - model_name: gemini/*
+  - model_name: openai/*
     litellm_params:
-      model: gemini/*
+      model: openai/*
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+  - model_name: auto_router1
+    litellm_params:
+      model: auto_router/auto_router1
+      auto_router_config_path: router.json
+      auto_router_default_model: "gpt-4o"
+      auto_router_embedding_model: "text-embedding-3-small"
 
 litellm_settings:
-  callbacks: ["s3_v2"]
-  s3_callback_params:
-    s3_bucket_name: litellm-logs   # AWS Bucket Name for S3
-    s3_region_name: us-west-2       
-
-general_settings:
-  cold_storage_custom_logger: s3_v2
-  store_prompts_in_cold_storage: true
-  store_prompts_in_spend_logs: true
+  callbacks:
+    - langfuse

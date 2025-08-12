@@ -4,10 +4,14 @@ import json
 import traceback
 import uuid
 from collections import deque
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional, Union
 
 from litellm import verbose_logger
-from litellm.types.llms.anthropic import UsageDelta
+from litellm.types.llms.anthropic import (
+    ContentBlockDelta,
+    MessageBlockDelta,
+    UsageDelta,
+)
 from litellm.types.utils import AdapterCompletionStreamWrapper
 
 if TYPE_CHECKING:
@@ -66,13 +70,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "usage": UsageDelta(input_tokens=0, output_tokens=0),
                     },
                 }
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                return {
-                    "type": "content_block_start",
-                    "index": self.current_content_block_index,
-                    "content_block": {"type": "text", "text": ""},
-                }
 
             # Handle pending new content block start
             if self.pending_new_content_block:
@@ -97,12 +94,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     current_content_block_index=self.current_content_block_index,
                 )
 
-                # Check if we need to start a new content block
-                # This is where you'd add your logic to detect when a new content block should start
-                # For example, if the chunk indicates a tool call or different content type
+                # Send content_block_start only when we have actual content
+                if self._should_send_content_block_start(processed_chunk):
+                    self.sent_content_block_start = True
+                    return self._create_content_block_start(processed_chunk)
 
-                if should_start_new_block and not self.sent_content_block_finish:
-                    # End current content block and prepare for new one
+                # Handle new content blocks
+                if should_start_new_block and not self.sent_content_block_finish and self.sent_content_block_start:
                     self.holding_chunk = processed_chunk
                     self.sent_content_block_finish = True
                     self.pending_new_content_block = True
@@ -111,10 +109,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "index": max(self.current_content_block_index - 1, 0),
                     }
 
-                if (
-                    processed_chunk["type"] == "message_delta"
-                    and self.sent_content_block_finish is False
-                ):
+                # Send content_block_stop when appropriate
+                if self._should_send_content_block_stop(processed_chunk):
                     self.holding_chunk = processed_chunk
                     self.sent_content_block_finish = True
                     return {
@@ -174,16 +170,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            if self.sent_content_block_start is False:
-                self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
-                return self.chunk_queue.popleft()
+
 
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
@@ -198,6 +185,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     response=chunk,
                     current_content_block_index=self.current_content_block_index,
                 )
+
+                # Send content_block_start only when we have actual content
+                if self._should_send_content_block_start(processed_chunk):
+                    self.sent_content_block_start = True
+                    self.chunk_queue.append(self._create_content_block_start(processed_chunk))
+                    return self.chunk_queue.popleft()
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if (
@@ -222,46 +215,28 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 # Check if this processed chunk has a stop_reason - hold it for next chunk
 
-                if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start -> current_chunk
-
-                    # 1. Stop current content block
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": max(self.current_content_block_index - 1, 0),
-                        }
-                    )
-
-                    # 2. Start new content block
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_start",
-                            "index": self.current_content_block_index,
-                            "content_block": self.current_content_block_start,
-                        }
-                    )
-
-                    # 3. Queue the current chunk (don't lose it!)
+                # Handle new content blocks
+                if should_start_new_block and not self.sent_content_block_finish and self.sent_content_block_start:
+                    # Queue: content_block_stop -> content_block_start -> current_chunk
+                    self.chunk_queue.append({
+                        "type": "content_block_stop",
+                        "index": max(self.current_content_block_index - 1, 0),
+                    })
+                    self.chunk_queue.append({
+                        "type": "content_block_start",
+                        "index": self.current_content_block_index,
+                        "content_block": self.current_content_block_start,
+                    })
                     self.chunk_queue.append(processed_chunk)
-
-                    # Reset state for new block
                     self.sent_content_block_finish = False
-
-                    # Return the first queued item
                     return self.chunk_queue.popleft()
 
-                if (
-                    processed_chunk["type"] == "message_delta"
-                    and self.sent_content_block_finish is False
-                ):
-                    # Queue both the content_block_stop and the holding chunk
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_stop",
-                            "index": self.current_content_block_index,
-                        }
-                    )
+                # Send content_block_stop when appropriate
+                if self._should_send_content_block_stop(processed_chunk):
+                    self.chunk_queue.append({
+                        "type": "content_block_stop",
+                        "index": self.current_content_block_index,
+                    })
                     self.sent_content_block_finish = True
                     if processed_chunk.get("delta", {}).get("stop_reason") is not None:
 
@@ -343,6 +318,37 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
+
+    def _has_content_to_stream(self, processed_chunk: Union[ContentBlockDelta, MessageBlockDelta]) -> bool:
+        """Check if chunk has actual content to stream."""
+        if processed_chunk["type"] != "content_block_delta":
+            return False
+        
+        delta = processed_chunk.get("delta", {})
+        return delta.get("text", "") != "" or delta.get("partial_json", "") != ""
+
+    def _create_content_block_start(self, processed_chunk: Union[ContentBlockDelta, MessageBlockDelta]) -> dict:
+        """Create content_block_start event based on content type."""
+        if processed_chunk.get("delta", {}).get("partial_json", "") != "":
+            content_block = {"type": "tool_use", "id": "", "name": "", "input": {}}
+        else:
+            content_block = {"type": "text", "text": ""}
+        
+        return {
+            "type": "content_block_start",
+            "index": self.current_content_block_index,
+            "content_block": content_block,
+        }
+
+    def _should_send_content_block_stop(self, processed_chunk: Union[ContentBlockDelta, MessageBlockDelta]) -> bool:
+        """Check if we should send content_block_stop."""
+        return (processed_chunk["type"] == "message_delta" and 
+                not self.sent_content_block_finish and 
+                self.sent_content_block_start)
+
+    def _should_send_content_block_start(self, processed_chunk: Union[ContentBlockDelta, MessageBlockDelta]) -> bool:
+        """Check if we should send content_block_start."""
+        return not self.sent_content_block_start and self._has_content_to_stream(processed_chunk)
 
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
