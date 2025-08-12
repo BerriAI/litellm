@@ -167,16 +167,18 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         deployment: Optional[Dict[str, Any]] = None,
         request_model: str = "",
     ) -> Optional[TokenCountResponse]:
+        import copy
+
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
         deployment = deployment or {}
-        deployment_litellm_params = deployment.get("litellm_params", {})
+        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
         count_tokens_params = {
             "model": model_to_use,
             "contents": contents,
         }
-        count_tokens_params.update(deployment_litellm_params)
+        count_tokens_params_request.update(count_tokens_params)
         result = await GoogleAIStudioTokenCounter().acount_tokens(
-            **count_tokens_params,
+            **count_tokens_params_request,
         )
         
         if result is not None:
