@@ -56,6 +56,8 @@ response = completion(
 print(response)
 ```
 
+> Include the `heroku/` prefix in the model name so LiteLLM knows the model provider to use.
+
 ### Explicitly Setting `api_key` and `api_base`
 
 ```python
