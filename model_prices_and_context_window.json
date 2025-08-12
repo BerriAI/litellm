@@ -14898,6 +14898,21 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "deepinfra/openai/gpt-oss-120b": {
+        "max_tokens": 32768,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 0.9e-07,
+        "output_cost_per_token": 4.5e-08,
+        "litellm_provider": "deepinfra",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://deepinfra.com/openai/gpt-oss-120b"
+    },
     "deepinfra/Gryphe/MythoMax-L2-13b": {
         "max_tokens": 4096,
         "max_input_tokens": 4096,
