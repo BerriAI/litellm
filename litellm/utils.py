@@ -3927,6 +3927,17 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
         else:
             verbose_logger.debug(
                 "Azure optional params - api_version: api_version={}, litellm.api_version={}, os.environ['AZURE_API_VERSION']={}".format(
@@ -6755,6 +6766,11 @@ class ProviderConfigManager:
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         ):
             return litellm.openaiOSeriesConfig
+        elif (
+            provider == LlmProviders.OPENAI
+            and litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+        ):
+            return litellm.OpenAIGPT5Config()
         elif litellm.LlmProviders.DEEPSEEK == provider:
             return litellm.DeepSeekChatConfig()
         elif litellm.LlmProviders.GROQ == provider:
@@ -6857,6 +6873,8 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.AZURE == provider:
             if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
                 return litellm.AzureOpenAIO1Config()
+            if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+                return litellm.AzureOpenAIGPT5Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIStudioConfig()
@@ -6965,6 +6983,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyChatConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
+        elif litellm.LlmProviders.GRADIENT_AI == provider:
+            return litellm.GradientAIConfig()
         elif litellm.LlmProviders.NSCALE == provider:
             return litellm.NscaleConfig()
         elif litellm.LlmProviders.OCI == provider:
@@ -7076,7 +7096,11 @@ class ProviderConfigManager:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
-            return litellm.AzureOpenAIResponsesAPIConfig()
+            # Check if it's an O-series model
+            if model and ("o_series" in model.lower() or supports_reasoning(model)):
+                return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
+            else:
+                return litellm.AzureOpenAIResponsesAPIConfig()
         return None
 
     @staticmethod

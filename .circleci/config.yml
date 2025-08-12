@@ -957,6 +957,7 @@ jobs:
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
             pip install "semantic_router==0.1.10"
+            pip install "fastapi-offline==1.7.3"
       - setup_litellm_enterprise_pip
       # Run pytest and generate JUnit XML report
       - run:
