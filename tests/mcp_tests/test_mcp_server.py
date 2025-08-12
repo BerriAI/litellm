@@ -880,6 +880,93 @@ def test_mcp_server_manager_access_groups_from_config():
     assert any(s.name == "other_server" and s.server_id in server_ids_c for s in test_manager.config_mcp_servers.values())
 
 
+def test_mcp_server_manager_config_integration_with_database():
+    """
+    Test that config-based servers properly integrate with database servers,
+    specifically testing access_groups and description fields.
+    """
+    import datetime
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+    
+    test_manager = MCPServerManager()
+    
+    # Test 1: Load config with access_groups and description
+    test_manager.load_servers_from_config({
+        "config_server_with_groups": {
+            "url": "https://config-server.com/mcp",
+            "transport": MCPTransport.http,
+            "description": "Test config server",
+            "access_groups": ["fr_staff", "admin"]
+        }
+    })
+    
+    # Verify config server has correct access_groups
+    config_servers = test_manager.config_mcp_servers
+    assert len(config_servers) == 1
+    config_server = next(iter(config_servers.values()))
+    assert config_server.access_groups == ["fr_staff", "admin"]
+    assert config_server.mcp_info["description"] == "Test config server"
+    
+    # Test 2: Create a database server record and test add_update_server method
+    db_server = LiteLLM_MCPServerTable(
+        server_id='db-server-123',
+        server_name='database-server',
+        url='https://db-server.com/mcp',
+        transport='http',
+        spec_version='2025-03-26',
+        auth_type='none',
+        description='Database server description',
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now(),
+        mcp_access_groups=['db_group', 'test_group']
+    )
+    
+    # Test the add_update_server method (this tests our fix)
+    test_manager.add_update_server(db_server)
+    
+    # Verify the server was added with correct access_groups
+    registry = test_manager.get_registry()
+    assert 'db-server-123' in registry
+    
+    db_server_in_registry = registry['db-server-123']
+    assert db_server_in_registry.access_groups == ['db_group', 'test_group']
+    assert db_server_in_registry.server_name == 'database-server'
+    
+    # Test 3: Test config server conversion to LiteLLM_MCPServerTable format
+    # This tests that config servers are properly converted with access_groups and description fields
+    
+    # Mock user auth to get all servers
+    from litellm.proxy._types import UserAPIKeyAuth
+    mock_user_auth = UserAPIKeyAuth(user_role="proxy_admin")
+    
+    # Mock the get_allowed_mcp_servers to return only config server IDs 
+    # (to avoid database dependency in this test)
+    async def mock_get_allowed_servers(user_auth=None):
+        config_server_ids = list(test_manager.config_mcp_servers.keys())
+        return config_server_ids
+    
+    test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
+    
+    # Test the method (this tests our second fix)
+    import asyncio
+    servers_list = asyncio.run(test_manager.get_all_mcp_servers_with_health_and_teams(
+        user_api_key_auth=mock_user_auth
+    ))
+    
+    # Verify we have the config server properly converted
+    assert len(servers_list) == 1
+    
+    # Find the config server in the list
+    config_server_in_list = servers_list[0]
+    assert config_server_in_list.server_name == 'config_server_with_groups'
+    assert config_server_in_list.mcp_access_groups == ["fr_staff", "admin"]
+    assert config_server_in_list.description == "Test config server"
+    
+    # Verify the mcp_info is also correct
+    assert config_server_in_list.mcp_info["description"] == "Test config server"
+    assert config_server_in_list.mcp_info["server_name"] == "config_server_with_groups"
+
+
 # Tests for Server Alias Functionality
 def test_get_server_prefix_with_alias():
     """
