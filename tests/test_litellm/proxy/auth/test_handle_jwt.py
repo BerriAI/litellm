@@ -459,9 +459,9 @@ async def test_nested_jwt_field_access():
     2. Backward compatibility is maintained for flat field names
     3. Missing nested paths return appropriate defaults
     """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy._types import LiteLLM_JWTAuth
-    
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
     # Create JWT handler
     jwt_handler = JWTHandler()
     
@@ -536,7 +536,7 @@ async def test_nested_jwt_field_access():
     assert jwt_handler.get_org_id(flat_token, None) == "org456"
 
     # Test 5: object_id_jwt_field with nested access (requires role_mappings)
-    from litellm.proxy._types import RoleMapping, LitellmUserRoles
+    from litellm.proxy._types import LitellmUserRoles, RoleMapping
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         object_id_jwt_field="profile.object_id",
         role_mappings=[RoleMapping(role="admin", internal_role=LitellmUserRoles.INTERNAL_USER)]
@@ -588,9 +588,9 @@ async def test_nested_jwt_field_missing_paths():
     2. Partial paths that exist but don't have the final key return defaults
     3. team_id_default fallback works with nested fields
     """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy._types import LiteLLM_JWTAuth
-    
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
     # Create JWT handler
     jwt_handler = JWTHandler()
     
@@ -626,7 +626,7 @@ async def test_nested_jwt_field_missing_paths():
     assert jwt_handler.get_org_id(incomplete_token, "default_org") == "default_org"
 
     # Test 5: Missing profile.object_id should return default (requires role_mappings)
-    from litellm.proxy._types import RoleMapping, LitellmUserRoles
+    from litellm.proxy._types import LitellmUserRoles, RoleMapping
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         object_id_jwt_field="profile.object_id",
         role_mappings=[RoleMapping(role="admin", internal_role=LitellmUserRoles.INTERNAL_USER)]
@@ -663,9 +663,9 @@ async def test_metadata_prefix_handling_in_nested_fields():
     
     The get_nested_value function should remove metadata. prefix before traversing
     """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy._types import LiteLLM_JWTAuth
-    
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
     # Create JWT handler
     jwt_handler = JWTHandler()
     
@@ -685,3 +685,55 @@ async def test_metadata_prefix_handling_in_nested_fields():
     # Test 2: user.sub should work normally without metadata prefix
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(user_id_jwt_field="sub")
     assert jwt_handler.get_user_id(token, None) == "u123"
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_model_group(monkeypatch):
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "gpt-4o-mini"},
+                "model_info": {"access_groups": ["test-group"]},
+            }
+        ]
+    )
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    team = LiteLLM_TeamTable(team_id="team-1", models=["test-group"])
+
+    async def mock_get_team_object(*args, **kwargs):  # type: ignore
+        return team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-1"},
+        requested_model="gpt-4o-mini",
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert team_id == "team-1"
+    assert team_obj.team_id == "team-1"
