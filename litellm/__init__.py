@@ -231,6 +231,7 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
 cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
@@ -521,6 +522,7 @@ sambanova_models: List = []
 novita_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
+gradient_ai_models: List = []
 llama_models: List = []
 nscale_models: List = []
 nebius_models: List = []
@@ -705,6 +707,8 @@ def add_known_models():
             jina_ai_models.append(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.append(key)
+        elif value.get("litellm_provider") == "gradient_ai":
+            gradient_ai_models.append(key)
         elif value.get("litellm_provider") == "featherless_ai":
             featherless_ai_models.append(key)
         elif value.get("litellm_provider") == "deepgram":
@@ -806,6 +810,7 @@ model_list = (
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
+    + gradient_ai_models
     + llama_models
     + featherless_ai_models
     + nscale_models
@@ -880,6 +885,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "gradient_ai": gradient_ai_models,
     "meta_llama": llama_models,
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
@@ -1140,13 +1146,14 @@ from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
-
+from .llms.gradient_ai.chat.transformation import GradientAIConfig
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
@@ -1199,6 +1206,7 @@ from .llms.azure.azure import (
 )
 from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig
