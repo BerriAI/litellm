@@ -46,6 +46,7 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
+    TokenCountResponse,
 )
 
 from .types_utils.utils import get_instance_fn, validate_custom_validate_return_type
@@ -2103,13 +2104,6 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     """
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
     """
-
-    passthrough_response: Optional[bool] = False
-    """
-    when set to True, will return the response from the token counting endpoint directly
-    without any processing
-    """
-
 
 
 class CallInfo(LiteLLMPydanticObjectBase):

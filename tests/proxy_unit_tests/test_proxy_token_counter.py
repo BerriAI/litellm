@@ -560,3 +560,41 @@ async def test_factory_anthropic_counter_supports_provider():
     # Test None deployment
     assert not counter.supports_provider(None, from_endpoint=True)
     assert not counter.supports_provider(None, from_endpoint=False)
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_gemini_token_counting_with_contents():
+    """
+    Test token counting for Vertex AI Gemini model using contents format with call_endpoint=True
+    """
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-pro",
+                },
+            }
+        ]
+    )
+    
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    
+    # Test with contents format and call_endpoint=True
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="gemini-2.5-pro",
+            contents=[
+                {
+                    "parts": [
+                        {
+                            "text": "Hello world, how are you doing today? i am ij"
+                        }
+                    ]
+                }
+            ],
+        ),
+        call_endpoint=True
+    )
+    
+    print("Vertex AI Gemini token counting response:", response)

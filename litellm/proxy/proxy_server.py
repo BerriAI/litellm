@@ -5871,12 +5871,6 @@ async def token_counter(
                 request_model=request.model,
             )
             #########################################################
-            # Return the response from the upstream provider
-            #########################################################
-            if request.passthrough_response is True and result is not None:
-                return result.original_response
-
-            #########################################################
             # Transfrom the Response to the well known format
             #########################################################
             if result is not None:
