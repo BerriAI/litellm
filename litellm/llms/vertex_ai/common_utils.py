@@ -7,8 +7,10 @@ import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.vertex_ai import PartType, Schema
+from litellm.types.utils import TokenCountResponse
 
 
 class VertexAIError(BaseLLMException):
@@ -522,3 +524,57 @@ def is_global_only_vertex_model(model: str) -> bool:
     if supported_regions is None:
         return False
     return "global" in supported_regions
+
+class VertexAIModelInfo(BaseLLMModelInfo):    
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+        """
+        Factory method to create a token counter for this provider.
+        
+        Returns:
+            Optional TokenCounterInterface implementation for this provider,
+            or None if token counting is not supported.
+        """
+        return VertexAITokenCounter()
+
+
+class VertexAITokenCounter(BaseTokenCounter):
+    """Token counter implementation for Google AI Studio provider."""
+    def should_use_token_counting_api(
+        self, 
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        from litellm.types.utils import LlmProviders
+        return custom_llm_provider == LlmProviders.VERTEX_AI.value
+    
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
+        request_model: str = "",
+    ) -> Optional[TokenCountResponse]:
+        import copy
+
+        from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+        deployment = deployment or {}
+        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
+        count_tokens_params = {
+            "model": model_to_use,
+            "contents": contents,
+        }
+        count_tokens_params_request.update(count_tokens_params)
+        result = await VertexAITokenCounter().acount_tokens(
+            **count_tokens_params_request,
+        )
+        
+        if result is not None:
+            return TokenCountResponse(
+                total_tokens=result.get("totalTokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
+        
+        return None
