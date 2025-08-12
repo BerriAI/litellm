@@ -14,13 +14,14 @@ def read_event_payload() -> dict:
         return json.load(f)
 
 
-def get_issue_text(event: dict) -> tuple[str, str, int, str]:
+def get_issue_text(event: dict) -> tuple[str, str, int, str, str]:
     issue = event.get("issue") or {}
     title = (issue.get("title") or "").strip()
     body = (issue.get("body") or "").strip()
     number = issue.get("number") or 0
     html_url = issue.get("html_url") or ""
-    return title, body, number, html_url
+    author = ((issue.get("user") or {}).get("login") or "").strip()
+    return title, body, number, html_url, author
 
 
 def detect_keywords(text: str, keywords: list[str]) -> list[str]:
@@ -63,6 +64,15 @@ def send_webhook(webhook_url: str, payload: dict) -> None:
         print(f"Webhook unexpected error: {e}", file=sys.stderr)
 
 
+def _excerpt(text: str, max_len: int = 400) -> str:
+    if not text:
+        return ""
+    clean = " ".join(text.split())
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max_len - 1] + "…"
+
+
 def main() -> int:
     event = read_event_payload()
     if not event:
@@ -70,7 +80,7 @@ def main() -> int:
         return 0
 
     # Read issue details
-    title, body, number, html_url = get_issue_text(event)
+    title, body, number, html_url, author = get_issue_text(event)
     combined_text = f"{title}\n\n{body}".strip()
 
     # Keywords from env or defaults
@@ -90,13 +100,17 @@ def main() -> int:
 
     # Optional webhook notification
     webhook_url = os.environ.get("PROVIDER_ISSUE_WEBHOOK_URL", "").strip()
-    print(f"Webhook URL detected")
     if found and webhook_url:
         repo_full = (event.get("repository") or {}).get("full_name", "")
+        title_part = f"*{title}*" if title else "New issue"
+        author_part = f" by @{author}" if author else ""
+        body_preview = _excerpt(body)
+        preview_block = f"\n{body_preview}" if body_preview else ""
         payload = {
             "text": (
-                f"Provider keyword(s) detected in issue {repo_full} #{number}: {title}\n"
-                f"Keywords: {', '.join(matches)}\n{html_url}"
+                f":memo: New issue in {repo_full} #{number}{author_part}\n"
+                f"{title_part}{preview_block}\n"
+                f"<{html_url}|View issue>"
             )
         }
         send_webhook(webhook_url, payload)
