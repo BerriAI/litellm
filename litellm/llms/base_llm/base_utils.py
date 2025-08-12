@@ -11,9 +11,8 @@ from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import TokenCountResponse
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
-from litellm.types.utils import Message, ProviderSpecificModelInfo
+from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
 
 
 class BaseTokenCounter(ABC):

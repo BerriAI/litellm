@@ -16,6 +16,7 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
 

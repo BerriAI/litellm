@@ -24,7 +24,8 @@ from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
-from litellm.proxy._types import TokenCountRequest, TokenCountResponse
+from litellm.proxy._types import TokenCountRequest
+from litellm.types.utils import TokenCountResponse
 
 
 from litellm import Router
