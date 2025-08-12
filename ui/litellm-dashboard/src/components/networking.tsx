@@ -1,3 +1,10 @@
+// Shared date formatter for daily activity endpoints
+export const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -247,6 +254,99 @@ export const modelCostMap = async (accessToken: string) => {
     return jsonData;
   } catch (error) {
     console.error("Failed to get model cost map:", error);
+    throw error;
+  }
+};
+
+export const reloadModelCostMap = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/reload/model_cost_map`
+      : `/reload/model_cost_map`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to reload model cost map:", error);
+    throw error;
+  }
+};
+
+export const scheduleModelCostMapReload = async (accessToken: string, hours: number) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload?hours=${hours}`
+      : `/schedule/model_cost_map_reload?hours=${hours}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Schedule model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to schedule model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const cancelModelCostMapReload = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload`
+      : `/schedule/model_cost_map_reload`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Cancel model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to cancel model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const getModelCostMapReloadStatus = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload/status`
+      : `/schedule/model_cost_map_reload/status`;
+    console.log("Fetching status from URL:", url);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (!response.ok) {
+      console.error(`Status request failed with status: ${response.status}`);
+      const errorText = await response.text();
+      console.error("Error response:", errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    const jsonData = await response.json();
+    console.log(`Model cost map reload status:`, jsonData);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to get model cost map reload status:", error);
     throw error;
   }
 };
@@ -1457,13 +1557,6 @@ export const userDailyActivityCall = async (
       ? `${proxyBaseUrl}/user/daily/activity`
       : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1510,13 +1603,6 @@ export const tagDailyActivityCall = async (
       ? `${proxyBaseUrl}/tag/daily/activity`
       : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1566,13 +1652,6 @@ export const teamDailyActivityCall = async (
       ? `${proxyBaseUrl}/team/daily/activity`
       : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -3198,6 +3277,55 @@ export interface User {
   [key: string]: string; // Include any other potential keys in the dictionary
 }
 
+export const userDailyActivityAggregatedCall = async (
+  accessToken: String,
+  startTime: Date,
+  endTime: Date
+) => {
+  /**
+   * Get aggregated daily user activity (no pagination)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/daily/activity/aggregated`
+      : `/user/daily/activity/aggregated`;
+    const queryParams = new URLSearchParams();
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      throw new Error("Network response was not ok");
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
 export const userGetAllUsersCall = async (
   accessToken: String,
   role: String
@@ -4229,9 +4357,6 @@ export const serviceHealthCheck = async (
     }
 
     const data = await response.json();
-    message.success(
-      `Test request to ${service} made - check logs/alerts on ${service} to verify`
-    );
     // You can add additional logic here based on the response if needed
     return data;
   } catch (error) {

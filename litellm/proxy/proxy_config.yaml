@@ -1,6 +1,11 @@
 model_list:
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
   - model_name: anthropic/*
     litellm_params:
       model: anthropic/*
 
-
+litellm_settings:
+  callbacks:
+    - langfuse_otel

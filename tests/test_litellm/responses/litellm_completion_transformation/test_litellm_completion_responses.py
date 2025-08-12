@@ -134,9 +134,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": image_url, "detail": "high"}}
+        expected = {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == image_url
         assert result["image_url"]["detail"] == "high"
 
@@ -154,9 +154,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": image_url, "detail": "high"}}
+        expected = {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == image_url
         assert result["image_url"]["detail"] == "high"
 
@@ -174,9 +174,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": image_url, "detail": "auto"}}
+        expected = {"type": "image_url", "image_url": {"url": image_url, "detail": "auto"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == image_url
         assert result["image_url"]["detail"] == "auto"
 
@@ -193,9 +193,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": "", "detail": "auto"}}
+        expected = {"type": "image_url", "image_url": {"url": "", "detail": "auto"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == ""
         assert result["image_url"]["detail"] == "auto"
 
@@ -217,9 +217,9 @@ class TestLiteLLMCompletionResponsesConfig:
         )
 
         # Assert
-        expected = {"type": "image", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}}
+        expected = {"type": "image_url", "image_url": {"url": "https://example.com/image.png", "detail": "auto"}}
         assert result == expected
-        assert result["type"] == "image"
+        assert result["type"] == "image_url"
         assert result["image_url"]["url"] == "https://example.com/image.png"
         assert result["image_url"]["detail"] == "auto"
         assert "extra_field" not in result

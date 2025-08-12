@@ -925,7 +925,15 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           <div className="space-y-2">
             <div className="flex">
               <span className="font-medium w-1/3">Tokens:</span>
-              <span>{row.original.total_tokens} ({row.original.prompt_tokens}+{row.original.completion_tokens})</span>
+              <span>{row.original.total_tokens} ({row.original.prompt_tokens} prompt tokens + {row.original.completion_tokens} completion tokens)</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Cache Read Tokens:</span>
+              <span>{formatNumberWithCommas(row.original.metadata?.additional_usage_values?.cache_read_input_tokens || 0)}</span>
+            </div>
+            <div className="flex">
+              <span className="font-medium w-1/3">Cache Creation Tokens:</span>
+              <span>{formatNumberWithCommas(row.original.metadata?.additional_usage_values.cache_creation_input_tokens)}</span>
             </div>
             <div className="flex">
               <span className="font-medium w-1/3">Cost:</span>

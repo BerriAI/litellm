@@ -231,7 +231,9 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -357,7 +359,7 @@ disable_copilot_system_to_assistant: bool = (
 )
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION #####
+#### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
 
 
@@ -520,6 +522,7 @@ sambanova_models: List = []
 novita_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
+gradient_ai_models: List = []
 llama_models: List = []
 nscale_models: List = []
 nebius_models: List = []
@@ -533,6 +536,8 @@ morph_models: List = []
 lambda_ai_models: List = []
 hyperbolic_models: List = []
 recraft_models: List = []
+cometapi_models: List = []
+oci_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -702,6 +707,8 @@ def add_known_models():
             jina_ai_models.append(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.append(key)
+        elif value.get("litellm_provider") == "gradient_ai":
+            gradient_ai_models.append(key)
         elif value.get("litellm_provider") == "featherless_ai":
             featherless_ai_models.append(key)
         elif value.get("litellm_provider") == "deepgram":
@@ -722,6 +729,10 @@ def add_known_models():
             hyperbolic_models.append(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
+        elif value.get("litellm_provider") == "cometapi":
+            cometapi_models.append(key)
+        elif value.get("litellm_provider") == "oci":
+            oci_models.append(key)
 
 
 add_known_models()
@@ -799,6 +810,7 @@ model_list = (
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
+    + gradient_ai_models
     + llama_models
     + featherless_ai_models
     + nscale_models
@@ -810,6 +822,8 @@ model_list = (
     + morph_models
     + lambda_ai_models
     + recraft_models
+    + cometapi_models
+    + oci_models
 )
 
 model_list_set = set(model_list)
@@ -871,6 +885,7 @@ models_by_provider: dict = {
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "gradient_ai": gradient_ai_models,
     "meta_llama": llama_models,
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
@@ -883,6 +898,8 @@ models_by_provider: dict = {
     "lambda_ai": lambda_ai_models,
     "hyperbolic": hyperbolic_models,
     "recraft": recraft_models,
+    "cometapi": cometapi_models,
+    "oci": oci_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1129,16 +1146,20 @@ from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
-
+from .llms.gradient_ai.chat.transformation import GradientAIConfig
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
+)
+from .llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
 )
 from .llms.openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
@@ -1153,6 +1174,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 )
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
@@ -1182,8 +1204,9 @@ from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
-
+from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig

@@ -224,6 +224,7 @@ LITELLM_CHAT_PROVIDERS = [
     "together_ai",
     "datarobot",
     "openrouter",
+    "cometapi",
     "vertex_ai",
     "vertex_ai_beta",
     "gemini",
@@ -270,6 +271,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
@@ -766,6 +768,7 @@ MAXIMUM_TRACEBACK_LINES_TO_LOG = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG",
 X_LITELLM_DISABLE_CALLBACKS = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD = "metadata"
+LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
@@ -876,6 +879,7 @@ SENTRY_DENYLIST = [
     "CLOUDFLARE_API_KEY",
     "BASETEN_KEY",
     "OPENROUTER_KEY",
+    "COMETAPI_KEY",
     "DATAROBOT_API_TOKEN",
     "FIREWORKS_API_KEY",
     "FIREWORKS_AI_API_KEY",
