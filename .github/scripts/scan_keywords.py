@@ -4,6 +4,7 @@ import os
 import sys
 import urllib.request
 import urllib.error
+import re
 
 
 def read_event_payload() -> dict:
@@ -67,10 +68,12 @@ def send_webhook(webhook_url: str, payload: dict) -> None:
 def _excerpt(text: str, max_len: int = 400) -> str:
     if not text:
         return ""
-    clean = " ".join(text.split())
-    if len(clean) <= max_len:
-        return clean
-    return clean[: max_len - 1] + "…"
+    
+    # Keep original formatting
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1] + "…"
+
 
 
 def main() -> int:
