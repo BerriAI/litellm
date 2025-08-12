@@ -25,7 +25,7 @@ When you attach a model to a Heroku app, three config variables are set:
 - `INFERENCE_MODEL_ID`: The name of the model, e.g. `claude-3-5-haiku`.
 - `INFERENCE_URL`: The base URL for calling the model.
 
-It is important to note that the values for `INFERENCE_KEY` and `INFERENCE_URL` will be required for making calls to your model. More details follow in the [Usage Examples](#usage-examples) section.
+Both `INFERENCE_KEY` and `INFERENCE_URL` are required to make calls to your model.
 
 For a deeper explanation of these variables, see the official [Heroku documentation](https://devcenter.heroku.com/articles/heroku-inference#model-resource-config-vars).
 
