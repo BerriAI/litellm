@@ -10,9 +10,12 @@ import tiktoken
 import litellm
 from litellm import verbose_logger
 from litellm.constants import (
+    DEFAULT_AUDIO_TOKENS_PER_SECOND,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    DEFAULT_PCM16_BYTES_PER_SAMPLE,
+    DEFAULT_PCM16_SAMPLE_RATE,
     MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
@@ -291,6 +294,38 @@ def calculate_img_tokens(
         tile_tokens = (base_tokens * 2) * tiles_needed_high_res
         total_tokens = base_tokens + tile_tokens
         return total_tokens
+
+
+def calculate_audio_tokens(data: str, audio_format: str = "wav") -> int:
+    """Approximate the number of tokens for an audio clip.
+
+    We estimate audio tokens at 50 tokens per second. Supports both
+    base64 encoded strings and URLs pointing to audio files.
+    """
+    import wave
+    try:
+        audio_bytes: bytes = b""
+        if data.startswith("http://") or data.startswith("https://"):
+            # for now we support token counting for WAV + PCM Audio files
+            # HTTPS endpoints can add sync calls in a critical path and waiting to see if user's need this
+            pass
+        else:
+            audio_bytes = base64.b64decode(data)
+
+        if audio_format == "wav":
+            with wave.open(io.BytesIO(audio_bytes)) as wav_file:
+                frame_rate = wav_file.getframerate()
+                nframes = wav_file.getnframes()
+            duration = nframes / float(frame_rate)
+        else:
+            # Assume PCM16 with 16kHz sample rate if format is unknown
+            bytes_per_sample = DEFAULT_PCM16_BYTES_PER_SAMPLE
+            sample_rate = DEFAULT_PCM16_SAMPLE_RATE
+            duration = len(audio_bytes) / (bytes_per_sample * sample_rate)
+
+        return int(duration * DEFAULT_AUDIO_TOKENS_PER_SECOND)
+    except Exception:
+        return 0
 
 
 TokenCounterFunction = Callable[[str], int]
@@ -593,6 +628,23 @@ def _count_content_list(
                     raise ValueError(
                         f"Invalid image_url type: {type(c['image_url'])}. Expected str or dict."
                     )
+            elif c["type"] == "input_audio":
+                audio_dict = c.get("input_audio", {})
+                audio_data = audio_dict.get("data")
+                audio_format = audio_dict.get("format", "wav")
+                if audio_data:
+                    num_tokens += calculate_audio_tokens(
+                        data=audio_data,
+                        audio_format=audio_format,
+                    )
+            elif c["type"] == "audio_url":
+                audio_url = c.get("audio_url")
+                if isinstance(audio_url, dict):
+                    url = audio_url.get("url")
+                else:
+                    url = audio_url
+                if url:
+                    num_tokens += calculate_audio_tokens(data=url)
             else:
                 raise ValueError(
                     f"Invalid content type: {type(c)}. Expected str or dict."
