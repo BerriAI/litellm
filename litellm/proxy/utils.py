@@ -1833,6 +1833,35 @@ class PrismaClient:
             )
 
             raise e
+    async def _process_team_member_budget_data(self, response_data: dict) -> dict:
+        """Helper function to fetch and process team member budget data"""
+        if response_data.get("team_member_budget_id") is not None:
+            try:
+                budget_query = """
+                    SELECT tpm_limit, rpm_limit 
+                    FROM "LiteLLM_BudgetTable" 
+                    WHERE budget_id = $1
+                """
+                budget_response = await self.db.query_first(
+                    query=budget_query, 
+                    values=[response_data["team_member_budget_id"]]
+                )
+                if budget_response:
+                    response_data["team_member_tpm_limit"] = budget_response.get("tpm_limit")
+                    response_data["team_member_rpm_limit"] = budget_response.get("rpm_limit")
+                else:
+                    response_data["team_member_tpm_limit"] = None
+                    response_data["team_member_rpm_limit"] = None
+            except Exception:
+                # If budget lookup fails, set limits to None
+                response_data["team_member_tpm_limit"] = None
+                response_data["team_member_rpm_limit"] = None
+        else:
+            response_data["team_member_tpm_limit"] = None
+            response_data["team_member_rpm_limit"] = None
+        
+        return response_data
+
 
     @backoff.on_exception(
         backoff.expo,
@@ -2143,8 +2172,7 @@ class PrismaClient:
                             t.members_with_roles AS team_members_with_roles,
                             t.organization_id as org_id,
                             tm.spend AS team_member_spend,
-                            tm.team_member_tpm_limit AS team_member_tpm_limit,
-                            tm.team_member_rpm_limit AS team_member_rpm_limit,
+                            tm.budget_id AS team_member_budget_id,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns
                             b.max_budget AS litellm_budget_table_max_budget,
@@ -2163,6 +2191,8 @@ class PrismaClient:
                     response = await self.db.query_first(query=sql_query)
 
                     if response is not None:
+                        # Process team member budget data to get TPM/RPM limits
+                        response = await self._process_team_member_budget_data(response)
                         if response["team_models"] is None:
                             response["team_models"] = []
                         if response["team_blocked"] is None:
