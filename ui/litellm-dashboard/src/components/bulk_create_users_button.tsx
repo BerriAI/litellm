@@ -14,6 +14,7 @@ import Papa from "papaparse"
 import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline"
 import { CopyToClipboard } from "react-copy-to-clipboard"
 import { InvitationLink } from "./onboarding_link"
+import NotificationManager from "./molecules/notifications_manager"
 
 interface BulkCreateUsersProps {
   accessToken: string
@@ -110,7 +111,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     // Check file type
     if (file.type !== "text/csv" && !file.name.endsWith(".csv")) {
       setFileError(`Invalid file type: ${file.name}. Please upload a CSV file (.csv extension).`)
-      message.error("Invalid file type. Please upload a CSV file.")
+      NotificationManager.fromBackend("Invalid file type. Please upload a CSV file.")
       return false
     }
 

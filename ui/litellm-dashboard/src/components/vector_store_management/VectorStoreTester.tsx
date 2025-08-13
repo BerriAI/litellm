@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Button, Input, Card, Typography, Spin, message, Divider } from "antd";
 import { SendOutlined, DatabaseOutlined, LoadingOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
 import { vectorStoreSearchCall } from "../networking";
+import NotificationManager from "../molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Text, Title } = Typography;
@@ -66,7 +67,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({
       setQuery("");
     } catch (error) {
       console.error("Error searching vector store:", error);
-      message.error("Failed to search vector store");
+      NotificationManager.fromBackend("Failed to search vector store");
     } finally {
       setIsLoading(false);
     }

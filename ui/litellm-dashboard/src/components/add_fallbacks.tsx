@@ -14,6 +14,7 @@ import {
   message,
 } from "antd";
 import { fetchAvailableModels, ModelGroup } from "./chat_ui/llm_calls/fetch_models";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface AddFallbacksProps {
   models?: string[];
@@ -91,10 +92,10 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
         // Update routerSettings state
         setRouterSettings(updatedRouterSettings);
     } catch (error) {
-        message.error("Failed to update router settings: " + error, 20);
+        NotificationManager.fromBackend("Failed to update router settings: " + error);
     }
 
-    message.success("router settings updated successfully");
+    NotificationManager.success("router settings updated successfully");
 
     setIsModalVisible(false);
     form.resetFields();

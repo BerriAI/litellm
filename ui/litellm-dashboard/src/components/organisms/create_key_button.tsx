@@ -33,6 +33,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils"
 import { callback_map, mapDisplayToInternalNames } from "../callback_info_helpers"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
 import ModelAliasManager from "../common_components/ModelAliasManager"
+import NotificationManager from "../molecules/notifications_manager"
 
 const { Option } = Select;
 
@@ -384,7 +385,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
 
     } catch (error) {
       console.log("error in create key:", error);
-      message.error(`Error creating the key: ${error}`);
+      NotificationManager.fromBackend(`Error creating the key: ${error}`);
     }
   };
 
@@ -434,7 +435,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setUserOptions(options);
     } catch (error) {
       console.error('Error fetching users:', error);
-      message.error('Failed to search for users');
+      NotificationManager.fromBackend('Failed to search for users');
     } finally {
       setUserSearchLoading(false);
     }

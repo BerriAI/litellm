@@ -28,6 +28,7 @@ import { list } from "postcss";
 import KeyValueInput from "./key_value_input";
 import { passThroughItem } from "./pass_through_settings";
 import RoutePreview from "./route_preview";
+import NotificationManager from "./molecules/notifications_manager";
 const { Option } = Select2;
 
 interface AddFallbacksProps {
@@ -87,7 +88,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
       setIncludeSubpath(true);
       setIsModalVisible(false);
     } catch (error) {
-      message.error("Error creating pass-through endpoint: " + error, 20);
+      NotificationManager.fromBackend("Error creating pass-through endpoint: " + error);
     } finally {
       setIsLoading(false);
     }

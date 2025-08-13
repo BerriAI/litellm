@@ -3,6 +3,7 @@ import { Button, Select, Tabs, message } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { Title } from '@tremor/react';
 import { transformRequestCall } from './networking';
+import NotificationManager from "./molecules/notifications_manager";
 interface TransformRequestPanelProps {
   accessToken: string | null;
 }
@@ -67,7 +68,7 @@ ${formattedBody}
       try {
         requestBody = JSON.parse(originalRequestJSON);
       } catch (e) {
-        message.error('Invalid JSON in request body');
+        NotificationManager.fromBackend('Invalid JSON in request body');
         setIsLoading(false);
         return;
       }
@@ -80,7 +81,7 @@ ${formattedBody}
       
       // Make the API call using fetch
       if (!accessToken) {
-        message.error('No access token found');
+        NotificationManager.fromBackend('No access token found');
         setIsLoading(false);
         return;
       }
@@ -108,7 +109,7 @@ ${formattedBody}
       }
     } catch (err) {
       console.error('Error transforming request:', err);
-      message.error('Failed to transform request');
+      NotificationManager.fromBackend('Failed to transform request');
     } finally {
       setIsLoading(false);
     }
