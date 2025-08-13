@@ -199,7 +199,7 @@ USE_PRISMA_MIGRATE="True"
 <TabItem value="cli" label="CLI">
 
 ```bash
-litellm --use_prisma_migrate
+litellm
 ```
 
 </TabItem>
