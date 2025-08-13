@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Modal, Form, Input, Select as AntSelect, Button as AntButton, message } from 'antd';
 import { Select, SelectItem } from "@tremor/react";
 import { Card, Text } from "@tremor/react";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface BaseMember {
   user_email?: string;
@@ -80,7 +81,7 @@ const MemberModal = <T extends BaseMember>({
       form.resetFields();
       // message.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);
     } catch (error) {
-      // message.error('Failed to submit form');
+      // NotificationManager.fromBackend('Failed to submit form');
       console.error('Form submission error:', error);
     }
   };

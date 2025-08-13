@@ -13,6 +13,7 @@ import {
   TableCell 
 } from "@tremor/react";
 import ModelSelector from "./ModelSelector";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface ModelAliasManagerProps {
   accessToken: string;
@@ -49,13 +50,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
 
   const handleAddAlias = () => {
     if (!newAlias.aliasName || !newAlias.targetModel) {
-      message.error("Please provide both alias name and target model");
+      NotificationManager.fromBackend("Please provide both alias name and target model");
       return;
     }
 
     // Check for duplicate alias names
     if (aliases.some(alias => alias.aliasName === newAlias.aliasName)) {
-      message.error("An alias with this name already exists");
+      NotificationManager.fromBackend("An alias with this name already exists");
       return;
     }
 
@@ -90,13 +91,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
     if (!editingAlias) return;
 
     if (!editingAlias.aliasName || !editingAlias.targetModel) {
-      message.error("Please provide both alias name and target model");
+      NotificationManager.fromBackend("Please provide both alias name and target model");
       return;
     }
 
     // Check for duplicate alias names (excluding current alias)
     if (aliases.some(alias => alias.id !== editingAlias.id && alias.aliasName === editingAlias.aliasName)) {
-      message.error("An alias with this name already exists");
+      NotificationManager.fromBackend("An alias with this name already exists");
       return;
     }
 

@@ -26,6 +26,7 @@ import { Tooltip } from "antd"
 import { InfoCircleOutlined } from "@ant-design/icons"
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key"
 import { useQueryClient } from "@tanstack/react-query"
+import NotificationManager from "./molecules/notifications_manager"
 
 // Helper function to generate UUID compatible across all environments
 const generateUUID = (): string => {
@@ -174,7 +175,7 @@ const Createuser: React.FC<CreateuserProps> = ({
       localStorage.removeItem("userData" + userID)
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user"
-      message.error(errorMessage)
+      NotificationManager.fromBackend(errorMessage)
       console.error("Error creating the user:", error)
     }
   }

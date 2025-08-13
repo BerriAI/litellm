@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import React from "react";
+import NotificationManager from "./molecules/notifications_manager";
 
 export enum Providers {
   Bedrock = "Amazon Bedrock",           

@@ -19,6 +19,7 @@ import {
 } from "antd";
 import { budgetUpdateCall } from "../networking";
 import { budgetItem } from "./budget_panel";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface BudgetModalProps {
   isModalVisible: boolean;
@@ -69,7 +70,7 @@ const EditBudgetModal: React.FC<BudgetModalProps> = ({
       handleUpdateCall();
     } catch (error) {
       console.error("Error creating the key:", error);
-      message.error(`Error creating the key: ${error}`, 20);
+      NotificationManager.fromBackend(`Error creating the key: ${error}`);
     }
   };
 
