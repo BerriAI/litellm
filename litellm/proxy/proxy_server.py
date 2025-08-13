@@ -1592,7 +1592,7 @@ class ProxyConfig:
         self,
         cache_params: dict,
     ):
-        global redis_usage_cache, llm_router
+        global redis_usage_cache
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
