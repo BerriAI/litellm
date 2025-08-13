@@ -1488,6 +1488,91 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 
 
+### OpenAI GPT OSS
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/converse/openai.gpt-oss-20b-1:0`, `bedrock/converse/openai.gpt-oss-120b-1:0` |
+| Provider Documentation | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python title="GPT OSS SDK Usage" showLineNumbers
+from litellm import completion
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = "your-aws-access-key"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-aws-secret-key"
+os.environ["AWS_REGION_NAME"] = "us-east-1"
+
+# GPT OSS 20B model
+response = completion(
+    model="bedrock/converse/openai.gpt-oss-20b-1:0",
+    messages=[{"role": "user", "content": "Hello, how are you?"}],
+)
+print(response.choices[0].message.content)
+
+# GPT OSS 120B model  
+response = completion(
+    model="bedrock/converse/openai.gpt-oss-120b-1:0",
+    messages=[{"role": "user", "content": "Explain machine learning in simple terms"}],
+)
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: gpt-oss-20b
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-20b-1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+      
+  - model_name: gpt-oss-120b
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+**2. Start proxy**
+
+```bash title="Start LiteLLM Proxy" showLineNumbers
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash title="Test GPT OSS via Proxy" showLineNumbers
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Authorization: Bearer sk-1234' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "gpt-oss-20b",
+    "messages": [
+      {
+        "role": "user", 
+        "content": "What are the key benefits of open source AI?"
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
 - `model=bedrock/<base-model>`, example `model=bedrock/anthropic.claude-v2`. Set `model` to any of the [Supported AWS models](#supported-aws-bedrock-models)
@@ -1522,6 +1607,8 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 
 | Model Name                 | Command                                                          |
 |----------------------------|------------------------------------------------------------------|
+| GPT-OSS 20B | `completion(model='bedrock/converse/openai.gpt-oss-20b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| GPT-OSS 120B | `completion(model='bedrock/converse/openai.gpt-oss-120b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Deepseek R1    | `completion(model='bedrock/us.deepseek.r1-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3.5 Sonnet    | `completion(model='bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3  sonnet    | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |

@@ -1890,7 +1890,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret_str("COMETAPI_KEY")
                 or litellm.api_key
             )
-            
+
             api_base = (
                 api_base
                 or litellm.api_base
@@ -1917,7 +1917,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream,
                 provider_config=provider_config,
             )
-            
+
             ## LOGGING
             logging.post_call(
                 input=messages, api_key=api_key, original_response=response
@@ -4278,6 +4278,28 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider == "sambanova":
+            api_key = api_key or litellm.api_key or get_secret_str("SAMBANOVA_API_KEY")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("SAMBANOVA_API_BASE")
+                or "https://api.sambanova.ai/v1"
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={},
             )
         elif custom_llm_provider == "voyage":
             response = base_llm_http_handler.embedding(

@@ -1154,3 +1154,37 @@ class AmazonConverseConfig(BaseConfig):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+    
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> bool:
+        """
+        Returns True if the model/provider should fake stream
+        """
+        ###################################################################
+        # If an upstream method already set fake_stream to True, return True
+        ###################################################################
+        if fake_stream is True:
+            return True
+
+        ###################################################################
+        # Bedrock Converse Specific Logic
+        ###################################################################
+        if stream is True:
+            if model is not None:
+                ###################################################################
+                # GPT-OSS models do not support streaming
+                ###################################################################
+                if "gpt-oss" in model:
+                    return True
+                ###################################################################
+                # AI21 models do not support streaming
+                ###################################################################
+                if "ai21" in model:
+                    return True
+        return False
