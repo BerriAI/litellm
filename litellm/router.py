@@ -418,6 +418,9 @@ class Router:
         self.failed_calls = (
             InMemoryCache()
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
+        self.failed_deployments = (
+            InMemoryCache()
+        )  # cache to track deployments that failed due to configuration errors (missing credentials, etc.) to prevent repeated retry attempts
 
         if num_retries is not None:
             self.num_retries = num_retries
@@ -4835,6 +4838,14 @@ class Router:
             # check if deployment already exists
             _deployment_model_id = deployment.model_info.id or ""
 
+            # Check if this deployment has previously failed due to configuration errors
+            _deployment_cache_key = f"failed_deployment_{_deployment_model_id}"
+            if self.failed_deployments.get_cache(_deployment_cache_key) is not None:
+                verbose_router_logger.debug(
+                    f"Skipping deployment {_deployment_model_id} - previously failed due to configuration errors"
+                )
+                return None
+
             _deployment_on_router: Optional[Deployment] = self.get_deployment(
                 model_id=_deployment_model_id
             )
@@ -4859,9 +4870,29 @@ class Router:
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
-                verbose_router_logger.warning(
-                    f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
+                # Check if this is a configuration error (missing credentials, etc.)
+                _is_config_error = (
+                    "api_key is required" in str(e) or
+                    "vertex_project, and vertex_location must be set" in str(e) or
+                    "credentials" in str(e).lower() or
+                    "authentication" in str(e).lower()
                 )
+                
+                if _is_config_error:
+                    # Cache this deployment as failed to prevent repeated retries
+                    _deployment_cache_key = f"failed_deployment_{deployment.model_info.id or ''}"
+                    self.failed_deployments.set_cache(
+                        key=_deployment_cache_key,
+                        value=str(e),
+                        ttl=3600  # Cache for 1 hour
+                    )
+                    verbose_router_logger.warning(
+                        f"Error upserting deployment: {e}, caching as failed deployment to prevent retries."
+                    )
+                else:
+                    verbose_router_logger.warning(
+                        f"Error upserting deployment: {e}, ignoring and continuing with other deployments."
+                    )
                 return None
             else:
                 raise e
@@ -4916,6 +4947,26 @@ class Router:
         return CredentialLiteLLMParams(
             **deployment.litellm_params.model_dump(exclude_none=True)
         ).model_dump(exclude_none=True)
+
+    def clear_failed_deployments_cache(self, model_id: Optional[str] = None) -> None:
+        """
+        Clear the cache of failed deployments to allow retrying them.
+        
+        Parameters:
+        - model_id (Optional[str]): If provided, only clear the cache for this specific model ID.
+                                   If None, clear all failed deployment entries.
+        """
+        if model_id is not None:
+            # Clear cache for specific deployment
+            _deployment_cache_key = f"failed_deployment_{model_id}"
+            self.failed_deployments.delete_cache(_deployment_cache_key)
+            verbose_router_logger.info(
+                f"Cleared failed deployment cache for model_id: {model_id}"
+            )
+        else:
+            # Clear all failed deployment entries
+            self.failed_deployments.flush_cache()
+            verbose_router_logger.info("Cleared all failed deployment cache entries")
 
     def get_deployment_by_model_group_name(
         self, model_group_name: str
