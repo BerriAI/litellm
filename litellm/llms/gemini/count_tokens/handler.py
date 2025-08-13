@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 
@@ -12,21 +12,36 @@ else:
     GenerateContentContentListUnionDict = Any
 
 class GoogleAIStudioTokenCounter:
+
+    def _construct_url(self, model: str, api_base: Optional[str] = None) -> str:
+        """
+        Construct the URL for the Google Gen AI Studio countTokens endpoint.
+        """
+        base_url = api_base or "https://generativelanguage.googleapis.com"
+        return f"{base_url}/v1beta/models/{model}:countTokens"
+
+        
     async def validate_environment(
         self,
+        api_base: Optional[str] = None,
         api_key: Optional[str] = None,
         headers: Optional[Dict[str, Any]] = None,
         model: str = "",
         litellm_params: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> Tuple[Dict[str, Any], str]:
+        """
+        Returns a Tuple of headers and url for the Google Gen AI Studio countTokens endpoint.
+        """
         from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
-        return GoogleGenAIConfig().validate_environment(
+        headers =  GoogleGenAIConfig().validate_environment(
             api_key=api_key,
             headers=headers,
             model=model,
             litellm_params=litellm_params,
         )
 
+        url = self._construct_url(model=model, api_base=api_base)
+        return headers, url
 
     async def acount_tokens(
         self,
@@ -70,12 +85,11 @@ class GoogleAIStudioTokenCounter:
             Exception: For any other unexpected errors
         """
         # Set up API base URL
-        base_url = api_base or "https://generativelanguage.googleapis.com"
-        url = f"{base_url}/v1beta/models/{model}:countTokens"
-        
+
         # Prepare headers
-        headers = await self.validate_environment(
+        headers, url = await self.validate_environment(
             api_key=api_key,
+            api_base=api_base,
             headers={},
             model=model,
             litellm_params=kwargs,
@@ -89,7 +103,7 @@ class GoogleAIStudioTokenCounter:
         async_httpx_client = get_async_httpx_client(
             llm_provider=LlmProviders.GEMINI,
         )
-        
+
         try:
             response = await async_httpx_client.post(
                 url=url,
