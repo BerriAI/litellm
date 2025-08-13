@@ -224,6 +224,7 @@ LITELLM_CHAT_PROVIDERS = [
     "together_ai",
     "datarobot",
     "openrouter",
+    "cometapi",
     "vertex_ai",
     "vertex_ai_beta",
     "gemini",
@@ -270,6 +271,7 @@ LITELLM_CHAT_PROVIDERS = [
     "llamafile",
     "lm_studio",
     "galadriel",
+    "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
@@ -877,6 +879,7 @@ SENTRY_DENYLIST = [
     "CLOUDFLARE_API_KEY",
     "BASETEN_KEY",
     "OPENROUTER_KEY",
+    "COMETAPI_KEY",
     "DATAROBOT_API_TOKEN",
     "FIREWORKS_API_KEY",
     "FIREWORKS_AI_API_KEY",
