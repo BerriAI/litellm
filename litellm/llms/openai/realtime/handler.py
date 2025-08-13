@@ -42,8 +42,6 @@ class OpenAIRealtime(OpenAIChatCompletion):
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
-        print("api_base", api_base)
-        print("api_key", api_key)
         if api_base is None:
             api_base = "https://api.openai.com/"
         if api_key is None:
