@@ -464,7 +464,7 @@ const Teams: React.FC<TeamProps> = ({
       }
     } catch (error) {
       console.error("Error creating the team:", error);
-      message.error("Error creating the team: " + error, 20);
+      NotificationManager.fromBackend("Error creating the team: " + error, 20);
     }
   };
 
