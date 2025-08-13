@@ -4,7 +4,7 @@ services:
       context: .
       args:
         target: runtime
-    image: ghcr.io/berriai/litellm:main-stable
+    image: "${GHCR_REGISTRY:-ghcr.io}/berriai/litellm:main-stable"
     #########################################
     ## Uncomment these lines to start proxy with a config.yaml file ##
     # volumes:
@@ -29,7 +29,7 @@ services:
       start_period: 40s  # Wait 40 seconds after container start before beginning health checks
 
   db:
-    image: postgres:16
+    image: "${REGISTRY:-docker.io}/postgres:16"
     restart: always
     container_name: litellm_db
     environment:
@@ -47,7 +47,7 @@ services:
       retries: 10
 
   prometheus:
-    image: prom/prometheus
+    image: "${REGISTRY:-docker.io}/prom/prometheus"
     volumes:
       - prometheus_data:/prometheus
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
