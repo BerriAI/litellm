@@ -24,12 +24,19 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
                 or get_secret_str("AZURE_AI_API_KEY")
             )
     
+    @property
+    def api_version(self, api_version: Optional[str] = None) -> Optional[str]:
+        api_version = (
+            api_version
+            or litellm.api_version
+            or get_secret_str("AZURE_API_VERSION")
+        )
+        return api_version
+    
     #########################################################
     # Not implemented methods
     #########################################################
-    @property
-    def api_version(self) -> str:
-        raise NotImplementedError("Azure Foundry does not support api version")
+        
 
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:
