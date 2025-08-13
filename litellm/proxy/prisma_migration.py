@@ -13,7 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.proxy_cli import run_server
 
 # Call the Click command with standalone_mode=False
-run_server(["--use_prisma_migrate", "--skip_server_startup"], standalone_mode=False)
+run_server(["--skip_server_startup"], standalone_mode=False)
 
 # run prisma generate
 verbose_proxy_logger.info("Running 'prisma generate'...")
