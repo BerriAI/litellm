@@ -108,6 +108,7 @@ def create_anthropic_llm_child_span(
     parent_span: Span,
     span_name: str,
     attributes: Dict[str, Any],
+    span_kind: str,
     model_name: Optional[str] = None,
 ) -> None:
     """
@@ -121,20 +122,21 @@ def create_anthropic_llm_child_span(
         safe_set_attribute(
             child_span,
             SpanAttributes.OPENINFERENCE_SPAN_KIND,
-            OpenInferenceSpanKindValues.LLM.value,
+            span_kind,
         )
-        safe_set_attribute(
-            child_span,
-            SpanAttributes.LLM_PROVIDER,
-            OpenInferenceLLMProviderValues.ANTHROPIC.value,
-        )
-        safe_set_attribute(
-            child_span,
-            SpanAttributes.LLM_SYSTEM,
-            OpenInferenceLLMSystemValues.ANTHROPIC.value,
-        )
-        if model_name:
-            safe_set_attribute(child_span, SpanAttributes.LLM_MODEL_NAME, model_name)
+        if span_kind == OpenInferenceSpanKindValues.LLM.value:
+            safe_set_attribute(
+                child_span,
+                SpanAttributes.LLM_PROVIDER,
+                OpenInferenceLLMProviderValues.ANTHROPIC.value,
+            )
+            safe_set_attribute(
+                child_span,
+                SpanAttributes.LLM_SYSTEM,
+                OpenInferenceLLMSystemValues.ANTHROPIC.value,
+            )
+            if model_name:
+                safe_set_attribute(child_span, SpanAttributes.LLM_MODEL_NAME, model_name)
 
 
 def build_input_output_attributes(
@@ -193,7 +195,7 @@ def handle_anthropic_claude_code_tracing(
     choices: List[Dict[str, Any]] = response_obj.get("choices", [])
     model_name: Optional[str] = kwargs.get("model")
 
-    span_definitions: List[Tuple[str, Dict[str, Any]]] = []
+    span_definitions: List[Tuple[str, Dict[str, Any], str]] = []
 
     # Build internal prompt span data
     i = 0
@@ -214,16 +216,86 @@ def handle_anthropic_claude_code_tracing(
             attrs = build_input_output_attributes(
                 input_value, input_mime, output_value, output_mime, i, i + 1
             )
-            span_definitions.append((span_name, attrs))
+            span_definitions.append((span_name, attrs, OpenInferenceSpanKindValues.LLM.value))
             i += 2
         else:
             # single message (either user or assistant)
             content_value, content_mime = detect_mimetype_and_serialize(content)
             attrs = build_single_message_attributes(role, i, content_value, content_mime)
-            span_definitions.append((span_name, attrs))
+            span_definitions.append((span_name, attrs, OpenInferenceSpanKindValues.LLM.value))
             i += 1
 
         span_index += 1
+
+    # Build internal tool span data
+    i = 0
+    span_index = 0
+    while i < len(messages):
+        role = messages[i].get("role", "")
+        content = messages[i].get("content", "")
+        next_msg = messages[i + 1] if i + 1 < len(messages) else None
+
+        span_name = f"Claude_Code_Internal_Tool_{span_index}"
+
+        if role == "assistant" and next_msg and next_msg.get("role") == "user":
+            # paired messages (assistant & user)
+            input_value, input_mime = detect_mimetype_and_serialize(content)
+            output_value, output_mime = detect_mimetype_and_serialize(
+                next_msg.get("content", "")
+            )
+            attrs = build_input_output_attributes(
+                input_value, input_mime, output_value, output_mime, i, i + 1
+            )
+            span_definitions.append((span_name, attrs, OpenInferenceSpanKindValues.TOOL.value))
+            i += 2
+        else:
+            i += 1
+
+        span_index += 1
+
+    # Build individual tool span data
+    i = 0
+    while i < len(messages):
+        role = messages[i].get("role", "")
+        content = messages[i].get("content", "")
+        next_msg = messages[i + 1] if i + 1 < len(messages) else None
+
+        if role == "assistant" and next_msg and next_msg.get("role") == "user":
+            tool_use_value, tool_use_mime = detect_mimetype_and_serialize(content)
+            tool_result_value, tool_result_mime = detect_mimetype_and_serialize(
+                next_msg.get("content", "")
+            )
+
+            tool_use_json = try_parse_json(tool_use_value) if tool_use_mime == OpenInferenceMimeTypeValues.JSON.value else None
+            tool_result_json = try_parse_json(tool_result_value) if tool_result_mime == OpenInferenceMimeTypeValues.JSON.value else None
+
+            if isinstance(tool_use_json, list):
+                for tool_use_obj in tool_use_json:
+                    tool_use_type = tool_use_obj.get("type", "")
+                    tool_use_id = tool_use_obj.get("id", "")
+                    tool_use_name = tool_use_obj.get("name", "")
+                    if tool_use_type == "tool_use":
+                        input_value, input_mime = detect_mimetype_and_serialize(tool_use_obj)
+                        output_value, output_mime = f"[ToolResultObject]", OpenInferenceMimeTypeValues.TEXT.value
+
+                        if isinstance(tool_result_json, list):
+                            for tool_result_obj in tool_result_json:
+                                tool_result_type = tool_result_obj.get("type", "")
+                                tool_result_id = tool_result_obj.get("tool_use_id", "")
+                                tool_result_content = tool_result_obj.get("content", "")
+                                if tool_result_type == "tool_result" and tool_result_id == tool_use_id:
+                                    output_value, output_mime = tool_result_content, OpenInferenceMimeTypeValues.TEXT.value
+                                    break
+
+                        attrs = build_input_output_attributes(
+                            input_value, input_mime, output_value, output_mime, i, i + 1
+                        )
+                        span_name = f"Claude_Code_Tool_{tool_use_name}"
+                        attrs["claude_code_tool_name"] = tool_use_name
+                        span_definitions.append((span_name, attrs, OpenInferenceSpanKindValues.TOOL.value))
+            i += 2
+        else:
+            i += 1
 
     # Build final output span data
     for idx, choice in enumerate(choices):
@@ -239,11 +311,11 @@ def handle_anthropic_claude_code_tracing(
             "llm.message.role": role,
             "llm.message.index": idx,
         }
-        span_definitions.append((span_name, attrs))
+        span_definitions.append((span_name, attrs, OpenInferenceSpanKindValues.LLM.value))
 
     # Create spans in order
-    for span_name, attrs in reversed(span_definitions):
-        create_anthropic_llm_child_span(tracer, parent_span, span_name, attrs, model_name)
+    for span_name, attrs, span_kind in reversed(span_definitions):
+        create_anthropic_llm_child_span(tracer, parent_span, span_name, attrs, span_kind, model_name)
 
 
 def set_attributes(span: Span, kwargs, response_obj):  # noqa: PLR0915
