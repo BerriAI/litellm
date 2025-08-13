@@ -2737,7 +2737,6 @@ class ProxyConfig:
         """
         Pull from DB, read general settings value
         """
-        global general_settings
         if db_general_settings is None:
             return
         _general_settings = dict(db_general_settings)
