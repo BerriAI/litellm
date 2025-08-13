@@ -1758,9 +1758,13 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
-    team_member_spend: Optional[float] = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
+
+    # Team Member Specific Params
+    team_member_spend: Optional[float] = None
+    team_member_tpm_limit: Optional[int] = None
+    team_member_rpm_limit: Optional[int] = None
 
     # End User Params
     end_user_id: Optional[str] = None
