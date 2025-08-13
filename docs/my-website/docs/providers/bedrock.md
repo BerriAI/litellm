@@ -687,6 +687,9 @@ model_list:
       model: bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0
       extra_headers:
         anthropic-beta: "computer-use-2024-10-22,context-1m-2025-08-07"
+
+general_settings:
+  forward_client_headers_to_llm_api: true  # 👈 Required for client-side header forwarding
 ```
 
 **Set on Request**
@@ -710,6 +713,10 @@ response = client.chat.completions.create(
     }
 )
 ```
+
+:::info
+**For client-side header forwarding**: When using the proxy and sending `anthropic-beta` headers from the client (like the OpenAI SDK), you need to enable `forward_client_headers_to_llm_api: true` in your proxy's `general_settings`. This tells the proxy to extract headers from HTTP requests and forward them to the underlying LLM provider.
+:::
 
 </TabItem>
 </Tabs>
