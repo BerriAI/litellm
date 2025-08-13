@@ -37,7 +37,6 @@ interface CredentialsPanelProps {
 const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, uploadProps, credentialList, fetchCredentials }) => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
   const [credentialToDelete, setCredentialToDelete] = useState<string | null>(null);
   const [form] = Form.useForm();
@@ -122,18 +121,15 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     }
     const response = await credentialDeleteCall(accessToken, credentialName);
     message.success('Credential deleted successfully');
-    setIsDeleteModalOpen(false);
     setCredentialToDelete(null);
     fetchCredentials(accessToken);
   };
 
   const openDeleteModal = (credentialName: string) => {
     setCredentialToDelete(credentialName);
-    setIsDeleteModalOpen(true);
   };
 
   const closeDeleteModal = () => {
-    setIsDeleteModalOpen(false);
     setCredentialToDelete(null);
   };
 
@@ -224,9 +220,9 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
         />
       )}
       
-      {isDeleteModalOpen && credentialToDelete && (
+      {credentialToDelete && (
         <CredentialDeleteModal
-          isVisible={isDeleteModalOpen}
+          isVisible={true}
           onCancel={closeDeleteModal}
           onConfirm={() => handleDeleteCredential(credentialToDelete)}
           credentialName={credentialToDelete}
