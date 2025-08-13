@@ -16,7 +16,7 @@ __all__ = [
 ]
 
 
-def get_azure_image_generation_config(model: str) -> BaseImageGenerationConfig:
+def get_azure_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
     model = model.lower()
     model = model.replace("-", "")
     model = model.replace("_", "")
