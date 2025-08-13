@@ -536,6 +536,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
                     end_user_id=end_user_id,
+                    user_tpm_limit=user_object.tpm_limit if user_object is not None else None,
+                    user_rpm_limit=user_object.rpm_limit if user_object is not None else None,
                 )
                 # run through common checks
                 _ = await common_checks(
