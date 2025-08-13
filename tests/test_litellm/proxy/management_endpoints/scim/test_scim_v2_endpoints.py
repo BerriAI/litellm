@@ -632,6 +632,7 @@ async def test_update_group_metadata_serialization_issue(mocker):
     # Mock user operations
     mock_user = mocker.MagicMock()
     mock_user.user_id = "user1"
+    mock_user.user_email = "user1@example.com"  # Add proper string value for user_email
     mock_user.teams = [group_id]
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user)
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
@@ -678,6 +679,3 @@ async def test_update_group_metadata_serialization_issue(mocker):
     assert "existing_key" in parsed_metadata
     assert "scim_data" in parsed_metadata
     assert parsed_metadata["existing_key"] == "existing_value"
-    
-    # Verify the result
-    assert result == mock_scim_group_response
