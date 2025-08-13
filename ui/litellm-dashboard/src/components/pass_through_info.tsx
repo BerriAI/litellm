@@ -20,6 +20,7 @@ import {
 } from "./networking";
 import { Eye, EyeOff } from "lucide-react";
 import RoutePreview from "./route_preview";
+import NotificationManager from "./molecules/notifications_manager";
 
 export interface PassThroughInfoProps {
   endpointData: PassThroughEndpoint;
@@ -87,7 +88,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             ? JSON.parse(values.headers)
             : values.headers;
         } catch (e) {
-          message.error("Invalid JSON format for headers");
+          NotificationManager.fromBackend("Invalid JSON format for headers");
           return;
         }
       }
@@ -114,7 +115,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
     } catch (error) {
       console.error("Error updating endpoint:", error);
-      message.error("Failed to update pass through endpoint");
+      NotificationManager.fromBackend("Failed to update pass through endpoint");
     }
   };
 
@@ -130,7 +131,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       }
     } catch (error) {
       console.error("Error deleting endpoint:", error);
-      message.error("Failed to delete pass through endpoint");
+      NotificationManager.fromBackend("Failed to delete pass through endpoint");
     }
   };
 

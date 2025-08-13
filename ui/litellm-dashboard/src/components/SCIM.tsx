@@ -21,6 +21,7 @@ import {
   PlusCircleOutlined
 } from "@ant-design/icons";
 import { parseErrorMessage } from "./shared/errorUtils";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface SCIMConfigProps {
   accessToken: string | null;
@@ -51,7 +52,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
   
   const handleCreateSCIMToken = async (values: any) => {
     if (!accessToken || !userID) {
-      message.error("You need to be logged in to create a SCIM token");
+      NotificationManager.fromBackend("You need to be logged in to create a SCIM token");
       return;
     }
     
@@ -70,7 +71,7 @@ const SCIMConfig: React.FC<SCIMConfigProps> = ({ accessToken, userID, proxySetti
       message.success("SCIM token created successfully");
     } catch (error: any) {
       console.error("Error creating SCIM token:", error);
-      message.error("Failed to create SCIM token: " + parseErrorMessage(error));
+      NotificationManager.fromBackend("Failed to create SCIM token: " + parseErrorMessage(error));
     } finally {
       setIsCreatingToken(false);
     }

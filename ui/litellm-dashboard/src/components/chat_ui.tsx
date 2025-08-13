@@ -72,6 +72,7 @@ import {
   FilePdfOutlined,
   ArrowUpOutlined
 } from "@ant-design/icons";
+import NotificationManager from "./molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -516,7 +517,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     // For image edits, require both image and prompt
     if (endpointType === EndpointType.IMAGE_EDITS && !uploadedImage) {
-      message.error("Please upload an image for editing");
+      NotificationManager.fromBackend("Please upload an image for editing");
       return;
     }
 
@@ -527,7 +528,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      message.error("Please provide an API key or select Current UI Session");
+      NotificationManager.fromBackend("Please provide an API key or select Current UI Session");
       return;
     }
 
@@ -543,7 +544,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       try {
         newUserMessage = await createMultimodalMessage(inputMessage, responsesUploadedImage);
       } catch (error) {
-        message.error("Failed to process image. Please try again.");
+        NotificationManager.fromBackend("Failed to process image. Please try again.");
         return;
       }
     } 
@@ -552,7 +553,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       try {
         newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
       } catch (error) {
-        message.error("Failed to process image. Please try again.");
+        NotificationManager.fromBackend("Failed to process image. Please try again.");
         return;
       }
     } else {

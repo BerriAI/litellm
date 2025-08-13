@@ -25,6 +25,7 @@ import {
   EmailEventSettingsUpdateRequest,
 } from "./email_events/types";
 import { jsonFields } from "./common_components/check_openapi_schema"
+import NotificationManager from "./molecules/notifications_manager";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -3198,7 +3199,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      message.error("Failed to fetch key info - " + errorData);
+      NotificationManager.fromBackend("Failed to fetch key info - " + errorData);
     }
 
     const data = await response.json();
@@ -3853,7 +3854,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      message.error("Failed to update team settings: " + errorData);
+      NotificationManager.fromBackend("Failed to update team settings: " + errorData);
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };

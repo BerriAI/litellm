@@ -15,6 +15,7 @@ import { UserEditView } from "../user_edit_view"
 import OnboardingModal, { InvitationLink } from "../onboarding_link"
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CopyIcon, CheckIcon } from "lucide-react";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface UserInfoViewProps {
   userId: string
@@ -83,7 +84,7 @@ export default function UserInfoView({
         setUserModels(availableModels)
       } catch (error) {
         console.error("Error fetching user data:", error)
-        message.error("Failed to fetch user data")
+        NotificationManager.fromBackend("Failed to fetch user data")
       } finally {
         setIsLoading(false)
       }
@@ -94,7 +95,7 @@ export default function UserInfoView({
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      message.error("Access token not found")
+      NotificationManager.fromBackend("Access token not found")
       return
     }
     try {
@@ -103,7 +104,7 @@ export default function UserInfoView({
       setInvitationLinkData(data)
       setIsInvitationLinkModalVisible(true)
     } catch (error) {
-      message.error("Failed to generate password reset link")
+      NotificationManager.fromBackend("Failed to generate password reset link")
     }
   }
 
@@ -118,7 +119,7 @@ export default function UserInfoView({
       onClose()
     } catch (error) {
       console.error("Error deleting user:", error)
-      message.error("Failed to delete user")
+      NotificationManager.fromBackend("Failed to delete user")
     }
   }
 
@@ -144,7 +145,7 @@ export default function UserInfoView({
       setIsEditing(false)
     } catch (error) {
       console.error("Error updating user:", error)
-      message.error("Failed to update user")
+      NotificationManager.fromBackend("Failed to update user")
     }
   }
 
