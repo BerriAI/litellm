@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
