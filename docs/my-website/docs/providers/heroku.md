@@ -22,7 +22,7 @@ Heroku for LiteLLM supports various [chat](https://devcenter.heroku.com/articles
 When you attach a model to a Heroku app, three config variables are set:
 
 - `INFERENCE_KEY`: The API key used for authenticating requests to the model.
-- `INFERENCE_MODEL_ID`: The name of the model, e.g. `claude-3-5-haiku`.
+- `INFERENCE_MODEL_ID`: The name of the model, for example`claude-3-5-haiku`.
 - `INFERENCE_URL`: The base URL for calling the model.
 
 Both `INFERENCE_KEY` and `INFERENCE_URL` are required to make calls to your model.
