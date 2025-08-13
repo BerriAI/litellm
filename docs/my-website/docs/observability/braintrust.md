@@ -71,6 +71,10 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 It is recommended that you include the `project_id` or `project_name` to ensure your traces are being written out to the correct Braintrust project.
 
+### Custom Span Names
+
+You can customize the span name in Braintrust logging by passing `span_name` in the metadata. By default, the span name is set to "Chat Completion".
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
@@ -84,7 +88,9 @@ response = litellm.completion(
     "project_id": "1234",
     # passing project_name will try to find a project with that name, or create one if it doesn't exist
     # if both project_id and project_name are passed, project_id will be used
-    # "project_name": "my-special-project"
+    # "project_name": "my-special-project",
+    # custom span name for this operation (default: "Chat Completion")
+    "span_name": "User Greeting Handler"
   }
 )
 ```
@@ -99,6 +105,7 @@ response = litellm.completion(
   ],
   metadata={
     "project_id": "1234",
+    "span_name": "Custom Operation",
     "item1": "an item",
     "item2": "another item"
   }
@@ -121,7 +128,8 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
         { "role": "user", "content": "What time is it now? Use your tool"}
     ],
     "metadata": {
-        "project_id": "my-special-project"
+        "project_id": "my-special-project",
+        "span_name": "Tool Usage Request"
     }
 }'
 ```
@@ -146,7 +154,8 @@ response = client.chat.completions.create(
     ],
     extra_body={ # pass in any provider-specific param, if not supported by openai, https://docs.litellm.ai/docs/completion/input#provider-specific-params
         "metadata": { # 👈 use for logging additional params (e.g. to braintrust)
-            "project_id": "my-special-project"
+            "project_id": "my-special-project",
+            "span_name": "Poetry Generation"
         }
     }
 )
@@ -168,3 +177,7 @@ Here's everything you can pass in metadata for a braintrust request
 `braintrust_*` - If you are adding metadata from _proxy request headers_, any metadata field starting with `braintrust_` will be passed as metadata to the logging request. If you are using the SDK, just pass your metadata like normal (e.g., `metadata={"project_name": "my-test-project", "item1": "an item", "item2": "another item"}`)
 
 `project_id` - Set the project id for a braintrust call. Default is `litellm`.
+
+`project_name` - Set the project name for a braintrust call. Will try to find a project with that name, or create one if it doesn't exist. If both `project_id` and `project_name` are passed, `project_id` will be used.
+
+`span_name` - Set a custom span name for the operation. Default is `"Chat Completion"`. Use this to provide more descriptive names for different types of operations in your application (e.g., "User Query", "Document Summary", "Code Generation").
