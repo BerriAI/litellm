@@ -750,8 +750,10 @@ def convert_to_anthropic_image_obj(
             else:
                 # Try to infer media type from URL extension
                 import mimetypes
-                media_type, _ = mimetypes.guess_type(openai_image_url)
-                if not media_type or not media_type.startswith("image/"):
+                guessed_type, _ = mimetypes.guess_type(openai_image_url)
+                if guessed_type and guessed_type.startswith("image/"):
+                    media_type = guessed_type
+                else:
                     # Default to JPEG if we can't determine the type
                     media_type = "image/jpeg"
             
