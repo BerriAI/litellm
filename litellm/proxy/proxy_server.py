@@ -517,7 +517,6 @@ def cleanup_router_config_variables():
 
 
 async def proxy_shutdown_event():
-    global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
@@ -1084,7 +1083,6 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 
 def cost_tracking():
-    global prisma_client
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
 
@@ -1357,7 +1355,6 @@ async def _run_background_health_check():
 
     Update health_check_results, based on this.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details
 
     if (
         health_check_interval is None
@@ -1429,7 +1426,7 @@ class ProxyConfig:
         Returns:
             dict: config
         """
-        global prisma_client, user_config_file_path
+        global user_config_file_path
 
         file_path = config_file_path or user_config_file_path
         if config_file_path is not None:
@@ -1499,7 +1496,6 @@ class ProxyConfig:
         return config
 
     async def save_config(self, new_config: dict):
-        global prisma_client, general_settings, user_config_file_path, store_model_in_db
         # Load existing config
         ## DB - writes valid config to db
         """
@@ -8699,7 +8695,6 @@ async def delete_callback(
     """
     Delete specific logging callback from configuration.
     """
-    global prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(
@@ -8791,7 +8786,6 @@ async def get_config():  # noqa: PLR0915
     # return the callbacks and the env variables for the callback
 
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
         import base64
 
