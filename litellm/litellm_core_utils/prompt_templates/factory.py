@@ -727,19 +727,41 @@ def convert_to_anthropic_image_obj(
     openai_image_url: str, format: Optional[str]
 ) -> GenericImageParsingChunk:
     """
-    Input:
-    "image_url": "data:image/jpeg;base64,{base64_image}",
+    Convert OpenAI image URL to Anthropic image object.
+    
+    Supports both URL and base64 formats:
+    - HTTP URLs: Returns URL type (native Anthropic support)
+    - Base64 data: Returns base64 type
+    
+    Input examples:
+    "image_url": "https://example.com/image.jpg"  -> URL type
+    "image_url": "data:image/jpeg;base64,{base64_image}"  -> base64 type
 
-    Return:
-    "source": {
-      "type": "base64",
-      "media_type": "image/jpeg",
-      "data": {base64_image},
-    }
+    Return examples:
+    URL type: {"type": "url", "media_type": "image/jpeg", "data": "https://..."}
+    Base64 type: {"type": "base64", "media_type": "image/jpeg", "data": "{base64_image}"}
     """
     try:
+        # Handle HTTP URLs - use native Anthropic URL support
         if openai_image_url.startswith("http"):
-            openai_image_url = convert_url_to_base64(url=openai_image_url)
+            # Determine media type from URL extension or use format parameter
+            if format:
+                media_type = format
+            else:
+                # Try to infer media type from URL extension
+                import mimetypes
+                media_type, _ = mimetypes.guess_type(openai_image_url)
+                if not media_type or not media_type.startswith("image/"):
+                    # Default to JPEG if we can't determine the type
+                    media_type = "image/jpeg"
+            
+            return GenericImageParsingChunk(
+                type="url",
+                media_type=media_type,
+                data=openai_image_url,
+            )
+        
+        # Handle base64 data URLs
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
@@ -757,7 +779,10 @@ def convert_to_anthropic_image_obj(
         if "Error: Unable to fetch image from URL" in str(e):
             raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            """Image url not in expected format. Supported inputs:
+- HTTP URL: "https://example.com/image.jpg"  
+- Base64 data: "data:image/jpeg;base64,{base64_image}"
+Supported formats: ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
         )
 
 
