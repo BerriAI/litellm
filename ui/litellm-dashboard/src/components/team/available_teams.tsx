@@ -13,6 +13,7 @@ import {
 } from "@tremor/react";
 import { message } from 'antd';
 import { availableTeamListCall, teamMemberAddCall } from "../networking";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface AvailableTeam {
   team_id: string;
@@ -64,7 +65,7 @@ const AvailableTeamsPanel: React.FC<AvailableTeamsProps> = ({
       setAvailableTeams(teams => teams.filter(team => team.team_id !== teamId));
     } catch (error) {
       console.error('Error joining team:', error);
-      message.error('Failed to join team');
+      NotificationManager.fromBackend('Failed to join team');
     }
   };
 

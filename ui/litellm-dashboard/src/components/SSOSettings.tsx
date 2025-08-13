@@ -56,7 +56,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
         }
       } catch (error) {
         console.error("Error fetching SSO settings:", error);
-        message.error("Failed to fetch SSO settings");
+        NotificationManager.fromBackend("Failed to fetch SSO settings");
       } finally {
         setLoading(false);
       }
@@ -81,7 +81,7 @@ const SSOSettings: React.FC<SSOSettingsProps> = ({ accessToken, possibleUIRoles,
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating SSO settings:", error);
-      message.error("Failed to update settings: " + error);
+      NotificationManager.fromBackend("Failed to update settings: " + error);
     } finally {
       setSaving(false);
     }

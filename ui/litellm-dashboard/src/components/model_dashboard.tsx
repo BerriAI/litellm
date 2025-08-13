@@ -77,6 +77,7 @@ import PassThroughSettings from "./pass_through_settings";
 import ModelGroupAliasSettings from "./model_group_alias_settings";
 import { all_admin_roles } from "@/utils/roles";
 import { Table as TableInstance } from "@tanstack/react-table";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -439,7 +440,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       if (info.file.status === "done") {
         message.success(`${info.file.name} file uploaded successfully`);
       } else if (info.file.status === "error") {
-        message.error(`${info.file.name} file upload failed.`);
+        NotificationManager.fromBackend(`${info.file.name} file upload failed.`);
       }
     },
   };
@@ -480,7 +481,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
       console.error("Failed to save retry settings:", error);
-      message.error("Failed to save retry settings");
+      NotificationManager.fromBackend("Failed to save retry settings");
     }
   };
 
@@ -1003,7 +1004,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         const errorMessages = error.errorFields?.map((field: any) => {
           return `${field.name.join('.')}: ${field.errors.join(', ')}`;
         }).join(' | ') || 'Unknown validation error';
-        message.error(`Please fill in the following required fields: ${errorMessages}`);
+        NotificationManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
       });
   };
 

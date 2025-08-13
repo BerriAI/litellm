@@ -16,6 +16,7 @@ import {
 import { Button } from '@tremor/react';
 import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "./networking";
 import { UserEditView } from "./user_edit_view";
+import NotificationManager from "./molecules/notifications_manager";
 
 const { Text, Title } = Typography;
 
@@ -80,7 +81,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   const handleSubmit = async (formValues: any) => {
     console.log("formValues", formValues);
     if (!accessToken) {
-      message.error("Access token not found");
+      NotificationManager.fromBackend("Access token not found");
       return;
     }
 
@@ -112,7 +113,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       const hasTeamAdditions = addToTeams && selectedTeams.length > 0;
 
       if (!hasUserUpdates && !hasTeamAdditions) {
-        message.error("Please modify at least one field or select teams to add users to");
+        NotificationManager.fromBackend("Please modify at least one field or select teams to add users to");
         return;
       }
 
@@ -201,7 +202,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       onCancel();
     } catch (error) {
       console.error("Bulk operation failed:", error);
-      message.error("Failed to perform bulk operations");
+      NotificationManager.fromBackend("Failed to perform bulk operations");
     } finally {
       setLoading(false);
     }
