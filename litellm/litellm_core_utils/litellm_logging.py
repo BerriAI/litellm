@@ -131,7 +131,6 @@ from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
-from ..integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from ..integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.literal_ai import LiteralAILogger
@@ -3457,6 +3456,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(langfuse_logger)
             return langfuse_logger  # type: ignore
         elif logging_integration == "langfuse_otel":
+            from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
                 OpenTelemetryConfig,
@@ -3467,15 +3467,16 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             # The endpoint and headers are now set as environment variables by get_langfuse_otel_config()
             otel_config = OpenTelemetryConfig(
                 exporter=langfuse_otel_config.protocol,
+                headers=langfuse_otel_config.otlp_auth_headers,
             )
 
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, LangfuseOtelLogger)
                     and callback.callback_name == "langfuse_otel"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(
+            _otel_logger = LangfuseOtelLogger(
                 config=otel_config, callback_name="langfuse_otel"
             )
             _in_memory_loggers.append(_otel_logger)
@@ -4106,7 +4107,16 @@ class StandardLoggingPayloadSetup:
         from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
         # Only generate object key if cold storage is configured
-        configured_cold_storage_logger = ColdStorageHandler._get_configured_cold_storage_custom_logger()
+        try:
+            configured_cold_storage_logger = (
+                ColdStorageHandler._get_configured_cold_storage_custom_logger()
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                f"Cold storage custom logger unavailable: {e}"
+            )
+            return None
+
         if configured_cold_storage_logger is None:
             return None
             
