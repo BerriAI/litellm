@@ -1,9 +1,10 @@
 # Import types from the Google GenAI SDK
-from typing import TYPE_CHECKING, Any, Optional, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, List, Optional, TypeAlias
 
 # During static type-checking we can rely on the real google-genai types.
 from google.genai import types as _genai_types  # type: ignore
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 
@@ -19,7 +20,7 @@ ToolConfigDict = _genai_types.ToolConfigDict
 
 class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
     generationConfig: Optional[Any]
-    tools: Optional[ToolConfigDict]
+    tools: Optional[ToolConfigDict] # type: ignore[assignment]
 
 
 class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
