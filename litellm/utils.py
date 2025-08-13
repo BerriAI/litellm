@@ -2831,6 +2831,19 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params = litellm.FireworksAIEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params, optional_params={}, model=model
         )
+    elif custom_llm_provider == "sambanova":
+        supported_params = get_supported_openai_params(
+            model=model,
+            custom_llm_provider="sambanova",
+            request_type="embeddings",
+        )
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = litellm.SambaNovaEmbeddingConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params={},
+            model=model,
+            drop_params=drop_params if drop_params is not None else False,
+        )
 
     elif (
         custom_llm_provider != "openai"
@@ -3918,6 +3931,17 @@ def get_optional_params(  # noqa: PLR0915
     elif custom_llm_provider == "azure":
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
+        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -6848,6 +6872,8 @@ class ProviderConfigManager:
             return litellm.TogetherAIConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
             return litellm.OpenrouterConfig()
+        elif litellm.LlmProviders.COMETAPI == provider:
+            return litellm.CometAPIConfig()
         elif litellm.LlmProviders.DATAROBOT == provider:
             return litellm.DataRobotConfig()
         elif litellm.LlmProviders.GEMINI == provider:
@@ -6860,6 +6886,8 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.AZURE == provider:
             if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
                 return litellm.AzureOpenAIO1Config()
+            if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+                return litellm.AzureOpenAIGPT5Config()
             return litellm.AzureOpenAIConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
             return litellm.AzureAIStudioConfig()
@@ -6991,6 +7019,8 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXEmbeddingConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityEmbeddingConfig()
+        elif litellm.LlmProviders.SAMBANOVA == provider:
+            return litellm.SambaNovaEmbeddingConfig()
         elif (
             litellm.LlmProviders.COHERE == provider
             or litellm.LlmProviders.COHERE_CHAT == provider
@@ -7110,6 +7140,9 @@ class ProviderConfigManager:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.GEMINI == provider:
             return litellm.GeminiModelInfo()
+        elif LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.common_utils import VertexAIModelInfo
+            return VertexAIModelInfo()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
         elif LlmProviders.TOPAZ == provider:

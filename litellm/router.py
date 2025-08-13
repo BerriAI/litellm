@@ -4353,16 +4353,22 @@ class Router:
                     tpm_model_info = deployment_model_info.get("tpm", None)
                     rpm_model_info = deployment_model_info.get("rpm", None)
 
-                    ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
-                    if (
-                        tpm is None
-                        and rpm is None
-                        and tpm_litellm_params is None
-                        and rpm_litellm_params is None
-                        and tpm_model_info is None
-                        and rpm_model_info is None
-                    ):
-                        return
+                # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
+                increment_deployment_successes_for_current_minute(
+                    litellm_router_instance=self,
+                    deployment_id=id,
+                )
+
+                ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                if (
+                    tpm is None
+                    and rpm is None
+                    and tpm_litellm_params is None
+                    and rpm_litellm_params is None
+                    and tpm_model_info is None
+                    and rpm_model_info is None
+                ):
+                    return
 
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 total_tokens: float = standard_logging_object.get("total_tokens", 0)
@@ -4408,11 +4414,6 @@ class Router:
                 await self.cache.async_increment_cache_pipeline(
                     increment_list=pipeline_operations,
                     parent_otel_span=parent_otel_span,
-                )
-
-                increment_deployment_successes_for_current_minute(
-                    litellm_router_instance=self,
-                    deployment_id=id,
                 )
 
                 return tpm_key
