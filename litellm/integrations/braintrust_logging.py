@@ -274,12 +274,15 @@ class BraintrustLogger(CustomLogger):
                     "end": end_time.timestamp(),
                 }
 
+            # Allow metadata override for span name
+            span_name = metadata.get("span_name", "Chat Completion")
+            
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "metadata": clean_metadata,
                 "tags": tags,
-                "span_attributes": {"name": "Chat Completion", "type": "llm"},
+                "span_attributes": {"name": span_name, "type": "llm"},
             }
             if choices is not None:
                 request_data["output"] = [choice.dict() for choice in choices]
@@ -426,13 +429,16 @@ class BraintrustLogger(CustomLogger):
                         - api_call_start_time.timestamp()
                     )
 
+            # Allow metadata override for span name
+            span_name = metadata.get("span_name", "Chat Completion")
+            
             request_data = {
                 "id": litellm_call_id,
                 "input": prompt["messages"],
                 "output": output,
                 "metadata": clean_metadata,
                 "tags": tags,
-                "span_attributes": {"name": "Chat Completion", "type": "llm"},
+                "span_attributes": {"name": span_name, "type": "llm"},
             }
             if choices is not None:
                 request_data["output"] = [choice.dict() for choice in choices]
