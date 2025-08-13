@@ -26,9 +26,84 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from litellm.proxy._types import TokenCountRequest
 from litellm.types.utils import TokenCountResponse
+import json, tempfile
 
 
 from litellm import Router
+
+
+def get_vertex_ai_creds_json() -> dict:
+    # Define the path to the vertex_key.json file
+    print("loading vertex ai credentials")
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/vertex_key.json"
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    return service_account_key_data
+
+
+def load_vertex_ai_credentials():
+    # Define the path to the vertex_key.json file
+    print("loading vertex ai credentials")
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + "/vertex_key.json"
+
+    # Read the existing content of the file or create an empty dictionary
+    try:
+        with open(vertex_key_path, "r") as file:
+            # Read the file content
+            print("Read vertexai file path")
+            content = file.read()
+
+            # If the file is empty or not valid JSON, create an empty dictionary
+            if not content or not content.strip():
+                service_account_key_data = {}
+            else:
+                # Attempt to load the existing JSON content
+                file.seek(0)
+                service_account_key_data = json.load(file)
+    except FileNotFoundError:
+        # If the file doesn't exist, create an empty dictionary
+        service_account_key_data = {}
+
+    # Update the service_account_key_data with environment variables
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+    service_account_key_data["private_key_id"] = private_key_id
+    service_account_key_data["private_key"] = private_key
+
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+        # Write the updated content to the temporary files
+        json.dump(service_account_key_data, temp_file, indent=2)
+
+    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+
 
 
 @pytest.mark.asyncio
@@ -558,10 +633,12 @@ async def test_factory_registration():
 
 
 @pytest.mark.asyncio
-async def test_vertex_ai_gemini_token_counting_with_contents():
+@pytest.mark.parametrize("model_name", ["gemini-2.5-pro", "vertex-ai-gemini-2.5-pro"])
+async def test_vertex_ai_gemini_token_counting_with_contents(model_name):
     """
     Test token counting for Vertex AI Gemini model using contents format with call_endpoint=True
     """
+    load_vertex_ai_credentials()
     llm_router = Router(
         model_list=[
             {
@@ -569,7 +646,13 @@ async def test_vertex_ai_gemini_token_counting_with_contents():
                 "litellm_params": {
                     "model": "gemini/gemini-2.5-pro",
                 },
-            }
+            },
+            {
+                "model_name": "vertex-ai-gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                },
+            },
         ]
     )
     
@@ -578,7 +661,7 @@ async def test_vertex_ai_gemini_token_counting_with_contents():
     # Test with contents format and call_endpoint=True
     response = await token_counter(
         request=TokenCountRequest(
-            model="gemini-2.5-pro",
+            model=model_name,
             contents=[
                 {
                     "parts": [
