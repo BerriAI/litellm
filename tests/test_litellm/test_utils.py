@@ -2416,3 +2416,16 @@ def test_generate_gcp_iam_access_token_import_error():
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
+
+
+def test_model_info_for_vertex_ai_deepseek_model():
+    model_info = litellm.get_model_info(
+        model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas"
+    )
+    assert model_info is not None
+    assert model_info["litellm_provider"] == "vertex_ai-deepseek_models"
+    assert model_info["mode"] == "chat"
+
+    assert model_info["input_cost_per_token"] is not None
+    assert model_info["output_cost_per_token"] is not None
+    print("vertex deepseek model info", model_info)
