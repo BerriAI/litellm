@@ -133,8 +133,7 @@ response = litellm.image_generation(
     api_key=os.environ["AZURE_AI_API_KEY"],
     n=1,
     size="1024x1024",
-    quality="standard",
-    response_format="url"
+    quality="standard"
 )
 
 for image in response.data:
