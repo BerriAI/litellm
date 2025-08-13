@@ -35,7 +35,7 @@ For more information on these variables, see the [Heroku documentation](https://
 Heroku uses the following LiteLLM API config variables:
 
 - `HEROKU_API_KEY`: This value corresponds to [LiteLLM's `api_key` param](https://docs.litellm.ai/docs/set_keys#litellmapi_key). Set this variable to the value of Heroku's `INFERENCE_KEY` config variable.
-- `HEROKU_API_BASE`: This value corresponds to [LiteLLM's `api_base` param](https://docs.litellm.ai/docs/set_keys#litellmapi_base). Set this to the value of Heroku's `INFERENCE_URL` config variable.
+- `HEROKU_API_BASE`: This value corresponds to [LiteLLM's `api_base` param](https://docs.litellm.ai/docs/set_keys#litellmapi_base). Set this variable to the value of Heroku's `INFERENCE_URL` config variable.
 
 In this example, we don't explicitly pass the `api_key` and `api_base` variables. Instead, we set the config variables which will be used by Heroku:
 
