@@ -1862,8 +1862,7 @@ class UserAPIKeyAuth(
             key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
         )
-
-
+    
 class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_id: Optional[str]
     user_info: Optional[Union[dict, BaseModel]]
@@ -2632,6 +2631,16 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
+    def safe_get_team_member_rpm_limit(self) -> Optional[int]:
+        if self.litellm_budget_table is not None:
+            return self.litellm_budget_table.rpm_limit
+        return None
+    
+    def safe_get_team_member_tpm_limit(self) -> Optional[int]:
+        if self.litellm_budget_table is not None:
+            return self.litellm_budget_table.tpm_limit
+        return None
+
 
 #### Organization / Team Member Requests ####
 
@@ -2996,6 +3005,7 @@ class JWTAuthBuilderResult(TypedDict):
     user_id: Optional[str]
     end_user_id: Optional[str]
     org_id: Optional[str]
+    team_membership: Optional[LiteLLM_TeamMembership]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
