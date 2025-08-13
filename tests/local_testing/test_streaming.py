@@ -476,6 +476,7 @@ def test_completion_azure_stream():
 async def test_completion_predibase_streaming(sync_mode):
     try:
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         if sync_mode:
             response = completion(
                 model="predibase/llama-3-8b-instruct",

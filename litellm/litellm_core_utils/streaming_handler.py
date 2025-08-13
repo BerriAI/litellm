@@ -1740,6 +1740,12 @@ class CustomStreamWrapper:
 
                         # Create a new object without the removed attribute
                         processed_chunk = self.model_response_creator(chunk=obj_dict)
+                        is_empty = is_model_response_stream_empty(
+                            model_response=cast(ModelResponseStream, processed_chunk)
+                        )
+
+                        if is_empty:
+                            continue
                     print_verbose(f"final returned processed chunk: {processed_chunk}")
                     return processed_chunk
                 raise StopAsyncIteration
