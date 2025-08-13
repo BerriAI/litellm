@@ -61,7 +61,7 @@ const CredentialDeleteModal: React.FC<CredentialDeleteModalProps> = ({
         <div className="mb-5">
           <label className="block text-base font-medium text-gray-700 mb-2">
             {`Type `}
-            <span className="underline italic">'{credentialName}'</span>
+            <span className="underline italic">&apos;{credentialName}&apos;</span>
             {` to confirm deletion:`}
           </label>
           <input
