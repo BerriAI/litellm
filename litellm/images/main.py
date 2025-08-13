@@ -311,7 +311,7 @@ def image_generation(  # noqa: PLR0915
             ) or get_secret_str("AZURE_AD_TOKEN")
 
             default_headers = {
-                "Content-Type": "application/json;",
+                "Content-Type": "application/json",
                 "api-key": api_key,
             }
             for k, v in default_headers.items():
