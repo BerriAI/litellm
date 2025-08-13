@@ -2945,6 +2945,7 @@ class ProxyConfig:
         Check if model cost map needs to be reloaded based on database configuration.
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
+        global last_model_cost_map_reload
         try:
             # Get model cost map reload configuration from database
             config_record = await prisma_client.db.litellm_config.find_unique(
@@ -2971,7 +2972,6 @@ class ProxyConfig:
                 verbose_proxy_logger.info("Model cost map reload triggered by force reload flag")
             elif interval_hours is not None:
                 # Use pod's in-memory last reload time
-                global last_model_cost_map_reload
                 if last_model_cost_map_reload is not None:
                     try:
                         last_reload_time = datetime.fromisoformat(last_model_cost_map_reload)
@@ -3000,7 +3000,6 @@ class ProxyConfig:
                 litellm.model_cost = new_model_cost_map
                 
                 # Update pod's in-memory last reload time
-                #TODO(yf): How does this work? the global was set in the other if branch 29 lines up?!
                 last_model_cost_map_reload = current_time.isoformat()
                 
                 # Clear force reload flag in database
