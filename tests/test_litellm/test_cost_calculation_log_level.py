@@ -17,6 +17,9 @@ def test_cost_calculation_uses_debug_level(caplog):
     This ensures cost calculation details don't appear in production logs.
     Part of fix for issue #9815.
     """
+    # Explicitly set the verbose_logger to DEBUG level for this test
+    litellm.verbose_logger.setLevel(logging.DEBUG)
+    
     # Create a mock completion response
     mock_response = {
         "id": "test",
@@ -65,6 +68,9 @@ def test_batch_cost_calculation_uses_debug_level(caplog):
     """
     from litellm.cost_calculator import batch_cost_calculator
     from litellm.types.utils import Usage
+    
+    # Explicitly set the verbose_logger to DEBUG level for this test
+    litellm.verbose_logger.setLevel(logging.DEBUG)
     
     # Create a mock usage object
     usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
