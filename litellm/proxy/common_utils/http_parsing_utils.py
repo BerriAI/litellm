@@ -5,6 +5,7 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import ProxyException
 from litellm.types.router import Deployment
 
 
@@ -43,9 +44,21 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                 parsed_body = {}
             else:
                 try:
+                    # Parse and immediately clear body reference to prevent memory accumulation
                     parsed_body = orjson.loads(body)
-                except orjson.JSONDecodeError:
-                    # Fall back to the standard json module which is more forgiving
+                    del body  # Clear body reference immediately
+                    
+                    # Force garbage collection every 100 requests to prevent accumulation
+                    import gc
+                    if hasattr(_read_request_body, '_gc_counter'):
+                        _read_request_body._gc_counter += 1
+                    else:
+                        _read_request_body._gc_counter = 1
+                    
+                    if _read_request_body._gc_counter % 100 == 0:
+                        gc.collect()
+                except orjson.JSONDecodeError as e:
+                    # First try the standard json module which is more forgiving
                     # First decode bytes to string if needed
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
 
@@ -61,15 +74,26 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                         r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
                     )
 
-                    parsed_body = json.loads(body_str)
+                    try:
+                        parsed_body = json.loads(body_str)
+                    except json.JSONDecodeError:
+                        # If both orjson and json.loads fail, throw a proper error
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        raise ProxyException(
+                            message=f"Invalid JSON payload: {str(e)}",
+                            type="invalid_request_error",
+                            param="request_body",
+                            code=status.HTTP_400_BAD_REQUEST,
+                        )
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
-    except (json.JSONDecodeError, orjson.JSONDecodeError):
-        verbose_proxy_logger.exception("Invalid JSON payload received.")
-        return {}
+    except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
+        # Re-raise ProxyException as-is
+        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+        raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception(
@@ -78,18 +102,64 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         return {}
 
 
+
+
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
+    
+    # Check if we already have a parsed body stored directly on the request object
+    if hasattr(request, "_litellm_parsed_body"):
+        return getattr(request, "_litellm_parsed_body")
+    
+    # Fallback to checking request.scope for backward compatibility
     if (
         hasattr(request, "scope")
         and "parsed_body" in request.scope
         and isinstance(request.scope["parsed_body"], tuple)
     ):
         accepted_keys, parsed_body = request.scope["parsed_body"]
-        return {key: parsed_body[key] for key in accepted_keys}
+        result = {key: parsed_body[key] for key in accepted_keys}
+        # Clean up the scope to free memory and store on request object
+        del request.scope["parsed_body"]
+        setattr(request, "_litellm_parsed_body", result)
+        return result
     return None
 
+
+def cleanup_request_memory(request: Optional[Request]) -> None:
+    """
+    Explicitly cleanup request memory to prevent leaks.
+    Call this after request processing is complete.
+    """
+    if request is None:
+        return
+    
+    try:
+        # Remove parsed body from request object
+        if hasattr(request, "_litellm_parsed_body"):
+            delattr(request, "_litellm_parsed_body")
+        
+        # Clean up any remaining scope data
+        if hasattr(request, "scope") and "parsed_body" in request.scope:
+            del request.scope["parsed_body"]
+            
+    except Exception:
+        pass  # Silent cleanup - don't break request processing
+
+
+def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
+    if request is None:
+        return {}
+    try:
+        if hasattr(request, "query_params"):
+            return dict(request.query_params)
+        return {}
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unexpected error reading request query params - {}".format(e)
+        )
+        return {}
 
 def _safe_set_request_parsed_body(
     request: Optional[Request],
@@ -98,7 +168,12 @@ def _safe_set_request_parsed_body(
     try:
         if request is None:
             return
-        request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
+        
+        # Store the parsed body directly on the request object
+        # This prevents memory leaks and data cross-contamination since
+        # the data is tied to the specific request object lifecycle
+        setattr(request, "_litellm_parsed_body", parsed_body)
+        
     except Exception as e:
         verbose_proxy_logger.debug(
             "Unexpected error setting request parsed body - {}".format(e)
