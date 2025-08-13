@@ -2108,8 +2108,9 @@
     },
     "gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2117,8 +2118,9 @@
     },
     "low/1024-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.0490417e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2126,8 +2128,9 @@
     },
     "medium/1024-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2135,8 +2138,9 @@
     },
     "high/1024-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.59263611e-07,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2144,8 +2148,9 @@
     },
     "low/1024-x-1536/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.0172526e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2153,8 +2158,9 @@
     },
     "medium/1024-x-1536/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2162,8 +2168,9 @@
     },
     "high/1024-x-1536/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.58945719e-07,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2171,8 +2178,9 @@
     },
     "low/1536-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.0172526e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2180,8 +2188,9 @@
     },
     "medium/1536-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -2189,8 +2198,9 @@
     },
     "high/1536-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.58945719e-07,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "openai",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4128,8 +4138,9 @@
     },
     "azure/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4137,8 +4148,9 @@
     },
     "azure/low/1024-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.0490417e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4146,8 +4158,9 @@
     },
     "azure/medium/1024-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4155,8 +4168,9 @@
     },
     "azure/high/1024-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.59263611e-07,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4164,8 +4178,9 @@
     },
     "azure/low/1024-x-1536/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.0172526e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4173,8 +4188,9 @@
     },
     "azure/medium/1024-x-1536/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4182,8 +4198,9 @@
     },
     "azure/high/1024-x-1536/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.58945719e-07,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4191,8 +4208,9 @@
     },
     "azure/low/1536-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.0172526e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4200,8 +4218,9 @@
     },
     "azure/medium/1536-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 4.0054321e-08,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -4209,8 +4228,9 @@
     },
     "azure/high/1536-x-1024/gpt-image-1": {
         "mode": "image_generation",
-        "input_cost_per_pixel": 1.58945719e-07,
-        "output_cost_per_pixel": 0.0,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 4e-05,
+        "input_cost_per_image_token": 1e-05,
         "litellm_provider": "azure",
         "supported_endpoints": [
             "/v1/images/generations"
