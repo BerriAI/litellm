@@ -159,11 +159,12 @@ class RouteChecks:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
                 )
+            
+            # Check if this is a write operation on management routes
             if RouteChecks.check_route_access(
                 route=route, allowed_routes=LiteLLMRoutes.management_routes.value
             ):
-
-                # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
+                # For management routes, only allow read operations or specific allowed updates
                 if route == "/user/update":
                     # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
                     if request_data is not None and isinstance(request_data, dict):
@@ -174,17 +175,25 @@ class RouteChecks:
                                     status_code=status.HTTP_403_FORBIDDEN,
                                     detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
                                 )
-                else:
+                elif route in ["/user/new", "/user/delete", "/team/new", "/team/update", "/team/delete", "/model/new", "/model/update", "/model/delete"]:
+                    # Block write operations for PROXY_ADMIN_VIEW_ONLY
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                     )
+                # Allow read operations on management routes (like /user/info, /team/info, /model/info)
+                pass
+            elif RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
+            ):
+                # Allow access to admin viewer routes (read-only admin endpoints)
+                pass
             else:
+                # For other routes, block access
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
                 )
-
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
             and RouteChecks.check_route_access(
