@@ -1223,6 +1223,12 @@ class NewTeamRequest(TeamBase):
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
+    team_member_rpm_limit: Optional[int] = (
+        None  # allow user to set RPM limit for all team members
+    )
+    team_member_tpm_limit: Optional[int] = (
+        None  # allow user to set TPM limit for all team members
+    )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1266,6 +1272,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
+    team_member_rpm_limit: Optional[int] = None
+    team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
 
 
