@@ -405,7 +405,7 @@ class RouteChecks:
                                 status_code=status.HTTP_403_FORBIDDEN,
                                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
                             )
-            elif route in ["/user/new", "/user/delete", "/team/new", "/team/update", "/team/delete", "/model/new", "/model/update", "/model/delete"]:
+            elif route in ["/user/new", "/user/delete", "/team/new", "/team/update", "/team/delete", "/model/new", "/model/update", "/model/delete", "/key/generate", "/key/delete", "/key/update", "/key/regenerate", "/key/service-account/generate", "/key/block", "/key/unblock"] or route.startswith("/key/") and route.endswith("/regenerate"):
                 # Block write operations for PROXY_ADMIN_VIEW_ONLY
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
