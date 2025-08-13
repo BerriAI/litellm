@@ -295,6 +295,7 @@ class MCPServerManager:
                 command=getattr(mcp_server, "command", None),
                 args=getattr(mcp_server, "args", None) or [],
                 env=env_dict,
+                access_groups=getattr(mcp_server, "mcp_access_groups", None),
             )
             self.registry[mcp_server.server_id] = new_server
             verbose_logger.debug(f"Added MCP Server: {name_for_prefix}")
@@ -1050,7 +1051,9 @@ class MCPServerManager:
                         auth_type=_server_config.auth_type,
                         created_at=datetime.datetime.now(),
                         updated_at=datetime.datetime.now(),
+                        description=_server_config.mcp_info.get("description") if _server_config.mcp_info else None,
                         mcp_info=_server_config.mcp_info,
+                        mcp_access_groups=_server_config.access_groups or [],
                         # Stdio-specific fields
                         command=getattr(_server_config, "command", None),
                         args=getattr(_server_config, "args", None) or [],
