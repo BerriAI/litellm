@@ -15,8 +15,6 @@ model LiteLLM_BudgetTable {
   max_parallel_requests Int?
   tpm_limit     BigInt?
   rpm_limit     BigInt?
-  team_member_tpm_limit BigInt?
-  team_member_rpm_limit BigInt?
   model_max_budget Json?
   budget_duration String? 
   budget_reset_at DateTime?
