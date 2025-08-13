@@ -45,6 +45,7 @@ class AzureTextCompletion(BaseAzureLLM):
         acompletion: bool = False,
         headers: Optional[dict] = None,
         client=None,
+        connect_timeout: Optional[float] = None,
     ):
         try:
             if model is None or messages is None:
@@ -143,6 +144,11 @@ class AzureTextCompletion(BaseAzureLLM):
                     raise AzureOpenAIError(
                         status_code=422, message="max retries must be an int"
                     )
+                # Add connect_timeout to litellm_params if provided
+                if connect_timeout is not None:
+                    if litellm_params is None:
+                        litellm_params = {}
+                    litellm_params["connect_timeout"] = connect_timeout
                 # init AzureOpenAI Client
                 azure_client = self.get_azure_openai_client(
                     api_key=api_key,

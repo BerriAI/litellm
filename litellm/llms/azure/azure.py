@@ -198,6 +198,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         acompletion: bool = False,
         headers: Optional[dict] = None,
         client=None,
+        connect_timeout: Optional[float] = None,
     ):
         if headers:
             optional_params["extra_headers"] = headers
@@ -281,6 +282,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                         max_retries=max_retries,
                         convert_tool_call_to_json_mode=json_mode,
                         litellm_params=litellm_params,
+                        connect_timeout=connect_timeout,
                     )
             elif "stream" in optional_params and optional_params["stream"] is True:
                 return self.streaming(
@@ -317,6 +319,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     raise AzureOpenAIError(
                         status_code=422, message="max retries must be an int"
                     )
+                # Add connect_timeout to litellm_params if provided
+                if connect_timeout is not None:
+                    if litellm_params is None:
+                        litellm_params = {}
+                    litellm_params["connect_timeout"] = connect_timeout
                 # init AzureOpenAI Client
                 azure_client = self.get_azure_openai_client(
                     api_version=api_version,
@@ -387,9 +394,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         convert_tool_call_to_json_mode: Optional[bool] = None,
         client=None,  # this is the AsyncAzureOpenAI
         litellm_params: Optional[dict] = {},
+        connect_timeout: Optional[float] = None,
     ):
         response = None
         try:
+            # Add connect_timeout to litellm_params if provided
+            if connect_timeout is not None:
+                if litellm_params is None:
+                    litellm_params = {}
+                litellm_params["connect_timeout"] = connect_timeout
             # setting Azure client
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,

@@ -355,6 +355,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries: Optional[int] = DEFAULT_MAX_RETRIES,
         organization: Optional[str] = None,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        connect_timeout: Optional[float] = None,
     ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
         client_initialization_params: Dict = locals()
         if client is None:
@@ -375,12 +376,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     cached_client, AsyncOpenAI
                 ):
                     return cached_client
+            # Handle connect_timeout by creating httpx.Timeout object if needed
+            _timeout = timeout
+            if connect_timeout is not None and isinstance(timeout, (int, float)):
+                _timeout = httpx.Timeout(timeout=timeout, connect=connect_timeout)
+            
             if is_async:
                 _new_client: Union[OpenAI, AsyncOpenAI] = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
                     http_client=OpenAIChatCompletion._get_async_http_client(),
-                    timeout=timeout,
+                    timeout=_timeout,
                     max_retries=max_retries,
                     organization=organization,
                 )
@@ -389,7 +395,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     api_key=api_key,
                     base_url=api_base,
                     http_client=OpenAIChatCompletion._get_sync_http_client(),
-                    timeout=timeout,
+                    timeout=_timeout,
                     max_retries=max_retries,
                     organization=organization,
                 )
@@ -522,6 +528,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
+        connect_timeout: Optional[float] = None,
     ):
         super().completion()
         try:
@@ -644,6 +651,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             max_retries=max_retries,
                             organization=organization,
                             client=client,
+                            connect_timeout=connect_timeout,
                         )
 
                         ## LOGGING
@@ -793,6 +801,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     client=client,
+                    connect_timeout=connect_timeout,
                 )
 
                 ## LOGGING
@@ -964,6 +973,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     max_retries=max_retries,
                     organization=organization,
                     client=client,
+                    connect_timeout=connect_timeout,
                 )
                 ## LOGGING
                 logging_obj.pre_call(

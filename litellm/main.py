@@ -330,6 +330,7 @@ async def acompletion(
     functions: Optional[List] = None,
     function_call: Optional[str] = None,
     timeout: Optional[Union[float, int]] = None,
+    connect_timeout: Optional[float] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
@@ -397,6 +398,7 @@ async def acompletion(
         api_key (str, optional): API key (default is None).
         model_list (list, optional): List of api base, version, keys
         timeout (float, optional): The maximum execution time in seconds for the completion request.
+        connect_timeout (float, optional): The maximum time in seconds to wait for connection handshaking to complete.
 
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
@@ -463,6 +465,7 @@ async def acompletion(
         "functions": functions,
         "function_call": function_call,
         "timeout": timeout,
+        "connect_timeout": connect_timeout,
         "temperature": temperature,
         "top_p": top_p,
         "n": n,
@@ -877,6 +880,7 @@ def completion(  # type: ignore # noqa: PLR0915
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
     timeout: Optional[Union[float, str, httpx.Timeout]] = None,
+    connect_timeout: Optional[float] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
@@ -1129,6 +1133,11 @@ def completion(  # type: ignore # noqa: PLR0915
             timeout = timeout.read or 600  # default 10 min timeout
         elif not isinstance(timeout, httpx.Timeout):
             timeout = float(timeout)  # type: ignore
+
+        ### CONNECT TIMEOUT LOGIC ###
+        connect_timeout = connect_timeout or kwargs.get("connect_timeout", None)
+        if connect_timeout is not None:
+            connect_timeout = float(connect_timeout)
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
@@ -1440,6 +1449,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,  # type: ignore
+                    connect_timeout=connect_timeout,
                     client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
                     custom_llm_provider=custom_llm_provider,
                 )
@@ -1472,6 +1482,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,  # type: ignore
+                    connect_timeout=connect_timeout,
                     client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
                 )
 
@@ -1545,6 +1556,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,
                 acompletion=acompletion,
                 timeout=timeout,
+                connect_timeout=connect_timeout,
                 client=client,  # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
@@ -1721,6 +1733,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 timeout=timeout,  # type: ignore
+                connect_timeout=connect_timeout,
             )
 
             if (
@@ -1839,6 +1852,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 litellm_params=litellm_params,
                 custom_llm_provider=custom_llm_provider,
                 timeout=timeout,
+                connect_timeout=connect_timeout,
                 headers=headers,
                 encoding=encoding,
                 api_key=api_key,
@@ -2000,6 +2014,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     client=client,  # pass AsyncOpenAI, OpenAI client
                     organization=organization,
                     custom_llm_provider=custom_llm_provider,
+                    connect_timeout=connect_timeout,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -2208,6 +2223,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
                 client=client,
                 custom_llm_provider=custom_llm_provider,
+                connect_timeout=connect_timeout,
             )
             if optional_params.get("stream", False) or acompletion is True:
                 ## LOGGING
@@ -2685,6 +2701,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
                 custom_llm_provider=custom_llm_provider,
                 client=client,
+                connect_timeout=connect_timeout,
                 api_base=api_base,
                 extra_headers=extra_headers,
             )
@@ -2983,6 +3000,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logging_obj=logging,
                     extra_headers=extra_headers,
                     timeout=timeout,
+                    connect_timeout=connect_timeout,
                     acompletion=acompletion,
                     client=client,
                     api_base=api_base,
@@ -3001,6 +3019,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     litellm_params=litellm_params,
                     custom_llm_provider="bedrock",
                     timeout=timeout,
+                    connect_timeout=connect_timeout,
                     headers=headers,
                     encoding=encoding,
                     api_key=api_key,
@@ -3019,6 +3038,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     litellm_params=litellm_params,
                     custom_llm_provider="bedrock",
                     timeout=timeout,
+                    connect_timeout=connect_timeout,
                     headers=headers,
                     encoding=encoding,
                     api_key=api_key,

@@ -590,7 +590,14 @@ class BaseAzureLLM(BaseOpenAILLM):
         if max_retries is not None:
             azure_client_params["max_retries"] = max_retries
         if timeout is not None:
-            azure_client_params["timeout"] = timeout
+            # Check if we have a separate connect_timeout
+            connect_timeout = litellm_params.get("connect_timeout")
+            if connect_timeout is not None and isinstance(timeout, (int, float)):
+                # Create httpx.Timeout object with separate connect timeout
+                import httpx
+                azure_client_params["timeout"] = httpx.Timeout(timeout=timeout, connect=connect_timeout)
+            else:
+                azure_client_params["timeout"] = timeout
 
         if azure_ad_token_provider is not None:
             azure_client_params["azure_ad_token_provider"] = azure_ad_token_provider

@@ -38,7 +38,13 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
         organization: Optional[str] = None,
         custom_llm_provider: Optional[str] = None,
         drop_params: Optional[bool] = None,
+        connect_timeout: Optional[float] = None,
     ):
+        # Add connect_timeout to litellm_params if provided
+        if connect_timeout is not None:
+            if litellm_params is None:
+                litellm_params = {}
+            litellm_params["connect_timeout"] = connect_timeout
         client = self.get_azure_openai_client(
             litellm_params=litellm_params,
             api_key=api_key,

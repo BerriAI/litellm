@@ -47,6 +47,7 @@ class OpenAITextCompletion(BaseLLM):
         client=None,
         organization: Optional[str] = None,
         headers: Optional[dict] = None,
+        connect_timeout: Optional[float] = None,
     ):
         try:
             if headers is None:
@@ -94,7 +95,7 @@ class OpenAITextCompletion(BaseLLM):
                         organization=organization,
                     )
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
+                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client, connect_timeout=connect_timeout)  # type: ignore
             elif optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
@@ -111,11 +112,17 @@ class OpenAITextCompletion(BaseLLM):
                 )
             else:
                 if client is None:
+                    # Handle connect_timeout by creating httpx.Timeout object if needed
+                    _timeout = timeout
+                    if connect_timeout is not None and isinstance(timeout, (int, float)):
+                        import httpx
+                        _timeout = httpx.Timeout(timeout=timeout, connect=connect_timeout)
+                    
                     openai_client = OpenAI(
                         api_key=api_key,
                         base_url=api_base,
                         http_client=litellm.client_session,
-                        timeout=timeout,
+                        timeout=_timeout,
                         max_retries=max_retries,  # type: ignore
                         organization=organization,
                     )
@@ -162,14 +169,21 @@ class OpenAITextCompletion(BaseLLM):
         max_retries: int,
         organization: Optional[str] = None,
         client=None,
+        connect_timeout: Optional[float] = None,
     ):
         try:
             if client is None:
+                # Handle connect_timeout by creating httpx.Timeout object if needed
+                _timeout = timeout
+                if connect_timeout is not None and isinstance(timeout, (int, float)):
+                    import httpx
+                    _timeout = httpx.Timeout(timeout=timeout, connect=connect_timeout)
+                
                 openai_aclient = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
                     http_client=litellm.aclient_session,
-                    timeout=timeout,
+                    timeout=_timeout,
                     max_retries=max_retries,
                     organization=organization,
                 )
