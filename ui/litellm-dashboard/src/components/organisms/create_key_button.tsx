@@ -1,29 +1,12 @@
-"use client";
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Button, TextInput, Grid, Col, Select as TremorSelect, SelectItem } from "@tremor/react";
-import {
-  Card,
-  Metric,
-  Text,
-  Title,
-  Subtitle,
-  Accordion,
-  AccordionHeader,
-  AccordionBody,
-} from "@tremor/react";
-import { CopyToClipboard } from "react-copy-to-clipboard";
-import {
-  Button as Button2,
-  Modal,
-  Form,
-  Input,
-  Select,
-  message,
-  Radio,
-} from "antd";
-import NumericalInput from "./shared/numerical_input";
-import { unfurlWildcardModelsInList, getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import SchemaFormFields from './common_components/check_openapi_schema';
+"use client"
+import React, { useState, useEffect, useRef, useCallback } from "react"
+import { Button, TextInput, Grid, Col, Select as TremorSelect, SelectItem } from "@tremor/react"
+import { Card, Metric, Text, Title, Subtitle, Accordion, AccordionHeader, AccordionBody } from "@tremor/react"
+import { CopyToClipboard } from "react-copy-to-clipboard"
+import { Button as Button2, Modal, Form, Input, Select, message, Radio } from "antd"
+import NumericalInput from "../shared/numerical_input"
+import { unfurlWildcardModelsInList, getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key"
+import SchemaFormFields from "../common_components/check_openapi_schema"
 import {
   keyCreateCall,
   slackBudgetAlertsHealthCheck,
@@ -35,22 +18,21 @@ import {
   keyCreateServiceAccountCall,
   fetchMCPAccessGroups,
   getPromptsList,
-} from "./networking";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import { Team } from "./key_team_helpers/key_list";
-import TeamDropdown from "./common_components/team_dropdown";
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { Tooltip } from 'antd';
-import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
-import Createuser from "./create_user_button";
-import debounce from 'lodash/debounce';
-import { rolesWithWriteAccess } from '../utils/roles';
-import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { callback_map, mapDisplayToInternalNames } from "./callback_info_helpers";
-import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
-import ModelAliasManager from "./common_components/ModelAliasManager";
-
+} from "../networking"
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
+import { Team } from "../key_team_helpers/key_list"
+import TeamDropdown from "../common_components/team_dropdown"
+import { InfoCircleOutlined } from "@ant-design/icons"
+import { Tooltip } from "antd"
+import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings"
+import Createuser from "../create_user_button"
+import debounce from "lodash/debounce"
+import { rolesWithWriteAccess } from "../../utils/roles"
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown"
+import { formatNumberWithCommas } from "@/utils/dataUtils"
+import { callback_map, mapDisplayToInternalNames } from "../callback_info_helpers"
+import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
+import ModelAliasManager from "../common_components/ModelAliasManager"
 
 const { Option } = Select;
 
