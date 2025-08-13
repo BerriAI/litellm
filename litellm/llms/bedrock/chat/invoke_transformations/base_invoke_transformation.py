@@ -190,13 +190,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ] = True  # cohere requires stream = True in inference params
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            return litellm.AmazonAnthropicClaudeConfig().transform_request(
+            transformed_request = litellm.AmazonAnthropicClaudeConfig().transform_request(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 headers=headers,
             )
+            
+            return transformed_request
         elif provider == "nova":
             return litellm.AmazonInvokeNovaConfig().transform_request(
                 model=model,

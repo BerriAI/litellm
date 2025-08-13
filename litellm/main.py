@@ -2981,7 +2981,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logger_fn=logger_fn,
                     encoding=encoding,
                     logging_obj=logging,
-                    extra_headers=extra_headers,
+                    extra_headers=headers,  # Use merged headers instead of original extra_headers
                     timeout=timeout,
                     acompletion=acompletion,
                     client=client,
