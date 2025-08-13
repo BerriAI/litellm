@@ -1624,7 +1624,6 @@ class ProxyConfig:
             dict: config
 
         """
-        global prisma_client, store_model_in_db
         # Load existing config
 
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
