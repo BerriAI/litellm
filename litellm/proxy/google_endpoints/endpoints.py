@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 router = APIRouter(
     tags=["google genai endpoints"],
@@ -145,10 +146,61 @@ async def google_stream_generate_content(
 
 
 
-@router.post("/v1beta/models/{model_name}:countTokens", dependencies=[Depends(user_api_key_auth)])
-@router.post("/models/{model_name}:countTokens", dependencies=[Depends(user_api_key_auth)])
+@router.post(
+    "/v1beta/models/{model_name}:countTokens",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountDetailsResponse,
+)
+@router.post(
+    "/models/{model_name}:countTokens",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountDetailsResponse,
+)
 async def google_count_tokens(request: Request, model_name: str):
     """
-    Not Implemented, this is a placeholder for the google genai countTokens endpoint.
+    ```json
+    return {
+        "totalTokens": 31,
+        "totalBillableCharacters": 96,
+        "promptTokensDetails": [
+            {
+            "modality": "TEXT",
+            "tokenCount": 31
+            }
+        ]
+    }
+    ```
     """
-    return {}
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+
+    data = await _read_request_body(request=request)
+    contents = data.get("contents", [])
+    #Create TokenCountRequest for the internal endpoint
+    from litellm.proxy._types import TokenCountRequest
+
+    token_request = TokenCountRequest(
+        model=model_name,
+        contents=contents
+    )
+
+    # Call the internal token counter function with direct request flag set to False
+    token_response = await internal_token_counter(
+        request=token_request,
+        call_endpoint=True,
+    )
+    if token_response is not None:
+        # cast the response to the well known format
+        original_response: dict = token_response.original_response or {}
+        return TokenCountDetailsResponse(
+            totalTokens=original_response.get("totalTokens", 0),
+            promptTokensDetails=original_response.get("promptTokensDetails", []),
+        )
+    
+    #########################################################
+    # Return the response in the well known format
+    #########################################################
+    return TokenCountDetailsResponse(
+        totalTokens=0,
+        promptTokensDetails=[],
+    )
