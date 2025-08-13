@@ -1988,8 +1988,6 @@ class ProxyConfig:
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
-        if general_settings is None:
-            general_settings = {}
         if general_settings:
             ### LOAD SECRET MANAGER ###
             key_management_system = general_settings.get("key_management_system", None)
