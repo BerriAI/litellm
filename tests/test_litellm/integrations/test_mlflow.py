@@ -1,16 +1,18 @@
-import importlib
+import asyncio
 import os
 import sys
 from unittest.mock import MagicMock, patch
-import time
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 sys.path.insert(0, os.path.abspath("../.."))
 
+import pytest
+
 import litellm
 
 
-def test_mlflow_request_tags_functionality():
+@pytest.mark.asyncio
+async def test_mlflow_request_tags_functionality():
     """Test that request_tags are properly extracted and transformed into tags for MLflow traces."""
     
     # Mock MLflow client and dependencies
@@ -32,34 +34,40 @@ def test_mlflow_request_tags_functionality():
     mock_mlflow = MagicMock()
     mock_mlflow.get_current_active_span.return_value = None
     
-    with patch.dict(
-        'sys.modules',
-        {
-            'mlflow': mock_mlflow,
-            'mlflow.tracking': mock_mlflow_tracking,
-            'mlflow.entities': mock_mlflow_entities,
-            'mlflow.tracing.utils': MagicMock(),
-        },
-    ):
+    with patch.dict('sys.modules', {
+        'mlflow': mock_mlflow,
+        'mlflow.tracking': mock_mlflow_tracking,
+        'mlflow.entities': mock_mlflow_entities,
+        'mlflow.tracing.utils': MagicMock(),
+    }):
+        # Now we can safely import MlflowLogger
         from litellm.integrations.mlflow import MlflowLogger
 
+        # Create MlflowLogger instance
         mlflow_logger = MlflowLogger()
         litellm.callbacks = [mlflow_logger]
-
-        litellm.completion(
+        
+        # Test completion with request_tags
+        await litellm.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "test message"}],
             mock_response="test response",
-            metadata={"tags": ["tag1", "tag2", "production"]},
+            metadata={
+                "tags": ["tag1", "tag2", "production"]
+            }
         )
-
-        time.sleep(2)
-
+        
+        # Allow time for async processing
+        await asyncio.sleep(1)
+        
+        # Verify start_trace was called with tags parameter
         assert mock_client.start_trace.called, "start_trace should have been called"
-
+        
+        # Get the call arguments
         call_args = mock_client.start_trace.call_args
         assert call_args is not None, "start_trace call args should not be None"
-
+        
+        # Check that tags parameter was included and properly transformed
         tags_param = call_args.kwargs.get('tags', {})
         expected_tags = {"tag1": "", "tag2": "", "production": ""}
         assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
@@ -80,8 +88,9 @@ def test_mlflow_token_usage_attribute_structure():
             "mlflow.tracing.utils": MagicMock(),
         },
     ):
-        mlflow_module = importlib.import_module("litellm.integrations.mlflow")
-        mlflow_logger = mlflow_module.MlflowLogger()
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
 
         attrs = mlflow_logger._extract_attributes(  # type: ignore
             {
