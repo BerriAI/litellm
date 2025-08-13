@@ -39,6 +39,16 @@ async def test_create_and_get_tag():
         # Setup mocks
         mock_get_tags.return_value = {}
         mock_get_models.return_value = {"model-1": "gpt-3.5-turbo"}
+        
+        # Mock llm_router methods that are called by get_deployments_by_model
+        mock_router.get_deployment.return_value = None
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+                "model_info": {}
+            }
+        ]
 
         # Create a new tag
         tag_data = {
