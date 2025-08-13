@@ -18,7 +18,7 @@ class LagoConfig:
         self.api_base = os.getenv("LAGO_API_BASE")
         self.api_key = os.getenv("LAGO_API_KEY")
         self.publisher_id = os.getenv("LAGO_PUBLISHER_ID")
-        
+        self.plan_tag = os.getenv("LAGO_PLAN_TAG")
         # Optional configuration with defaults
         self.timeout = int(os.getenv("LAGO_TIMEOUT", "5"))
         self.fallback_allow = os.getenv("LAGO_FALLBACK_ALLOW", "true").lower() == "true"

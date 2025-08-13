@@ -224,7 +224,7 @@ class EntitlementCallback(CustomLogger):
                     "name": "", 
                     "type": "article",
                     "author": "any.email@is.fine",
-                    "tags": []                             
+                    "tags": [self.config.plan_tag]                             
                 },
                 "timestamp": int(time.time())
             }
