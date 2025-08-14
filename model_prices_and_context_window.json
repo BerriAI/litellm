@@ -14657,7 +14657,7 @@
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
         "source": "https://www.together.ai/models/qwen3-235b-a22b-instruct-2507-fp8"
     },
     "together_ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": {
@@ -14668,7 +14668,7 @@
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
         "source": "https://www.together.ai/models/qwen3-coder-480b-a35b-instruct"
     },
     "together_ai/Qwen/Qwen3-235B-A22B-Thinking-2507": {
@@ -14679,7 +14679,7 @@
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
         "source": "https://www.together.ai/models/qwen3-235b-a22b-thinking-2507"
     },
     "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput": {
@@ -14690,7 +14690,7 @@
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
         "source": "https://www.together.ai/models/qwen3-235b-a22b-fp8-tput"
     },
     "together_ai/deepseek-ai/DeepSeek-V3": {
@@ -14725,7 +14725,7 @@
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "mode": "chat",
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
         "source": "https://www.together.ai/models/deepseek-r1-0528-throughput"
     },
     "together_ai/mistralai/Mistral-Small-24B-Instruct-2501": {
