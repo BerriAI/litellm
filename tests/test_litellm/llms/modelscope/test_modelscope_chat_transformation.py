@@ -1,7 +1,7 @@
 """
 Unit tests for ModelScope configuration.
 
-These tests validate the DashScopeConfig class which extends OpenAIGPTConfig.
+These tests validate the ModelScopeConfig class which extends OpenAIGPTConfig.
 ModelScope is an OpenAI-compatible provider with minor customizations.
 """
 
