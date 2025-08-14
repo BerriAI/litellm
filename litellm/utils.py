@@ -7280,6 +7280,12 @@ class ProviderConfigManager:
             )
 
             return get_azure_image_generation_config(model)
+        elif LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.image_generation import (
+                get_azure_ai_image_generation_config,
+            )
+
+            return get_azure_ai_image_generation_config(model)
         elif LlmProviders.XINFERENCE == provider:
             from litellm.llms.xinference.image_generation import (
                 get_xinference_image_generation_config,
