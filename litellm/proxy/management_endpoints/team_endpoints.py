@@ -103,6 +103,137 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router = APIRouter()
 
 
+class TeamMemberBudgetHandler:
+    """Helper class to handle team member budget, RPM, and TPM limit operations"""
+    
+    @staticmethod
+    def should_create_budget(
+        team_member_budget: Optional[float] = None,
+        team_member_rpm_limit: Optional[int] = None,
+        team_member_tpm_limit: Optional[int] = None,
+    ) -> bool:
+        """Check if any team member limits are provided"""
+        return any([
+            team_member_budget is not None,
+            team_member_rpm_limit is not None,
+            team_member_tpm_limit is not None,
+        ])
+    
+    @staticmethod
+    async def create_team_member_budget_table(
+        data: Union[NewTeamRequest, LiteLLM_TeamTable],
+        new_team_data_json: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        team_member_budget: Optional[float] = None,
+        team_member_rpm_limit: Optional[int] = None,
+        team_member_tpm_limit: Optional[int] = None,
+    ) -> dict:
+        """Create team member budget table with provided limits"""
+        from litellm.proxy._types import BudgetNewRequest
+        from litellm.proxy.management_endpoints.budget_management_endpoints import (
+            new_budget,
+        )
+
+        if data.team_alias is not None:
+            budget_id = (
+                f"team-{data.team_alias.replace(' ', '-')}-budget-{uuid.uuid4().hex}"
+            )
+        else:
+            budget_id = f"team-budget-{uuid.uuid4().hex}"
+
+        # Create budget request with all provided limits
+        budget_request = BudgetNewRequest(
+            budget_id=budget_id,
+            budget_duration=data.budget_duration,
+        )
+        
+        if team_member_budget is not None:
+            budget_request.max_budget = team_member_budget
+        if team_member_rpm_limit is not None:
+            budget_request.rpm_limit = team_member_rpm_limit
+        if team_member_tpm_limit is not None:
+            budget_request.tpm_limit = team_member_tpm_limit
+
+        team_member_budget_table = await new_budget(
+            budget_obj=budget_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Add team_member_budget_id as metadata field to team table
+        if new_team_data_json.get("metadata") is None:
+            new_team_data_json["metadata"] = {}
+        new_team_data_json["metadata"][
+            "team_member_budget_id"
+        ] = team_member_budget_table.budget_id
+        
+        # Remove team member fields from new_team_data_json
+        TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
+
+        return new_team_data_json
+    
+    @staticmethod
+    async def upsert_team_member_budget_table(
+        team_table: LiteLLM_TeamTable,
+        user_api_key_dict: UserAPIKeyAuth,
+        updated_kv: dict,
+        team_member_budget: Optional[float] = None,
+        team_member_rpm_limit: Optional[int] = None,
+        team_member_tpm_limit: Optional[int] = None,
+    ) -> dict:
+        """Upsert team member budget table with provided limits"""
+        from litellm.proxy._types import BudgetNewRequest
+        from litellm.proxy.management_endpoints.budget_management_endpoints import (
+            update_budget,
+        )
+
+        if team_table.metadata is None:
+            team_table.metadata = {}
+
+        team_member_budget_id = team_table.metadata.get("team_member_budget_id")
+        if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
+            # Budget exists - create update request with only provided values
+            budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
+            
+            if team_member_budget is not None:
+                budget_request.max_budget = team_member_budget
+            if team_member_rpm_limit is not None:
+                budget_request.rpm_limit = team_member_rpm_limit
+            if team_member_tpm_limit is not None:
+                budget_request.tpm_limit = team_member_tpm_limit
+                
+            budget_row = await update_budget(
+                budget_obj=budget_request,
+                user_api_key_dict=user_api_key_dict,
+            )
+            verbose_proxy_logger.info(
+                f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}, team_member_rpm_limit={team_member_rpm_limit}, team_member_tpm_limit={team_member_tpm_limit}"
+            )
+            if updated_kv.get("metadata") is None:
+                updated_kv["metadata"] = {}
+            updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
+
+        else:  # budget does not exist
+            updated_kv = await TeamMemberBudgetHandler.create_team_member_budget_table(
+                data=team_table,
+                new_team_data_json=updated_kv,
+                user_api_key_dict=user_api_key_dict,
+                team_member_budget=team_member_budget,
+                team_member_rpm_limit=team_member_rpm_limit,
+                team_member_tpm_limit=team_member_tpm_limit,
+            )
+        
+        # Remove team member fields from updated_kv
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        return updated_kv
+    
+    @staticmethod
+    def _clean_team_member_fields(data_dict: dict) -> None:
+        """Remove team member fields from data dictionary"""
+        data_dict.pop("team_member_budget", None)
+        data_dict.pop("team_member_rpm_limit", None)
+        data_dict.pop("team_member_tpm_limit", None)
+
+
 def _is_available_team(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
     if litellm.default_internal_user_params is None:
         return False
@@ -135,93 +266,6 @@ async def get_all_team_memberships(
 
     return returned_tm
 
-
-async def _create_team_member_budget_table(
-    data: Union[NewTeamRequest, LiteLLM_TeamTable],
-    new_team_data_json: dict,
-    user_api_key_dict: UserAPIKeyAuth,
-    team_member_budget: float,
-) -> dict:
-    """Allows admin to create 1 budget, that applies to all team members"""
-    from litellm.proxy._types import BudgetNewRequest
-    from litellm.proxy.management_endpoints.budget_management_endpoints import (
-        new_budget,
-    )
-
-    if data.team_alias is not None:
-        budget_id = (
-            f"team-{data.team_alias.replace(' ', '-')}-budget-{uuid.uuid4().hex}"
-        )
-    else:
-        budget_id = f"team-budget-{uuid.uuid4().hex}"
-
-    team_member_budget_table = await new_budget(
-        budget_obj=BudgetNewRequest(
-            max_budget=team_member_budget,
-            budget_duration=data.budget_duration,
-            budget_id=budget_id,
-        ),
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    # Add team_member_budget_id as metadata field to team table
-    if new_team_data_json.get("metadata") is None:
-        new_team_data_json["metadata"] = {}
-    new_team_data_json["metadata"][
-        "team_member_budget_id"
-    ] = team_member_budget_table.budget_id
-    new_team_data_json.pop(
-        "team_member_budget", None
-    )  # remove team_member_budget from new_team_data_json
-
-    return new_team_data_json
-
-
-async def _upsert_team_member_budget_table(
-    team_table: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-    team_member_budget: float,
-    updated_kv: dict,
-) -> dict:
-    """
-    Add budget if none exists
-
-    If budget exists, update it
-    """
-    from litellm.proxy._types import BudgetNewRequest
-    from litellm.proxy.management_endpoints.budget_management_endpoints import (
-        update_budget,
-    )
-
-    if team_table.metadata is None:
-        team_table.metadata = {}
-
-    team_member_budget_id = team_table.metadata.get("team_member_budget_id")
-    if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
-        # Budget exists
-        budget_row = await update_budget(
-            budget_obj=BudgetNewRequest(
-                budget_id=team_member_budget_id,
-                max_budget=team_member_budget,
-            ),
-            user_api_key_dict=user_api_key_dict,
-        )
-        verbose_proxy_logger.info(
-            f"Updated team member budget table: {budget_row.budget_id}, with team_member_budget={team_member_budget}"
-        )
-        if updated_kv.get("metadata") is None:
-            updated_kv["metadata"] = {}
-        updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
-
-    else:  # budget does not exist
-        updated_kv = await _create_team_member_budget_table(
-            data=team_table,
-            new_team_data_json=updated_kv,
-            user_api_key_dict=user_api_key_dict,
-            team_member_budget=team_member_budget,
-        )
-    updated_kv.pop("team_member_budget", None)
-    return updated_kv
 
 
 #### TEAM MANAGEMENT ####
@@ -268,6 +312,8 @@ async def new_team(  # noqa: PLR0915
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
+    - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - prompts: Optional[List[str]] - List of allowed prompts for the team. If specified, the team will only be able to use these specific prompts.
     
@@ -421,12 +467,18 @@ async def new_team(  # noqa: PLR0915
 
         ## Create Team Member Budget Table
         data_json = data.json()
-        if data.team_member_budget is not None:
-            data_json = await _create_team_member_budget_table(
+        if TeamMemberBudgetHandler.should_create_budget(
+            team_member_budget=data.team_member_budget,
+            team_member_rpm_limit=data.team_member_rpm_limit,
+            team_member_tpm_limit=data.team_member_tpm_limit,
+        ):
+            data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=data,
                 new_team_data_json=data_json,
                 user_api_key_dict=user_api_key_dict,
                 team_member_budget=data.team_member_budget,
+                team_member_rpm_limit=data.team_member_rpm_limit,
+                team_member_tpm_limit=data.team_member_tpm_limit,
             )
 
         ## ADD TO TEAM TABLE
@@ -705,6 +757,8 @@ async def update_team(
     - prompts: Optional[List[str]] - List of prompts that the team is allowed to use.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
+    - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     Example - update team TPM Limit
 
@@ -797,15 +851,21 @@ async def update_team(
         # set the budget_reset_at in DB
         updated_kv["budget_reset_at"] = reset_at
 
-    if data.team_member_budget is not None:
-        updated_kv = await _upsert_team_member_budget_table(
+    if TeamMemberBudgetHandler.should_create_budget(
+        team_member_budget=data.team_member_budget,
+        team_member_rpm_limit=data.team_member_rpm_limit,
+        team_member_tpm_limit=data.team_member_tpm_limit,
+    ):
+        updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
             team_table=existing_team_row,
+            user_api_key_dict=user_api_key_dict,
             updated_kv=updated_kv,
             team_member_budget=data.team_member_budget,
-            user_api_key_dict=user_api_key_dict,
+            team_member_rpm_limit=data.team_member_rpm_limit,
+            team_member_tpm_limit=data.team_member_tpm_limit,
         )
     else:
-        updated_kv.pop("team_member_budget", None)
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
 
     # Check object permission
     if data.object_permission is not None:

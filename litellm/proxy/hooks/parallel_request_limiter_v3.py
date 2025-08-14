@@ -448,6 +448,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     },
                 )
             )
+        
+        # Team Member rate limits
+        if user_api_key_dict.user_id and (user_api_key_dict.team_member_rpm_limit is not None or user_api_key_dict.team_member_tpm_limit is not None):
+            team_member_value = f"{user_api_key_dict.team_id}:{user_api_key_dict.user_id}"
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="team_member",
+                    value=team_member_value,
+                    rate_limit={
+                        "requests_per_unit": user_api_key_dict.team_member_rpm_limit,
+                        "tokens_per_unit": user_api_key_dict.team_member_tpm_limit,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
 
         # End user rate limits
         if user_api_key_dict.end_user_id and (
@@ -658,6 +673,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._create_pipeline_operations(
                         key="team",
                         value=user_api_key_team_id,
+                        rate_limit_type="tokens",
+                        total_tokens=total_tokens,
+                    )
+                )
+            # Team Member TPM
+            if user_api_key_team_id and user_api_key_user_id:
+                pipeline_operations.extend(
+                    self._create_pipeline_operations(
+                        key="team_member",
+                        value=f"{user_api_key_team_id}:{user_api_key_user_id}",
                         rate_limit_type="tokens",
                         total_tokens=total_tokens,
                     )

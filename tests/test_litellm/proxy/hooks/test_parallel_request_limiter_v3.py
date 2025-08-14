@@ -722,3 +722,64 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
     assert (
         should_rate_limit_called
     ), "should_rate_limit should be called when model-specific limits match requested model"
+
+
+@pytest.mark.asyncio
+async def test_team_member_rate_limits_v3():
+    """
+    Test that team member RPM/TPM rate limits are properly applied for team member combinations.
+    """
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    _team_id = "team_123"
+    _user_id = "user_456"
+    
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id=_team_id,
+        user_id=_user_id,
+        team_member_rpm_limit=10,
+        team_member_tpm_limit=1000,
+    )
+    
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock should_rate_limit to capture the descriptors
+    captured_descriptors = None
+    original_should_rate_limit = parallel_request_handler.should_rate_limit
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        # Return OK response to avoid HTTPException
+        return {
+            "overall_code": "OK",
+            "statuses": []
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    # Test the pre-call hook
+    await parallel_request_handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-3.5-turbo"},
+        call_type="",
+    )
+
+    # Verify team member descriptor was created
+    assert captured_descriptors is not None, "Rate limit descriptors should be captured"
+    
+    team_member_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "team_member":
+            team_member_descriptor = descriptor
+            break
+    
+    assert team_member_descriptor is not None, "Team member descriptor should be present"
+    assert team_member_descriptor["value"] == f"{_team_id}:{_user_id}", "Team member value should combine team_id and user_id"
+    assert team_member_descriptor["rate_limit"]["requests_per_unit"] == 10, "Team member RPM limit should be set"
+    assert team_member_descriptor["rate_limit"]["tokens_per_unit"] == 1000, "Team member TPM limit should be set"
