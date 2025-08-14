@@ -86,3 +86,18 @@ def test_hosted_vllm_chat_transformation_with_audio_url():
                 ],
             }
         ]
+
+
+def test_hosted_vllm_supports_reasoning_effort():
+    config = HostedVLLMChatConfig()
+    supported_params = config.get_supported_openai_params(
+        model="hosted_vllm/gpt-oss-120b"
+    )
+    assert "reasoning_effort" in supported_params
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "high"
