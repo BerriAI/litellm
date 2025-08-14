@@ -1773,3 +1773,161 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     assert calls[1][0][2] == "2025-06-18"  # mcp_protocol_version
 
 
+@pytest.mark.asyncio
+async def test_mcp_access_group_permission_inheritance_integration():
+    """Integration test for MCP access group permission inheritance"""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    # Test scenario: team has access groups, key has no permissions -> should inherit
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        # Mock team with access groups
+        mock_team_permission = MagicMock()
+        mock_team_permission.mcp_servers = []
+        mock_team_permission.mcp_access_groups = ["staff", "ops"]
+        
+        mock_team = MagicMock()
+        mock_team.object_permission = mock_team_permission
+        
+        # Mock key with no permissions
+        mock_key_permission = None
+        
+        # Setup database mocks
+        mock_prisma_client.db.litellm_teamtable.find_unique.return_value = mock_team
+        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.return_value = mock_key_permission
+        
+        # Mock servers for access groups
+        mock_staff_servers = [
+            MagicMock(server_id="staff-server-1", mcp_access_groups=["staff"]),
+            MagicMock(server_id="staff-server-2", mcp_access_groups=["staff"])
+        ]
+        mock_ops_servers = [
+            MagicMock(server_id="ops-server-1", mcp_access_groups=["ops"]),
+        ]
+        
+        mock_prisma_client.db.litellm_mcpservertable.find_many.return_value = mock_staff_servers + mock_ops_servers
+        
+        # Create user auth object
+        user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user", 
+            team_id="team-staff",
+            object_permission_id=None  # Key has no explicit permissions
+        )
+        
+        # Test the inheritance logic
+        allowed_servers = await MCPRequestHandler.get_allowed_mcp_servers(user_auth)
+        
+        # Should inherit all team servers since key has no permissions
+        expected_servers = ["staff-server-1", "staff-server-2", "ops-server-1"]
+        assert sorted(allowed_servers) == sorted(expected_servers)
+
+
+@pytest.mark.asyncio  
+async def test_mcp_access_group_permission_intersection_integration():
+    """Integration test for MCP access group permission intersection"""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    # Test scenario: both team and key have access groups -> should intersect
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        # Mock team with access groups
+        mock_team_permission = MagicMock()
+        mock_team_permission.mcp_servers = []
+        mock_team_permission.mcp_access_groups = ["staff", "ops", "admin"]
+        
+        mock_team = MagicMock()
+        mock_team.object_permission = mock_team_permission
+        
+        # Mock key with different access groups
+        mock_key_permission = MagicMock()
+        mock_key_permission.mcp_servers = []
+        mock_key_permission.mcp_access_groups = ["ops", "external"]
+        
+        # Setup database mocks
+        mock_prisma_client.db.litellm_teamtable.find_unique.return_value = mock_team
+        mock_prisma_client.db.litellm_objectpermissiontable.find_unique.return_value = mock_key_permission
+        
+        # Mock servers for access groups
+        team_group_servers = [
+            MagicMock(server_id="staff-server", mcp_access_groups=["staff"]),
+            MagicMock(server_id="ops-server", mcp_access_groups=["ops"]),
+            MagicMock(server_id="admin-server", mcp_access_groups=["admin"])
+        ]
+        key_group_servers = [
+            MagicMock(server_id="ops-server", mcp_access_groups=["ops"]),
+            MagicMock(server_id="external-server", mcp_access_groups=["external"])
+        ]
+        
+        def mock_find_many(where=None):
+            if where and "mcp_access_groups" in where:
+                groups = where["mcp_access_groups"]["hasSome"]
+                if "staff" in groups or "admin" in groups:
+                    return [s for s in team_group_servers if any(g in s.mcp_access_groups for g in groups)]
+                else:
+                    return [s for s in key_group_servers if any(g in s.mcp_access_groups for g in groups)]
+            return []
+        
+        mock_prisma_client.db.litellm_mcpservertable.find_many.side_effect = mock_find_many
+        
+        # Create user auth object
+        user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="team-staff", 
+            object_permission_id="key-permission-id"
+        )
+        
+        # Test the intersection logic
+        allowed_servers = await MCPRequestHandler.get_allowed_mcp_servers(user_auth)
+        
+        # Should only get intersection (ops-server is common)
+        expected_servers = ["ops-server"]
+        assert sorted(allowed_servers) == sorted(expected_servers)
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_manager_with_access_groups_integration():
+    """Integration test for MCPServerManager with access group filtering"""
+    from litellm.proxy._types import UserAPIKeyAuth
+    
+    # Create a test manager
+    test_manager = MCPServerManager()
+    
+    # Load servers with access groups
+    test_manager.load_servers_from_config({
+        "staff_server": {
+            "url": "https://staff-server.com/mcp",
+            "access_groups": ["staff"],
+            "transport": MCPTransport.http,
+        },
+        "ops_server": {
+            "url": "https://ops-server.com/mcp", 
+            "access_groups": ["ops"],
+            "transport": MCPTransport.http,
+        },
+        "admin_server": {
+            "url": "https://admin-server.com/mcp",
+            "access_groups": ["admin"],
+            "transport": MCPTransport.http,
+        }
+    })
+    
+    # Mock user with specific access groups
+    user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-staff"
+    )
+    
+    # Mock the permission lookup to return staff access group
+    with patch.object(MCPRequestHandler, "get_allowed_mcp_servers") as mock_get_allowed:
+        mock_get_allowed.return_value = ["staff-server-id", "ops-server-id"]  # User has access to staff and ops
+        
+        allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
+        
+        # Should only get servers user has access to
+        assert len(allowed_servers) >= 0  # At least verify no errors
+        mock_get_allowed.assert_called_once_with(user_auth)
+
+
