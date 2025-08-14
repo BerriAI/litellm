@@ -9,6 +9,7 @@ import random
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from litellm._logging import verbose_router_logger
+from litellm.litellm_core_utils.core_helpers import safe_divide
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -46,7 +47,7 @@ def simple_shuffle(
         weights = [m["litellm_params"].get("weight", 0) for m in healthy_deployments]
         verbose_router_logger.debug(f"\nweight {weights}")
         total_weight = sum(weights)
-        weights = [weight / total_weight for weight in weights]
+        weights = [safe_divide(weight, total_weight, 0) for weight in weights]
         verbose_router_logger.debug(f"\n weights {weights}")
         # Perform weighted random pick
         selected_index = random.choices(range(len(weights)), weights=weights)[0]
@@ -63,7 +64,7 @@ def simple_shuffle(
         rpms = [m["litellm_params"].get("rpm", 0) for m in healthy_deployments]
         verbose_router_logger.debug(f"\nrpms {rpms}")
         total_rpm = sum(rpms)
-        weights = [rpm / total_rpm for rpm in rpms]
+        weights = [safe_divide(rpm, total_rpm, 0) for rpm in rpms]
         verbose_router_logger.debug(f"\n weights {weights}")
         # Perform weighted random pick
         selected_index = random.choices(range(len(rpms)), weights=weights)[0]
@@ -80,7 +81,7 @@ def simple_shuffle(
         tpms = [m["litellm_params"].get("tpm", 0) for m in healthy_deployments]
         verbose_router_logger.debug(f"\ntpms {tpms}")
         total_tpm = sum(tpms)
-        weights = [tpm / total_tpm for tpm in tpms]
+        weights = [safe_divide(tpm, total_tpm, 0) for tpm in tpms]
         verbose_router_logger.debug(f"\n weights {weights}")
         # Perform weighted random pick
         selected_index = random.choices(range(len(tpms)), weights=weights)[0]
