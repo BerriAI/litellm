@@ -3615,7 +3615,7 @@ def get_optional_params(  # noqa: PLR0915
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
             if bedrock_base_model.startswith("anthropic.claude-3"):
                 optional_params = (
-                    litellm.AmazonAnthropicClaude3Config().map_openai_params(
+                    litellm.AmazonAnthropicClaudeConfig().map_openai_params(
                         non_default_params=non_default_params,
                         optional_params=optional_params,
                         model=model,
@@ -6975,7 +6975,7 @@ class ProviderConfigManager:
                 ):
                     return litellm.AmazonAnthropicConfig()
                 else:
-                    return litellm.AmazonAnthropicClaude3Config()
+                    return litellm.AmazonAnthropicClaudeConfig()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
