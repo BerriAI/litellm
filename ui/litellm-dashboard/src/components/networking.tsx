@@ -4731,7 +4731,7 @@ export const deletePassThroughEndpointsCall = async (
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
-      : `/config/pass_through_endpoint${endpointId}`;
+      : `/config/pass_through_endpoint?endpoint_id=${endpointId}`;
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
