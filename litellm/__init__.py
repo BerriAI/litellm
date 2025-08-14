@@ -625,7 +625,6 @@ def add_known_models():
             vertex_deepseek_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-mistral_models":
             key = key.replace("vertex_ai/", "")
-            vertex_mistral_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-qwen_models":
             key = key.replace("vertex_ai/", "")
             vertex_qwen_models.append(key)
