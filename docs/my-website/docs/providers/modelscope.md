@@ -18,8 +18,8 @@ Refer to the [Inference Endpoints catalog](https://modelscope.cn/models?filter=i
 ### Authentication
 With a single ModelScope token, you can access inference through multiple providers. Your calls are routed through ModelScope and the usage is free. 
 However, please ensure you bind your Alibaba Cloud account before use. For details, refer to the following two links.
-- [API-Infereference](https://modelscope.cn/docs/model-service/API-Inference/intro)
-- [Binding Alibaba Cloud Account](https://modelscope.cn/docs/accounts/aliyun-binding-and-authorization)
+- [API-Infereference](https://modelscope.cn/docs/model-service/API-Inference/intro) or [API-Inference-EN](https://modelscope.cn/docs/model-service/API-Inference/intro)
+- [Binding Alibaba Cloud Account](https://modelscope.cn/docs/accounts/aliyun-binding-and-authorization) or [Binding Alibaba Cloud Account-EN](https://modelscope.cn/docs/Organization-and-Personal/AccessToken)
 
 Simply set the `MODELSCOPE_TOKEN` environment variable with your ModelScope token, you can create one here: https://modelscope.cn/my/myaccesstoken.
 
