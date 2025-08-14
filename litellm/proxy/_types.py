@@ -527,9 +527,20 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/member_update",
     ]
 
+    # Routes accessible by Admin Viewer (read-only admin access)
+    admin_viewer_routes = [
+        "/user/list",
+        "/user/available_users", 
+        "/user/available_roles",
+        "/user/daily/activity",
+        "/team/daily/activity",
+        "/tag/daily/activity",
+        "/tag/list",
+    ] + info_routes
+
     # All routes accesible by an Org Admin
     org_admin_allowed_routes = (
-        org_admin_only_routes + management_routes + self_managed_routes
+        org_admin_only_routes + management_routes + self_managed_routes + admin_viewer_routes
     )
 
 
