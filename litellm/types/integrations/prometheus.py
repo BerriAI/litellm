@@ -384,15 +384,15 @@ class PrometheusMetricLabels:
     litellm_deployment_success_responses = litellm_deployment_total_requests
 
     # Buffer monitoring metrics - these typically don't need additional labels
-    litellm_pod_lock_manager_size: List[str] = []
+    litellm_pod_lock_manager_size = []
     
-    litellm_in_memory_daily_spend_update_queue_size: List[str] = []
+    litellm_in_memory_daily_spend_update_queue_size = []
     
-    litellm_redis_daily_spend_update_queue_size: List[str] = []
+    litellm_redis_daily_spend_update_queue_size = []
     
-    litellm_in_memory_spend_update_queue_size: List[str] = []
+    litellm_in_memory_spend_update_queue_size = []
     
-    litellm_redis_spend_update_queue_size: List[str] = []
+    litellm_redis_spend_update_queue_size = []
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
