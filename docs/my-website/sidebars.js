@@ -372,7 +372,14 @@ const sidebars = {
             "providers/azure/azure_embedding",
           ]
         },
-        "providers/azure_ai",
+        {
+          type: "category",
+          label: "Azure AI",
+          items: [
+            "providers/azure_ai",
+            "providers/azure_ai_img",
+          ]
+        },
         {
           type: "category",
           label: "Vertex AI",
