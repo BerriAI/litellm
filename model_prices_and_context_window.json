@@ -14649,7 +14649,7 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
-    "deepseek-ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": {
+    "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": {
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 6e-06,
         "max_input_tokens": 262000,
@@ -14660,7 +14660,7 @@
         "supports_tool_choice": false
         "source": "https://www.together.ai/models/qwen3-235b-a22b-instruct-2507-fp8"
     },
-    "deepseek-ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": {
+    "together_ai/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": {
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 2e-06,
         "max_input_tokens": 256000,
@@ -14671,7 +14671,7 @@
         "supports_tool_choice": false
         "source": "https://www.together.ai/models/qwen3-coder-480b-a35b-instruct"
     },
-    "deepseek-ai/Qwen/Qwen3-235B-A22B-Thinking-2507": {
+    "together_ai/Qwen/Qwen3-235B-A22B-Thinking-2507": {
         "input_cost_per_token": 6.5e-07,
         "output_cost_per_token": 3e-06,
         "max_input_tokens": 256000,
@@ -14682,7 +14682,7 @@
         "supports_tool_choice": false
         "source": "https://www.together.ai/models/qwen3-235b-a22b-thinking-2507"
     },
-    "deepseek-ai/Qwen/Qwen3-235B-A22B-fp8-tput": {
+    "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput": {
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 6e-07,
         "max_input_tokens": 40000,
@@ -14717,7 +14717,7 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
-    "deepseek-ai/DeepSeek-R1-0528-tput": {
+    "together_ai/deepseek-ai/DeepSeek-R1-0528-tput": {
         "input_cost_per_token": 5.5e-07,
         "output_cost_per_token": 2.19e-06,
         "max_input_tokens": 128000,
