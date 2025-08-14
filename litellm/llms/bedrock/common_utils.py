@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING, List, Literal, Optional, Union
 import httpx
 
 import litellm
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret
@@ -445,13 +448,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if "invoke/" in model:
+        if BedrockModelInfo._explicit_invoke_route(model):
             return "invoke"
-        elif "converse_like" in model:
+        elif BedrockModelInfo._explicit_converse_like_route(model):
             return "converse_like"
-        elif "converse/" in model:
+        elif BedrockModelInfo._explicit_converse_route(model):
             return "converse"
-        elif "agent/" in model:
+        elif BedrockModelInfo._explicit_agent_route(model):
             return "agent"
         elif (
             base_model in litellm.bedrock_converse_models
@@ -459,7 +462,62 @@ class BedrockModelInfo(BaseLLMModelInfo):
         ):
             return "converse"
         return "invoke"
+    
+    @staticmethod
+    def _explicit_converse_route(model: str) -> bool:
+        """
+        Check if the model is an explicit converse route.
+        """
+        return "converse/" in model
+    
+    @staticmethod
+    def _explicit_invoke_route(model: str) -> bool:
+        """
+        Check if the model is an explicit invoke route.
+        """
+        return "invoke/" in model
+    
+    @staticmethod
+    def _explicit_agent_route(model: str) -> bool:
+        """
+        Check if the model is an explicit agent route.
+        """
+        return "agent/" in model
+    
+    @staticmethod
+    def _explicit_converse_like_route(model: str) -> bool:
+        """
+        Check if the model is an explicit converse like route.
+        """
+        return "converse_like/" in model
+    
 
+    @staticmethod
+    def get_bedrock_provider_config_for_messages_api(model: str) -> Optional[BaseAnthropicMessagesConfig]:
+        """
+        Get the bedrock provider config for the given model.
+
+        Only route to AmazonAnthropicClaude3MessagesConfig() for BaseMessagesConfig
+
+        All other routes should return None since they will go through litellm.completion
+        """
+
+        #########################################################
+        # Converse routes should go through litellm.completion()
+        if BedrockModelInfo._explicit_converse_route(model):
+            return None
+        
+        #########################################################
+        # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
+        # Since bedrock Invoke supports Native Anthropic Messages API
+        #########################################################
+        if "claude" in model:
+            return litellm.AmazonAnthropicClaude3MessagesConfig()
+        
+        #########################################################
+        # These routes will go through litellm.completion()
+        #########################################################
+        return None
 
 class BedrockEventStreamDecoderBase:
     """
