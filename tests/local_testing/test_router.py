@@ -2023,14 +2023,13 @@ def test_router_get_model_info(model, base_model, llm_provider):
             deployment=deployment.to_json(), received_model_name=model
         )
     else:
-        try:
-            router.get_router_model_info(
-                deployment=deployment.to_json(), received_model_name=model
-            )
-            pytest.fail("Expected this to raise model not mapped error")
-        except Exception as e:
-            if "This model isn't mapped yet" in str(e):
-                pass
+        # Azure models without base_model now fallback to using the original model name
+        # instead of raising an exception. This should succeed but log a warning.
+        model_info = router.get_router_model_info(
+            deployment=deployment.to_json(), received_model_name=model
+        )
+        # Verify that model_info is returned (even if it may have default values)
+        assert model_info is not None
 
 
 @pytest.mark.parametrize(
