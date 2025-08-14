@@ -104,6 +104,10 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         updatePayload.models = formValues.models;
       }
 
+      if (formValues.budget_duration && formValues.budget_duration !== "") {
+        updatePayload.budget_duration = formValues.budget_duration;
+      }
+
       if (formValues.metadata && Object.keys(formValues.metadata).length > 0) {
         updatePayload.metadata = formValues.metadata;
       }
