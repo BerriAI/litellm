@@ -625,6 +625,7 @@ aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
+modelscope_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 v0_models: Set = set()
@@ -872,7 +873,9 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
-            dashscope_models.add(key)
+            dashscope_models.append(key)
+        elif value.get("litellm_provider") == "modelscope":
+            modelscope_models.append(key)
         elif value.get("litellm_provider") == "moonshot":
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
@@ -992,6 +995,7 @@ model_list = list(
     | zai_models
     | fal_ai_models
     | deepseek_models
+    | modelscope_models
     | azure_ai_models
     | voyage_models
     | infinity_models
@@ -1123,6 +1127,7 @@ models_by_provider: dict = {
     "elevenlabs": elevenlabs_models,
     "heroku": heroku_models,
     "dashscope": dashscope_models,
+    "modelscope": modelscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
     "v0": v0_models,
@@ -1234,14 +1239,30 @@ from .llms.topaz.common_utils import TopazModelInfo
 # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
 from .llms.xai.common_utils import XAIModelInfo
 
-# PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
-# All remaining configs are now lazy loaded - see _lazy_imports_registry.py
-
-# Import LlmProviders here (before main import) because it's imported during import time
-# in multiple places including openai.py (via main import)
-from litellm.types.utils import LlmProviders
-
-## Lazy loading this is not straightforward, will leave it here for now.
+from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.completion.transformation import AzureOpenAITextConfig
+from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
+from .llms.llamafile.chat.transformation import LlamafileChatConfig
+from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
+from .llms.vllm.completion.transformation import VLLMConfig
+from .llms.deepseek.chat.transformation import DeepSeekChatConfig
+from .llms.lm_studio.chat.transformation import LMStudioChatConfig
+from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
+from .llms.nscale.chat.transformation import NscaleConfig
+from .llms.perplexity.chat.transformation import PerplexityChatConfig
+from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
+from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
+from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
+from .llms.github_copilot.chat.transformation import GithubCopilotConfig
+from .llms.nebius.chat.transformation import NebiusConfig
+from .llms.dashscope.chat.transformation import DashScopeChatConfig
+from .llms.modelscope.chat.transformation import ModelScopeChatConfig
+from .llms.moonshot.chat.transformation import MoonshotChatConfig
+from .llms.v0.chat.transformation import V0ChatConfig
+from .llms.morph.chat.transformation import MorphChatConfig
+from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
+from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
 from .main import *  # type: ignore
 from .compression import compress  # type: ignore[no-redef]
 
