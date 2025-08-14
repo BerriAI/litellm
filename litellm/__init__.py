@@ -487,6 +487,7 @@ vertex_embedding_models: List = []
 vertex_anthropic_models: List = []
 vertex_llama3_models: List = []
 vertex_deepseek_models: List = []
+vertex_qwen_models: List = []
 vertex_ai_ai21_models: List = []
 vertex_mistral_models: List = []
 ai21_models: List = []
@@ -624,7 +625,9 @@ def add_known_models():
             vertex_deepseek_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-mistral_models":
             key = key.replace("vertex_ai/", "")
-            vertex_mistral_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-qwen_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_qwen_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-ai21_models":
             key = key.replace("vertex_ai/", "")
             vertex_ai_ai21_models.append(key)
@@ -855,7 +858,8 @@ models_by_provider: dict = {
     + vertex_anthropic_models
     + vertex_vision_models
     + vertex_language_models
-    + vertex_deepseek_models,
+    + vertex_deepseek_models
+    + vertex_qwen_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models + bedrock_converse_models,
     "petals": petals_models,
