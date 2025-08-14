@@ -77,7 +77,7 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
-from litellm.secret_managers.main import get_secret_str
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import RawRequestTypedDict
 from litellm.utils import (
@@ -1973,26 +1973,49 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params[k] = v
 
             ## COMPLETION CALL
+            use_base_llm_http_handler = get_secret_bool(
+                "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
+            )
             try:
-                response = openai_chat_completions.completion(
-                    model=model,
-                    messages=messages,
-                    headers=headers,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=api_key,
-                    api_base=api_base,
-                    acompletion=acompletion,
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    timeout=timeout,  # type: ignore
-                    custom_prompt_dict=custom_prompt_dict,
-                    client=client,  # pass AsyncOpenAI, OpenAI client
-                    organization=organization,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                if use_base_llm_http_handler:
+                    response = base_llm_http_handler.completion(
+                        model=model,
+                        messages=messages,
+                        api_base=api_base,
+                        custom_llm_provider=custom_llm_provider,
+                        model_response=model_response,
+                        encoding=encoding,
+                        logging_obj=logging,
+                        optional_params=optional_params,
+                        timeout=timeout,
+                        litellm_params=litellm_params,
+                        acompletion=acompletion,
+                        stream=stream,
+                        api_key=api_key,
+                        headers=headers,
+                        client=client,
+                        provider_config=provider_config,
+                    )
+                else:
+                    response = openai_chat_completions.completion(
+                        model=model,
+                        messages=messages,
+                        headers=headers,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        api_key=api_key,
+                        api_base=api_base,
+                        acompletion=acompletion,
+                        logging_obj=logging,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        timeout=timeout,  # type: ignore
+                        custom_prompt_dict=custom_prompt_dict,
+                        client=client,  # pass AsyncOpenAI, OpenAI client
+                        organization=organization,
+                        custom_llm_provider=custom_llm_provider,
+                    )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
@@ -2973,7 +2996,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     logger_fn=logger_fn,
                     encoding=encoding,
                     logging_obj=logging,
-                    extra_headers=extra_headers,
+                    extra_headers=headers,  # Use merged headers instead of original extra_headers
                     timeout=timeout,
                     acompletion=acompletion,
                     client=client,
