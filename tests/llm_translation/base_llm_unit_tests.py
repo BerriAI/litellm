@@ -1200,96 +1200,99 @@ class BaseLLMChatTest(ABC):
         from litellm.utils import supports_function_calling
         from litellm import completion
         litellm._turn_on_debug()
+        try:
 
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        base_completion_call_args = self.get_base_completion_call_args()
-        if not supports_function_calling(base_completion_call_args["model"], None):
-            print("Model does not support function calling")
-            pytest.skip("Model does not support function calling")
-        
-        def get_weather(city: str):
-            return f"City: {city}, Weather: Sunny with 34 degree Celcius"
+            base_completion_call_args = self.get_base_completion_call_args()
+            if not supports_function_calling(base_completion_call_args["model"], None):
+                print("Model does not support function calling")
+                pytest.skip("Model does not support function calling")
+            
+            def get_weather(city: str):
+                return f"City: {city}, Weather: Sunny with 34 degree Celcius"
 
-        TOOLS = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the weather in a city",
-                    "parameters": {
-                        "$id": "https://some/internal/name",
-                        "$schema": "https://json-schema.org/draft-07/schema",
-                        "type": "object",
-                        "properties": {
-                            "city": {
-                                "type": "string",
-                                "description": "The city to get the weather for",
-                            }
+            TOOLS = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the weather in a city",
+                        "parameters": {
+                            "$id": "https://some/internal/name",
+                            "$schema": "https://json-schema.org/draft-07/schema",
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string",
+                                    "description": "The city to get the weather for",
+                                }
+                            },
+                            "required": ["city"],
+                            "additionalProperties": False,
                         },
-                        "required": ["city"],
-                        "additionalProperties": False,
+                        "strict": True,
                     },
-                    "strict": True,
-                },
-            }
-        ]
+                }
+            ]
 
 
-        messages = [{ "content": "How is the weather in Mumbai?","role": "user"}]
-        response, iteration = "", 0
-        while True:
-            if response:
-                break
-            # Create a streaming response with tool calling enabled
-            stream = completion(
-                **base_completion_call_args,
-                messages=messages,
-                tools=TOOLS,
-                stream=True,
-            )
+            messages = [{ "content": "How is the weather in Mumbai?","role": "user"}]
+            response, iteration = "", 0
+            while True:
+                if response:
+                    break
+                # Create a streaming response with tool calling enabled
+                stream = completion(
+                    **base_completion_call_args,
+                    messages=messages,
+                    tools=TOOLS,
+                    stream=True,
+                )
 
-            final_tool_calls = {}
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                print(delta)
-                if delta.content:
-                    response += delta.content
-                elif delta.tool_calls:
-                    for tool_call in chunk.choices[0].delta.tool_calls or []:
-                        index = tool_call.index
-                        if index not in final_tool_calls:
-                            final_tool_calls[index] = tool_call
-                        else:
-                            final_tool_calls[
-                                index
-                            ].function.arguments += tool_call.function.arguments
-            if final_tool_calls:
-                for tool_call in final_tool_calls.values():
-                    if tool_call.function.name == "get_weather":
-                        city = json.loads(tool_call.function.arguments)["city"]
-                        tool_response = get_weather(city)
-                        messages.append(
-                            {
-                                "role": "assistant",
-                                "tool_calls": [tool_call],
-                                "content": None,
-                            }
-                        )
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": tool_response,
-                            }
-                        )
-            iteration += 1
-            if iteration > 2:
-                print("Something went wrong!")
-                break
+                final_tool_calls = {}
+                for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    print(delta)
+                    if delta.content:
+                        response += delta.content
+                    elif delta.tool_calls:
+                        for tool_call in chunk.choices[0].delta.tool_calls or []:
+                            index = tool_call.index
+                            if index not in final_tool_calls:
+                                final_tool_calls[index] = tool_call
+                            else:
+                                final_tool_calls[
+                                    index
+                                ].function.arguments += tool_call.function.arguments
+                if final_tool_calls:
+                    for tool_call in final_tool_calls.values():
+                        if tool_call.function.name == "get_weather":
+                            city = json.loads(tool_call.function.arguments)["city"]
+                            tool_response = get_weather(city)
+                            messages.append(
+                                {
+                                    "role": "assistant",
+                                    "tool_calls": [tool_call],
+                                    "content": None,
+                                }
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": tool_response,
+                                }
+                            )
+                iteration += 1
+                if iteration > 2:
+                    print("Something went wrong!")
+                    break
 
-        print(response)
+            print(response)
+        except litellm.ServiceUnavailableError:
+            pass
 
     def test_reasoning_effort(self):
         """Test that reasoning_effort is passed correctly to the model"""

@@ -54,6 +54,7 @@ import LoggingSettingsView from "../logging_settings_view";
 import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
+import NotificationManager from "../molecules/notifications_manager";
 
 export interface TeamMembership {
   user_id: string;
@@ -160,7 +161,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const response = await teamInfoCall(accessToken, teamId);
       setTeamData(response);
     } catch (error) {
-      message.error("Failed to load team information");
+      NotificationManager.fromBackend("Failed to load team information");
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
@@ -236,7 +237,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         errMsg = error.message;
       }
 
-      message.error(errMsg);
+      NotificationManager.fromBackend(errMsg);
       console.error("Error adding team member:", error);
     }
   };
@@ -281,7 +282,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       message.destroy(); // Remove all existing toasts
 
-      message.error(errMsg);
+      NotificationManager.fromBackend(errMsg);
       console.error("Error updating team member:", error);
     }
   };
@@ -303,7 +304,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Notify parent component of the update
       onUpdate(updatedTeamData);
     } catch (error) {
-      message.error("Failed to remove team member");
+      NotificationManager.fromBackend("Failed to remove team member");
       console.error("Error removing team member:", error);
     }
   };
@@ -316,16 +317,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       try {
         parsedMetadata = values.metadata ? JSON.parse(values.metadata) : {};
       } catch (e) {
-        message.error("Invalid JSON in metadata field");
+        NotificationManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
+
+      const sanitizeNumeric = (v: any) => {
+        if (v === null || v === undefined) return null;
+        if (typeof v === "string" && v.trim() === "") return null;
+        if (typeof v === "number" && Number.isNaN(v)) return null;
+        return v;
+      };
 
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
         models: values.models,
-        tpm_limit: values.tpm_limit,
-        rpm_limit: values.rpm_limit,
+        tpm_limit: sanitizeNumeric(values.tpm_limit),
+        rpm_limit: sanitizeNumeric(values.rpm_limit),
         max_budget: values.max_budget,
         budget_duration: values.budget_duration,
         metadata: {
@@ -349,10 +357,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         servers: [],
         accessGroups: [],
       };
-      if (
-        (servers && servers.length > 0) ||
-        (accessGroups && accessGroups.length > 0)
-      ) {
+      if ((servers && servers.length > 0) || (accessGroups && accessGroups.length > 0)) {
         updateData.object_permission = {};
         if (servers && servers.length > 0) {
           updateData.object_permission.mcp_servers = servers;
@@ -472,8 +477,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <Card>
                 <Text>Rate Limits</Text>
                 <div className="mt-2">
-                  <Text>TPM: {info.tpm_limit || "Unlimited"}</Text>
-                  <Text>RPM: {info.rpm_limit || "Unlimited"}</Text>
+                  <Text>
+                    TPM: {info.tpm_limit || "Unlimited"}
+                  </Text>
+                  <Text>
+                    RPM: {info.rpm_limit || "Unlimited"}
+                  </Text>
                   {info.max_parallel_requests && (
                     <Text>
                       Max Parallel Requests: {info.max_parallel_requests}

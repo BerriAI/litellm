@@ -5,6 +5,7 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import copy
 import os
 import sys
 
@@ -48,6 +49,51 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME = "bedrock"
+
+
+def _redact_pii_matches(response_json: dict) -> dict:
+    try:
+        # Create a deep copy to avoid modifying the original response
+        redacted_response = copy.deepcopy(response_json)
+
+        # Get assessments from the response
+        assessments = redacted_response.get("assessments", [])
+        if not assessments:
+            return redacted_response
+
+        for assessment in assessments:
+            # Redact PII entities in sensitive information policy
+            sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
+            if sensitive_info_policy:
+                pii_entities = sensitive_info_policy.get("piiEntities", [])
+                for pii_entity in pii_entities:
+                    if "match" in pii_entity:
+                        pii_entity["match"] = "[REDACTED]"
+
+                # Redact regex matches
+                regexes = sensitive_info_policy.get("regexes", [])
+                for regex_match in regexes:
+                    if "match" in regex_match:
+                        regex_match["match"] = "[REDACTED]"
+
+            # Redact custom word matches in word policy
+            word_policy = assessment.get("wordPolicy")
+            if word_policy:
+                custom_words = word_policy.get("customWords", [])
+                for custom_word in custom_words:
+                    if "match" in custom_word:
+                        custom_word["match"] = "[REDACTED]"
+
+                managed_words = word_policy.get("managedWordLists", [])
+                for managed_word in managed_words:
+                    if "match" in managed_word:
+                        managed_word["match"] = "[REDACTED]"
+
+        return redacted_response
+    except Exception as e:
+        # We do not want to fail in any case so this is just a warning
+        verbose_proxy_logger.warning("Guardrail log redaction failed: %s", str(e))
+        return response_json
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
@@ -271,10 +317,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             data=prepared_request.body,  # type: ignore
             headers=prepared_request.headers,  # type: ignore
         )
-        verbose_proxy_logger.debug("Bedrock AI response: %s", response.text)
         if response.status_code == 200:
             # check if the response was flagged
             _json_response = response.json()
+            redacted_response = _redact_pii_matches(_json_response)
+            verbose_proxy_logger.debug("Bedrock AI response : %s", redacted_response)
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(
                 bedrock_guardrail_response

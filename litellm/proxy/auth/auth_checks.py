@@ -35,6 +35,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
@@ -288,9 +289,6 @@ def _is_api_route_allowed(
     if valid_token is None:
         raise Exception("Invalid proxy server token passed. valid_token=None.")
 
-    # Check if management routes are disabled and raise exception if they are
-    RouteChecks.should_call_route(route=route, valid_token=valid_token)
-
     if not _is_user_proxy_admin(user_obj=user_obj):  # if non-admin
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
@@ -440,6 +438,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: DualCache,
+    route: str,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
@@ -456,6 +455,8 @@ async def get_end_user_object(
     _key = "end_user_id:{}".format(end_user_id)
 
     def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
+        if route in LiteLLMRoutes.info_routes.value:  # allow calling info routes
+            return
         if end_user_obj.litellm_budget_table is None:
             return
         end_user_budget = end_user_obj.litellm_budget_table.max_budget
@@ -498,6 +499,60 @@ async def get_end_user_object(
     except Exception as e:  # if end-user not in db
         if isinstance(e, litellm.BudgetExceededError):
             raise e
+        return None
+
+
+@log_db_metrics
+async def get_team_membership(
+    user_id: str,
+    team_id: str,
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> Optional["LiteLLM_TeamMembership"]:
+    """
+    Returns team membership object if user is member of team.
+    
+    Do a isolated check for team membership vs. doing a combined key + team + user + team-membership check, as key might come in frequently for different users/teams. Larger call will slowdown query time. This way we get to cache the constant (key/team/user info) and only update based on the changing value (team membership).
+    """
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    
+    if prisma_client is None:
+        raise Exception("No db connected")
+
+    if user_id is None or team_id is None:
+        return None
+    
+    _key = "team_membership:{}:{}".format(user_id, team_id)
+    
+    # check if in cache
+    cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
+    if cached_membership_obj is not None:
+        if isinstance(cached_membership_obj, dict):
+            return LiteLLM_TeamMembership(**cached_membership_obj)
+        elif isinstance(cached_membership_obj, LiteLLM_TeamMembership):
+            return cached_membership_obj
+    
+    # else, check db
+    try:
+        response = await prisma_client.db.litellm_teammembership.find_unique(
+            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+            include={"litellm_budget_table": True},
+        )
+
+        if response is None:
+            return None
+
+        # save the team membership object to cache
+        await user_api_key_cache.async_set_cache(
+            key=_key, value=response
+        )
+
+        _response = LiteLLM_TeamMembership(**response.dict())
+
+        return _response
+    except Exception:
         return None
 
 

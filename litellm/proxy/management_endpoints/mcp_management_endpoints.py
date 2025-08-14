@@ -403,6 +403,9 @@ if MCP_AVAILABLE:
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
             global_mcp_server_manager.add_update_server(new_mcp_server)
+            
+            # Ensure registry is up to date by reloading from database
+            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
             raise HTTPException(
@@ -461,6 +464,9 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server not found, passed server_id={server_id}"},
             )
         global_mcp_server_manager.remove_server(mcp_server_record_deleted)
+        
+        # Ensure registry is up to date by reloading from database
+        await global_mcp_server_manager.reload_servers_from_database()
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:
@@ -533,6 +539,9 @@ if MCP_AVAILABLE:
                 },
             )
         global_mcp_server_manager.add_update_server(mcp_server_record_updated)
+        
+        # Ensure registry is up to date by reloading from database
+        await global_mcp_server_manager.reload_servers_from_database()
 
         # TODO: Enterprise: Finish audit log trail
         if litellm.store_audit_logs:

@@ -231,7 +231,9 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 novita_api_key: Optional[str] = None
 snowflake_key: Optional[str] = None
+gradient_ai_api_key: Optional[str] = None
 nebius_key: Optional[str] = None
+cometapi_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -269,6 +271,7 @@ blocked_user_list: Optional[Union[str, List]] = None
 banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
+include_cost_in_streaming_usage: bool = False
 ### PROMPTS ###
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -356,7 +359,7 @@ disable_copilot_system_to_assistant: bool = (
 )
 public_model_groups: Optional[List[str]] = None
 public_model_groups_links: Dict[str, str] = {}
-#### REQUEST PRIORITIZATION #####
+#### REQUEST PRIORITIZATION ######
 priority_reservation: Optional[Dict[str, float]] = None
 
 
@@ -429,6 +432,9 @@ project = None
 config_path = None
 vertex_ai_safety_settings: Optional[dict] = None
 BEDROCK_CONVERSE_MODELS = [
+    "openai.gpt-oss-20b-1:0",
+    "openai.gpt-oss-120b-1:0",
+    "anthropic.claude-opus-4-1-20250805-v1:0",
     "anthropic.claude-opus-4-20250514-v1:0",
     "anthropic.claude-sonnet-4-20250514-v1:0",
     "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -480,6 +486,7 @@ vertex_code_text_models: List = []
 vertex_embedding_models: List = []
 vertex_anthropic_models: List = []
 vertex_llama3_models: List = []
+vertex_deepseek_models: List = []
 vertex_ai_ai21_models: List = []
 vertex_mistral_models: List = []
 ai21_models: List = []
@@ -513,9 +520,11 @@ anyscale_models: List = []
 cerebras_models: List = []
 galadriel_models: List = []
 sambanova_models: List = []
+sambanova_embedding_models: List = []
 novita_models: List = []
 assemblyai_models: List = []
 snowflake_models: List = []
+gradient_ai_models: List = []
 llama_models: List = []
 nscale_models: List = []
 nebius_models: List = []
@@ -530,6 +539,8 @@ morph_models: List = []
 lambda_ai_models: List = []
 hyperbolic_models: List = []
 recraft_models: List = []
+cometapi_models: List = []
+oci_models: List = []
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -609,6 +620,9 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-llama_models":
             key = key.replace("vertex_ai/", "")
             vertex_llama3_models.append(key)
+        elif value.get("litellm_provider") == "vertex_ai-deepseek_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_deepseek_models.append(key)
         elif value.get("litellm_provider") == "vertex_ai-mistral_models":
             key = key.replace("vertex_ai/", "")
             vertex_mistral_models.append(key)
@@ -687,6 +701,8 @@ def add_known_models():
             galadriel_models.append(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.append(key)
+        elif value.get("litellm_provider") == "sambanova-embedding-models":
+            sambanova_embedding_models.append(key)
         elif value.get("litellm_provider") == "novita":
             novita_models.append(key)
         elif value.get("litellm_provider") == "nebius-chat-models":
@@ -699,6 +715,8 @@ def add_known_models():
             jina_ai_models.append(key)
         elif value.get("litellm_provider") == "snowflake":
             snowflake_models.append(key)
+        elif value.get("litellm_provider") == "gradient_ai":
+            gradient_ai_models.append(key)
         elif value.get("litellm_provider") == "featherless_ai":
             featherless_ai_models.append(key)
         elif value.get("litellm_provider") == "deepgram":
@@ -721,6 +739,10 @@ def add_known_models():
             hyperbolic_models.append(key)
         elif value.get("litellm_provider") == "recraft":
             recraft_models.append(key)
+        elif value.get("litellm_provider") == "cometapi":
+            cometapi_models.append(key)
+        elif value.get("litellm_provider") == "oci":
+            oci_models.append(key)
 
 
 add_known_models()
@@ -798,6 +820,7 @@ model_list = (
     + assemblyai_models
     + jina_ai_models
     + snowflake_models
+    + gradient_ai_models
     + llama_models
     + featherless_ai_models
     + nscale_models
@@ -810,6 +833,8 @@ model_list = (
     + morph_models
     + lambda_ai_models
     + recraft_models
+    + cometapi_models
+    + oci_models
 )
 
 model_list_set = set(model_list)
@@ -833,7 +858,8 @@ models_by_provider: dict = {
     + vertex_text_models
     + vertex_anthropic_models
     + vertex_vision_models
-    + vertex_language_models,
+    + vertex_language_models
+    + vertex_deepseek_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models + bedrock_converse_models,
     "petals": petals_models,
@@ -865,12 +891,13 @@ models_by_provider: dict = {
     "anyscale": anyscale_models,
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
-    "sambanova": sambanova_models,
+    "sambanova": sambanova_models + sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models + nebius_embedding_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
+    "gradient_ai": gradient_ai_models,
     "meta_llama": llama_models,
     "nscale": nscale_models,
     "featherless_ai": featherless_ai_models,
@@ -884,6 +911,8 @@ models_by_provider: dict = {
     "lambda_ai": lambda_ai_models,
     "hyperbolic": hyperbolic_models,
     "recraft": recraft_models,
+    "cometapi": cometapi_models,
+    "oci": oci_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -917,6 +946,7 @@ all_embedding_models = (
     + vertex_embedding_models
     + fireworks_ai_embedding_models
     + nebius_embedding_models
+    + sambanova_embedding_models
 )
 
 ####### IMAGE GENERATION MODELS ###################
@@ -1130,16 +1160,20 @@ from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
 )
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
-
+from .llms.gradient_ai.chat.transformation import GradientAIConfig
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
+)
+from .llms.openai.chat.gpt_5_transformation import (
+    OpenAIGPT5Config,
 )
 from .llms.openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
@@ -1154,6 +1188,7 @@ from .llms.openai.chat.gpt_audio_transformation import (
 )
 
 openAIGPTAudioConfig = OpenAIGPTAudioConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
 from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
@@ -1164,6 +1199,7 @@ nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
 from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
 from .llms.cerebras.chat import CerebrasConfig
 from .llms.sambanova.chat import SambanovaConfig
+from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
 from .llms.ai21.chat.transformation import AI21ChatConfig
 from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
@@ -1183,8 +1219,9 @@ from .llms.azure.azure import (
     AzureOpenAIError,
     AzureOpenAIAssistantsAPIConfig,
 )
-
+from .llms.cometapi.chat.transformation import CometAPIConfig
 from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
+from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
 from .llms.azure.completion.transformation import AzureOpenAITextConfig
 from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from .llms.llamafile.chat.transformation import LlamafileChatConfig
@@ -1205,6 +1242,7 @@ from .llms.dashscope.chat.transformation import DashScopeChatConfig
 from .llms.modelscope.chat.transformation import ModelScopeChatConfig
 from .llms.moonshot.chat.transformation import MoonshotChatConfig
 from .llms.v0.chat.transformation import V0ChatConfig
+from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.morph.chat.transformation import MorphChatConfig
 from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
 from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig

@@ -371,8 +371,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                         reasoning_content += sum["text"]
                         thinking_block = ChatCompletionThinkingBlock(
                             type="thinking",
-                            thinking=sum["text"],
-                            signature=sum["signature"],
+                            thinking=sum.get("text", ""),
+                            signature=sum.get("signature", ""),
                         )
                         if thinking_blocks is None:
                             thinking_blocks = []

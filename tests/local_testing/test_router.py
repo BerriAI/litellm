@@ -2133,7 +2133,7 @@ def test_router_correctly_reraise_error():
     """
     User feedback: There is a problem with my messages array, but the error exception thrown is a Rate Limit error.
     ```
-    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-1.5-flash..
+    Rate Limit: Error code: 429 - {'error': {'message': 'No deployments available for selected model, Try again in 60 seconds. Passed model=gemini-2.5-flash-lite..
     ```
     What they want? Propagation of the real error.
     """

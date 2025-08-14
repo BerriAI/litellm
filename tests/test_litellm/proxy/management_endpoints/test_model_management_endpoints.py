@@ -451,3 +451,119 @@ class TestClearCache:
             mock_config.add_deployment.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
+
+
+class TestModelInfoEndpoint:
+    """Test the model_info endpoint for retrieving individual model information"""
+
+    @pytest.mark.asyncio
+    async def test_model_info_accessible_model_success(self):
+        """Test model_info returns model data for accessible models"""
+        from litellm.proxy.proxy_server import model_info
+
+        # Mock user with access to specific models
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            api_key="test_key",
+            models=["gpt-4", "claude-3"],
+            team_models=["gpt-3.5-turbo"]
+        )
+
+        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
+             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
+             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
+             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
+             patch("litellm.get_llm_provider") as mock_get_provider:
+            
+            # Setup mocks
+            mock_router.get_model_names.return_value = ["gpt-4", "claude-3", "gpt-3.5-turbo"]
+            mock_router.get_model_access_groups.return_value = {}
+            mock_get_key_models.return_value = ["gpt-4", "claude-3"]
+            mock_get_team_models.return_value = ["gpt-3.5-turbo"]
+            mock_get_complete_models.return_value = ["gpt-4", "claude-3", "gpt-3.5-turbo"]
+            mock_get_provider.return_value = (None, "openai", None, None)
+
+            # Test accessible model
+            result = await model_info(
+                model_id="gpt-4",
+                user_api_key_dict=user_api_key_dict
+            )
+
+            assert result["id"] == "gpt-4"
+            assert result["object"] == "model"
+            assert result["owned_by"] == "openai"
+            assert "created" in result
+
+    @pytest.mark.asyncio
+    async def test_model_info_inaccessible_model_returns_404(self):
+        """Test model_info returns 404 for inaccessible models"""
+        from litellm.proxy.proxy_server import model_info
+        from fastapi import HTTPException
+
+        # Mock user with limited access
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            api_key="test_key",
+            models=["gpt-4"],  # Only has access to gpt-4
+            team_models=[]
+        )
+
+        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
+             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
+             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
+             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models:
+            
+            # Setup mocks - user only has access to gpt-4
+            mock_router.get_model_names.return_value = ["gpt-4", "claude-3"]
+            mock_router.get_model_access_groups.return_value = {}
+            mock_get_key_models.return_value = ["gpt-4"]
+            mock_get_team_models.return_value = []
+            mock_get_complete_models.return_value = ["gpt-4"]  # Only gpt-4 accessible
+
+            # Test inaccessible model should raise 404
+            with pytest.raises(HTTPException) as exc_info:
+                await model_info(
+                    model_id="claude-3",  # Not in user's accessible models
+                    user_api_key_dict=user_api_key_dict
+                )
+            
+            assert exc_info.value.status_code == 404
+            assert "does not exist or is not accessible" in exc_info.value.detail
+
+    @pytest.mark.asyncio 
+    async def test_model_info_team_model_access(self):
+        """Test model_info works with team model access"""
+        from litellm.proxy.proxy_server import model_info
+        
+        # Mock user with team access
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            api_key="test_key", 
+            team_id="test_team",
+            models=[],  # No direct key models
+            team_models=["team-model-1"]
+        )
+
+        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, \
+             patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models, \
+             patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models, \
+             patch("litellm.proxy.proxy_server.get_complete_model_list") as mock_get_complete_models, \
+             patch("litellm.get_llm_provider") as mock_get_provider:
+            
+            # Setup mocks
+            mock_router.get_model_names.return_value = ["team-model-1"]
+            mock_router.get_model_access_groups.return_value = {}
+            mock_get_key_models.return_value = []
+            mock_get_team_models.return_value = ["team-model-1"]
+            mock_get_complete_models.return_value = ["team-model-1"]
+            mock_get_provider.return_value = (None, "custom", None, None)
+
+            # Test team model access
+            result = await model_info(
+                model_id="team-model-1",
+                user_api_key_dict=user_api_key_dict
+            )
+
+            assert result["id"] == "team-model-1"
+            assert result["object"] == "model" 
+            assert result["owned_by"] == "custom"

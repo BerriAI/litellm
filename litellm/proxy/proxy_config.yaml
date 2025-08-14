@@ -2,5 +2,3 @@ model_list:
   - model_name: vertex_ai/*
     litellm_params:
       model: vertex_ai/*
-
-

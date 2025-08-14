@@ -465,10 +465,10 @@ class ProxyInitializationHelpers:
     help="Ciphers to use for the SSL setup.",
 )
 @click.option(
-    "--use_prisma_migrate",
+    "--use_prisma_db_push",
     is_flag=True,
-    default=True,
-    help="Use prisma migrate instead of prisma db push for database schema updates",
+    default=False,
+    help="Use prisma db push instead of prisma migrate for database schema updates",
 )
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 @click.option(
@@ -519,7 +519,7 @@ def run_server(  # noqa: PLR0915
     ssl_certfile_path,
     ciphers,
     log_config,
-    use_prisma_migrate,
+    use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
 ):
@@ -777,7 +777,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    PrismaManager.setup_database(use_migrate=use_prisma_migrate)
+                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa

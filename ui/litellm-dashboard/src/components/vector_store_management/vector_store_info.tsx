@@ -25,6 +25,7 @@ import { vectorStoreInfoCall, vectorStoreUpdateCall, credentialListCall, Credent
 import { VectorStore } from "./types";
 import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
 import VectorStoreTester from "./VectorStoreTester";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
@@ -74,7 +75,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       }
     } catch (error) {
       console.error("Error fetching vector store details:", error);
-      message.error("Error fetching vector store details: " + error);
+      NotificationManager.fromBackend("Error fetching vector store details: " + error);
     }
   };
 
@@ -102,7 +103,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       try {
         metadata = metadataString ? JSON.parse(metadataString) : {};
       } catch (e) {
-        message.error("Invalid JSON in metadata field");
+        NotificationManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
       
@@ -120,7 +121,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       fetchVectorStoreDetails();
     } catch (error) {
       console.error("Error updating vector store:", error);
-      message.error("Error updating vector store: " + error);
+      NotificationManager.fromBackend("Error updating vector store: " + error);
     }
   };
 

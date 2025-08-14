@@ -965,6 +965,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
+    service_tier: Optional[str]
+    safety_identifier: Optional[str]
     prompt: Optional[PromptObject]
 
 
@@ -1300,7 +1302,7 @@ ResponsesAPIStreamingResponse = Annotated[
 ]
 
 
-REASONING_EFFORT = Literal["low", "medium", "high"]
+REASONING_EFFORT = Literal["minimal", "low", "medium", "high"]
 
 
 class OpenAIRealtimeStreamSession(TypedDict, total=False):

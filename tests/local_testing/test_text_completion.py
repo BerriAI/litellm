@@ -4152,7 +4152,7 @@ def test_completion_vllm(provider):
         client.completions.with_raw_response, "create", side_effect=mock_post
     ) as mock_call:
         response = text_completion(
-            model="{provider}/gemini-1.5-flash".format(provider=provider),
+            model="{provider}/gemini-2.5-flash-lite".format(provider=provider),
             prompt="ping",
             client=client,
             hello="world",
