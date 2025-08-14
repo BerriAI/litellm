@@ -226,7 +226,8 @@ class RouteChecks:
 
     @staticmethod
     def custom_admin_only_route_check(route: str):
-        from litellm.proxy.proxy_server import general_settings, premium_user
+        from litellm.proxy.general_settings import general_settings
+        from litellm.proxy.proxy_server import premium_user
 
         if "admin_only_routes" in general_settings:
             if premium_user is not True:

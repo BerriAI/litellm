@@ -670,7 +670,8 @@ async def active_callbacks():
     ```
     """
 
-    from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import proxy_logging_obj
 
     _alerting = str(general_settings.get("alerting"))
     # get success callbacks

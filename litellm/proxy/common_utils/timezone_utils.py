@@ -9,7 +9,7 @@ def get_budget_reset_timezone():
     Falls back to UTC if not specified.
     """
     # Import at function level to avoid circular imports
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.general_settings import general_settings
 
     if general_settings:
         litellm_settings = general_settings.get("litellm_settings", {})

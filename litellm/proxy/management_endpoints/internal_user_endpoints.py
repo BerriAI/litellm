@@ -705,7 +705,8 @@ def _process_keys_for_user_info(
     keys: Optional[List[LiteLLM_VerificationToken]],
     all_teams: Optional[Union[List[LiteLLM_TeamTable], List[TeamListResponseObject]]],
 ):
-    from litellm.proxy.proxy_server import general_settings, litellm_master_key_hash
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import litellm_master_key_hash
 
     returned_keys = []
     if keys is None:

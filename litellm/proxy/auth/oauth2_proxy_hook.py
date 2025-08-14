@@ -10,7 +10,7 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
     """
     Handle request from oauth2 proxy.
     """
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.general_settings import general_settings
 
     verbose_proxy_logger.debug("Handling oauth2 proxy request")
     # Define the OAuth2 config mappings

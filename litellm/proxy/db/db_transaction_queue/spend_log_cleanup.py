@@ -23,7 +23,7 @@ class SpendLogCleanup:
     def __init__(self, general_settings=None, redis_cache: Optional[RedisCache] = None):
         self.batch_size = SPEND_LOG_CLEANUP_BATCH_SIZE
         self.retention_seconds: Optional[int] = None
-        from litellm.proxy.proxy_server import general_settings as default_settings
+        from litellm.proxy.general_settings import general_settings as default_settings
 
         self.general_settings = general_settings or default_settings
         from litellm.proxy.proxy_server import proxy_logging_obj

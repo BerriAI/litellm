@@ -3243,7 +3243,7 @@ class ProxyUpdateSpend:
         returns True if should not update spend in db
         Skips writing spend logs and updates to key, team, user spend to DB
         """
-        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy.general_settings import general_settings
 
         if general_settings.get("disable_spend_updates") is True:
             return True

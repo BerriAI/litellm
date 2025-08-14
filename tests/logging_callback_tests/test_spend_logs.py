@@ -323,7 +323,7 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
     Test that messages and responses are logged in spend logs when store_prompts_in_spend_logs is enabled
     """
     # Mock general_settings
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.general_settings import general_settings
 
     general_settings["store_prompts_in_spend_logs"] = True
 

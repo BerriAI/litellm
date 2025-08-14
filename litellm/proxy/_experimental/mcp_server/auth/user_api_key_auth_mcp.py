@@ -160,7 +160,7 @@ class MCPRequestHandler:
             1. `LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME` as an environment variable
             2. `mcp_client_side_auth_header_name` in the general settings on the config.yaml file
         """
-        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy.general_settings import general_settings
         from litellm.secret_managers.main import get_secret_str
         MCP_CLIENT_SIDE_AUTH_HEADER_NAME: str = MCPRequestHandler.LITELLM_MCP_AUTH_HEADER_NAME
         if get_secret_str("LITELLM_MCP_CLIENT_SIDE_AUTH_HEADER_NAME") is not None:

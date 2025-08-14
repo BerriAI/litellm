@@ -144,7 +144,8 @@ def get_spend_logs_id(
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
-    from litellm.proxy.proxy_server import general_settings, master_key
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import master_key
 
     if kwargs is None:
         kwargs = {}
@@ -563,7 +564,7 @@ def _get_response_for_spend_logs_payload(
 
 
 def _should_store_prompts_and_responses_in_spend_logs() -> bool:
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.general_settings import general_settings
     from litellm.secret_managers.main import get_secret_bool
 
     return (
