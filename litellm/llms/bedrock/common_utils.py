@@ -4,7 +4,7 @@ Common utilities used across bedrock chat/embedding/image generation
 
 import json
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
 
 import httpx
 
@@ -446,17 +446,21 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
         """
+        route_mappings: Dict[str, Literal["invoke", "converse_like", "converse", "agent"]] = {
+            "invoke/": "invoke",
+            "converse_like/": "converse_like", 
+            "converse/": "converse",
+            "agent/": "agent"
+        }
+        
+        # Check explicit routes first
+        for prefix, route_type in route_mappings.items():
+            if prefix in model:
+                return route_type
+        
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if BedrockModelInfo._explicit_invoke_route(model):
-            return "invoke"
-        elif BedrockModelInfo._explicit_converse_like_route(model):
-            return "converse_like"
-        elif BedrockModelInfo._explicit_converse_route(model):
-            return "converse"
-        elif BedrockModelInfo._explicit_agent_route(model):
-            return "agent"
-        elif (
+        if (
             base_model in litellm.bedrock_converse_models
             or alt_model in litellm.bedrock_converse_models
         ):
