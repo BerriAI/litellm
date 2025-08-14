@@ -5476,6 +5476,11 @@ class Router:
                         pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
+        if model is None:
+            # Handle case where base_model is None (e.g., Azure models without base_model set)
+            # Use the original model from litellm_params
+            model = _model
+
         if not model.startswith("{}/".format(custom_llm_provider)):
             model_info_name = "{}/{}".format(custom_llm_provider, model)
         else:

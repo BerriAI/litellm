@@ -584,6 +584,150 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
 Same as [Anthropic API response](../providers/anthropic#usage---thinking--reasoning_content).
 
 
+## Usage - Anthropic Beta Features
+
+LiteLLM supports Anthropic's beta features on AWS Bedrock through the `anthropic-beta` header. This enables access to experimental features like:
+
+- **1M Context Window** - Up to 1 million tokens of context (Claude Sonnet 4)
+- **Computer Use Tools** - AI that can interact with computer interfaces
+- **Token-Efficient Tools** - More efficient tool usage patterns  
+- **Extended Output** - Up to 128K output tokens
+- **Enhanced Thinking** - Advanced reasoning capabilities
+
+### Supported Beta Features
+
+| Beta Feature | Header Value | Compatible Models | Description |
+|--------------|-------------|------------------|-------------|
+| 1M Context Window | `context-1m-2025-08-07` | Claude Sonnet 4 | Enable 1 million token context window |
+| Computer Use (Latest) | `computer-use-2025-01-24` | Claude 3.7 Sonnet | Latest computer use tools |
+| Computer Use (Legacy) | `computer-use-2024-10-22` | Claude 3.5 Sonnet v2 | Computer use tools for Claude 3.5 |
+| Token-Efficient Tools | `token-efficient-tools-2025-02-19` | Claude 3.7 Sonnet | More efficient tool usage |
+| Interleaved Thinking | `interleaved-thinking-2025-05-14` | Claude 4 models | Enhanced thinking capabilities |
+| Extended Output | `output-128k-2025-02-19` | Claude 3.7 Sonnet | Up to 128K output tokens |
+| Developer Thinking | `dev-full-thinking-2025-05-14` | Claude 4 models | Raw thinking mode for developers |
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+**Single Beta Feature**
+
+```python
+from litellm import completion
+import os
+
+# set env
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+# Use 1M context window with Claude Sonnet 4
+response = completion(
+    model="bedrock/anthropic.claude-sonnet-4-20250115-v1:0",
+    messages=[{"role": "user", "content": "Hello! Testing 1M context window."}],
+    max_tokens=100,
+    extra_headers={
+        "anthropic-beta": "context-1m-2025-08-07"  # 👈 Enable 1M context
+    }
+)
+```
+
+**Multiple Beta Features**
+
+```python
+from litellm import completion
+
+# Combine multiple beta features (comma-separated)
+response = completion(
+    model="bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    messages=[{"role": "user", "content": "Testing multiple beta features"}],
+    max_tokens=100,
+    extra_headers={
+        "anthropic-beta": "computer-use-2024-10-22,context-1m-2025-08-07"
+    }
+)
+```
+
+**Computer Use Tools with Beta Features**
+
+```python
+from litellm import completion
+
+# Computer use tools automatically add computer-use-2024-10-22
+# You can add additional beta features
+response = completion(
+    model="bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0",
+    messages=[{"role": "user", "content": "Take a screenshot"}],
+    tools=[{
+        "type": "computer_20241022",
+        "name": "computer",
+        "display_width_px": 1920,
+        "display_height_px": 1080
+    }],
+    extra_headers={
+        "anthropic-beta": "context-1m-2025-08-07"  # Additional beta feature
+    }
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+**Set on YAML Config**
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-1m
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-4-20250115-v1:0
+      extra_headers:
+        anthropic-beta: "context-1m-2025-08-07"  # 👈 Enable 1M context
+
+  - model_name: claude-computer-use
+    litellm_params:
+      model: bedrock/converse/anthropic.claude-3-5-sonnet-20241022-v2:0
+      extra_headers:
+        anthropic-beta: "computer-use-2024-10-22,context-1m-2025-08-07"
+
+general_settings:
+  forward_client_headers_to_llm_api: true  # 👈 Required for client-side header forwarding
+```
+
+**Set on Request**
+
+```python
+import openai
+
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="claude-sonnet-4-1m",
+    messages=[{
+        "role": "user", 
+        "content": "Testing 1M context window"
+    }],
+    extra_headers={
+        "anthropic-beta": "context-1m-2025-08-07"
+    }
+)
+```
+
+:::info
+**For client-side header forwarding**: When using the proxy and sending `anthropic-beta` headers from the client (like the OpenAI SDK), you need to enable `forward_client_headers_to_llm_api: true` in your proxy's `general_settings`. This tells the proxy to extract headers from HTTP requests and forward them to the underlying LLM provider.
+:::
+
+</TabItem>
+</Tabs>
+
+:::info
+
+Beta features may require special access or permissions in your AWS account. Some features are only available in specific AWS regions. Check the [AWS Bedrock documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html) for availability and access requirements.
+
+:::
+
+
 ## Usage - Structured Output / JSON mode 
 
 <Tabs>
