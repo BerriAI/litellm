@@ -524,3 +524,25 @@ class BedrockEventStreamDecoderBase:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
+
+
+def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
+    """
+    Extract anthropic-beta header values and convert them to a list.
+    Supports comma-separated values from user headers.
+    
+    Used by both converse and invoke transformations for consistent handling
+    of anthropic-beta headers that should be passed to AWS Bedrock.
+    
+    Args:
+        headers (dict): Request headers dictionary
+        
+    Returns:
+        List[str]: List of anthropic beta feature strings, empty list if no header
+    """
+    anthropic_beta_header = headers.get("anthropic-beta")
+    if not anthropic_beta_header:
+        return []
+    
+    # Split comma-separated values and strip whitespace
+    return [beta.strip() for beta in anthropic_beta_header.split(",")]
