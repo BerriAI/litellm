@@ -37,6 +37,27 @@ def safe_divide_seconds(
     return float(seconds / denominator)
 
 
+def safe_divide(
+    numerator: Union[int, float], 
+    denominator: Union[int, float], 
+    default: Union[int, float] = 0
+) -> Union[int, float]:
+    """
+    Safely divide two numbers, returning a default value if denominator is zero.
+    
+    Args:
+        numerator: The number to divide
+        denominator: The number to divide by
+        default: Value to return if denominator is zero (defaults to 0)
+    
+    Returns:
+        The result of numerator/denominator, or default if denominator is zero
+    """
+    if denominator == 0:
+        return default
+    return numerator / denominator
+
+
 def map_finish_reason(
     finish_reason: str,
 ):  # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
