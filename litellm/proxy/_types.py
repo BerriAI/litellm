@@ -1223,6 +1223,12 @@ class NewTeamRequest(TeamBase):
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
+    team_member_rpm_limit: Optional[int] = (
+        None  # allow user to set RPM limit for all team members
+    )
+    team_member_tpm_limit: Optional[int] = (
+        None  # allow user to set TPM limit for all team members
+    )
     team_member_key_duration: Optional[str] = None  # e.g. "1d", "1w", "1m"
 
     model_config = ConfigDict(protected_namespaces=())
@@ -1266,6 +1272,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
+    team_member_rpm_limit: Optional[int] = None
+    team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
 
 
@@ -1758,9 +1766,13 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_blocked: bool = False
     soft_budget: Optional[float] = None
     team_model_aliases: Optional[Dict] = None
-    team_member_spend: Optional[float] = None
     team_member: Optional[Member] = None
     team_metadata: Optional[Dict] = None
+
+    # Team Member Specific Params
+    team_member_spend: Optional[float] = None
+    team_member_tpm_limit: Optional[int] = None
+    team_member_rpm_limit: Optional[int] = None
 
     # End User Params
     end_user_id: Optional[str] = None
@@ -1850,8 +1862,7 @@ class UserAPIKeyAuth(
             key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
         )
-
-
+    
 class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_id: Optional[str]
     user_info: Optional[Union[dict, BaseModel]]
@@ -2620,6 +2631,16 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
+    def safe_get_team_member_rpm_limit(self) -> Optional[int]:
+        if self.litellm_budget_table is not None:
+            return self.litellm_budget_table.rpm_limit
+        return None
+    
+    def safe_get_team_member_tpm_limit(self) -> Optional[int]:
+        if self.litellm_budget_table is not None:
+            return self.litellm_budget_table.tpm_limit
+        return None
+
 
 #### Organization / Team Member Requests ####
 
@@ -2984,6 +3005,7 @@ class JWTAuthBuilderResult(TypedDict):
     user_id: Optional[str]
     end_user_id: Optional[str]
     org_id: Optional[str]
+    team_membership: Optional[LiteLLM_TeamMembership]
 
 
 class ClientSideFallbackModel(TypedDict, total=False):
