@@ -14,9 +14,18 @@ from unittest.mock import patch
 
 import litellm
 from litellm.proxy.proxy_server import app
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
 
 client = TestClient(app)
+
+
+def create_mock_user_api_key_auth():
+    """Helper function to create a mock auth object"""
+    return UserAPIKeyAuth(
+        user_id="test-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
 
 
 @pytest.mark.asyncio
@@ -24,6 +33,9 @@ async def test_create_and_get_tag():
     """
     Test creation of a new tag and retrieving its information
     """
+    # Create a mock auth object
+    mock_user_api_key_auth = create_mock_user_api_key_auth()
+    
     # Mock the prisma client and _get_tags_config and _save_tags_config
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.proxy_server.llm_router"
@@ -35,8 +47,11 @@ async def test_create_and_get_tag():
         "litellm.proxy.management_endpoints.tag_management_endpoints._add_tag_to_deployment"
     ) as mock_add_tag, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._get_model_names"
-    ) as mock_get_models:
+    ) as mock_get_models, patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
+    ) as mock_auth:
         # Setup mocks
+        mock_auth.return_value = mock_user_api_key_auth
         mock_get_tags.return_value = {}
         mock_get_models.return_value = {"model-1": "gpt-3.5-turbo"}
 
@@ -83,6 +98,9 @@ async def test_update_tag():
     """
     Test updating an existing tag
     """
+    # Create a mock auth object
+    mock_user_api_key_auth = create_mock_user_api_key_auth()
+    
     # Mock the prisma client and _get_tags_config and _save_tags_config
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
@@ -90,8 +108,11 @@ async def test_update_tag():
         "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
     ) as mock_save_tags, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._get_model_names"
-    ) as mock_get_models:
+    ) as mock_get_models, patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
+    ) as mock_auth:
         # Setup mocks for existing tag
+        mock_auth.return_value = mock_user_api_key_auth
         mock_get_tags.return_value = {
             "test-tag": {
                 "name": "test-tag",
@@ -129,13 +150,19 @@ async def test_delete_tag():
     """
     Test deleting a tag
     """
+    # Create a mock auth object
+    mock_user_api_key_auth = create_mock_user_api_key_auth()
+    
     # Mock the prisma client and _get_tags_config and _save_tags_config
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._get_tags_config"
     ) as mock_get_tags, patch(
         "litellm.proxy.management_endpoints.tag_management_endpoints._save_tags_config"
-    ) as mock_save_tags:
+    ) as mock_save_tags, patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
+    ) as mock_auth:
         # Setup mocks for existing tag
+        mock_auth.return_value = mock_user_api_key_auth
         mock_get_tags.return_value = {
             "test-tag": {
                 "name": "test-tag",
