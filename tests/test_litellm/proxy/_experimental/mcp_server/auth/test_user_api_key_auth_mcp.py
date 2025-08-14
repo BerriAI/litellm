@@ -172,14 +172,6 @@ class TestMCPRequestHandler:
                 mock_key_servers.assert_called_once_with(user_api_key_auth)
                 mock_team_servers.assert_called_once_with(user_api_key_auth)
 
-
-                elif expected_behavior == "use_key_groups":
-                    # Team has no permissions, use key permissions
-                    assert sorted(final_result) == sorted(expected_key_servers)
-                elif expected_behavior == "no_groups":
-                    # Neither has permissions
-                    assert final_result == []
-
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""
         
