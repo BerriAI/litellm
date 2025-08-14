@@ -11223,6 +11223,17 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "openrouter/deepseek/deepseek-chat-v3-0324": {
+        "max_tokens": 8192,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "litellm_provider": "openrouter",
+        "supports_prompt_caching": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "openrouter/deepseek/deepseek-coder": {
         "max_tokens": 8192,
         "max_input_tokens": 66000,
