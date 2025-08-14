@@ -111,6 +111,7 @@ import {
   v2TeamListCall,
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -464,7 +465,7 @@ const Teams: React.FC<TeamProps> = ({
       }
     } catch (error) {
       console.error("Error creating the team:", error);
-      NotificationManager.fromBackend("Error creating the team: " + error, 20);
+      NotificationManager.fromBackend("Error creating the team: " + error);
     }
   };
 

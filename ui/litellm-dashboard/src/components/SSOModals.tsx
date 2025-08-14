@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button as Button2, Select, message } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;

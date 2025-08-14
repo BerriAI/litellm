@@ -6,6 +6,7 @@ import { getInternalUserSettings, updateInternalUserSettings, modelAvailableCall
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface SSOSettingsProps {
   accessToken: string | null;
