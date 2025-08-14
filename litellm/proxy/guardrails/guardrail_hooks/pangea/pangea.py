@@ -279,7 +279,7 @@ class PangeaHandler(CustomGuardrail):
 
         output = ai_guard_response.get("result", {}).get("output", {})
         response.choices = output["choices"]
-        return data
+        return response
 
     @log_guardrail_information
     async def async_post_call_success_hook(
