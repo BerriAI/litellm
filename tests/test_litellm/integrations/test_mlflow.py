@@ -71,5 +71,42 @@ async def test_mlflow_request_tags_functionality():
         tags_param = call_args.kwargs.get('tags', {})
         expected_tags = {"tag1": "", "tag2": "", "production": ""}
         assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
-        
-        print("✅ Request tags properly transformed and passed to MLflow trace")
+
+
+
+def test_mlflow_token_usage_attribute_structure():
+    """Ensure token usage attributes are formatted with mlflow.chat.tokenUsage."""
+
+    mock_mlflow_tracking = MagicMock()
+    mock_mlflow_tracking.MlflowClient = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mlflow": MagicMock(),
+            "mlflow.tracking": mock_mlflow_tracking,
+            "mlflow.tracing.utils": MagicMock(),
+        },
+    ):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+
+        attrs = mlflow_logger._extract_attributes(  # type: ignore
+            {
+                "litellm_call_id": "123",
+                "call_type": "completion",
+                "model": "gpt-3.5-turbo",
+                "standard_logging_object": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 7,
+                    "total_tokens": 12,
+                },
+            }
+        )
+
+        assert attrs["mlflow.chat.tokenUsage"] == {
+            "input_tokens": 5,
+            "output_tokens": 7,
+            "total_tokens": 12,
+        }
