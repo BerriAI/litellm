@@ -30,6 +30,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
@@ -58,11 +59,13 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import (
+    CreateBatchRequest,
     CreateFileRequest,
     OpenAIFileObject,
     ResponseInputParam,
     ResponsesAPIResponse,
 )
+from openai.types import Batch
 from litellm.types.rerank import OptionalRerankParams, RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
@@ -2208,6 +2211,18 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
+        # Handle Bedrock-specific file creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return self._create_bedrock_file(
+                create_file_data=create_file_data,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                sync_httpx_client=sync_httpx_client,
+                timeout=timeout,
+            )
+
         if isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -2277,6 +2292,18 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        # Handle Bedrock-specific file creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return await self._async_create_bedrock_file(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=async_httpx_client,
+                timeout=timeout,
+            )
+
         if isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -2325,6 +2352,494 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    def create_batch(
+        self,
+        create_batch_data: CreateBatchRequest,
+        litellm_params: dict,
+        provider_config: BaseBatchesConfig,
+        headers: dict,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        logging_obj: LiteLLMLoggingObj,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+        """
+        Creates a batch for processing multiple requests
+        """
+        # get config from model, custom llm provider
+        headers = provider_config.validate_environment(
+            api_key=api_key,
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        api_base = provider_config.get_complete_batch_url(
+            api_base=api_base,
+            api_key=api_key,
+            model="",
+            optional_params={},
+            litellm_params=litellm_params,
+            data=create_batch_data,
+        )
+        if api_base is None:
+            raise ValueError("api_base is required for create_batch")
+
+        # Get the transformed request data
+        transformed_request = provider_config.transform_create_batch_request(
+            model="",
+            create_batch_data=create_batch_data,
+            litellm_params=litellm_params,
+            optional_params={},
+        )
+
+        if _is_async:
+            return self.async_create_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        # Handle Bedrock-specific batch creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return self._create_bedrock_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                sync_httpx_client=sync_httpx_client,
+                timeout=timeout,
+            )
+
+        try:
+            batch_response = sync_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=transformed_request,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_create_batch_response(
+            model=None,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    async def async_create_batch(
+        self,
+        transformed_request: Union[bytes, str, dict],
+        litellm_params: dict,
+        provider_config: BaseBatchesConfig,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Batch:
+        """
+        Creates a batch for processing multiple requests (async)
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        # Handle Bedrock-specific batch creation
+        if provider_config.custom_llm_provider == litellm.LlmProviders.BEDROCK:
+            return await self._async_create_bedrock_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=async_httpx_client,
+                timeout=timeout,
+            )
+
+        try:
+            batch_response = await async_httpx_client.post(
+                url=api_base,
+                headers=headers,
+                data=transformed_request,
+                timeout=timeout,
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error creating batch: {e}")
+            raise self._handle_error(
+                e=e,
+                provider_config=provider_config,
+            )
+
+        return provider_config.transform_create_batch_response(
+            model=None,
+            raw_response=batch_response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    def _create_bedrock_batch(
+        self,
+        transformed_request: Union[bytes, str, dict],
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        sync_httpx_client: HTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Batch:
+        """
+        Creates a Bedrock batch synchronously
+        """
+        import asyncio
+
+        return asyncio.run(
+            self._async_create_bedrock_batch(
+                transformed_request=transformed_request,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.BEDROCK
+                ),
+                timeout=timeout,
+            )
+        )
+
+    async def _async_create_bedrock_batch(
+        self,
+        transformed_request: Union[bytes, str, dict],
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        async_httpx_client: AsyncHTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Batch:
+        """
+        Creates a Bedrock batch asynchronously using AWS Batch API
+        """
+        import uuid
+        import time
+        from litellm import get_secret_str
+
+        verbose_logger.debug(
+            "Creating Bedrock batch with data: %s", transformed_request
+        )
+
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        except ImportError:
+            raise ImportError(
+                "Missing boto3 to call bedrock batch. Run 'pip install boto3'."
+            )
+
+        # Get AWS credentials using BaseAWSLLM
+        base_aws = BaseAWSLLM()
+        aws_params = {
+            k: v
+            for k, v in litellm_params.items()
+            if k
+            in [
+                "aws_access_key_id",
+                "aws_secret_access_key",
+                "aws_session_token",
+                "aws_region_name",
+            ]
+        }
+        credentials = base_aws.get_credentials(**aws_params)
+
+        # Get region
+        region_name = (
+            litellm_params.get("aws_region_name")
+            or get_secret_str("AWS_REGION")
+            or "us-east-1"
+        )
+
+        # Parse the transformed request
+        if isinstance(transformed_request, (str, bytes)):
+            import json
+
+            batch_data = (
+                json.loads(transformed_request)
+                if isinstance(transformed_request, str)
+                else json.loads(transformed_request.decode())
+            )
+        else:
+            batch_data = transformed_request
+
+        # Extract batch information
+        input_file_id = batch_data.get("input_file_id")
+        completion_window = batch_data.get("completion_window", "24h")
+
+        # Prepare Bedrock batch job request
+        job_name = f"litellm-batch-{str(uuid.uuid4())[:8]}"
+
+        batch_request = {
+            "jobName": job_name,
+            "roleArn": get_secret_str("LITELLM_BEDROCK_BATCH_ROLE_ARN"),
+            "modelId": litellm_params.get("model", ""),
+            "inputDataConfig": {
+                "s3InputDataConfig": {
+                    "s3Uri": f"s3://{get_secret_str('LITELLM_BEDROCK_BATCH_BUCKET')}/batch/{input_file_id}"
+                }
+            },
+            "outputDataConfig": {
+                "s3OutputDataConfig": {
+                    "s3Uri": f"s3://{get_secret_str('LITELLM_BEDROCK_BATCH_BUCKET')}/batch-output/{job_name}"
+                }
+            },
+        }
+
+        # Use Bedrock batch API endpoint
+        bedrock_url = (
+            f"https://bedrock.{region_name}.amazonaws.com/model-invocation-jobs"
+        )
+
+        # Create signed AWS request
+        aws_request = AWSRequest(
+            method="POST",
+            url=bedrock_url,
+            data=json.dumps(batch_request).encode(),
+            headers={
+                "Content-Type": "application/x-amz-json-1.1",
+                "X-Amz-Target": "AmazonBedrockControlPlane.CreateModelInvocationJob",
+            },
+        )
+        SigV4Auth(credentials, "bedrock", region_name).add_auth(aws_request)
+
+        try:
+            response = await async_httpx_client.post(
+                bedrock_url,
+                headers=dict(aws_request.headers.items()),
+                content=aws_request.body,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            bedrock_response = response.json()
+
+            # Convert to OpenAI Batch format
+            from openai.types import Batch
+
+            return Batch(
+                id=f"batch_{bedrock_response.get('jobArn', job_name).split('/')[-1]}",
+                object="batch",
+                created_at=int(time.time()),
+                completion_window=completion_window,
+                endpoint="/v1/chat/completions",
+                input_file_id=input_file_id,
+                status="validating",  # Bedrock starts in validating state
+                output_file_id=None,  # Will be set when completed
+                error_file_id=None,
+                errors=None,
+                failed_at=None,
+                finalizing_at=None,
+                completed_at=None,
+                expired_at=None,
+                expires_at=int(time.time())
+                + (24 * 3600 if completion_window == "24h" else 0),
+                cancelled_at=None,
+                cancelling_at=None,
+                in_progress_at=None,
+                request_counts=None,
+                metadata={
+                    "bedrock_job_arn": bedrock_response.get("jobArn"),
+                    "bedrock_job_name": job_name,
+                    "aws_region": region_name,
+                },
+            )
+
+        except Exception as e:
+            verbose_logger.exception(f"Error creating Bedrock batch: {e}")
+            raise Exception(f"Bedrock batch creation failed: {str(e)}")
+
+    def _create_bedrock_file(
+        self,
+        create_file_data: CreateFileRequest,
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        sync_httpx_client: HTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> OpenAIFileObject:
+        """
+        Creates a Bedrock file synchronously by uploading to S3
+        """
+        import asyncio
+
+        return asyncio.run(
+            self._async_create_bedrock_file(
+                transformed_request=create_file_data,
+                litellm_params=litellm_params,
+                headers=headers,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                async_httpx_client=get_async_httpx_client(
+                    llm_provider=litellm.LlmProviders.BEDROCK
+                ),
+                timeout=timeout,
+            )
+        )
+
+    async def _async_create_bedrock_file(
+        self,
+        transformed_request: Union[CreateFileRequest, bytes, str, dict],
+        litellm_params: dict,
+        headers: dict,
+        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        async_httpx_client: AsyncHTTPHandler,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> OpenAIFileObject:
+        """
+        Creates a Bedrock file asynchronously by uploading to S3
+        """
+        import uuid
+        from litellm import get_secret_str
+
+        # Extract file data from the request
+        create_file_data: dict
+        if isinstance(transformed_request, dict):
+            create_file_data = transformed_request  # type: ignore
+        elif isinstance(transformed_request, (bytes, str)):
+            # This shouldn't happen in normal usage, but handle gracefully
+            raise ValueError(f"Unexpected data type for file creation: {type(transformed_request)}")
+        else:
+            # Handle CreateFileRequest (TypedDict) - convert to dict
+            create_file_data = dict(transformed_request)  # type: ignore
+
+        verbose_logger.debug("Creating Bedrock file with data: %s", create_file_data)
+
+        try:
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        except ImportError:
+            raise ImportError(
+                "Missing boto3 to call bedrock file upload. Run 'pip install boto3'."
+            )
+
+        # Get S3 configuration from environment variables
+        bucket_name = get_secret_str("LITELLM_BEDROCK_BATCH_BUCKET")
+        if not bucket_name:
+            raise ValueError(
+                "LITELLM_BEDROCK_BATCH_BUCKET environment variable is required for Bedrock file uploads"
+            )
+
+        region_name = (
+            litellm_params.get("aws_region_name")
+            or get_secret_str("AWS_REGION")
+            or "us-east-1"
+        )
+
+        # Get AWS credentials using BaseAWSLLM
+        base_aws = BaseAWSLLM()
+        aws_params = {
+            k: v
+            for k, v in litellm_params.items()
+            if k
+            in [
+                "aws_access_key_id",
+                "aws_secret_access_key",
+                "aws_session_token",
+                "aws_region_name",
+            ]
+        }
+        credentials = base_aws.get_credentials(**aws_params)
+
+        # Extract file content and filename using utility function
+        from litellm.llms.bedrock.common_utils import (
+            extract_bedrock_file_content,
+            generate_bedrock_s3_key,
+            prepare_bedrock_s3_upload,
+        )
+
+        # Extract file content and filename using utility function
+        file_content, filename = extract_bedrock_file_content(create_file_data)
+        purpose = create_file_data.get("purpose", "batch")
+        s3_key = generate_bedrock_s3_key(filename, purpose)
+        url, upload_headers = prepare_bedrock_s3_upload(
+            file_content, s3_key, bucket_name, region_name
+        )
+
+        # Create and sign AWS request
+        aws_request = AWSRequest(
+            method="PUT",
+            url=url,
+            data=file_content,
+            headers=upload_headers,
+        )
+        SigV4Auth(credentials, "s3", region_name).add_auth(aws_request)
+
+        try:
+            # Upload using httpx
+            response = await async_httpx_client.put(
+                url,
+                data=file_content,
+                headers=dict(aws_request.headers.items()),
+                timeout=timeout,
+            )
+            response.raise_for_status()
+
+            # Create OpenAI-compatible response
+            file_id = f"file-{str(uuid.uuid4())}"
+
+            file_response = OpenAIFileObject(
+                id=file_id,
+                bytes=len(file_content),
+                created_at=int(__import__("time").time()),
+                filename=filename,
+                object="file",
+                purpose=purpose,
+                status="processed",
+                status_details=None,
+            )
+
+            # Store S3 info in hidden params for batch operations
+            if not hasattr(file_response, "_hidden_params"):
+                file_response._hidden_params = {}
+            file_response._hidden_params.update(
+                {
+                    "s3_uri": f"s3://{bucket_name}/{s3_key}",
+                    "s3_key": s3_key,
+                    "bucket_name": bucket_name,
+                    "region_name": region_name,
+                }
+            )
+
+            verbose_logger.debug("Bedrock file created: %s", file_response)
+            return file_response
+
+        except Exception as e:
+            verbose_logger.exception(f"Error uploading file to S3: {e}")
+            raise Exception(f"Bedrock file upload failed: {str(e)}")
 
     def list_files(self):
         """
@@ -2485,10 +3000,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
 
         Handles image edit requests.
@@ -2677,10 +3189,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[
-        ImageResponse,
-        Coroutine[Any, Any, ImageResponse],
-    ]:
+    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -2712,7 +3221,8 @@ class BaseLLMHTTPHandler:
 
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2763,15 +3273,17 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
 
         return model_response
@@ -2804,10 +3316,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2858,17 +3370,19 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
-        
+
         return model_response
 
     ###### VECTOR STORE HANDLER ######
@@ -2907,15 +3421,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
+            litellm_params=dict(litellm_params),
         )
         all_optional_params: Dict[str, Any] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -2936,7 +3451,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = await async_httpx_client.post(
@@ -3004,15 +3521,16 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_search_vector_store_request(
-                vector_store_id=vector_store_id,
-                query=query,
-                vector_store_search_optional_params=vector_store_search_optional_params,
-                api_base=api_base,
-                litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=logging_obj,
+            litellm_params=dict(litellm_params),
         )
 
         all_optional_params: Dict[str, Any] = dict(litellm_params)
@@ -3035,7 +3553,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = sync_httpx_client.post(
@@ -3084,11 +3604,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -3159,11 +3680,12 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, request_body = (
-            vector_store_provider_config.transform_create_vector_store_request(
-                vector_store_create_optional_params=vector_store_create_optional_params,
-                api_base=api_base,
-            )
+        (
+            url,
+            request_body,
+        ) = vector_store_provider_config.transform_create_vector_store_request(
+            vector_store_create_optional_params=vector_store_create_optional_params,
+            api_base=api_base,
         )
 
         logging_obj.pre_call(
@@ -3242,13 +3764,14 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            generate_content_provider_config.sync_get_auth_token_and_url(
-                api_base=litellm_params.api_base,
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-            )
+        (
+            headers,
+            api_base,
+        ) = generate_content_provider_config.sync_get_auth_token_and_url(
+            api_base=litellm_params.api_base,
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
         )
 
         if extra_headers:
@@ -3348,13 +3871,14 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get headers and URL from the provider config
-        headers, api_base = (
-            await generate_content_provider_config.get_auth_token_and_url(
-                model=model,
-                litellm_params=dict(litellm_params),
-                stream=stream,
-                api_base=litellm_params.api_base,
-            )
+        (
+            headers,
+            api_base,
+        ) = await generate_content_provider_config.get_auth_token_and_url(
+            model=model,
+            litellm_params=dict(litellm_params),
+            stream=stream,
+            api_base=litellm_params.api_base,
         )
 
         if extra_headers:
