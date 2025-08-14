@@ -512,7 +512,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         # Since bedrock Invoke supports Native Anthropic Messages API
         #########################################################
         if "claude" in model:
-            return litellm.AmazonAnthropicClaude3MessagesConfig()
+            return litellm.AmazonAnthropicClaudeMessagesConfig()
         
         #########################################################
         # These routes will go through litellm.completion()
