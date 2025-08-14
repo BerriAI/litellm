@@ -1,5 +1,6 @@
 import { message } from "antd";
 import { modelCreateCall, Model } from "../networking";
+import NotificationManager from "../molecules/notifications_manager";
 
 export const handleAddAutoRouterSubmit = async (
   values: any,
@@ -55,6 +56,6 @@ export const handleAddAutoRouterSubmit = async (
     
   } catch (error) {
     console.error("Failed to add auto router:", error);
-    message.error("Failed to add auto router: " + error, 10);
+    NotificationManager.fromBackend("Failed to add auto router: " + error);
   }
 }; 

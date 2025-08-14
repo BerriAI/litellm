@@ -8,7 +8,7 @@ import {
   TableCell,
 } from "@tremor/react";
 import { Typography } from "antd";
-import NotificationsManager from "./molecules/notifications_manager";
+import NotificationManager from "./molecules/notifications_manager";
 import { serviceHealthCheck, setCallbacksCall } from "./networking";
 import { EmailEventSettings } from "./email_events";
 
@@ -54,9 +54,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
     };
     try {
       await setCallbacksCall(accessToken, payload);
-      NotificationsManager.success("Email settings updated successfully");
+      NotificationManager.success("Email settings updated successfully");
     } catch (error) {
-      NotificationsManager.fromBackend(error);
+      NotificationManager.fromBackend(error);
     }
   }
 
@@ -195,9 +195,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({
                 if (!accessToken) return;
                 try {
                   await serviceHealthCheck(accessToken, "email");
-                  NotificationsManager.success("Email test triggered. Check your configured email inbox/logs.");
+                  NotificationManager.success("Email test triggered. Check your configured email inbox/logs.");
                 } catch (error) {
-                  NotificationsManager.fromBackend(error);
+                  NotificationManager.fromBackend(error);
                 }
               }}
               className="mx-2"

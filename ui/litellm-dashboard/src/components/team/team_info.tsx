@@ -54,6 +54,7 @@ import LoggingSettingsView from "../logging_settings_view";
 import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
+import NotificationManager from "../molecules/notifications_manager";
 
 export interface TeamMembership {
   user_id: string;
@@ -160,7 +161,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const response = await teamInfoCall(accessToken, teamId);
       setTeamData(response);
     } catch (error) {
-      message.error("Failed to load team information");
+      NotificationManager.fromBackend("Failed to load team information");
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
@@ -236,7 +237,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         errMsg = error.message;
       }
 
-      message.error(errMsg);
+      NotificationManager.fromBackend(errMsg);
       console.error("Error adding team member:", error);
     }
   };
@@ -281,7 +282,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       message.destroy(); // Remove all existing toasts
 
-      message.error(errMsg);
+      NotificationManager.fromBackend(errMsg);
       console.error("Error updating team member:", error);
     }
   };
@@ -303,7 +304,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Notify parent component of the update
       onUpdate(updatedTeamData);
     } catch (error) {
-      message.error("Failed to remove team member");
+      NotificationManager.fromBackend("Failed to remove team member");
       console.error("Error removing team member:", error);
     }
   };
@@ -316,7 +317,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       try {
         parsedMetadata = values.metadata ? JSON.parse(values.metadata) : {};
       } catch (e) {
-        message.error("Invalid JSON in metadata field");
+        NotificationManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
 
