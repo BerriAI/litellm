@@ -4875,7 +4875,9 @@ async def websocket_endpoint(
     await websocket.accept()
 
     # Only use explicit parameters, not all query params
-    query_params: RealtimeQueryParams = {"model": model, "intent": intent}
+    query_params: RealtimeQueryParams = {"model": model}
+    if intent is not None:
+        query_params["intent"] = intent
 
     data = {
         "model": model,
