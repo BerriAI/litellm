@@ -12,6 +12,7 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
+from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -25,12 +26,13 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class AmazonAnthropicClaude3MessagesConfig(
+class AmazonAnthropicClaudeMessagesConfig(
     AnthropicMessagesConfig,
     AmazonInvokeConfig,
 ):
     """
     Call Claude model family in the /v1/messages API spec
+    Supports anthropic_beta parameter for beta features.
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
@@ -127,6 +129,12 @@ class AmazonAnthropicClaude3MessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
+            
+        # 4. Handle anthropic_beta from user headers
+        anthropic_beta_list = get_anthropic_beta_from_headers(headers)
+        if anthropic_beta_list:
+            anthropic_messages_request["anthropic_beta"] = anthropic_beta_list
+            
         return anthropic_messages_request
 
     def get_async_streaming_response_iterator(

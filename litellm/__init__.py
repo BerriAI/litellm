@@ -1046,7 +1046,7 @@ from .llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaude3MessagesConfig,
+    AmazonAnthropicClaudeMessagesConfig,
 )
 from .llms.together_ai.chat import TogetherAIConfig
 from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
@@ -1106,7 +1106,7 @@ from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation 
     AmazonAnthropicConfig,
 )
 from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaude3Config,
+    AmazonAnthropicClaudeConfig,
 )
 from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
     AmazonCohereConfig,
