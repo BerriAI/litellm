@@ -471,6 +471,7 @@ def test_completion_azure_stream():
 
 
 # test_completion_azure_stream()
+@pytest.mark.skip("Skipping predibase streaming test - ran out of credits")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_predibase_streaming(sync_mode):
