@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
+    Dict,
     List,
     Literal,
     Optional,
@@ -339,6 +340,7 @@ from litellm.proxy.utils import (
     hash_token,
     update_spend,
 )
+from .general_settings import general_settings
 from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
 from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
     router as langfuse_router,
@@ -549,7 +551,7 @@ async def proxy_shutdown_event():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval
+    global prisma_client, master_key, llm_router, llm_model_list, premium_user
     import json
 
     init_verbose_loggers()
@@ -576,10 +578,13 @@ async def proxy_startup_event(app: FastAPI):
             (
                 llm_router,
                 llm_model_list,
-                general_settings,
+                _general_settings,
             ) = await proxy_config.load_config(
                 router=llm_router, config_file_path=env_config_yaml
             )
+            general_settings.clear()
+            if _general_settings:
+                general_settings.update(_general_settings)
     elif worker_config is not None:
         if (
             isinstance(worker_config, str)
@@ -589,20 +594,26 @@ async def proxy_startup_event(app: FastAPI):
             (
                 llm_router,
                 llm_model_list,
-                general_settings,
+                _general_settings,
             ) = await proxy_config.load_config(
                 router=llm_router, config_file_path=worker_config
             )
+            general_settings.clear()
+            if _general_settings:
+                general_settings.update(_general_settings)
         elif os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None and isinstance(
             worker_config, str
         ):
             (
                 llm_router,
                 llm_model_list,
-                general_settings,
+                _general_settings,
             ) = await proxy_config.load_config(
                 router=llm_router, config_file_path=worker_config
             )
+            general_settings.clear()
+            if _general_settings:
+                general_settings.update(_general_settings)
         elif isinstance(worker_config, dict):
             await initialize(**worker_config)
         else:
@@ -918,8 +929,6 @@ def mount_swagger_ui():
 
 mount_swagger_ui()
 
-from typing import Dict
-
 user_api_base = None
 user_model = None
 user_debug = False
@@ -935,7 +944,6 @@ experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Optional[Router] = None
 llm_model_list: Optional[list] = None
-general_settings: dict = {}
 callback_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
@@ -1499,7 +1507,7 @@ class ProxyConfig:
         return config
 
     async def save_config(self, new_config: dict):
-        global prisma_client, general_settings, user_config_file_path, store_model_in_db
+        global prisma_client, user_config_file_path, store_model_in_db
         # Load existing config
         ## DB - writes valid config to db
         """
@@ -2531,7 +2539,7 @@ class ProxyConfig:
         new_models: list,
         proxy_logging_obj: ProxyLogging,
     ):
-        global llm_router, llm_model_list, master_key, general_settings
+        global llm_router, llm_model_list, master_key
 
         try:
             if llm_router is None and master_key is not None:
@@ -2737,7 +2745,6 @@ class ProxyConfig:
         """
         Pull from DB, read general settings value
         """
-        global general_settings
         if db_general_settings is None:
             return
         _general_settings = dict(db_general_settings)
@@ -2894,7 +2901,7 @@ class ProxyConfig:
         - Check if model id's in router already
         - If not, add to router
         """
-        global llm_router, llm_model_list, master_key, general_settings
+        global llm_router, llm_model_list, master_key
 
         try:
             if master_key is None or not isinstance(master_key, str):
@@ -3208,7 +3215,7 @@ async def initialize(  # noqa: PLR0915
     use_queue=False,
     config=None,
 ):
-    global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
+    global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, master_key, user_custom_auth, prisma_client
     from litellm.proxy.common_utils.banner import show_banner
 
     show_banner()
@@ -3274,8 +3281,11 @@ async def initialize(  # noqa: PLR0915
         (
             llm_router,
             llm_model_list,
-            general_settings,
+            _general_settings,
         ) = await proxy_config.load_config(router=llm_router, config_file_path=config)
+        general_settings.clear()
+        if _general_settings:
+            general_settings.update(_general_settings)
     if headers:  # model-specific param
         user_headers = headers
         dynamic_config[user_model]["headers"] = headers
@@ -3875,7 +3885,7 @@ async def model_list(
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
     """
-    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+    global llm_model_list, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
     from litellm.proxy.utils import (
         create_model_info_response,
@@ -3938,7 +3948,7 @@ async def model_info(
     Follows OpenAI API specification for individual model retrieval.
     https://platform.openai.com/docs/api-reference/models/retrieve
     """
-    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+    global llm_model_list, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
     from litellm.proxy.utils import (
         create_model_info_response,
@@ -4041,7 +4051,7 @@ async def chat_completion(  # noqa: PLR0915
     ```
 
     """
-    global general_settings, user_debug, proxy_logging_obj, llm_model_list
+    global user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -6242,7 +6252,7 @@ async def model_info_v2(
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+    global llm_model_list, user_config_file_path, proxy_config, llm_router
 
     if llm_router is None:
         raise HTTPException(
@@ -6853,7 +6863,7 @@ async def model_info_v1(  # noqa: PLR0915
 
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router, user_model
+    global llm_model_list, user_config_file_path, proxy_config, llm_router, user_model
 
     if user_model is not None:
         # user is trying to get specific model from litellm router
@@ -7143,7 +7153,7 @@ async def model_group_info(
             }
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+    global llm_model_list, user_config_file_path, proxy_config, llm_router
 
     if llm_model_list is None:
         raise HTTPException(
@@ -7332,7 +7342,7 @@ async def async_queue_request(
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global general_settings, user_debug, proxy_logging_obj
+    global user_debug, proxy_logging_obj
     """
     v2 attempt at a background worker to handle queuing.
 
@@ -7469,7 +7479,7 @@ async def fallback_login(request: Request):
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):  # noqa: PLR0915
-    global premium_user, general_settings, master_key
+    global premium_user, master_key
     from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if master_key is None:
@@ -7728,7 +7738,7 @@ async def onboarding(invite_link: str, request: Request):
     - Get user from db
     - Pass in user_email if set
     """
-    global prisma_client, master_key, general_settings
+    global prisma_client, master_key
     from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if master_key is None:
@@ -8191,7 +8201,7 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
 
     Currently supports modifying General Settings + LiteLLM settings
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
+    global llm_router, llm_model_list, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
         import base64
 
@@ -8484,7 +8494,7 @@ async def get_config_list(
     """
     List the available fields + current values for a given type of setting (currently just 'general_settings'user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),)
     """
-    global prisma_client, general_settings
+    global prisma_client
 
     ## VALIDATION ##
     """
@@ -8785,7 +8795,7 @@ async def get_config():  # noqa: PLR0915
     # return the callbacks and the env variables for the callback
 
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
+    global llm_router, llm_model_list, proxy_config, proxy_logging_obj, master_key
     try:
         import base64
 
