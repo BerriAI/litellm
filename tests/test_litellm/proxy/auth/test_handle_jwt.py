@@ -186,7 +186,7 @@ async def test_auth_builder_proxy_admin_user_role():
         JWTAuthManager,
         "get_objects",
         new_callable=AsyncMock,
-        return_value=(user_object, None, None),
+        return_value=(user_object, None, None, None),
     ) as mock_get_objects, patch.object(
         JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
     ) as mock_map_user, patch.object(
@@ -270,7 +270,7 @@ async def test_auth_builder_non_proxy_admin_user_role():
         JWTAuthManager,
         "get_objects",
         new_callable=AsyncMock,
-        return_value=(user_object, None, None),
+        return_value=(user_object, None, None, None),
     ) as mock_get_objects, patch.object(
         JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
     ) as mock_map_user, patch.object(
