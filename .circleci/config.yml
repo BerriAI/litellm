@@ -83,7 +83,7 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
@@ -208,7 +208,7 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
@@ -315,7 +315,7 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
@@ -590,7 +590,7 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install lunary==0.2.5
@@ -816,7 +816,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1238,7 +1238,7 @@ jobs:
             pip install aiohttp
             pip install openai
             pip install click
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install jinja2
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
@@ -1507,7 +1507,7 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
@@ -1663,7 +1663,7 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install "langchain_mcp_adapters==0.0.5"
@@ -1804,7 +1804,7 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install "aioboto3==12.3.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
@@ -2406,7 +2406,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "boto3==1.37.38"
+            pip install "boto3==1.34.34"
             pip install mypy
             pip install pyarrow
             pip install numpydoc
