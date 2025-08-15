@@ -208,34 +208,34 @@ def test_base64_image_input(url, expected_media_type):
 
 
 @pytest.mark.parametrize(
-    "url, expected_media_type",
+    "url",
     [
-        ("https://example.com/test-image.jpg", "image/jpeg"),
-        ("https://example.com/test-image.png", "image/png"), 
-        ("https://example.com/test-image.gif", "image/gif"),
-        ("https://example.com/test-image.webp", "image/webp"),
-        ("http://example.com/test-image.jpeg", "image/jpeg"),
-        ("https://example.com/api/image", "image/jpeg"),  # No extension, defaults to jpeg
+        "https://example.com/test-image.jpg",
+        "https://example.com/test-image.png", 
+        "https://example.com/test-image.gif",
+        "https://example.com/test-image.webp",
+        "http://example.com/test-image.jpeg",
+        "https://example.com/api/image",  # No extension
     ],
 )
-def test_url_image_input(url, expected_media_type):
-    """Test that HTTP URLs are now preserved as URL type instead of converted to base64"""
+def test_url_image_input(url):
+    """Test that HTTP URLs are now preserved as URL type without media_type (per Anthropic docs)"""
     response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["type"] == "url"
-    assert response["media_type"] == expected_media_type
+    assert "media_type" not in response  # URL images should not have media_type per Anthropic spec
     assert response["data"] == url
 
 
 def test_url_image_with_format_override():
-    """Test that format parameter overrides inferred media type for URLs"""
+    """Test that URL images don't include media_type even when format is provided (per Anthropic docs)"""
     url = "https://example.com/unknown-image"
     custom_format = "image/webp"
     
     response = convert_to_anthropic_image_obj(openai_image_url=url, format=custom_format)
     
     assert response["type"] == "url"
-    assert response["media_type"] == custom_format
+    assert "media_type" not in response  # URL images should not have media_type per Anthropic spec
     assert response["data"] == url
 
 
