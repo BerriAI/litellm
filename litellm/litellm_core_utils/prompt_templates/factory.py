@@ -1260,7 +1260,7 @@ def convert_to_anthropic_tool_result(
                     anthropic_content_list.append(
                         AnthropicMessagesImageParam(
                             type="image",
-                            source=AnthropicContentParamSource(
+                            source=AnthropicContentParamSourceUrl(
                                 type="url",
                                 url=image_chunk["data"],
                             ),
@@ -1440,7 +1440,7 @@ def _anthropic_content_element_factory(
             # For URL images, use Anthropic's native URL format (no media_type field)
             _anthropic_content_element = AnthropicMessagesImageParam(
                 type="image",
-                source=AnthropicContentParamSource(
+                source=AnthropicContentParamSourceUrl(
                     type="url",
                     url=image_chunk["data"],
                 ),
