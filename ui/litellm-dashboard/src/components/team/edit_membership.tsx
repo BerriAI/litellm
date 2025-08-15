@@ -54,11 +54,17 @@ const MemberModal = <T extends BaseMember>({
     if (visible) {
       if (mode === 'edit' && initialData) {
         // For edit mode, use the initialData values
-        form.setFieldsValue({
+        const formValues = {
           ...initialData,
           // Ensure role is set correctly for editing
-          role: initialData.role || config.defaultRole
-        });
+          role: initialData.role || config.defaultRole,
+          // Convert numbers to strings for form inputs
+          max_budget_in_team: (initialData as any).max_budget_in_team?.toString() || '',
+          tpm_limit: (initialData as any).tpm_limit?.toString() || '',
+          rpm_limit: (initialData as any).rpm_limit?.toString() || '',
+        };
+        console.log("Setting form values:", formValues);
+        form.setFieldsValue(formValues);
       } else {
         // For add mode, reset to defaults
         form.resetFields();
@@ -71,12 +77,29 @@ const MemberModal = <T extends BaseMember>({
 
   const handleSubmit = async (values: any) => {
     try {
-      // Trim string values
-      const formData = Object.entries(values).reduce((acc, [key, value]) => ({
-        ...acc,
-        [key]: typeof value === 'string' ? value.trim() : value
-      }), {}) as T;
+      // Trim string values and convert numeric fields
+      const formData = Object.entries(values).reduce((acc, [key, value]) => {
+        if (typeof value === 'string') {
+          const trimmedValue = value.trim();
+          // Convert numeric fields back to numbers
+          if (key === 'max_budget_in_team' && trimmedValue) {
+            return { ...acc, [key]: parseFloat(trimmedValue) };
+          } else if ((key === 'tpm_limit' || key === 'rpm_limit') && trimmedValue) {
+            return { ...acc, [key]: parseInt(trimmedValue, 10) };
+          } else if (trimmedValue === '') {
+            // For empty strings, set to null for optional numeric fields
+            if (key === 'max_budget_in_team' || key === 'tpm_limit' || key === 'rpm_limit') {
+              return { ...acc, [key]: null };
+            }
+            return { ...acc, [key]: trimmedValue };
+          } else {
+            return { ...acc, [key]: trimmedValue };
+          }
+        }
+        return { ...acc, [key]: value };
+      }, {}) as T;
       
+      console.log("Submitting form data:", formData);
       onSubmit(formData);
       form.resetFields();
       // message.success(`Successfully ${mode === 'add' ? 'added' : 'updated'} member`);

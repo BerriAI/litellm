@@ -4078,6 +4078,9 @@ export const teamMemberUpdateCall = async (
 ) => {
   try {
     console.log("Form Values in teamMemberUpdateCall:", formValues);
+    console.log("Budget value:", formValues.max_budget_in_team);
+    console.log("TPM limit:", formValues.tpm_limit);
+    console.log("RPM limit:", formValues.rpm_limit);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
@@ -4102,6 +4105,8 @@ export const teamMemberUpdateCall = async (
     if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
       requestBody.rpm_limit = formValues.rpm_limit;
     }
+
+    console.log("Final request body:", requestBody);
 
     const response = await fetch(url, {
       method: "POST",

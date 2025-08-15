@@ -254,7 +254,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
+        max_budget_in_team: values.max_budget_in_team,
+        tpm_limit: values.tpm_limit,
+        rpm_limit: values.rpm_limit,
       };
+      console.log("Updating member with values:", member);
       message.destroy(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
