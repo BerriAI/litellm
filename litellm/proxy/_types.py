@@ -1675,7 +1675,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     alert_to_webhook_url: Optional[Dict] = Field(
         None,
-        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
+        description="Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`",
     )
     alerting_args: Optional[Dict] = Field(
         None, description="Controllable params for slack alerting - e.g. ttl in cache."
