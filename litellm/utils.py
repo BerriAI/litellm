@@ -3615,7 +3615,7 @@ def get_optional_params(  # noqa: PLR0915
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
             if bedrock_base_model.startswith("anthropic.claude-3"):
                 optional_params = (
-                    litellm.AmazonAnthropicClaude3Config().map_openai_params(
+                    litellm.AmazonAnthropicClaudeConfig().map_openai_params(
                         non_default_params=non_default_params,
                         optional_params=optional_params,
                         model=model,
@@ -6975,7 +6975,7 @@ class ProviderConfigManager:
                 ):
                     return litellm.AmazonAnthropicConfig()
                 else:
-                    return litellm.AmazonAnthropicClaude3Config()
+                    return litellm.AmazonAnthropicClaudeConfig()
             elif (
                 bedrock_invoke_provider == "meta" or bedrock_invoke_provider == "llama"
             ):  # amazon / meta llms
@@ -7071,7 +7071,8 @@ class ProviderConfigManager:
         # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
-            return litellm.AmazonAnthropicClaude3MessagesConfig()
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+            return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (

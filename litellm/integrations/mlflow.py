@@ -189,9 +189,9 @@ class MlflowLogger(CustomLogger):
                 {
                     "api_base": standard_obj.get("api_base"),
                     "cache_hit": standard_obj.get("cache_hit"),
-                    "usage": {
-                        "completion_tokens": standard_obj.get("completion_tokens"),
-                        "prompt_tokens": standard_obj.get("prompt_tokens"),
+                    "mlflow.chat.tokenUsage": {
+                        "input_tokens": standard_obj.get("prompt_tokens"),
+                        "output_tokens": standard_obj.get("completion_tokens"),
                         "total_tokens": standard_obj.get("total_tokens"),
                     },
                     "raw_llm_response": standard_obj.get("response"),
