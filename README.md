@@ -374,11 +374,7 @@ We welcome contributions to LiteLLM! Whether you're fixing bugs, adding features
 
 ## Quick Start for Contributors
 
-:::info
-
 This requires poetry to be installed.
-
-:::
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
