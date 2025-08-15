@@ -442,7 +442,7 @@ All these checks must pass before your PR can be merged.
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
 3. Install dependencies `pip install -e ".[all]"`
-4. Start proxy backend `uvicorn litellm.proxy.proxy_server:app --host localhost --port 4000 --reload`
+4. Start proxy backend `python3 /path/to/litellm/proxy_cli.py`
 
 ### Frontend
 1. Navigate to `ui/litellm-dashboard`
