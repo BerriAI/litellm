@@ -174,5 +174,5 @@ class BedrockBatchesAPI(BaseAWSLLM):
             created_at=int(time.time()),
             endpoint="bedrock",
             input_file_id=create_batch_data.get("input_file_id", ""),
-            completion_window=3600,  # Default 1 hour
+            completion_window="1h",  # Default 1 hour
         )
