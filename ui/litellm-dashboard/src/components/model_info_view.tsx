@@ -399,9 +399,15 @@ export default function ModelInfoView({
               </Card>
               <Card>
                 <Text>LiteLLM Model</Text>
-                <pre>
-                  <Title>{modelData.litellm_model_name || "Not Set"}</Title>
-                </pre>
+                <div className="mt-2 overflow-hidden">
+                  <Tooltip title={modelData.litellm_model_name || "Not Set"}>
+                    <div 
+                      className="break-all text-sm font-medium leading-relaxed cursor-pointer"
+                    >
+                      {modelData.litellm_model_name || "Not Set"}
+                    </div>
+                  </Tooltip>
+                </div>
               </Card>
               <Card>
                 <Text>Pricing</Text>
