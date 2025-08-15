@@ -400,12 +400,13 @@ export default function ModelInfoView({
               <Card>
                 <Text>LiteLLM Model</Text>
                 <div className="mt-2 overflow-hidden">
-                  <div 
-                    className="break-all text-sm font-medium leading-relaxed cursor-pointer"
-                    title={modelData.litellm_model_name || "Not Set"}
-                  >
-                    {modelData.litellm_model_name || "Not Set"}
-                  </div>
+                  <Tooltip title={modelData.litellm_model_name || "Not Set"}>
+                    <div 
+                      className="break-all text-sm font-medium leading-relaxed cursor-pointer"
+                    >
+                      {modelData.litellm_model_name || "Not Set"}
+                    </div>
+                  </Tooltip>
                 </div>
               </Card>
               <Card>
