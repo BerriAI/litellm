@@ -106,6 +106,8 @@ export interface TeamData {
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string;
+      tpm_limit: number | null;
+      rpm_limit: number | null;
     } | null;
   };
   keys: any[];
@@ -352,6 +354,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.team_member_key_duration = values.team_member_key_duration;
       }
 
+      if (values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined) {
+        updateData.team_member_tpm_limit = sanitizeNumeric(values.team_member_tpm_limit);
+        updateData.team_member_rpm_limit = sanitizeNumeric(values.team_member_rpm_limit);
+      }
+
       // Handle object_permission updates
       const { servers, accessGroups } = values.mcp_servers_and_groups || {
         servers: [],
@@ -582,6 +589,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     rpm_limit: info.rpm_limit,
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
+                    team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
+                    team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata
                       ? JSON.stringify(
@@ -654,6 +663,30 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                   >
                     <TextInput placeholder="e.g., 30d" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Team Member TPM Limit"
+                    name="team_member_tpm_limit"
+                    tooltip="Default tokens per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
+                  >
+                    <NumericalInput 
+                      step={1} 
+                      style={{ width: "100%" }}
+                      placeholder="e.g., 1000"
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Team Member RPM Limit"
+                    name="team_member_rpm_limit"
+                    tooltip="Default requests per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
+                  >
+                    <NumericalInput 
+                      step={1} 
+                      style={{ width: "100%" }}
+                      placeholder="e.g., 100"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -810,6 +843,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <div>
                       Key Duration:{" "}
                       {info.metadata?.team_member_key_duration || "No Limit"}
+                    </div>
+                    <div>
+                      TPM Limit:{" "}
+                      {info.team_member_budget_table?.tpm_limit || "No Limit"}
+                    </div>
+                    <div>
+                      RPM Limit:{" "}
+                      {info.team_member_budget_table?.rpm_limit || "No Limit"}
                     </div>
                   </div>
                   <div>
