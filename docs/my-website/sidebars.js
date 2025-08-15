@@ -65,6 +65,7 @@ const sidebars = {
       label: "[Beta] Prompt Management",
       items: [
         "proxy/prompt_management",
+        "proxy/native_litellm_prompt",
         "proxy/custom_prompt_management"
       ].sort()
     },
@@ -81,12 +82,12 @@ const sidebars = {
         "tutorials/cost_tracking_coding",
       ]
     },
-    
+
   ],
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
-    
+
     {
       type: "category",
       label: "LiteLLM Proxy Server",
@@ -213,7 +214,7 @@ const sidebars = {
             "proxy/dynamic_logging"
           ],
         },
-        
+
         {
           type: "category",
           label: "Secret Managers",
@@ -371,7 +372,14 @@ const sidebars = {
             "providers/azure/azure_embedding",
           ]
         },
-        "providers/azure_ai",
+        {
+          type: "category",
+          label: "Azure AI",
+          items: [
+            "providers/azure_ai",
+            "providers/azure_ai_img",
+          ]
+        },
         {
           type: "category",
           label: "Vertex AI",
@@ -466,6 +474,7 @@ const sidebars = {
         "providers/custom_llm_server",
         "providers/petals",
         "providers/snowflake",
+        "providers/gradient_ai",
         "providers/featherless_ai",
         "providers/nebius",
         "providers/dashscope",
@@ -504,7 +513,7 @@ const sidebars = {
 
       ]
     },
-    
+
     {
       type: "category",
       label: "Routing, Loadbalancing & Fallbacks",
@@ -535,7 +544,7 @@ const sidebars = {
         },
       ],
     },
-    
+
     {
       type: "category",
       label: "Load Testing",

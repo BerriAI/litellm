@@ -47,7 +47,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
 
-from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
+from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name, get_anthropic_beta_from_headers
 
 # Computer use tool prefixes supported by Bedrock
 BEDROCK_COMPUTER_USE_TOOLS = [
@@ -593,12 +593,14 @@ class AmazonConverseConfig(BaseConfig):
 
         return {}
 
+
     def _transform_request_helper(
         self,
         model: str,
         system_content_blocks: List[SystemContentBlock],
         optional_params: dict,
         messages: Optional[List[AllMessageValues]] = None,
+        headers: Optional[dict] = None,
     ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
@@ -651,6 +653,12 @@ class AmazonConverseConfig(BaseConfig):
         # Initialize bedrock_tools
         bedrock_tools: List[ToolBlock] = []
         
+        # Collect anthropic_beta values from user headers
+        anthropic_beta_list = []
+        if headers:
+            user_betas = get_anthropic_beta_from_headers(headers)
+            anthropic_beta_list.extend(user_betas)
+        
         # Only separate tools if computer use tools are actually present
         if original_tools and self.is_computer_use_tool_used(original_tools, model):
             # Separate computer use tools from regular function tools
@@ -663,13 +671,24 @@ class AmazonConverseConfig(BaseConfig):
             
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
-                additional_request_params["anthropic_beta"] = ["computer-use-2024-10-22"]
+                anthropic_beta_list.append("computer-use-2024-10-22")
                 # Transform computer use tools to proper Bedrock format
                 transformed_computer_tools = self._transform_computer_use_tools(computer_use_tools)
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
             bedrock_tools = _bedrock_tools_pt(original_tools)
+        
+        # Set anthropic_beta in additional_request_params if we have any beta features
+        if anthropic_beta_list:
+            # Remove duplicates while preserving order
+            unique_betas = []
+            seen = set()
+            for beta in anthropic_beta_list:
+                if beta not in seen:
+                    unique_betas.append(beta)
+                    seen.add(beta)
+            additional_request_params["anthropic_beta"] = unique_betas
         
         bedrock_tool_config: Optional[ToolConfigBlock] = None
         if len(bedrock_tools) > 0:
@@ -708,6 +727,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
+        headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
         ## TRANSFORMATION ##
@@ -717,6 +737,7 @@ class AmazonConverseConfig(BaseConfig):
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
+            headers=headers,
         )
 
         bedrock_messages = (
@@ -747,6 +768,7 @@ class AmazonConverseConfig(BaseConfig):
                 messages=messages,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                headers=headers,
             ),
         )
 
@@ -756,6 +778,7 @@ class AmazonConverseConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
+        headers: Optional[dict] = None,
     ) -> RequestObject:
         messages, system_content_blocks = self._transform_system_message(messages)
 
@@ -764,6 +787,7 @@ class AmazonConverseConfig(BaseConfig):
             system_content_blocks=system_content_blocks,
             optional_params=optional_params,
             messages=messages,
+            headers=headers,
         )
 
         ## TRANSFORMATION ##
@@ -1154,3 +1178,37 @@ class AmazonConverseConfig(BaseConfig):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+    
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> bool:
+        """
+        Returns True if the model/provider should fake stream
+        """
+        ###################################################################
+        # If an upstream method already set fake_stream to True, return True
+        ###################################################################
+        if fake_stream is True:
+            return True
+
+        ###################################################################
+        # Bedrock Converse Specific Logic
+        ###################################################################
+        if stream is True:
+            if model is not None:
+                ###################################################################
+                # GPT-OSS models do not support streaming
+                ###################################################################
+                if "gpt-oss" in model:
+                    return True
+                ###################################################################
+                # AI21 models do not support streaming
+                ###################################################################
+                if "ai21" in model:
+                    return True
+        return False

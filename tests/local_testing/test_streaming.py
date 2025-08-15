@@ -471,11 +471,13 @@ def test_completion_azure_stream():
 
 
 # test_completion_azure_stream()
+@pytest.mark.skip("Skipping predibase streaming test - ran out of credits")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_completion_predibase_streaming(sync_mode):
     try:
         litellm.set_verbose = True
+        litellm._turn_on_debug()
         if sync_mode:
             response = completion(
                 model="predibase/llama-3-8b-instruct",
@@ -701,7 +703,12 @@ async def test_completion_gemini_stream(sync_mode):
                 },
             }
         ]
-        messages = [{"role": "user", "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response."}]
+        messages = [
+            {
+                "role": "user",
+                "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response.",
+            }
+        ]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
@@ -817,7 +824,12 @@ async def test_completion_gemini_stream_accumulated_json(sync_mode):
                 },
             }
         ]
-        messages = [{"role": "user", "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response."}]
+        messages = [
+            {
+                "role": "user",
+                "content": "What is the weather like in Boston, MA?. You must provide me with a tool call in your response.",
+            }
+        ]
         print("testing gemini streaming")
         complete_response = ""
         # Add any assertions here to check the response
@@ -3990,3 +4002,48 @@ def test_streaming_with_cost_calculation():
     assert usage_object.prompt_tokens > 0
     assert usage_object.cost is not None
     assert usage_object.cost > 0
+
+
+def test_streaming_finish_reason():
+    litellm.set_verbose = False
+
+    openai_finish_reason_idx: Optional[int] = None
+    openai_last_chunk_idx: Optional[int] = None
+    anthropic_finish_reason_idx: Optional[int] = None
+    anthropic_last_chunk_idx: Optional[int] = None
+
+    ## OpenAI
+    response = litellm.completion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    for idx, chunk in enumerate(response):
+        print(f"OPENAI CHUNK: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            openai_finish_reason_idx = idx
+        openai_last_chunk_idx = idx
+
+    assert openai_finish_reason_idx is not None
+    assert openai_finish_reason_idx > 0
+
+    ## Anthropic
+    response = litellm.completion(
+        model="anthropic/claude-3-5-sonnet-latest",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    for idx, chunk in enumerate(response):
+        print(f"ANTHROPIC CHUNK: {chunk}")
+        if chunk.choices[0].finish_reason is not None:
+            anthropic_finish_reason_idx = idx
+        anthropic_last_chunk_idx = idx
+
+    assert anthropic_finish_reason_idx is not None
+    assert anthropic_finish_reason_idx > 0
+
+    relative_anthropic_idx = anthropic_finish_reason_idx - anthropic_last_chunk_idx
+    relative_openai_idx = openai_finish_reason_idx - openai_last_chunk_idx
+    assert relative_anthropic_idx == relative_openai_idx
