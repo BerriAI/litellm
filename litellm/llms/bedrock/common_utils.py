@@ -291,7 +291,8 @@ def init_bedrock_client(
 
     return client
 
-def init_bedrock_service_client(
+
+def init_bedrock_service_client(  # noqa: PLR0915
     region_name=None,
     aws_access_key_id: Optional[str] = None,
     aws_secret_access_key: Optional[str] = None,
@@ -385,7 +386,7 @@ def init_bedrock_service_client(
     ):
         # TODO: Add sts credentials - https://github.com/BerriAI/litellm/issues/1727
         ...
-    
+
     # create bedrock service client (for batch operations)
     if aws_web_identity_token is not None:
         if aws_role_name is None:
@@ -636,18 +637,20 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
         """
-        route_mappings: Dict[str, Literal["invoke", "converse_like", "converse", "agent"]] = {
+        route_mappings: Dict[
+            str, Literal["invoke", "converse_like", "converse", "agent"]
+        ] = {
             "invoke/": "invoke",
-            "converse_like/": "converse_like", 
+            "converse_like/": "converse_like",
             "converse/": "converse",
-            "agent/": "agent"
+            "agent/": "agent",
         }
-        
+
         # Check explicit routes first
         for prefix, route_type in route_mappings.items():
             if prefix in model:
                 return route_type
-        
+
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
         if (
@@ -656,38 +659,39 @@ class BedrockModelInfo(BaseLLMModelInfo):
         ):
             return "converse"
         return "invoke"
-    
+
     @staticmethod
     def _explicit_converse_route(model: str) -> bool:
         """
         Check if the model is an explicit converse route.
         """
         return "converse/" in model
-    
+
     @staticmethod
     def _explicit_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit invoke route.
         """
         return "invoke/" in model
-    
+
     @staticmethod
     def _explicit_agent_route(model: str) -> bool:
         """
         Check if the model is an explicit agent route.
         """
         return "agent/" in model
-    
+
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
         """
         Check if the model is an explicit converse like route.
         """
         return "converse_like/" in model
-    
 
     @staticmethod
-    def get_bedrock_provider_config_for_messages_api(model: str) -> Optional[BaseAnthropicMessagesConfig]:
+    def get_bedrock_provider_config_for_messages_api(
+        model: str,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
         """
         Get the bedrock provider config for the given model.
 
@@ -700,18 +704,19 @@ class BedrockModelInfo(BaseLLMModelInfo):
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
-        
+
         #########################################################
         # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
         # Since bedrock Invoke supports Native Anthropic Messages API
         #########################################################
         if "claude" in model:
             return litellm.AmazonAnthropicClaudeMessagesConfig()
-        
+
         #########################################################
         # These routes will go through litellm.completion()
         #########################################################
         return None
+
 
 class BedrockEventStreamDecoderBase:
     """
@@ -782,19 +787,19 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
     Supports comma-separated values from user headers.
-    
+
     Used by both converse and invoke transformations for consistent handling
     of anthropic-beta headers that should be passed to AWS Bedrock.
-    
+
     Args:
         headers (dict): Request headers dictionary
-        
+
     Returns:
         List[str]: List of anthropic beta feature strings, empty list if no header
     """
     anthropic_beta_header = headers.get("anthropic-beta")
     if not anthropic_beta_header:
         return []
-    
+
     # Split comma-separated values and strip whitespace
     return [beta.strip() for beta in anthropic_beta_header.split(",")]

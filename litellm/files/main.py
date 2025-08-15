@@ -96,7 +96,9 @@ async def acreate_file(
 def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock"]] = None,
+    custom_llm_provider: Optional[
+        Literal["openai", "azure", "vertex_ai", "bedrock"]
+    ] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -254,13 +256,16 @@ def create_file(
             )
         elif custom_llm_provider == "bedrock":
             response = bedrock_files_instance.create_file(
-                _is_async=_is_async,
                 create_file_data=_create_file_request,
-                api_base=optional_params.api_base,
                 litellm_params=litellm_params_dict,
+                provider_config=bedrock_files_instance.provider_config
+                if hasattr(bedrock_files_instance, "provider_config")
+                else None,
+                headers={},
+                api_base=optional_params.api_base,
                 logging_obj=logging_obj,
                 timeout=timeout,
-                max_retries=optional_params.max_retries,
+                _is_async=_is_async,
             )
         else:
             raise litellm.exceptions.BadRequestError(

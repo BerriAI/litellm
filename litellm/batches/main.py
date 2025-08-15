@@ -257,7 +257,6 @@ def create_batch(
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
-                
             )
         else:
             raise litellm.exceptions.BadRequestError(

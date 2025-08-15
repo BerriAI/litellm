@@ -3,13 +3,8 @@ from typing import Any, List, Literal, Optional, TypedDict, Union
 
 from typing_extensions import (
     TYPE_CHECKING,
-    Protocol,
     Required,
-    Self,
-    TypeGuard,
-    get_origin,
     override,
-    runtime_checkable,
 )
 
 from .openai import ChatCompletionToolCallChunk
@@ -574,25 +569,30 @@ class AmazonDeepSeekR1StreamingResponse(TypedDict):
     stop_reason: Optional[str]
     prompt_token_count: int
 
+
 class Tag(TypedDict):
     key: str
     value: str
 
+
 class S3DataConfig(TypedDict):
     s3Uri: str
+
 
 class InputDataConfig(TypedDict):
     s3InputDataConfig: S3DataConfig
 
+
 class OutputDataConfig(TypedDict):
     s3OutputDataConfig: S3DataConfig
 
-class CreateModelInvocationJobRequest(TypedDict):
-    clientRequestToken: Optional[str] = None  # Optional; AWS auto-generates if not provided
+
+class CreateModelInvocationJobRequest(TypedDict, total=False):
+    clientRequestToken: Optional[str]  # Optional; AWS auto-generates if not provided
     jobName: str
     modelId: str
     inputDataConfig: InputDataConfig
     outputDataConfig: OutputDataConfig
     roleArn: str
-    tags: Optional[List[Tag]] = None
-    timeoutDurationInHours: Optional[int] = None
+    tags: Optional[List[Tag]]
+    timeoutDurationInHours: Optional[int]
