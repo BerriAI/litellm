@@ -553,6 +553,7 @@ async def get_team_membership(
 
         return _response
     except Exception:
+        verbose_proxy_logger.exception("Error getting team membership for user_id: %s, team_id: %s", user_id, team_id)
         return None
 
 
