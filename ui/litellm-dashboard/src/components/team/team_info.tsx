@@ -898,6 +898,41 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             { label: "Admin", value: "admin" },
             { label: "User", value: "user" },
           ],
+          additionalFields: [
+            {
+              name: "max_budget_in_team",
+              label: "Team Member Budget (USD)",
+              type: "input" as const,
+              rules: [
+                { 
+                  pattern: /^[0-9]*\.?[0-9]*$/, 
+                  message: "Please enter a valid number" 
+                }
+              ]
+            },
+            {
+              name: "tpm_limit",
+              label: "Tokens Per Minute Limit",
+              type: "input" as const,
+              rules: [
+                { 
+                  pattern: /^[0-9]*$/, 
+                  message: "Please enter a valid integer" 
+                }
+              ]
+            },
+            {
+              name: "rpm_limit",
+              label: "Requests Per Minute Limit",
+              type: "input" as const,
+              rules: [
+                { 
+                  pattern: /^[0-9]*$/, 
+                  message: "Please enter a valid integer" 
+                }
+              ]
+            }
+          ]
         }}
       />
 
