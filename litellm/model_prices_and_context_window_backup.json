@@ -18457,6 +18457,38 @@
         "supports_system_messages": true,
         "supports_tool_choice": false
     },
+    "heroku/claude-4-sonnet": {
+        "max_tokens": 8192,
+        "litellm_provider": "heroku",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "heroku/claude-3-7-sonnet": {
+        "max_tokens": 8192,
+        "litellm_provider": "heroku",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "heroku/claude-3-5-sonnet-latest": {
+        "max_tokens": 8192,
+        "litellm_provider": "heroku",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "heroku/claude-3-5-haiku": {
+        "max_tokens": 4096,
+        "litellm_provider": "heroku",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
     "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": {
         "max_tokens": 512000,
         "max_input_tokens": 512000,
