@@ -451,6 +451,8 @@ class TestOpenAIGPT4OAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_base_audio_transcription_call_args(self) -> dict:
         return {
             "model": "openai/gpt-4o-transcribe",
+            "response_format": "verbose_json",
+            "timestamp_granularities": ["word"],
         }
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
