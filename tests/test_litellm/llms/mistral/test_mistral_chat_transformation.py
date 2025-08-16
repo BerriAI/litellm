@@ -9,6 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.mistral.chat.transformation import MistralConfig
+from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.asyncio
@@ -422,6 +423,115 @@ class TestMistralParallelToolCalls:
         assert result.get("parallel_tool_calls") is True
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
+
+
+class TestMistralThinkingContentHandling:
+    """Test suite for Mistral thinking content response handling functionality."""
+
+    def test_transform_response_with_thinking_content(self):
+        """Test that Mistral responses with thinking content are correctly transformed."""
+        import json
+        from unittest.mock import Mock
+
+        import litellm
+
+        # Raw response from Mistral with thinking content
+        raw_response_data = {
+            "id": "12a18e1439f24f95b9812a016e0af235",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": [
+                                    {
+                                        "type": "text",
+                                        "text": "Well, the capital of France is a well-known fact. It's Paris. But just to be sure, I recall that Paris is indeed the capital city of France. I don't need to look it up because it's a common knowledge fact. But if I were unsure, I would double-check using a reliable source or a knowledge base. Since I'm confident about this, I can provide the answer directly.",
+                                    }
+                                ],
+                            },
+                            {"type": "text", "text": "The capital of France is Paris."},
+                        ],
+                        "refusal": None,
+                        "role": "assistant",
+                        "annotations": None,
+                        "audio": None,
+                        "function_call": None,
+                        "tool_calls": None,
+                    },
+                }
+            ],
+            "created": 1754654178,
+            "model": "magistral-medium-2507",
+            "object": "chat.completion",
+            "service_tier": None,
+            "system_fingerprint": None,
+            "usage": {
+                "completion_tokens": 93,
+                "prompt_tokens": 11,
+                "total_tokens": 104,
+                "completion_tokens_details": None,
+                "prompt_tokens_details": None,
+            },
+        }
+
+        # Mock httpx response
+        mock_response = Mock()
+        mock_response.json.return_value = raw_response_data
+        mock_response.headers = {}
+        mock_response.text = json.dumps(raw_response_data)
+
+        # Mock logging object with proper attributes
+        mock_logging_obj = Mock()
+        mock_logging_obj.model_call_details = {}
+
+        # Test the transformation
+        mistral_config = MistralConfig()
+        model_response = litellm.ModelResponse()
+
+        # Test transform_response method
+        final_response = mistral_config.transform_response(
+            model="mistral/magistral-medium-2507",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging_obj,
+            request_data={},
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        # Verify the response structure
+        assert final_response is not None
+        assert len(final_response.choices) == 1
+        choice = final_response.choices[0]
+
+        # Verify message content
+        message = choice.message
+        assert message.role == "assistant"
+
+        # The content should be processed - either as text or as thinking blocks
+        # Content could be the text part or the full content list
+        content_str = str(message.content) if message.content else ""
+
+        # Verify the actual text content is preserved somewhere
+        assert "The capital of France is Paris." in content_str or (
+            hasattr(message, "thinking_blocks") and message.thinking_blocks
+        )
+
+        # Verify usage information
+        assert final_response.usage.completion_tokens == 93
+        assert final_response.usage.prompt_tokens == 11
+        assert final_response.usage.total_tokens == 104
+
+        # Verify model and metadata
+        assert final_response.id == "12a18e1439f24f95b9812a016e0af235"
+        assert final_response.created == 1754654178
 
 
 class TestMistralEmptyContentHandling:

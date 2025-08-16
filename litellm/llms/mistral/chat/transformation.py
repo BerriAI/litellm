@@ -28,7 +28,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import MistralToolCallMessage
+from litellm.types.llms.mistral import (
+    MistralTextBlock,
+    MistralThinkingBlock,
+    MistralToolCallMessage,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import convert_to_model_response_object
@@ -433,6 +437,58 @@ class MistralConfig(OpenAIGPTConfig):
                     choice["message"]["content"] = None
         return response_data
 
+    @staticmethod
+    def _convert_thinking_block_to_reasoning_content(
+        thinking_blocks: MistralThinkingBlock,
+    ) -> str:
+        """
+        Convert Mistral thinking blocks to reasoning content.
+        """
+        return "\n".join(
+            [block.get("text", "") for block in thinking_blocks["thinking"]]
+        )
+
+    @staticmethod
+    def _handle_content_list_to_str_conversion(response_data: dict) -> dict:
+        """
+        Handle Mistral's content list format and extract thinking content.
+
+        Map mistral's content list to string and extract thinking blocks:
+        - Thinking block -> reasoning_content field
+        - Text block -> content field
+        """
+
+        if response_data.get("choices") and len(response_data["choices"]) > 0:
+            for choice in response_data["choices"]:
+                if choice.get("message") and choice["message"].get("content"):
+                    content = choice["message"]["content"]
+
+                    # Only process if content is a list
+                    if isinstance(content, list):
+                        thinking_content = ""
+                        text_content = ""
+
+                        # Process each content block
+                        for block in content:
+                            if block.get("type") == "thinking":
+                                thinking_blocks = block.get("thinking", [])
+                                thinking_texts = []
+                                for thinking_block in thinking_blocks:
+                                    if thinking_block.get("type") == "text":
+                                        thinking_texts.append(
+                                            thinking_block.get("text", "")
+                                        )
+                                thinking_content = "\n".join(thinking_texts)
+                            elif block.get("type") == "text":
+                                text_content = block.get("text", "")
+
+                        # Set the extracted content
+                        choice["message"]["content"] = text_content
+                        if thinking_content:
+                            choice["message"]["reasoning_content"] = thinking_content
+
+        return response_data
+
     def transform_request(
         self,
         model: str,
@@ -481,14 +537,16 @@ class MistralConfig(OpenAIGPTConfig):
     ) -> ModelResponse:
         """
         Transform the raw response from Mistral API.
-        Handles Mistral-specific behavior like converting empty string content to None.
+        Handles Mistral-specific behavior like converting empty string content to None
+        and extracting thinking content from content lists.
         """
         logging_obj.post_call(original_response=raw_response.text)
         logging_obj.model_call_details["response_headers"] = raw_response.headers
 
-        # Handle Mistral-specific empty string content conversion to None
+        # Handle Mistral-specific response transformations
         response_data = raw_response.json()
         response_data = self._handle_empty_content_response(response_data)
+        response_data = self._handle_content_list_to_str_conversion(response_data)
 
         final_response_obj = cast(
             ModelResponse,
