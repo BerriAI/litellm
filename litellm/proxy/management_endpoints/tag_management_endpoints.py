@@ -24,6 +24,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
+    get_daily_activity_aggregated,
 )
 from litellm.types.tag_management import (
     LiteLLM_DailyTagSpendTable,
@@ -479,4 +480,45 @@ async def get_tag_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+    )
+
+
+# Aggregated variant to avoid heavy pagination queries on large datasets
+from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+
+
+@router.get(
+    "/tag/daily/activity/aggregated",
+    response_model=SpendAnalyticsPaginatedResponse,
+    tags=["tag management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def get_tag_daily_activity_aggregated(
+    tags: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Aggregated analytics for tag daily activity without pagination.
+    Returns the same response shape as the paginated endpoint with single-page metadata.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Convert comma-separated tags string to list if provided
+    tag_list = tags.split(",") if tags else None
+
+    return await get_daily_activity_aggregated(
+        prisma_client=prisma_client,
+        table_name="litellm_dailytagspend",
+        entity_id_field="tag",
+        entity_id=tag_list,
+        entity_metadata_field=None,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
     )
