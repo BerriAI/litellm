@@ -198,7 +198,6 @@ pip install litellm==1.75.8
 #### Bugs
 
 - **Dependencies**
-    - Updated boto3 version to 1.37.38 for Bedrock Integration - [PR #13656](https://github.com/BerriAI/litellm/pull/13656)
     - Updated boto3 to 1.36.0 and aioboto3 to 13.4.0 - [PR #13665](https://github.com/BerriAI/litellm/pull/13665)
 
 ---
