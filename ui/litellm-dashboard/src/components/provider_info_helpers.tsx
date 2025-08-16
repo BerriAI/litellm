@@ -39,105 +39,107 @@ export enum Providers {
 }
 
 export const provider_map: Record<string, string> = {
-    OpenAI: "openai",
-    OpenAI_Text: "text-completion-openai",
-    Azure: "azure",
-    Azure_AI_Studio: "azure_ai",
-    Anthropic: "anthropic",
-    Google_AI_Studio: "gemini",
-    Bedrock: "bedrock",
-    Groq: "groq",
-    MistralAI: "mistral",
-    Cohere: "cohere",
-    OpenAI_Compatible: "openai",
-    OpenAI_Text_Compatible: "text-completion-openai",
-    Vertex_AI: "vertex_ai",
-    Databricks: "databricks",
-    xAI: "xai",
-    Deepseek: "deepseek",
-    Ollama: "ollama",
-    AssemblyAI: "assemblyai",
-    Cerebras: "cerebras",
-    Sambanova: "sambanova",
-    Perplexity: "perplexity",
-    TogetherAI: "together_ai",
-    Openrouter: "openrouter",
-    FireworksAI: "fireworks_ai",
-    GradientAI: "gradient_ai",
-    Triton: "triton",
-    Deepgram: "deepgram",
-    ElevenLabs: "elevenlabs",
-    SageMaker: "sagemaker_chat",
-    Voyage: "voyage",
-    JinaAI: "jina_ai",
-    VolcEngine: "volcengine",
-    DeepInfra: "deepinfra"
+  OpenAI: "openai",
+  OpenAI_Text: "text-completion-openai",
+  Azure: "azure",
+  Azure_AI_Studio: "azure_ai",
+  Anthropic: "anthropic",
+  Google_AI_Studio: "gemini",
+  Bedrock: "bedrock",
+  Groq: "groq",
+  MistralAI: "mistral",
+  Cohere: "cohere",
+  OpenAI_Compatible: "openai",
+  OpenAI_Text_Compatible: "text-completion-openai",
+  Vertex_AI: "vertex_ai",
+  Databricks: "databricks",
+  xAI: "xai",
+  Deepseek: "deepseek",
+  Ollama: "ollama",
+  AssemblyAI: "assemblyai",
+  Cerebras: "cerebras",
+  Sambanova: "sambanova",
+  Perplexity: "perplexity",
+  TogetherAI: "together_ai",
+  Openrouter: "openrouter",
+  FireworksAI: "fireworks_ai",
+  GradientAI: "gradient_ai",
+  Triton: "triton",
+  Deepgram: "deepgram",
+  ElevenLabs: "elevenlabs",
+  SageMaker: "sagemaker_chat",
+  Voyage: "voyage",
+  JinaAI: "jina_ai",
+  VolcEngine: "volcengine",
+  DeepInfra: "deepinfra"
 };
 
-const asset_logos_folder = '/ui/assets/logos/';
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
-    [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
-    [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
-    [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
-    [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
-    [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
-    [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
-    [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
-    [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
-    [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
-    [Providers.Deepseek]: `${asset_logos_folder}deepseek.svg`,
-    [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
-    [Providers.Groq]: `${asset_logos_folder}groq.svg`,
-    [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
-    [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
-    [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
-    [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
-    [Providers.OpenAI_Text]: `${asset_logos_folder}openai_small.svg`,
-    [Providers.OpenAI_Text_Compatible]: `${asset_logos_folder}openai_small.svg`,
-    [Providers.OpenAI_Compatible]: `${asset_logos_folder}openai_small.svg`,
-    [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
-    [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
-    [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
-    [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
-    [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
-    [Providers.xAI]: `${asset_logos_folder}xai.svg`,
-    [Providers.GradientAI]: `${asset_logos_folder}gradientai.svg`,
-    [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
-    [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
-    [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
-    [Providers.Voyage]: `${asset_logos_folder}voyage.webp`, 
-    [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
-    [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
-    [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`
+  [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
+  [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
+  [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
+  [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
+  [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
+  [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
+  [Providers.Cerebras]: `${asset_logos_folder}cerebras.svg`,
+  [Providers.Cohere]: `${asset_logos_folder}cohere.svg`,
+  [Providers.Databricks]: `${asset_logos_folder}databricks.svg`,
+  [Providers.Deepseek]: `${asset_logos_folder}deepseek.svg`,
+  [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
+  [Providers.Groq]: `${asset_logos_folder}groq.svg`,
+  [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
+  [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
+  [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
+  [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
+  [Providers.OpenAI_Text]: `${asset_logos_folder}openai_small.svg`,
+  [Providers.OpenAI_Text_Compatible]: `${asset_logos_folder}openai_small.svg`,
+  [Providers.OpenAI_Compatible]: `${asset_logos_folder}openai_small.svg`,
+  [Providers.Openrouter]: `${asset_logos_folder}openrouter.svg`,
+  [Providers.Perplexity]: `${asset_logos_folder}perplexity-ai.svg`,
+  [Providers.Sambanova]: `${asset_logos_folder}sambanova.svg`,
+  [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
+  [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
+  [Providers.xAI]: `${asset_logos_folder}xai.svg`,
+  [Providers.GradientAI]: `${asset_logos_folder}gradientai.svg`,
+  [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
+  [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
+  [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
+  [Providers.Voyage]: `${asset_logos_folder}voyage.webp`, 
+  [Providers.JinaAI]: `${asset_logos_folder}jina.png`,
+  [Providers.VolcEngine]: `${asset_logos_folder}volcengine.png`,
+  [Providers.DeepInfra]: `${asset_logos_folder}deepinfra.png`
 };
 
-export const getProviderLogoAndName = (providerValue: string): { logo: string, displayName: string } => {
-    if (!providerValue) {
-        return { logo: "", displayName: "-" };
-    }
+export const getProviderLogoAndName = (
+  providerValue: string
+): { logo: string; displayName: string } => {
+  if (!providerValue) {
+    return { logo: "", displayName: "-" };
+  }
 
-    // Handle special case for "gemini" provider value
-    if (providerValue.toLowerCase() === "gemini") {
-        const displayName = Providers.Google_AI_Studio;
-        const logo = providerLogoMap[displayName];
-        return { logo, displayName };
-    }
-
-    // Find the enum key by matching provider_map values
-    const enumKey = Object.keys(provider_map).find(
-        key => provider_map[key].toLowerCase() === providerValue.toLowerCase()
-    );
-
-    if (!enumKey) {
-        return { logo: "", displayName: providerValue };
-    }
-
-    // Get the display name from Providers enum and logo from map
-    const displayName = Providers[enumKey as keyof typeof Providers];
-    const logo = providerLogoMap[displayName as keyof typeof providerLogoMap];
-
+  // Handle special case for "gemini" provider value
+  if (providerValue.toLowerCase() === "gemini") {
+    const displayName = Providers.Google_AI_Studio;
+    const logo = providerLogoMap[displayName];
     return { logo, displayName };
+  }
+
+  // Find the enum key by matching provider_map values
+  const enumKey = Object.keys(provider_map).find(
+    (key) => provider_map[key].toLowerCase() === providerValue.toLowerCase()
+  );
+
+  if (!enumKey) {
+    return { logo: "", displayName: providerValue };
+  }
+
+  // Get the display name from Providers enum and logo from map
+  const displayName = Providers[enumKey as keyof typeof Providers];
+  const logo = providerLogoMap[displayName as keyof typeof providerLogoMap];
+
+  return { logo, displayName };
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {

@@ -8,61 +8,71 @@ const ConditionalPublicModelName: React.FC = () => {
   const [tableKey, setTableKey] = useState(0);// Add a key to force table re-render
 
   // Watch the 'model' field for changes and ensure it's always an array
-  const modelValue = Form.useWatch('model', form) || [];
+  const modelValue = Form.useWatch("model", form) || [];
   const selectedModels = Array.isArray(modelValue) ? modelValue : [modelValue];
   const customModelName = Form.useWatch('custom_model_name', form);
   const showPublicModelName = !selectedModels.includes('all-wildcard');
 
   // Force table to re-render when custom model name changes
   useEffect(() => {
-    if (customModelName && selectedModels.includes('custom')) {
-      const currentMappings = form.getFieldValue('model_mappings') || [];
+    if (customModelName && selectedModels.includes("custom")) {
+      const currentMappings = form.getFieldValue("model_mappings") || [];
       const updatedMappings = currentMappings.map((mapping: any) => {
-        if (mapping.public_name === 'custom' || mapping.litellm_model === 'custom') {
+        if (
+          mapping.public_name === "custom" ||
+          mapping.litellm_model === "custom"
+        ) {
           return {
             public_name: customModelName,
-            litellm_model: customModelName
+            litellm_model: customModelName + "/",
           };
         }
         return mapping;
       });
-      form.setFieldValue('model_mappings', updatedMappings);
-      setTableKey(prev => prev + 1); // Force table re-render
+      form.setFieldValue("model_mappings", updatedMappings);
+      setTableKey((prev) => prev + 1); // Force table re-render
     }
   }, [customModelName, selectedModels, form]);
 
   // Initial setup of model mappings when models are selected
   useEffect(() => {
-    if (selectedModels.length > 0 && !selectedModels.includes('all-wildcard')) {
+    if (selectedModels.length > 0 && !selectedModels.includes("all-wildcard")) {
       // Check if we already have mappings that match the selected models
-      const currentMappings = form.getFieldValue('model_mappings') || [];
-      
+      const currentMappings = form.getFieldValue("model_mappings") || [];
+
       // Only update if the mappings don't exist or don't match the selected models
-      const shouldUpdateMappings = currentMappings.length !== selectedModels.length ||
-        !selectedModels.every(model =>
-          currentMappings.some((mapping: { public_name: string; litellm_model: string }) => {
-            if (model === 'custom') {
-              return mapping.litellm_model === 'custom' || mapping.litellm_model === customModelName;
+      const shouldUpdateMappings =
+        currentMappings.length !== selectedModels.length ||
+        !selectedModels.every((model) =>
+          currentMappings.some(
+            (mapping: { public_name: string; litellm_model: string }) => {
+              if (model === "custom") {
+                return (
+                  mapping.litellm_model === "custom" ||
+                  mapping.litellm_model === customModelName
+                );
+              }
+              return mapping.litellm_model === model;
             }
-            return mapping.litellm_model === model;
-          }));
-      
+          )
+        );
+
       if (shouldUpdateMappings) {
         const mappings = selectedModels.map((model: string) => {
-          if (model === 'custom' && customModelName) {
+          if (model === "custom" && customModelName) {
             return {
               public_name: customModelName,
-              litellm_model: customModelName
+              litellm_model: customModelName + "/",
             };
           }
           return {
             public_name: model,
-            litellm_model: model
+            litellm_model: model + "/",
           };
         });
-        
-        form.setFieldValue('model_mappings', mappings);
-        setTableKey(prev => prev + 1); // Force table re-render
+
+        form.setFieldValue("model_mappings", mappings);
+        setTableKey((prev) => prev + 1); // Force table re-render
       }
     }
   }, [selectedModels, customModelName, form]);
@@ -109,13 +119,13 @@ const ConditionalPublicModelName: React.FC = () => {
           <TextInput
             value={text}
             onChange={(e) => {
-              const newMappings = [...form.getFieldValue('model_mappings')];
+              const newMappings = [...form.getFieldValue("model_mappings")];
               newMappings[index].public_name = e.target.value;
-              form.setFieldValue('model_mappings', newMappings);
+              form.setFieldValue("model_mappings", newMappings);
             }}
           />
         );
-      }
+      },
     },
     {
       title: (
@@ -159,10 +169,10 @@ const ConditionalPublicModelName: React.FC = () => {
           }
         ]}
       >
-        <Table 
+        <Table
           key={tableKey} // Add key to force re-render
-          dataSource={form.getFieldValue('model_mappings')} 
-          columns={columns} 
+          dataSource={form.getFieldValue("model_mappings")}
+          columns={columns}
           pagination={false}
           size="small"
         />
