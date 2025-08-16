@@ -56,16 +56,13 @@ pip install litellm==1.75.8
 
 #### New Model Support
 
-| Provider    | Model                                  | Features |
-| ----------- | -------------------------------------- | -------- |
-| OpenAI | `gpt-5` family | `reasoning_effort` parameter support |
-| Azure OpenAI | `gpt-5` family | `reasoning` parameter + max_tokens support |
-| Vertex AI | `vertex_ai/deepseek-ai/deepseek-r1-0528-maas` | Chat completions |
-| Azure AI | Flux image generation models | Image generation |
-| CometAPI | All supported models | Chat completions + streaming |
-| SambaNova | Embedding models | Text embeddings |
-| hosted_vllm | All models | `reasoning_effort` parameter |
-| OpenRouter | `deepseek-chat-v3-0324` | Updated cost mapping |
+| Provider    | Model                                  | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Features |
+| ----------- | -------------------------------------- | -------------- | ------------------- | -------------------- | -------- |
+| Azure AI | `azure_ai/FLUX-1.1-pro` | - | - | $40/image | Image generation |
+| Azure AI | `azure_ai/FLUX.1-Kontext-pro` | - | - | $40/image | Image generation |
+| Vertex AI | `vertex_ai/deepseek-ai/deepseek-r1-0528-maas` | 65k | $1.35 | $5.4 | Chat completions + reasoning |
+| OpenRouter | `openrouter/deepseek/deepseek-chat-v3-0324` | 65k | $0.14 | $0.28 | Chat completions |
+
 
 #### Features
 
