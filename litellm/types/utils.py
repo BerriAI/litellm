@@ -10,6 +10,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Required,
     Tuple,
     Union,
 )
@@ -1723,10 +1724,10 @@ class TranscriptionResponse(OpenAIObject):
             return self.dict()
 
 
-class GenericImageParsingChunk(TypedDict):
-    type: str
-    media_type: str
-    data: str
+class GenericImageParsingChunk(TypedDict, total=False):
+    type: Required[str]
+    media_type: str  # Optional for URL types, required for base64 types
+    data: Required[str]
 
 
 class ResponseFormatChunk(TypedDict, total=False):
