@@ -3951,6 +3951,9 @@ export interface Member {
   role: string;
   user_id: string | null;
   user_email?: string | null;
+  max_budget_in_team?: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
 }
 
 export const teamMemberAddCall = async (
@@ -4075,21 +4078,43 @@ export const teamMemberUpdateCall = async (
 ) => {
   try {
     console.log("Form Values in teamMemberUpdateCall:", formValues);
+    console.log("Budget value:", formValues.max_budget_in_team);
+    console.log("TPM limit:", formValues.tpm_limit);
+    console.log("RPM limit:", formValues.rpm_limit);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
       : `/team/member_update`;
+    
+    const requestBody: any = {
+      team_id: teamId,
+      role: formValues.role,
+      user_id: formValues.user_id,
+    };
+
+    // Add optional budget and rate limit fields
+    if (formValues.user_email !== undefined) {
+      requestBody.user_email = formValues.user_email;
+    }
+    if (formValues.max_budget_in_team !== undefined && formValues.max_budget_in_team !== null) {
+      requestBody.max_budget_in_team = formValues.max_budget_in_team;
+    }
+    if (formValues.tpm_limit !== undefined && formValues.tpm_limit !== null) {
+      requestBody.tpm_limit = formValues.tpm_limit;
+    }
+    if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
+      requestBody.rpm_limit = formValues.rpm_limit;
+    }
+
+    console.log("Final request body:", requestBody);
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        team_id: teamId,
-        role: formValues.role,
-        user_id: formValues.user_id,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
