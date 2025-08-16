@@ -98,7 +98,7 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
             # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url, format=format)
             if image["type"] == "url":
-                # For URL images, we need to convert to base64 for Vertex AI
+                # For URL images, we need to convert to base64 for Vertex AI inline_data
                 from litellm.litellm_core_utils.prompt_templates.image_handling import convert_url_to_base64
                 base64_data = convert_url_to_base64(image["data"])
                 # Extract media type and data from base64 data URL
