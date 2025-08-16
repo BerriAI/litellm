@@ -905,36 +905,27 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           additionalFields: [
             {
               name: "max_budget_in_team",
-              label: "Team Member Budget (USD)",
-              type: "input" as const,
-              rules: [
-                { 
-                  pattern: /^[0-9]*\.?[0-9]*$/, 
-                  message: "Please enter a valid number" 
-                }
-              ]
+              label: "Max Budget (USD)",
+              type: "numerical" as const,
+              step: 0.01,
+              min: 0,
+              placeholder: "Enter budget amount"
             },
             {
               name: "tpm_limit",
-              label: "Tokens Per Minute Limit",
-              type: "input" as const,
-              rules: [
-                { 
-                  pattern: /^[0-9]*$/, 
-                  message: "Please enter a valid integer" 
-                }
-              ]
+              label: "TPM Limit",
+              type: "numerical" as const,
+              step: 1,
+              min: 0,
+              placeholder: "Tokens per minute"
             },
             {
               name: "rpm_limit",
-              label: "Requests Per Minute Limit",
-              type: "input" as const,
-              rules: [
-                { 
-                  pattern: /^[0-9]*$/, 
-                  message: "Please enter a valid integer" 
-                }
-              ]
+              label: "RPM Limit", 
+              type: "numerical" as const,
+              step: 1,
+              min: 0,
+              placeholder: "Requests per minute"
             }
           ]
         }}

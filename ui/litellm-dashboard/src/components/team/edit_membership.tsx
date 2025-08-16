@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Form, Input, Select as AntSelect, Button as AntButton, message } from 'antd';
-import { Select, SelectItem } from "@tremor/react";
+import { Modal, Form, Button as AntButton, message } from 'antd';
+import { Select, SelectItem, TextInput } from "@tremor/react";
 import { Card, Text } from "@tremor/react";
 import NotificationManager from "../molecules/notifications_manager";
+import NumericalInput from "../shared/numerical_input";
 
 interface BaseMember {
   user_email?: string;
@@ -22,9 +23,12 @@ interface ModalConfig {
   additionalFields?: Array<{
     name: string;
     label: string;
-    type: 'input' | 'select';
+    type: 'input' | 'select' | 'numerical';
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
+    step?: number;
+    min?: number;
+    placeholder?: string;
   }>;
 }
 
@@ -58,10 +62,10 @@ const MemberModal = <T extends BaseMember>({
           ...initialData,
           // Ensure role is set correctly for editing
           role: initialData.role || config.defaultRole,
-          // Convert numbers to strings for form inputs
-          max_budget_in_team: (initialData as any).max_budget_in_team?.toString() || '',
-          tpm_limit: (initialData as any).tpm_limit?.toString() || '',
-          rpm_limit: (initialData as any).rpm_limit?.toString() || '',
+          // Keep numeric values as numbers for NumericalInput components
+          max_budget_in_team: (initialData as any).max_budget_in_team || null,
+          tpm_limit: (initialData as any).tpm_limit || null,
+          rpm_limit: (initialData as any).rpm_limit || null,
         };
         console.log("Setting form values:", formValues);
         form.setFieldsValue(formValues);
@@ -77,25 +81,17 @@ const MemberModal = <T extends BaseMember>({
 
   const handleSubmit = async (values: any) => {
     try {
-      // Trim string values and convert numeric fields
+      // Trim string values and clean up form data
       const formData = Object.entries(values).reduce((acc, [key, value]) => {
         if (typeof value === 'string') {
           const trimmedValue = value.trim();
-          // Convert numeric fields back to numbers
-          if (key === 'max_budget_in_team' && trimmedValue) {
-            return { ...acc, [key]: parseFloat(trimmedValue) };
-          } else if ((key === 'tpm_limit' || key === 'rpm_limit') && trimmedValue) {
-            return { ...acc, [key]: parseInt(trimmedValue, 10) };
-          } else if (trimmedValue === '') {
-            // For empty strings, set to null for optional numeric fields
-            if (key === 'max_budget_in_team' || key === 'tpm_limit' || key === 'rpm_limit') {
-              return { ...acc, [key]: null };
-            }
-            return { ...acc, [key]: trimmedValue };
-          } else {
-            return { ...acc, [key]: trimmedValue };
+          // For empty strings on optional numeric fields, set to null
+          if (trimmedValue === '' && (key === 'max_budget_in_team' || key === 'tpm_limit' || key === 'rpm_limit')) {
+            return { ...acc, [key]: null };
           }
+          return { ...acc, [key]: trimmedValue };
         }
+        // For numeric values from NumericalInput, use as-is (already numbers)
         return { ...acc, [key]: value };
       }, {}) as T;
       
@@ -117,29 +113,38 @@ const MemberModal = <T extends BaseMember>({
   const renderField = (field: {
     name: string;
     label: string;
-    type: 'input' | 'select';
+    type: 'input' | 'select' | 'numerical';
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
+    step?: number;
+    min?: number;
+    placeholder?: string;
   }) => {
     switch (field.type) {
       case 'input':
         return (
-          <Input
-            className="px-3 py-2 border rounded-md w-full"
-            onChange={(e) => {
-              e.target.value = e.target.value.trim();
-            }}
+          <TextInput
+            placeholder={field.placeholder}
+          />
+        );
+      case 'numerical':
+        return (
+          <NumericalInput
+            step={field.step || 1}
+            min={field.min || 0}
+            style={{ width: "100%" }}
+            placeholder={field.placeholder || "Enter a numerical value"}
           />
         );
       case 'select':
         return (
-          <AntSelect>
+          <Select>
             {field.options?.map(option => (
-              <AntSelect.Option key={option.value} value={option.value}>
+              <SelectItem key={option.value} value={option.value}>
                 {option.label}
-              </AntSelect.Option>
+              </SelectItem>
             ))}
-          </AntSelect>
+          </Select>
         );
       default:
         return null;
@@ -150,7 +155,7 @@ const MemberModal = <T extends BaseMember>({
     <Modal
       title={config.title || (mode === 'add' ? "Add Member" : "Edit Member")}
       open={visible}
-      width={800}
+      width={1000}
       footer={null}
       onCancel={onCancel}
     >
@@ -170,12 +175,8 @@ const MemberModal = <T extends BaseMember>({
               { type: 'email', message: 'Please enter a valid email!' }
             ]}
           >
-            <Input
-              className="px-3 py-2 border rounded-md w-full"
+            <TextInput
               placeholder="user@example.com"
-              onChange={(e) => {
-                e.target.value = e.target.value.trim();
-              }}
             />
           </Form.Item>
         )}
@@ -192,12 +193,8 @@ const MemberModal = <T extends BaseMember>({
             name="user_id"
             className="mb-4"
           >
-            <Input
-              className="px-3 py-2 border rounded-md w-full"
+            <TextInput
               placeholder="user_123"
-              onChange={(e) => {
-                e.target.value = e.target.value.trim();
-              }}
             />
           </Form.Item>
         )}
@@ -219,7 +216,7 @@ const MemberModal = <T extends BaseMember>({
             { required: true, message: 'Please select a role!' }
           ]}
         >
-          <AntSelect>
+          <Select>
             {mode === 'edit' && initialData
               ? [
                   // Current role first
@@ -227,16 +224,16 @@ const MemberModal = <T extends BaseMember>({
                   // Then all other roles
                   ...config.roleOptions.filter(option => option.value !== initialData.role)
                 ].map(option => (
-                  <AntSelect.Option key={option.value} value={option.value}>
+                  <SelectItem key={option.value} value={option.value}>
                     {option.label}
-                  </AntSelect.Option>
+                  </SelectItem>
                 ))
               : config.roleOptions.map(option => (
-                  <AntSelect.Option key={option.value} value={option.value}>
+                  <SelectItem key={option.value} value={option.value}>
                     {option.label}
-                  </AntSelect.Option>
+                  </SelectItem>
                 ))}
-          </AntSelect>
+          </Select>
         </Form.Item>
 
         {config.additionalFields?.map(field => (
