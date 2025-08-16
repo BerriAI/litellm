@@ -4,7 +4,7 @@ Ollama /chat/completion calls handled in llm_http_handler.py
 [TODO]: migrate embeddings to a base handler as well.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import litellm
 from litellm.types.utils import EmbeddingResponse
@@ -77,7 +77,7 @@ async def ollama_aembeddings(
     optional_params: dict,
     logging_obj: Any,
     encoding: Any,
-    api_key: str = None,
+    api_key: Optional[str] = None,
 ):
     if not api_base.endswith("/api/embed"):
         api_base += "/api/embed"
@@ -114,7 +114,7 @@ def ollama_embeddings(
     model_response: EmbeddingResponse,
     logging_obj: Any,
     encoding: Any = None,
-    api_key: str = None,
+    api_key: Optional[str] = None,
 ):
     if not api_base.endswith("/api/embed"):
         api_base += "/api/embed"
