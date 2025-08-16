@@ -1562,6 +1562,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
         elif custom_llm_provider == "deepseek":
             ## COMPLETION CALL
+
             try:
                 response = base_llm_http_handler.completion(
                     model=model,
@@ -1977,10 +1978,10 @@ def completion(  # type: ignore # noqa: PLR0915
             use_base_llm_http_handler = get_secret_bool(
                 "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
             )
+
             try:
 
                 if use_base_llm_http_handler:
-                    optional_params.pop("max_retries", None)
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
