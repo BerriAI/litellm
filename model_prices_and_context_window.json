@@ -722,7 +722,7 @@
             "/v1/batch",
             "/v1/responses"
         ],
-        "supported_modalities": [
+        "supported_modalities": [   
             "text",
             "image"
         ],
@@ -730,13 +730,13 @@
             "text"
         ],
         "supports_pdf_input": true,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_native_streaming": true,
         "supports_reasoning": true
     },
@@ -762,13 +762,13 @@
             "text"
         ],
         "supports_pdf_input": true,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_native_streaming": true,
         "supports_reasoning": true
     },
