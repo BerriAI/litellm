@@ -101,8 +101,6 @@ pip install litellm==1.75.8
     - Fixed thinking disabled parameter handling - [PR #13598](https://github.com/BerriAI/litellm/pull/13598)
 - **[Streaming](../../docs/completion/stream)**
     - Consistent 'finish_reason' chunk indexing - [PR #13560](https://github.com/BerriAI/litellm/pull/13560)
-    - Fixed `stream=True` + `background=True` with Responses API - [PR #13654](https://github.com/BerriAI/litellm/pull/13654)
-
 ---
 
 ## LLM API Endpoints
@@ -116,6 +114,8 @@ pip install litellm==1.75.8
 
 - **[Real-time API](../../docs/realtime)**
     - Fixed endpoint for no intent scenarios - [PR #13476](https://github.com/BerriAI/litellm/pull/13476)
+- **[Responses API](../../docs/response_api)**
+    - Fixed `stream=True` + `background=True` with Responses API - [PR #13654](https://github.com/BerriAI/litellm/pull/13654)
 
 ---
 
