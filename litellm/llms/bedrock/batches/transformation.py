@@ -8,6 +8,9 @@ from litellm.types.llms.bedrock import CreateModelInvocationJobRequest
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch
 
+from openai.types.batch import Errors
+from openai.types.batch_error import BatchError
+
 
 class BedrockBatchTransformation:
     """
@@ -198,7 +201,7 @@ class BedrockBatchTransformation:
     @classmethod
     def _get_error_information_from_bedrock_response(
         cls, response: Dict[str, Any], openai_status: str
-    ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    ) -> tuple[Optional[str], Optional[Errors]]:
         """
         Gets error information from the Bedrock response
         """
@@ -206,19 +209,18 @@ class BedrockBatchTransformation:
         errors = None
 
         if response.get("message") and openai_status == "failed":
-            # Construct errors object as per OpenAI batch error schema
-            errors = {
-                "object": "list",
-                "data": [
-                    {
-                        "object": "error",
-                        "code": response.get("status", "failed") or "failed",
-                        "message": response.get("message") or "Unknown error",
-                        "line": None,
-                        "param": None,
-                    }
+            # Create proper Errors object as per OpenAI batch error schema
+            errors = Errors(
+                object="list",
+                data=[
+                    BatchError(
+                        code=response.get("status", "failed") or "failed",
+                        message=response.get("message") or "Unknown error",
+                        line=None,
+                        param=None,
+                    )
                 ],
-            }
+            )
             error_file_id = None  # Bedrock doesn't provide error files
 
         return error_file_id, errors
