@@ -45,8 +45,8 @@ class TestOllamaTurboAuthHeaders:
                     api_key="test_key_123",
                     client=client,
                 )
-            except Exception as e:
-                print(e)
+            except Exception:
+                pass
 
             mock_post.assert_called()
 
@@ -78,8 +78,8 @@ class TestOllamaTurboAuthHeaders:
                         api_base="https://ollama.com",
                         client=client,
                     )
-                except Exception as e:
-                    print(e)
+                except Exception:
+                    pass
 
                 mock_post.assert_called()
 
@@ -117,8 +117,8 @@ class TestOllamaTurboAuthHeaders:
                     api_base="https://ollama.com",
                     api_key="test_embed_key",
                 )
-            except Exception as e:
-                print(e)
+            except Exception:
+                pass
 
             mock_post.assert_called()
 
@@ -132,8 +132,6 @@ class TestOllamaTurboAuthHeaders:
     def test_ollama_turbo_vision_auth_header(self):
         """Test that vision/multimodal calls to ollama.com get correct auth header."""
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
-        from litellm.llms.ollama.common_utils import _convert_image
-        import json
 
         client = HTTPHandler()
 
@@ -165,8 +163,8 @@ class TestOllamaTurboAuthHeaders:
                         api_key="test_vision_key",
                         client=client,
                     )
-                except Exception as e:
-                    print(e)
+                except Exception:
+                    pass
 
                 mock_post.assert_called()
 
@@ -205,7 +203,6 @@ class TestOllamaTurboIntegration:
             "Ollama Turbo" in response.choices[0].message.content
             or "Hello" in response.choices[0].message.content
         )
-        print(f"LiteLLM Response: {response.choices[0].message.content}")
 
     @integration_tests
     @pytest.mark.skipif(
@@ -244,13 +241,11 @@ class TestOllamaTurboIntegration:
         full_response = "".join(response_parts)
         assert full_response
         assert "Ollama Turbo" in full_response or "Hello" in full_response
-        print(f"Native Ollama Response: {full_response}")
 
     @integration_tests
     @pytest.mark.asyncio
     async def test_litellm_ollama_turbo_async_streaming(self):
         """Test async streaming with Ollama Turbo via LiteLLM."""
-        import asyncio
         from litellm import acompletion
 
         api_key = os.getenv("OLLAMA_API_KEY")
@@ -269,38 +264,3 @@ class TestOllamaTurboIntegration:
 
         full_response = "".join(response_parts)
         assert full_response
-        print(f"Async Streaming Response: {full_response}")
-
-
-if __name__ == "__main__":
-    # Allow running directly for quick testing
-
-    # First run auth header tests (these don't need API key)
-    print("=== Testing Auth Headers ===")
-    auth_test = TestOllamaTurboAuthHeaders()
-    auth_test.test_ollama_turbo_auth_header_without_bearer()
-    print("✓ Auth header test passed")
-
-    auth_test.test_ollama_env_var_pickup()
-    print("✓ Environment variable test passed")
-
-    # Now run integration tests if API key is available
-    if not os.getenv("OLLAMA_API_KEY"):
-        print("\nSet OLLAMA_API_KEY environment variable to run integration tests")
-        sys.exit(0)
-
-    test = TestOllamaTurboIntegration()
-
-    print("\n=== Testing LiteLLM Ollama Turbo ===")
-    test.test_litellm_ollama_turbo_completion()
-
-    print("\n=== Testing Native Ollama Turbo ===")
-    try:
-        test.test_native_ollama_turbo_completion()
-    except Exception as e:
-        print(f"Native test skipped: {e}")
-
-    print("\n=== Testing Async Streaming ===")
-    import asyncio
-
-    asyncio.run(test.test_litellm_ollama_turbo_async_streaming())
