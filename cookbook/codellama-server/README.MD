@@ -6,7 +6,7 @@ Works with: Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.
 [![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.345-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
 ![Downloads](https://img.shields.io/pypi/dm/litellm)
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/HuDPw-?referralCode=jch2ME)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/HuDPw-?referralCode=jch2ME&utm_medium=integration&utm_source=docs&utm_campaign=litellm)
 
 **LIVE DEMO** - https://litellm.ai/playground
 
@@ -134,7 +134,7 @@ All responses from the server are returned in the following format (for all LLM 
 
 1. Quick Start: Deploy on Railway
 
-   [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/HuDPw-?referralCode=jch2ME)
+   [![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/HuDPw-?referralCode=jch2ME&utm_medium=integration&utm_source=docs&utm_campaign=litellm)
 
 2. `GCP`, `AWS`, `Azure`
    This project includes a `Dockerfile` allowing you to build and deploy a Docker Project on your providers
