@@ -16,6 +16,7 @@ import OnboardingModal, { InvitationLink } from "../onboarding_link"
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CopyIcon, CheckIcon } from "lucide-react";
 import NotificationManager from "../molecules/notifications_manager";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 
 interface UserInfoViewProps {
   userId: string
@@ -36,6 +37,7 @@ interface UserInfo {
     teams: any[] | null
     models: string[] | null
     max_budget: number | null
+    budget_duration: string | null
     spend: number | null
     metadata: Record<string, any> | null
     created_at: string | null
@@ -137,6 +139,7 @@ export default function UserInfoView({
           user_email: formValues.user_email,
           models: formValues.models,
           max_budget: formValues.max_budget,
+          budget_duration: formValues.budget_duration,
           metadata: formValues.metadata,
         },
       })
@@ -355,7 +358,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Role</Text>
+                    <Text className="font-medium">Global Proxy Role</Text>
                     <Text>{userData.user_info?.user_role || "Not Set"}</Text>
                   </div>
 
@@ -393,7 +396,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Models</Text>
+                    <Text className="font-medium">Personal Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
                         userData.user_info?.models?.map((model, index) => (
@@ -420,6 +423,20 @@ export default function UserInfoView({
                         <Text>No API keys</Text>
                       )}
                     </div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Max Budget</Text>
+                    <Text>
+                      {userData.user_info?.max_budget !== null && userData.user_info?.max_budget !== undefined
+                        ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                        : "Unlimited"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Budget Reset</Text>
+                    <Text>{getBudgetDurationLabel(userData.user_info?.budget_duration ?? null)}</Text>
                   </div>
 
                   <div>
