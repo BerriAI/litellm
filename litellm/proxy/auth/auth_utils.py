@@ -195,7 +195,8 @@ async def pre_db_read_auth_checks(
     Raises:
     - HTTPException if request fails initial auth checks
     """
-    from litellm.proxy.proxy_server import general_settings, llm_router, premium_user
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import llm_router, premium_user
 
     # Check 1. request size
     await check_if_request_size_is_safe(request=request)
@@ -262,7 +263,8 @@ def route_in_additonal_public_routes(current_route: str):
     """
 
     # check if user is premium_user - if not do nothing
-    from litellm.proxy.proxy_server import general_settings, premium_user
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import premium_user
 
     try:
         if premium_user is not True:
@@ -317,7 +319,8 @@ async def check_if_request_size_is_safe(request: Request) -> bool:
         ProxyException: If the request size is too large
 
     """
-    from litellm.proxy.proxy_server import general_settings, premium_user
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import premium_user
 
     max_request_size_mb = general_settings.get("max_request_size_mb", None)
 
@@ -382,7 +385,8 @@ async def check_response_size_is_safe(response: Any) -> bool:
 
     """
 
-    from litellm.proxy.proxy_server import general_settings, premium_user
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import premium_user
 
     max_response_size_mb = general_settings.get("max_response_size_mb", None)
     if max_response_size_mb is not None:
@@ -479,7 +483,7 @@ def get_end_user_id_from_request_body(
 ) -> Optional[str]:
     # Import general_settings here to avoid potential circular import issues at module level
     # and to ensure it's fetched at runtime.
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.general_settings import general_settings
 
     # Check 1: Custom Header from general_settings.user_header_name (only if request_headers is provided)
     # User query: "system not respecting user_header_name property"

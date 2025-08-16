@@ -59,7 +59,7 @@ class RedisUpdateBuffer:
         This setting enables buffering database transactions in Redis
         to improve reliability and reduce database contention
         """
-        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy.general_settings import general_settings
 
         _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
             general_settings.get("use_redis_transaction_buffer", False)

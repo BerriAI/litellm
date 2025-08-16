@@ -567,7 +567,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return pipeline_operations
 
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
-        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy.general_settings import general_settings
 
         specified_rate_limit_type = general_settings.get(
             "token_rate_limit_type", "output"

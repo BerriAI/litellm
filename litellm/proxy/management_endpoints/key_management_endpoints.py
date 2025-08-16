@@ -3018,7 +3018,8 @@ async def test_key_logging(
     from io import StringIO
 
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-    from litellm.proxy.proxy_server import general_settings, proxy_config
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import proxy_config
 
     logging_callbacks: List[str] = []
     for callback in key_logging:

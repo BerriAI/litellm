@@ -153,7 +153,8 @@ class UserManagementEventHooks:
         """
         Send a user invitation email to the user
         """
-        from litellm.proxy.proxy_server import general_settings, proxy_logging_obj
+        from litellm.proxy.general_settings import general_settings
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
         # check if user has setup email alerting
         if "email" not in general_settings.get("alerting", []):

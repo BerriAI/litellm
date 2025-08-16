@@ -225,7 +225,7 @@ class _ProxyDBLogger(CustomLogger):
 
         If users want to disable error tracking, they can set the disable_error_logs flag in the general_settings
         """
-        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy.general_settings import general_settings
 
         if general_settings.get("disable_error_logs") is True:
             return False

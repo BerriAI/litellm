@@ -70,7 +70,7 @@ class UIThemeSettingsResponse(SettingsResponse):
     include_in_schema=False,
 )
 async def get_allowed_ips():
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.general_settings import general_settings
 
     _allowed_ip = general_settings.get("allowed_ips")
     return {"data": _allowed_ip}
@@ -133,7 +133,8 @@ async def add_allowed_ip(ip_address: IPAddress):
     dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_allowed_ip(ip_address: IPAddress):
-    from litellm.proxy.proxy_server import general_settings, proxy_config
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import proxy_config
 
     _allowed_ips: List = general_settings.get("allowed_ips", [])
     if ip_address.ip in _allowed_ips:

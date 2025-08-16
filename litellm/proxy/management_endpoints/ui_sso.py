@@ -781,7 +781,8 @@ async def insert_sso_user(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_ui_settings(request: Request):
-    from litellm.proxy.proxy_server import general_settings, proxy_state
+    from litellm.proxy.general_settings import general_settings
+    from litellm.proxy.proxy_server import proxy_state
 
     _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
     _logout_url = os.getenv("PROXY_LOGOUT_URL", None)

@@ -73,10 +73,10 @@ class ColdStorageHandler:
         """
 
         try:
-            from litellm.proxy.proxy_server import general_settings
+            from litellm.proxy.general_settings import general_settings
         except Exception as e:
             verbose_proxy_logger.debug(
-                f"Unable to import proxy_server for cold storage logging: {e}"
+                f"Unable to import general_settings for cold storage logging: {e}"
             )
             return None
 
