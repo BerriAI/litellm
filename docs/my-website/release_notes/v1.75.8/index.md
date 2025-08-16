@@ -70,7 +70,7 @@ pip install litellm==1.75.8
     - Added `reasoning_effort` parameter support for GPT-5 model family - [PR #13475](https://github.com/BerriAI/litellm/pull/13475), [Get Started](../../docs/providers/openai#openai-chat-completion-models)
     - Support for `reasoning` parameter in Responses API - [PR #13475](https://github.com/BerriAI/litellm/pull/13475), [Get Started](../../docs/response_api)
 - **[Azure OpenAI](../../docs/providers/azure/azure)**
-    - GPT-5 support with max_tokens and `reasoning` parameter - [PR #13510](https://github.com/BerriAI/litellm/pull/13510), [Get Started](../../docs/providers/azure/azure#gpt-5-models
+    - GPT-5 support with max_tokens and `reasoning` parameter - [PR #13510](https://github.com/BerriAI/litellm/pull/13510), [Get Started](../../docs/providers/azure/azure#gpt-5-models)
 - **[AWS Bedrock](../../docs/providers/bedrock)**
     - Streaming support for bedrock gpt-oss model family - [PR #13346](https://github.com/BerriAI/litellm/pull/13346), [Get Started](../../docs/providers/bedrock#openai-gpt-oss)
     - `/messages` endpoint compatibility with `bedrock/converse/<model>` - [PR #13627](https://github.com/BerriAI/litellm/pull/13627)
