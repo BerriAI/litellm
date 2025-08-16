@@ -125,7 +125,6 @@ pip install litellm==1.75.8
 
 - **Access Control & Configuration**
     - Enhanced MCPServerManager with access groups and description support - [PR #13549](https://github.com/BerriAI/litellm/pull/13549)
-    - Added CredentialDeleteModal component and integration with CredentialsPanel - [PR #13550](https://github.com/BerriAI/litellm/pull/13550)
 
 #### Bugs
 
@@ -156,7 +155,8 @@ pip install litellm==1.75.8
     - Enhanced chart readability with short-form notation for large numbers - [PR #12370](https://github.com/BerriAI/litellm/pull/12370)
     - Fixed image overflow in LiteLLM model display - [PR #13639](https://github.com/BerriAI/litellm/pull/13639)
     - Removed ambiguous network response errors - [PR #13582](https://github.com/BerriAI/litellm/pull/13582)
-    - Fixed e2e UI testing - [PR #13610](https://github.com/BerriAI/litellm/pull/13610)
+- **Credentials**
+    - Added CredentialDeleteModal component and integration with CredentialsPanel - [PR #13550](https://github.com/BerriAI/litellm/pull/13550)
 - **Admin & Permissions**
     - Allow routes for admin viewer - [PR #13588](https://github.com/BerriAI/litellm/pull/13588)
 
