@@ -4232,6 +4232,7 @@ def embedding(  # noqa: PLR0915
                 logging_obj=logging,
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
+                api_key=api_key,
             )
         elif custom_llm_provider == "sagemaker":
             response = sagemaker_llm.embedding(

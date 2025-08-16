@@ -140,6 +140,7 @@ def test_ollama_embeddings(mock_embeddings):
             logging_obj=mock.ANY,
             model_response=mock.ANY,
             encoding=mock.ANY,
+            api_key=None,
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -167,6 +168,7 @@ def test_ollama_aembeddings(mock_aembeddings):
             logging_obj=mock.ANY,
             model_response=mock.ANY,
             encoding=mock.ANY,
+            api_key=None,
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
