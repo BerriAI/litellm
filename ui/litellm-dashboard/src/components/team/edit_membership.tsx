@@ -22,7 +22,7 @@ interface ModalConfig {
   showUserId?: boolean;
   additionalFields?: Array<{
     name: string;
-    label: string;
+    label: string | React.ReactNode;
     type: 'input' | 'select' | 'numerical';
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
@@ -112,7 +112,7 @@ const MemberModal = <T extends BaseMember>({
 
   const renderField = (field: {
     name: string;
-    label: string;
+    label: string | React.ReactNode;
     type: 'input' | 'select' | 'numerical';
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
