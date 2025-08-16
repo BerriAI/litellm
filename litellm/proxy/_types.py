@@ -2762,11 +2762,22 @@ class TeamMemberDeleteRequest(MemberDeleteRequest):
 class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
     role: Optional[Literal["admin", "user"]] = None
+    tpm_limit: Optional[int] = Field(
+        default=None,
+        description="Tokens per minute limit for this team member"
+    )
+    rpm_limit: Optional[int] = Field(
+        default=None,
+        description="Requests per minute limit for this team member"
+    )
+    
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
     team_id: str
     max_budget_in_team: Optional[float] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 
 class TeamModelAddRequest(BaseModel):

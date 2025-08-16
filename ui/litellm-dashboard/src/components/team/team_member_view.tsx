@@ -144,7 +144,15 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                         icon={PencilAltIcon}
                         size="sm"
                         onClick={() => {
-                          setSelectedEditMember(member);
+                          // Get budget and rate limit data from team membership
+                          const membership = teamData.team_memberships.find(tm => tm.user_id === member.user_id);
+                          const enhancedMember = {
+                            ...member,
+                            max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
+                            tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
+                            rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+                          };
+                          setSelectedEditMember(enhancedMember);
                           setIsEditMemberModalVisible(true);
                         }}
                         className="cursor-pointer hover:text-blue-600"

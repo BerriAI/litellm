@@ -1617,6 +1617,8 @@ async def team_member_update(
             max_budget=data.max_budget_in_team,
             existing_budget_id=identified_budget_id,
             user_api_key_dict=user_api_key_dict,
+            tpm_limit=data.tpm_limit,
+            rpm_limit=data.rpm_limit,
         )
 
     ### update team member role
@@ -1647,6 +1649,8 @@ async def team_member_update(
         user_id=received_user_id,
         user_email=data.user_email,
         max_budget_in_team=data.max_budget_in_team,
+        tpm_limit=data.tpm_limit,
+        rpm_limit=data.rpm_limit,
     )
 
 

@@ -254,7 +254,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
+        max_budget_in_team: values.max_budget_in_team,
+        tpm_limit: values.tpm_limit,
+        rpm_limit: values.rpm_limit,
       };
+      console.log("Updating member with values:", member);
       message.destroy(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
@@ -898,6 +902,53 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             { label: "Admin", value: "admin" },
             { label: "User", value: "user" },
           ],
+          additionalFields: [
+            {
+              name: "max_budget_in_team",
+              label: (
+                <span>
+                  Team Member Budget (USD){' '}
+                  <Tooltip title="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 0.01,
+              min: 0,
+              placeholder: "Budget limit for this member within this team"
+            },
+            {
+              name: "tpm_limit",
+              label: (
+                <span>
+                  Team Member TPM Limit{' '}
+                  <Tooltip title="Maximum tokens per minute this member can use within this team. This is separate from any global user TPM limit">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 1,
+              min: 0,
+              placeholder: "Tokens per minute limit for this member in this team"
+            },
+            {
+              name: "rpm_limit",
+              label: (
+                <span>
+                  Team Member RPM Limit{' '}
+                  <Tooltip title="Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 1,
+              min: 0,
+              placeholder: "Requests per minute limit for this member in this team"
+            }
+          ]
         }}
       />
 
