@@ -279,7 +279,7 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai","bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -321,7 +321,7 @@ async def aretrieve_batch(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai","bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -463,6 +463,13 @@ def retrieve_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_batches_instance.retrieve_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=optional_params.api_base,
+                litellm_params=litellm_params,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
@@ -485,7 +492,7 @@ def retrieve_batch(
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure","bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -528,7 +535,7 @@ async def alist_batches(
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure","bedrock"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -625,9 +632,17 @@ def list_batches(
                 max_retries=optional_params.max_retries,
                 litellm_params=litellm_params,
             )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_batches_instance.list_batches(
+                _is_async=_is_async,
+                after=after,
+                limit=limit,
+                api_base=optional_params.api_base,
+                litellm_params=litellm_params,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'list_batch'. Only 'openai' is supported.".format(
+                message="LiteLLM doesn't support {} for 'list_batch'. Only 'openai', 'azure', and 'bedrock' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",
@@ -645,7 +660,7 @@ def list_batches(
 
 async def acancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure","bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -686,7 +701,7 @@ async def acancel_batch(
 
 def cancel_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure"] = "openai",
+    custom_llm_provider: Literal["openai", "azure","bedrock"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -791,6 +806,13 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 cancel_batch_data=_cancel_batch_request,
+                litellm_params=litellm_params,
+            )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                batch_id=batch_id,
+                api_base=optional_params.api_base,
                 litellm_params=litellm_params,
             )
         else:

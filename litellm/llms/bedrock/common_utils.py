@@ -803,3 +803,20 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
 
     # Split comma-separated values and strip whitespace
     return [beta.strip() for beta in anthropic_beta_header.split(",")]
+
+
+def convert_bedrock_datetime_to_openai_datetime(bedrock_datetime) -> Optional[int]:
+    """
+    Convert Bedrock datetime objects to OpenAI datetime format (Unix epoch).
+    
+    Args:
+        bedrock_datetime: Bedrock datetime object or None
+        
+    Returns:
+        Optional[int]: Unix epoch timestamp or None if input is None
+    """
+    if bedrock_datetime is None:
+        return None
+    if hasattr(bedrock_datetime, 'timestamp'):
+        return int(bedrock_datetime.timestamp())
+    return None
