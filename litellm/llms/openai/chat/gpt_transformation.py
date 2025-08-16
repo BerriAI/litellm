@@ -428,6 +428,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if tools is not None and len(tools) > 0:
             optional_params["tools"] = tools
 
+        optional_params.pop("max_retries", None)
+
         return {
             "model": model,
             "messages": messages,
