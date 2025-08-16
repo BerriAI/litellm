@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, Optional
 
 from litellm.llms.bedrock.common_utils import (
@@ -89,9 +90,11 @@ class BedrockBatchTransformation:
         job_id = cls._get_batch_id_from_bedrock_response(job_arn)
 
         # Convert timestamps to Unix epoch
-        created_at = convert_bedrock_datetime_to_openai_datetime(
+        created_at_raw = convert_bedrock_datetime_to_openai_datetime(
             bedrock_response.get("submitTime")
         )
+        # Ensure created_at is always an int (required by LiteLLMBatch)
+        created_at = created_at_raw if created_at_raw is not None else int(time.time())
 
         # Determine timestamps based on status
         in_progress_at = None
