@@ -2,12 +2,12 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # 🆕 Github
-https://github.com/marketplace/models
+https://github.com/features/models
 
 :::tip
 
 **We support ALL Github models, just set `model=github/<any-model-on-github>` as a prefix when sending litellm requests**
-Ignore company prefix: meta/Llama-3.2-11B-Vision-Instruct becomes model=github/Llama-3.2-11B-Vision-Instruct
+The publisher prefix is optional: meta/Llama-3.2-11B-Vision-Instruct can become either model=github/Llama-3.2-11B-Vision-Instruct or model=github/meta/Llama-3.2-11B-Vision-Instruct
 
 :::
 
@@ -147,16 +147,14 @@ print(response)
 
 
 ## Supported Models - ALL Github Models Supported!
-We support ALL Github models, just set `github/` as a prefix when sending completion requests
+We support ALL Github models, just set `github/` as a prefix when sending completion requests. For example:
 
 | Model Name         | Usage                                           |
 |--------------------|---------------------------------------------------------|
-| llama-3.1-8b-Instant     | `completion(model="github/Llama-3.1-8b-Instant", messages)`     | 
-| Llama-3.1-70b-Versatile    | `completion(model="github/Llama-3.1-70b-Versatile", messages)`    | 
+| gpt-4.1     | `completion(model="github/gpt-4.1", messages)`     | 
+| deepseek-v3     | `completion(model="github/deepseek-v3", messages)`     | 
 | Llama-3.2-11B-Vision-Instruct     | `completion(model="github/Llama-3.2-11B-Vision-Instruct", messages)`     | 
-| Llama3-70b-8192    | `completion(model="github/Llama3-70b-8192", messages)`    | 
-| Llama2-70b-4096    | `completion(model="github/Llama2-70b-4096", messages)`    | 
-| Mixtral-8x7b-32768 | `completion(model="github/Mixtral-8x7b-32768", messages)` |
+| codestral-2501 | `completion(model="github/codestral-2501", messages)` |
 | Phi-4 | `completion(model="github/Phi-4", messages)` |
 
 ## Github - Tool / Function Calling Example
