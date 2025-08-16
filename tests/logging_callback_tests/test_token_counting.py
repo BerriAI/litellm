@@ -223,14 +223,19 @@ async def test_stream_token_counting_anthropic_with_include_usage():
         json.dumps(all_anthropic_usage_chunks, indent=4, default=str),
     )
 
-    input_tokens_anthropic_api = max(
-        [getattr(usage, "input_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
-    )
-    output_tokens_anthropic_api = max(
-        [getattr(usage, "output_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
-    )
-    print("input_tokens_anthropic_api", input_tokens_anthropic_api)
-    print("output_tokens_anthropic_api", output_tokens_anthropic_api)
+    # Get the most recent value of input tokens (iterate backwards to find last non-zero value)
+    anthropic_api_input_tokens = 0
+    for usage in reversed(all_anthropic_usage_chunks):
+        if getattr(usage, "input_tokens", 0) > 0:
+            anthropic_api_input_tokens = getattr(usage, "input_tokens", 0)
+            break
+    anthropic_api_output_tokens = 0
+    for usage in reversed(all_anthropic_usage_chunks):
+        if getattr(usage, "output_tokens", 0) > 0:
+            anthropic_api_output_tokens = getattr(usage, "output_tokens", 0)
+            break
+    print("input_tokens_anthropic_api", anthropic_api_input_tokens)
+    print("output_tokens_anthropic_api", anthropic_api_output_tokens)
 
     print("input_tokens_litellm", custom_logger.recorded_usage.prompt_tokens)
     print("output_tokens_litellm", custom_logger.recorded_usage.completion_tokens)
