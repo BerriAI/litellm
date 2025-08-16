@@ -3,6 +3,7 @@ Bedrock Batches API Handler
 """
 
 import time
+from datetime import datetime
 from typing import Any, Dict, Optional, Union
 
 import httpx
@@ -22,8 +23,6 @@ from litellm.types.llms.openai import (
     LiteLLMBatchCreateRequest,
 )
 from litellm.types.utils import LiteLLMBatch
-from datetime import datetime
-
 
 from ..base_aws_llm import BaseAWSLLM
 from .transformation import BedrockBatchTransformation
@@ -48,7 +47,7 @@ class BedrockBatchesAPI(BaseAWSLLM):
         api_key: Optional[str] = None,
     ) -> LiteLLMBatch:
         import asyncio
-        
+
         def sync_create_batch():
             return self.create_batch(
                 _is_async=True,
@@ -60,7 +59,7 @@ class BedrockBatchesAPI(BaseAWSLLM):
                 logging_obj=None,
                 client=client,
             )
-        
+
         # Run the sync method in an executor to make it async
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, sync_create_batch)
@@ -154,13 +153,11 @@ class BedrockBatchesAPI(BaseAWSLLM):
             "metadata": create_batch_data.get("metadata", {}),
         }
 
-        bedrock_job_request: CreateModelInvocationJobRequest = (
-            BedrockBatchTransformation.transform_openai_batch_request_to_bedrock_job_request(
-                bedrock_batch_data,
-                s3_input_uri=input_s3_uri,
-                s3_output_uri=output_s3_uri,
-                role_arn=role_arn,
-            )
+        bedrock_job_request: CreateModelInvocationJobRequest = BedrockBatchTransformation.transform_openai_batch_request_to_bedrock_job_request(
+            bedrock_batch_data,
+            s3_input_uri=input_s3_uri,
+            s3_output_uri=output_s3_uri,
+            role_arn=role_arn,
         )
         verbose_logger.debug(f"create_batch_data: {bedrock_job_request}")
 
@@ -172,9 +169,10 @@ class BedrockBatchesAPI(BaseAWSLLM):
         # Retrieve the full job details to transform properly
         if job_arn:
             full_resp = boto_client.get_model_invocation_job(jobIdentifier=job_arn)
-            return BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(
-                full_resp, 
-                input_file_id=create_batch_data.get("input_file_id", "")
+            return (
+                BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(
+                    full_resp, input_file_id=create_batch_data.get("input_file_id", "")
+                )
             )
         else:
             # Fallback if job_arn is not available
@@ -188,62 +186,93 @@ class BedrockBatchesAPI(BaseAWSLLM):
                 completion_window="24h",
             )
 
-    def retrieve_batch(self, batch_id: str, _is_async: bool, api_base: Optional[str], litellm_params: Optional[Dict[str, Any]]) -> LiteLLMBatch:
+    def retrieve_batch(
+        self,
+        batch_id: str,
+        _is_async: bool,
+        api_base: Optional[str],
+        litellm_params: Optional[Dict[str, Any]],
+    ) -> LiteLLMBatch:
         # Build boto3 client via existing BaseAWSLLM credential helpers
         from litellm.llms.bedrock.common_utils import init_bedrock_service_client
 
         boto_client = init_bedrock_service_client()
-        resp = boto_client.get_model_invocation_job(jobIdentifier=batch_id)
-        
+        response = boto_client.get_model_invocation_job(jobIdentifier=batch_id)
+
         # Transform the Bedrock response to OpenAI batch format
-        return BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(resp)
+        return BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(
+            response
+        )
 
-    def cancel_batch(self, batch_id: str, _is_async: bool, api_base: Optional[str], litellm_params: Optional[Dict[str, Any]]) -> LiteLLMBatch:
+    def cancel_batch(
+        self,
+        batch_id: str,
+        _is_async: bool,
+        api_base: Optional[str],
+        litellm_params: Optional[Dict[str, Any]],
+    ) -> LiteLLMBatch:
         # Build boto3 client via existing BaseAWSLLM credential helpers
         from litellm.llms.bedrock.common_utils import init_bedrock_service_client
 
         boto_client = init_bedrock_service_client()
-        resp = boto_client.stop_model_invocation_job(jobIdentifier=batch_id)
-        
+        boto_client.stop_model_invocation_job(jobIdentifier=batch_id)
+
         # After stopping, retrieve the job details to get the full response
         updated_resp = boto_client.get_model_invocation_job(jobIdentifier=batch_id)
-        
-        # Transform the Bedrock response to OpenAI batch format
-        return BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(updated_resp)
 
-    def list_batches(self, _is_async: bool, api_base: Optional[str], litellm_params: Optional[Dict[str, Any]], after: Optional[str] = None, limit: Optional[int] = None) -> Dict[str, Any]:
+        # Transform the Bedrock response to OpenAI batch format
+        return BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(
+            updated_resp
+        )
+
+    def list_batches(
+        self,
+        _is_async: bool,
+        api_base: Optional[str],
+        litellm_params: Optional[Dict[str, Any]],
+        after: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
         # Build boto3 client via existing BaseAWSLLM credential helpers
         from litellm.llms.bedrock.common_utils import init_bedrock_service_client
 
         boto_client = init_bedrock_service_client()
-        submitTimeBefore = datetime(datetime.utcnow().year, datetime.utcnow().month, datetime.utcnow().day)
-        submitTimeAfter = after        
+        submitTimeBefore = datetime.utcnow()
+        submitTimeAfter = after
         # Prepare list parameters
-        list_params = {}
+        list_params: Dict[str, Any] = {}
         if limit is not None:
             list_params["maxResults"] = limit
         else:
-            list_params["maxResults"] = 20 # Max limit of openai
+            list_params["maxResults"] = 20  # Max limit of openai
         if submitTimeBefore is not None:
             list_params["submitTimeBefore"] = submitTimeBefore
         if submitTimeAfter is not None:
             list_params["submitTimeAfter"] = submitTimeAfter
-        
+
         list_params["sortBy"] = "CreationTime"
         list_params["sortOrder"] = "Descending"
-        
+
         resp = boto_client.list_model_invocation_jobs(**list_params)
-        
+
         # Transform each job summary to OpenAI batch format
         job_summaries = resp.get("invocationJobSummaries", [])
         transformed_batches = []
-        
+
         for job_summary in job_summaries:
             # For list operations, we have limited information
             # Transform what we have available
-            transformed_batch = BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(job_summary)
-            transformed_batches.append(transformed_batch.model_dump() if hasattr(transformed_batch, 'model_dump') else transformed_batch.dict())
-        
+            transformed_batch = (
+                BedrockBatchTransformation.transform_bedrock_response_to_openai_batch(
+                    job_summary
+                )
+            )
+            transformed_batches.append(
+                transformed_batch.model_dump()
+                if hasattr(transformed_batch, "model_dump")
+                else transformed_batch.dict()
+            )
+
         # Return list in OpenAI format
         return {
             "object": "list",

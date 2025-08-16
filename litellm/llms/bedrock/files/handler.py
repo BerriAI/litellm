@@ -6,6 +6,7 @@ import httpx
 
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -149,9 +150,11 @@ class BedrockFilesHandler(BaseLLMHTTPHandler):
             upload_response = S3UploadResponse(response.get("ResponseMetadata", {}))
 
         except Exception as e:
-            # provider_config is not used in error handling, so we can pass a dummy object
-            # Using type ignore since this is just for error handling
-            raise self._handle_error(e=e, provider_config=object())  # type: ignore
+            raise BaseLLMException(
+                status_code=500,
+                message=str(e),
+                headers={},
+            )
 
         return bedrock_files_transformation.transform_s3_bucket_response_to_openai_file_object(
             model=None,

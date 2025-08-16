@@ -1,6 +1,8 @@
 from typing import Any, Dict, Optional
 
-from litellm.llms.bedrock.common_utils import convert_bedrock_datetime_to_openai_datetime
+from litellm.llms.bedrock.common_utils import (
+    convert_bedrock_datetime_to_openai_datetime,
+)
 from litellm.types.llms.bedrock import CreateModelInvocationJobRequest
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch
@@ -16,7 +18,7 @@ class BedrockBatchTransformation:
     # Map Bedrock status to OpenAI status
     _status_mapping: Dict[str, BatchJobStatus] = {
         "Submitted": "validating",
-        "InProgress": "in_progress", 
+        "InProgress": "in_progress",
         "Completed": "completed",
         "Failed": "failed",
         "Stopping": "cancelling",
@@ -43,11 +45,15 @@ class BedrockBatchTransformation:
         model = req.get("model") or ""
         # Handle metadata safely
         metadata = req.get("metadata") or {}
-        job_name = metadata.get("job_name") or req.get("custom_id") or "litellm-batch-job"
+        job_name = (
+            metadata.get("job_name") or req.get("custom_id") or "litellm-batch-job"
+        )
 
         from litellm.types.llms.bedrock import InputDataConfig, OutputDataConfig
 
-        inputDataConfig: InputDataConfig = {"s3InputDataConfig": {"s3Uri": s3_input_uri}}
+        inputDataConfig: InputDataConfig = {
+            "s3InputDataConfig": {"s3Uri": s3_input_uri}
+        }
         outputDataConfig: OutputDataConfig = {
             "s3OutputDataConfig": {"s3Uri": s3_output_uri}
         }
@@ -69,22 +75,24 @@ class BedrockBatchTransformation:
     ) -> LiteLLMBatch:
         """
         Transform Bedrock batch job response to OpenAI batch format.
-        
+
         Maps Bedrock get_model_invocation_job response to LiteLLMBatch structure.
-        
+
         Reference: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock/client/get_model_invocation_job.html
         """
-        
+
         bedrock_status = bedrock_response.get("status", "Failed")
         openai_status = cls._status_mapping.get(bedrock_status, "failed")
-        
+
         # Extract job ID from jobArn
         job_arn = bedrock_response.get("jobArn", "")
         job_id = cls._get_batch_id_from_bedrock_response(job_arn)
-        
+
         # Convert timestamps to Unix epoch
-        created_at = convert_bedrock_datetime_to_openai_datetime(bedrock_response.get("submitTime"))
-        
+        created_at = convert_bedrock_datetime_to_openai_datetime(
+            bedrock_response.get("submitTime")
+        )
+
         # Determine timestamps based on status
         in_progress_at = None
         completed_at = None
@@ -93,28 +101,42 @@ class BedrockBatchTransformation:
         cancelling_at = None
 
         if openai_status == "in_progress":
-            in_progress_at = convert_bedrock_datetime_to_openai_datetime(bedrock_response.get("lastModifiedTime"))
+            in_progress_at = convert_bedrock_datetime_to_openai_datetime(
+                bedrock_response.get("lastModifiedTime")
+            )
         elif openai_status == "cancelling":
-            cancelling_at = convert_bedrock_datetime_to_openai_datetime(bedrock_response.get("lastModifiedTime"))
+            cancelling_at = convert_bedrock_datetime_to_openai_datetime(
+                bedrock_response.get("lastModifiedTime")
+            )
         elif openai_status == "cancelled":
-            cancelled_at = convert_bedrock_datetime_to_openai_datetime(bedrock_response.get("lastModifiedTime"))
+            cancelled_at = convert_bedrock_datetime_to_openai_datetime(
+                bedrock_response.get("lastModifiedTime")
+            )
         elif openai_status == "completed":
-            completed_at = convert_bedrock_datetime_to_openai_datetime(bedrock_response.get("endTime"))
+            completed_at = convert_bedrock_datetime_to_openai_datetime(
+                bedrock_response.get("endTime")
+            )
         elif openai_status == "failed":
-            failed_at = convert_bedrock_datetime_to_openai_datetime(bedrock_response.get("endTime"))
+            failed_at = convert_bedrock_datetime_to_openai_datetime(
+                bedrock_response.get("endTime")
+            )
 
         # Add expired_at mapped from jobExpirationTime
-        expires_at = convert_bedrock_datetime_to_openai_datetime(bedrock_response.get("jobExpirationTime"))
-        
+        expires_at = convert_bedrock_datetime_to_openai_datetime(
+            bedrock_response.get("jobExpirationTime")
+        )
+
         # Extract file IDs from input/output configs
         input_s3_uri = cls._get_input_file_id_from_bedrock_response(bedrock_response)
         output_s3_uri = cls._get_output_file_id_from_bedrock_response(bedrock_response)
-        
+
         # Use provided input_file_id or fall back to S3 URI
         resolved_input_file_id = input_file_id or input_s3_uri
-        
+
         # Handle error information
-        error_file_id, errors = cls._get_error_information_from_bedrock_response(bedrock_response, openai_status)
+        error_file_id, errors = cls._get_error_information_from_bedrock_response(
+            bedrock_response, openai_status
+        )
 
         return LiteLLMBatch(
             id=job_id,
@@ -141,13 +163,13 @@ class BedrockBatchTransformation:
     def _get_batch_id_from_bedrock_response(cls, job_arn: str) -> str:
         """
         Gets the batch id from the Bedrock response safely
-        
+
         Bedrock response: `arn:aws:bedrock:region:account-id:model-invocation-job/job-id`
         returns: `job-id`
         """
         if not job_arn:
             return ""
-        
+
         # Split by '/' and get the last part if it exists
         parts = job_arn.split("/")
         return parts[-1] if parts else job_arn
@@ -172,9 +194,7 @@ class BedrockBatchTransformation:
 
     @classmethod
     def _get_error_information_from_bedrock_response(
-        cls, 
-        response: Dict[str, Any], 
-        openai_status: str
+        cls, response: Dict[str, Any], openai_status: str
     ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
         Gets error information from the Bedrock response
@@ -189,25 +209,27 @@ class BedrockBatchTransformation:
                 "data": [
                     {
                         "object": "error",
-                        "code": response.get("status", "failed"),
-                        "message": response.get("message"),
+                        "code": response.get("status", "failed") or "failed",
+                        "message": response.get("message") or "Unknown error",
                         "line": None,
-                        "param": None
+                        "param": None,
                     }
-                ]
+                ],
             }
             error_file_id = None  # Bedrock doesn't provide error files
 
         return error_file_id, errors
 
     @classmethod
-    def _get_metadata_from_bedrock_response(cls, response: Dict[str, Any], job_arn: str) -> Dict[str, Any]:
+    def _get_metadata_from_bedrock_response(
+        cls, response: Dict[str, Any], job_arn: str
+    ) -> Dict[str, Any]:
         """
         Gets metadata from the Bedrock response
         """
         return {
-            "job_name": response.get("jobName"),
-            "model_id": response.get("modelId"),
+            "job_name": response.get("jobName") or "",
+            "model_id": response.get("modelId") or "",
             "job_arn": job_arn,
-            "failure_message": response.get("message")
+            "failure_message": response.get("message") or "",
         }
