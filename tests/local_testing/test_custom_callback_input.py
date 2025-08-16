@@ -1599,7 +1599,7 @@ def test_logging_key_masking_gemini():
         assert "PART" == trimmed_key
 
 
-@pytest.mark.parametrize("sync_mode", [True])
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_standard_logging_payload_stream_usage(sync_mode):
     """
