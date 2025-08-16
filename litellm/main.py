@@ -20,6 +20,7 @@ import traceback
 import uuid
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+import copy
 from copy import deepcopy
 from functools import partial
 from typing import (
@@ -218,6 +219,19 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     TranscriptionResponse,
 )
+
+
+def safe_copy_optional_params(optional_params: dict) -> dict:
+    """
+    Safely copy optional_params dict, handling Pydantic models that may fail with deepcopy.
+    Falls back to shallow copy if deepcopy fails.
+    """
+    try:
+        return deepcopy(optional_params)
+    except Exception:
+        # If deepcopy fails (e.g., with Pydantic models), use shallow copy
+        return copy.copy(optional_params)
+
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
@@ -2681,7 +2695,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret("GEMINI_API_BASE")
 
-            new_params = deepcopy(optional_params)
+            new_params = safe_copy_optional_params(optional_params)
             response = vertex_chat_completion.completion(  # type: ignore
                 model=model,
                 messages=messages,
@@ -2725,7 +2739,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
-            new_params = deepcopy(optional_params)
+            new_params = safe_copy_optional_params(optional_params)
             if vertex_partner_models_chat_completion.is_vertex_partner_model(model):
                 model_response = vertex_partner_models_chat_completion.completion(
                     model=model,
