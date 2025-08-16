@@ -936,3 +936,284 @@ def test_transform_request_with_function_tool():
     assert "tools" in request_data["toolConfig"]
     assert len(request_data["toolConfig"]["tools"]) == 1
     assert request_data["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
+
+
+def test_assistant_message_cache_control():
+    """Test that assistant messages with cache_control generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    # Test assistant message with string content and cache_control
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant", 
+            "content": "Hi there!",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Should have user message and assistant message
+    assert len(result) == 2
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    
+    # Assistant message should have text content and cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 2
+    assert assistant_content[0]["text"] == "Hi there!"
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+
+
+def test_assistant_message_list_content_cache_control():
+    """Test assistant messages with list content and cache_control."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "This should be cached",
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Assistant message should have text content and cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 2
+    assert assistant_content[0]["text"] == "This should be cached"
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+
+
+def test_tool_message_cache_control():
+    """Test that tool messages with cache_control generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"}
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Weather data: sunny, 25°C",
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Should have user, assistant, and user (tool results) messages
+    assert len(result) == 3
+    
+    # Last message should contain tool result and cachePoint
+    tool_message_content = result[2]["content"]
+    assert len(tool_message_content) == 2
+    
+    # First should be tool result
+    assert "toolResult" in tool_message_content[0]
+    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather data: sunny, 25°C"
+    
+    # Second should be cachePoint
+    assert "cachePoint" in tool_message_content[1]
+    assert tool_message_content[1]["cachePoint"]["type"] == "default"
+
+
+def test_tool_message_string_content_cache_control():
+    """Test tool messages with string content and message-level cache_control."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function", 
+                    "function": {"name": "get_weather", "arguments": "{}"}
+                }
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "Weather: sunny, 25°C",
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Last message should contain tool result and cachePoint
+    tool_message_content = result[2]["content"]
+    assert len(tool_message_content) == 2
+    
+    # First should be tool result
+    assert "toolResult" in tool_message_content[0]
+    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather: sunny, 25°C"
+    
+    # Second should be cachePoint
+    assert "cachePoint" in tool_message_content[1]
+    assert tool_message_content[1]["cachePoint"]["type"] == "default"
+
+
+def test_assistant_tool_calls_cache_control():
+    """Test that assistant tool_calls with cache_control generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "Calculate 2+2"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_proxy_123",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"}
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Assistant message should have tool use and cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 2
+    
+    # First should be tool use
+    assert "toolUse" in assistant_content[0]
+    assert assistant_content[0]["toolUse"]["name"] == "calc"
+    assert assistant_content[0]["toolUse"]["toolUseId"] == "call_proxy_123"
+    
+    # Second should be cachePoint
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+
+
+def test_multiple_tool_calls_with_mixed_cache_control():
+    """Test multiple tool calls where only some have cache_control."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "Do multiple calculations"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": '{"expr": "2+2"}'},
+                    "cache_control": {"type": "ephemeral"}
+                },
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": '{"expr": "3+3"}'}
+                    # No cache_control
+                }
+            ]
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Assistant message should have: toolUse1, cachePoint, toolUse2
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 3
+    
+    # First tool use with cache
+    assert "toolUse" in assistant_content[0]
+    assert assistant_content[0]["toolUse"]["toolUseId"] == "call_1"
+    
+    # Cache point for first tool
+    assert "cachePoint" in assistant_content[1]
+    assert assistant_content[1]["cachePoint"]["type"] == "default"
+    
+    # Second tool use without cache
+    assert "toolUse" in assistant_content[2]
+    assert assistant_content[2]["toolUse"]["toolUseId"] == "call_2"
+
+
+def test_no_cache_control_no_cache_point():
+    """Test that messages without cache_control don't generate cachePoint blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},  # No cache_control
+        {
+            "role": "tool",
+            "tool_call_id": "call_123",
+            "content": "Tool result"  # No cache_control
+        }
+    ]
+    
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    # Assistant message should only have text content, no cachePoint
+    assistant_content = result[1]["content"]
+    assert len(assistant_content) == 1
+    assert assistant_content[0]["text"] == "Hi there!"
+    
+    # Tool message should only have tool result, no cachePoint
+    tool_content = result[2]["content"]
+    assert len(tool_content) == 1
+    assert "toolResult" in tool_content[0]
