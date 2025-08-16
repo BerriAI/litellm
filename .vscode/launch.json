@@ -1,0 +1,18 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "LiteLLM Proxy",
+			"type": "debugpy",
+			"request": "launch",
+			"python": "${command:python.interpreterPath}",
+			"module": "litellm.proxy.proxy_cli",
+			"justMyCode": false,
+			"args": ["--config", "config.yaml", "--detailed_debug"],
+			"envFile": "${workspaceFolder}/.env",
+			"cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+			"preLaunchTask": "install-proxy-dev"
+		}
+	]
+}
