@@ -67,16 +67,16 @@ pip install litellm==1.75.8
 #### Features
 
 - **[OpenAI](../../docs/providers/openai)**
-    - Added `reasoning_effort` parameter support for GPT-5 model family - [PR #13475](https://github.com/BerriAI/litellm/pull/13475)
-    - Support for `reasoning` parameter in Responses API - [PR #13475](https://github.com/BerriAI/litellm/pull/13475)
+    - Added `reasoning_effort` parameter support for GPT-5 model family - [PR #13475](https://github.com/BerriAI/litellm/pull/13475), [Get Started](../../docs/providers/openai#openai-chat-completion-models)
+    - Support for `reasoning` parameter in Responses API - [PR #13475](https://github.com/BerriAI/litellm/pull/13475), [Get Started](../../docs/response_api)
 - **[Azure OpenAI](../../docs/providers/azure/azure)**
-    - GPT-5 support with max_tokens and `reasoning` parameter - [PR #13510](https://github.com/BerriAI/litellm/pull/13510)
+    - GPT-5 support with max_tokens and `reasoning` parameter - [PR #13510](https://github.com/BerriAI/litellm/pull/13510), [Get Started](../../docs/providers/azure/azure#gpt-5-models
 - **[AWS Bedrock](../../docs/providers/bedrock)**
-    - Streaming support for bedrock gpt-oss model family - [PR #13346](https://github.com/BerriAI/litellm/pull/13346)
+    - Streaming support for bedrock gpt-oss model family - [PR #13346](https://github.com/BerriAI/litellm/pull/13346), [Get Started](../../docs/providers/bedrock#openai-gpt-oss)
     - `/messages` endpoint compatibility with `bedrock/converse/<model>` - [PR #13627](https://github.com/BerriAI/litellm/pull/13627)
     - Cache point support for assistant and tool messages - [PR #13640](https://github.com/BerriAI/litellm/pull/13640)
 - **[Azure AI](../../docs/providers/azure)**
-    - New Azure AI Flux Image Generation provider - [PR #13592](https://github.com/BerriAI/litellm/pull/13592)
+    - New Azure AI Flux Image Generation provider - [PR #13592](https://github.com/BerriAI/litellm/pull/13592), [Get Started](../../docs/providers/azure_ai_img)
     - Fixed Content-Type header for image generation - [PR #13584](https://github.com/BerriAI/litellm/pull/13584)
 - **[CometAPI](../../docs/providers/comet)**
     - New provider support with chat completions and streaming - [PR #13458](https://github.com/BerriAI/litellm/pull/13458)
@@ -86,7 +86,7 @@ pip install litellm==1.75.8
     - Added `/countTokens` endpoint support for Gemini CLI integration - [PR #13545](https://github.com/BerriAI/litellm/pull/13545)
     - Token counter support for VertexAI models - [PR #13558](https://github.com/BerriAI/litellm/pull/13558)
 - **[hosted_vllm](../../docs/providers/vllm)**
-    - Added `reasoning_effort` parameter support - [PR #13620](https://github.com/BerriAI/litellm/pull/13620)
+    - Added `reasoning_effort` parameter support - [PR #13620](https://github.com/BerriAI/litellm/pull/13620), [Get Started](../../docs/providers/vllm#reasoning-effort)
 
 #### Bugs
 
