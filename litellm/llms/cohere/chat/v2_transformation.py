@@ -247,6 +247,7 @@ class CohereV2ChatConfig(BaseConfig):
                 content=None,
             )
             model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].finish_reason = "tool_calls"
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
         token_usage = cohere_v2_chat_response["usage"].get("tokens", {})
