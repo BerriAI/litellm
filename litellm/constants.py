@@ -216,6 +216,7 @@ LITELLM_CHAT_PROVIDERS = [
     "text-completion-openai",
     "cohere",
     "cohere_chat",
+    "cohere_v2",
     "clarifai",
     "anthropic",
     "anthropic_text",
