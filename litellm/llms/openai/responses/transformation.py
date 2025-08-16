@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hints
 
 import httpx
 from pydantic import BaseModel
@@ -34,34 +34,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         All OpenAI Responses API params are supported
         """
-        return [
-            "input",
-            "model",
-            "include",
-            "instructions",
-            "max_output_tokens",
-            "metadata",
-            "parallel_tool_calls",
-            "previous_response_id",
-            "reasoning",
-            "store",
-            "background",
-            "stream",
-            "prompt",
-            "temperature",
-            "text",
-            "tool_choice",
-            "tools",
-            "top_p",
-            "truncation",
-            "user",
-            "service_tier",
-            "safety_identifier",
-            "extra_headers",
-            "extra_query",
-            "extra_body",
-            "timeout",
-        ]
+        supported_params = get_type_hints(ResponsesAPIRequestParams).keys()
+        return list(
+            set(
+                [
+                    "input",
+                    "model",
+                    "extra_headers",
+                    "extra_query",
+                    "extra_body",
+                    "timeout",
+                ]
+                + list(supported_params)
+            )
+        )
 
     def map_openai_params(
         self,
