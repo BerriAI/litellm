@@ -134,6 +134,43 @@ def test_token_counter_with_images(message_count_pair):
     assert counted_tokens == message_count_pair["count"]
 
 
+def test_token_counter_with_input_audio():
+    import base64
+
+    with open(
+        "litellm/litellm_core_utils/audio_utils/audio_health_check.wav", "rb"
+    ) as f:
+        encoded_string = base64.b64encode(f.read()).decode()
+
+    messages_with_audio = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Here's some text content."},
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": encoded_string, "format": "wav"},
+                },
+                {"type": "text", "text": "And some more text after the audio."},
+            ],
+        }
+    ]
+    messages_without_audio = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Here's some text content."},
+                {"type": "text", "text": "And some more text after the audio."},
+            ],
+        }
+    ]
+
+    tokens_with_audio = token_counter(model="gpt-4o", messages=messages_with_audio)
+    tokens_without_audio = token_counter(model="gpt-4o", messages=messages_without_audio)
+
+    assert tokens_with_audio > tokens_without_audio
+
+
 @pytest.mark.parametrize(
     "message_count_pair",
     MESSAGES_WITH_TOOLS,
