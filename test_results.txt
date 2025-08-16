@@ -1,0 +1,36 @@
+================================================
+OLLAMA TURBO AUTH HEADER TEST RESULTS
+================================================
+
+============================= test session starts ==============================
+platform linux -- Python 3.11.12, pytest-7.4.4, pluggy-1.5.0 -- /home/graham/.cache/pypoetry/virtualenvs/litellm-dUQmg4-y-py3.11/bin/python
+cachedir: .pytest_cache
+rootdir: /home/graham/workspace/experiments/litellm
+plugins: mock-3.14.1, requests-mock-1.12.1, respx-0.22.0, asyncio-0.21.2, anyio-4.5.2
+asyncio: mode=Mode.STRICT
+collecting ... collected 4 items
+
+tests/local_testing/test_ollama_turbo_integration.py::TestOllamaTurboAuthHeaders::test_ollama_env_var_pickup PASSED [ 25%]
+tests/local_testing/test_ollama_turbo_integration.py::TestOllamaTurboAuthHeaders::test_ollama_turbo_auth_header_without_bearer PASSED [ 50%]
+tests/local_testing/test_ollama_turbo_integration.py::TestOllamaTurboAuthHeaders::test_ollama_turbo_embedding_auth_header PASSED [ 75%]
+tests/local_testing/test_ollama_turbo_integration.py::TestOllamaTurboAuthHeaders::test_ollama_turbo_vision_auth_header PASSED [100%]
+
+=============================== warnings summary ===============================
+tests/local_testing/test_ollama_turbo_integration.py::TestOllamaTurboAuthHeaders::test_ollama_turbo_vision_auth_header
+  /home/graham/.cache/pypoetry/virtualenvs/litellm-dUQmg4-y-py3.11/lib/python3.11/site-packages/pydantic/main.py:426: UserWarning: Pydantic serializer warnings:
+    PydanticSerializationUnexpectedValue: Expected `str` but got `MagicMock` with value `<MagicMock name='post().j...)' id='130029605098000'>` - serialized value may not be as expected
+    PydanticSerializationUnexpectedValue: Expected `StreamingChoices` but got `Choices` with value `Choices(finish_reason='st...r_specific_fields=None))` - serialized value may not be as expected
+    Expected `str` but got `MagicMock` with value `<MagicMock name='post().j...)' id='130029605098000'>` - serialized value may not be as expected
+    return self.__pydantic_serializer__.to_python(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+========================= 4 passed, 1 warning in 1.34s =========================
+/home/graham/.cache/pypoetry/virtualenvs/litellm-dUQmg4-y-py3.11/lib/python3.11/site-packages/pydantic/main.py:426: UserWarning: Pydantic serializer warnings:
+  PydanticSerializationUnexpectedValue: Expected `str` but got `MagicMock` with value `<MagicMock name='post().j...)' id='130029605098000'>` - serialized value may not be as expected
+  PydanticSerializationUnexpectedValue: Expected `StreamingChoices` but got `Choices` with value `Choices(finish_reason='st...r_specific_fields=None))` - serialized value may not be as expected
+  Expected `str` but got `MagicMock` with value `<MagicMock name='post().j...)' id='130029605098000'>` - serialized value may not be as expected
+  return self.__pydantic_serializer__.to_python(
+
+================================================
+TEST SUMMARY: Check above for 4 PASSED
+================================================
