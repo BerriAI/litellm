@@ -517,7 +517,6 @@ def cleanup_router_config_variables():
 
 
 async def proxy_shutdown_event():
-    global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
@@ -549,7 +548,7 @@ async def proxy_shutdown_event():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval
+    global prisma_client, master_key, llm_router, llm_model_list, general_settings, premium_user
     import json
 
     init_verbose_loggers()
@@ -1084,7 +1083,6 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 
 def cost_tracking():
-    global prisma_client
     if prisma_client is not None:
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
 
@@ -1357,7 +1355,6 @@ async def _run_background_health_check():
 
     Update health_check_results, based on this.
     """
-    global health_check_results, llm_model_list, health_check_interval, health_check_details
 
     if (
         health_check_interval is None
@@ -1429,7 +1426,7 @@ class ProxyConfig:
         Returns:
             dict: config
         """
-        global prisma_client, user_config_file_path
+        global user_config_file_path
 
         file_path = config_file_path or user_config_file_path
         if config_file_path is not None:
@@ -1499,7 +1496,6 @@ class ProxyConfig:
         return config
 
     async def save_config(self, new_config: dict):
-        global prisma_client, general_settings, user_config_file_path, store_model_in_db
         # Load existing config
         ## DB - writes valid config to db
         """
@@ -1596,7 +1592,7 @@ class ProxyConfig:
         self,
         cache_params: dict,
     ):
-        global redis_usage_cache, llm_router
+        global redis_usage_cache
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -1628,7 +1624,6 @@ class ProxyConfig:
             dict: config
 
         """
-        global prisma_client, store_model_in_db
         # Load existing config
 
         if os.environ.get("LITELLM_CONFIG_BUCKET_NAME") is not None:
@@ -1739,7 +1734,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, callback_settings, proxy_batch_polling_interval
+        global master_key, user_custom_auth, user_custom_key_generate, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, health_check_interval, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, store_model_in_db, premium_user, health_check_details, callback_settings, proxy_batch_polling_interval
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -2398,7 +2393,6 @@ class ProxyConfig:
         Return:
         - int - returns number of deleted deployments
         """
-        global user_config_file_path, llm_router
         combined_id_list = []
 
         ## BASE CASES ##
@@ -2533,7 +2527,7 @@ class ProxyConfig:
         new_models: list,
         proxy_logging_obj: ProxyLogging,
     ):
-        global llm_router, llm_model_list, master_key, general_settings
+        global llm_router, llm_model_list
 
         try:
             if llm_router is None and master_key is not None:
@@ -2743,7 +2737,6 @@ class ProxyConfig:
         """
         Pull from DB, read general settings value
         """
-        global general_settings
         if db_general_settings is None:
             return
         _general_settings = dict(db_general_settings)
@@ -2900,8 +2893,6 @@ class ProxyConfig:
         - Check if model id's in router already
         - If not, add to router
         """
-        global llm_router, llm_model_list, master_key, general_settings
-
         try:
             if master_key is None or not isinstance(master_key, str):
                 raise ValueError(
@@ -2953,6 +2944,7 @@ class ProxyConfig:
         Check if model cost map needs to be reloaded based on database configuration.
         This function runs every 10 seconds as part of _init_non_llm_objects_in_db.
         """
+        global last_model_cost_map_reload
         try:
             # Get model cost map reload configuration from database
             config_record = await prisma_client.db.litellm_config.find_unique(
@@ -2979,7 +2971,6 @@ class ProxyConfig:
                 verbose_proxy_logger.info("Model cost map reload triggered by force reload flag")
             elif interval_hours is not None:
                 # Use pod's in-memory last reload time
-                global last_model_cost_map_reload
                 if last_model_cost_map_reload is not None:
                     try:
                         last_reload_time = datetime.fromisoformat(last_model_cost_map_reload)
@@ -3214,7 +3205,7 @@ async def initialize(  # noqa: PLR0915
     use_queue=False,
     config=None,
 ):
-    global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
+    global user_model, user_api_base, user_debug, user_request_timeout, user_temperature, user_telemetry, user_headers, llm_model_list, llm_router, general_settings
     from litellm.proxy.common_utils.banner import show_banner
 
     show_banner()
@@ -3881,8 +3872,6 @@ async def model_list(
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
     """
-    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
-
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
@@ -3944,8 +3933,6 @@ async def model_info(
     Follows OpenAI API specification for individual model retrieval.
     https://platform.openai.com/docs/api-reference/models/retrieve
     """
-    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
-
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
@@ -4047,8 +4034,6 @@ async def chat_completion(  # noqa: PLR0915
     ```
 
     """
-    global general_settings, user_debug, proxy_logging_obj, llm_model_list
-    global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -4160,7 +4145,6 @@ async def completion(  # noqa: PLR0915
     }'
     ```
     """
-    global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = {}
     try:
         data = await _read_request_body(request=request)
@@ -4293,7 +4277,6 @@ async def embeddings(  # noqa: PLR0915
     ```
 
 """
-    global proxy_logging_obj
     data: Any = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -4486,7 +4469,6 @@ async def moderations(
     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
     ```
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -4600,7 +4582,6 @@ async def audio_speech(
 
     https://platform.openai.com/docs/api-reference/audio/createSpeech
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -4720,7 +4701,6 @@ async def audio_transcriptions(
 
     https://platform.openai.com/docs/api-reference/audio/createTranscription?lang=curl
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -4970,7 +4950,6 @@ async def get_assistants(
 
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/listAssistants
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -5068,7 +5047,6 @@ async def create_assistant(
 
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/createAssistant
     """
-    global proxy_logging_obj
     data = {}  # ensure data always dict
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -5167,7 +5145,6 @@ async def delete_assistant(
 
     API Reference docs - https://platform.openai.com/docs/api-reference/assistants/createAssistant
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -5263,7 +5240,6 @@ async def create_threads(
 
     API Reference - https://platform.openai.com/docs/api-reference/threads/createThread
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -5361,7 +5337,6 @@ async def get_thread(
 
     API Reference - https://platform.openai.com/docs/api-reference/threads/getThread
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Include original request and headers in the data
@@ -5456,7 +5431,6 @@ async def add_messages(
 
     API Reference - https://platform.openai.com/docs/api-reference/messages/createMessage
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -5555,7 +5529,6 @@ async def get_messages(
 
     API Reference - https://platform.openai.com/docs/api-reference/messages/listMessages
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         # Include original request and headers in the data
@@ -5650,7 +5623,6 @@ async def run_thread(
 
     API Reference: https://platform.openai.com/docs/api-reference/runs/createRun
     """
-    global proxy_logging_obj
     data: Dict = {}
     try:
         body = await request.body()
@@ -5820,8 +5792,6 @@ async def token_counter(
         TokenCountResponse
     """
     from litellm import token_counter
-
-    global llm_router
 
     prompt = request.prompt
     messages = request.messages
@@ -6250,8 +6220,6 @@ async def model_info_v2(
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
-
     if llm_router is None:
         raise HTTPException(
             status_code=500,
@@ -6362,7 +6330,6 @@ async def model_streaming_metrics(
     startTime: Optional[datetime] = None,
     endTime: Optional[datetime] = None,
 ):
-    global prisma_client, llm_router
     if prisma_client is None:
         raise ProxyException(
             message=CommonProxyErrors.db_not_connected_error.value,
@@ -6496,7 +6463,6 @@ async def model_metrics(
     api_key: Optional[str] = None,
     customer: Optional[str] = None,
 ):
-    global prisma_client, llm_router
     if prisma_client is None:
         raise ProxyException(
             message="Prisma Client is not initialized",
@@ -6611,7 +6577,6 @@ async def model_metrics_slow_responses(
     api_key: Optional[str] = None,
     customer: Optional[str] = None,
 ):
-    global prisma_client, llm_router, proxy_logging_obj
     if prisma_client is None:
         raise ProxyException(
             message="Prisma Client is not initialized",
@@ -6701,7 +6666,6 @@ async def model_metrics_exceptions(
     api_key: Optional[str] = None,
     customer: Optional[str] = None,
 ):
-    global prisma_client, llm_router
     if prisma_client is None:
         raise ProxyException(
             message="Prisma Client is not initialized",
@@ -6861,8 +6825,6 @@ async def model_info_v1(  # noqa: PLR0915
 
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router, user_model
-
     if user_model is not None:
         # user is trying to get specific model from litellm router
         try:
@@ -7151,8 +7113,6 @@ async def model_group_info(
             }
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
-
     if llm_model_list is None:
         raise HTTPException(
             status_code=500, detail={"error": "LLM Model List not loaded in"}
@@ -7228,7 +7188,6 @@ async def model_settings():
 async def alerting_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global proxy_logging_obj, prisma_client
     """
     Used by UI to generate 'alerting settings' page
     {
@@ -7340,7 +7299,6 @@ async def async_queue_request(
     model: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global general_settings, user_debug, proxy_logging_obj
     """
     v2 attempt at a background worker to handle queuing.
 
@@ -7391,7 +7349,6 @@ async def async_queue_request(
         )
         data["metadata"]["endpoint"] = str(request.url)
 
-        global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
         if user_temperature:
             data["temperature"] = user_temperature
@@ -7451,8 +7408,6 @@ async def fallback_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
-    from litellm.proxy.proxy_server import ui_link
-
     # get url from request
     redirect_url = get_custom_url(str(request.base_url))
     ui_username = os.getenv("UI_USERNAME")
@@ -7477,7 +7432,6 @@ async def fallback_login(request: Request):
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):  # noqa: PLR0915
-    global premium_user, general_settings, master_key
     from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if master_key is None:
@@ -7736,7 +7690,6 @@ async def onboarding(invite_link: str, request: Request):
     - Get user from db
     - Pass in user_email if set
     """
-    global prisma_client, master_key, general_settings
     from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
     if master_key is None:
@@ -7861,7 +7814,6 @@ async def claim_onboarding_link(data: InvitationClaim):
 
     This route can only update user password.
     """
-    global prisma_client
     ### VALIDATE INVITE LINK ###
     if prisma_client is None:
         raise HTTPException(
@@ -7992,8 +7944,6 @@ async def new_invitation(
             create_invitation_for_user,
         )
 
-        global prisma_client
-
         if prisma_client is None:
             raise HTTPException(
                 status_code=400,
@@ -8095,8 +8045,6 @@ async def invitation_update(
         }'
     ```
     """
-    global prisma_client
-
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
@@ -8155,8 +8103,6 @@ async def invitation_delete(
         }'
     ```
     """
-    global prisma_client
-
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
@@ -8199,7 +8145,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
 
     Currently supports modifying General Settings + LiteLLM settings
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
         import base64
 
@@ -8352,7 +8297,6 @@ async def update_config_general_settings(
     """
     Update a specific field in litellm general settings
     """
-    global prisma_client
     ## VALIDATION ##
     """
     - Check if prisma_client is None
@@ -8428,8 +8372,6 @@ async def get_config_general_settings(
     field_name: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global prisma_client
-
     ## VALIDATION ##
     """
     - Check if prisma_client is None
@@ -8492,8 +8434,6 @@ async def get_config_list(
     """
     List the available fields + current values for a given type of setting (currently just 'general_settings'user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),)
     """
-    global prisma_client, general_settings
-
     ## VALIDATION ##
     """
     - Check if prisma_client is None
@@ -8629,7 +8569,6 @@ async def delete_config_general_settings(
     """
     Delete the db value of this field in litellm general settings. Resets it to it's initial default value on litellm.
     """
-    global prisma_client
     ## VALIDATION ##
     """
     - Check if prisma_client is None
@@ -8701,7 +8640,6 @@ async def delete_callback(
     """
     Delete specific logging callback from configuration.
     """
-    global prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(
@@ -8793,7 +8731,6 @@ async def get_config():  # noqa: PLR0915
     # return the callbacks and the env variables for the callback
 
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
         import base64
 
@@ -9053,7 +8990,6 @@ async def reload_model_cost_map(
         )
     
     try:
-        global prisma_client
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
