@@ -131,7 +131,6 @@ from ..integrations.humanloop import HumanloopLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
-from ..integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from ..integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from ..integrations.langsmith import LangsmithLogger
 from ..integrations.literal_ai import LiteralAILogger
@@ -812,7 +811,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             str(e)
                         )
                     )
-            if self.logger_fn and callable(self.logger_fn):
+            if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
                         self.model_call_details
@@ -1000,7 +999,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     )
                 )
-            if self.logger_fn and callable(self.logger_fn):
+            if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(
                         self.model_call_details
@@ -3457,6 +3456,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(langfuse_logger)
             return langfuse_logger  # type: ignore
         elif logging_integration == "langfuse_otel":
+            from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
             from litellm.integrations.opentelemetry import (
                 OpenTelemetry,
                 OpenTelemetryConfig,
@@ -3467,15 +3467,16 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             # The endpoint and headers are now set as environment variables by get_langfuse_otel_config()
             otel_config = OpenTelemetryConfig(
                 exporter=langfuse_otel_config.protocol,
+                headers=langfuse_otel_config.otlp_auth_headers,
             )
 
             for callback in _in_memory_loggers:
                 if (
-                    isinstance(callback, OpenTelemetry)
+                    isinstance(callback, LangfuseOtelLogger)
                     and callback.callback_name == "langfuse_otel"
                 ):
                     return callback  # type: ignore
-            _otel_logger = OpenTelemetry(
+            _otel_logger = LangfuseOtelLogger(
                 config=otel_config, callback_name="langfuse_otel"
             )
             _in_memory_loggers.append(_otel_logger)
@@ -3918,10 +3919,12 @@ class StandardLoggingPayloadSetup:
 
         # Generate cold storage object key if cold storage is configured
         if start_time is not None and response_id is not None:
-            cold_storage_object_key = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
-                start_time=start_time,
-                response_id=response_id,
-                team_alias=clean_metadata.get("user_api_key_team_alias"),
+            cold_storage_object_key = (
+                StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+                    start_time=start_time,
+                    response_id=response_id,
+                    team_alias=clean_metadata.get("user_api_key_team_alias"),
+                )
             )
             if cold_storage_object_key:
                 clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -4092,12 +4095,12 @@ class StandardLoggingPayloadSetup:
     ) -> Optional[str]:
         """
         Generate cold storage object key in the same format as S3Logger.
-        
+
         Args:
             start_time: The start time of the request
-            response_id: The response ID 
+            response_id: The response ID
             team_alias: Optional team alias for team-based prefixing
-            
+
         Returns:
             Optional[str]: The generated object key or None if cold storage not configured
         """
@@ -4111,26 +4114,23 @@ class StandardLoggingPayloadSetup:
                 ColdStorageHandler._get_configured_cold_storage_custom_logger()
             )
         except Exception as e:
-            verbose_logger.debug(
-                f"Cold storage custom logger unavailable: {e}"
-            )
+            verbose_logger.debug(f"Cold storage custom logger unavailable: {e}")
             return None
 
         if configured_cold_storage_logger is None:
             return None
-            
+
         try:
             # Generate file name in same format as litellm.utils.get_logging_id
             s3_file_name = f"time-{start_time.strftime('%H-%M-%S-%f')}_{response_id}"
 
-            
             s3_object_key = get_s3_object_key(
-                s3_path="",             # Use empty path as default
-                team_alias_prefix="",   # Don't split by team alias for cold storage
+                s3_path="",  # Use empty path as default
+                team_alias_prefix="",  # Don't split by team alias for cold storage
                 start_time=start_time,
                 s3_file_name=s3_file_name,
             )
-            
+
             return s3_object_key
         except Exception:
             # If any error occurs in generating the key, return None

@@ -187,6 +187,19 @@ class TestAzureOpenAIDalle3(BaseImageGenTest):
                 }
             },
         }
+    
+
+
+class TestAzureFoundryFlux(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        litellm.set_verbose = True
+        return {
+            "model": "azure_ai/FLUX.1-Kontext-pro",
+            "api_base": os.getenv("AZURE_FLUX_API_BASE"),
+            "api_key": os.getenv("AZURE_GPT5_API_KEY"),
+            "n": 1,
+            "quality": "standard",
+        }
 
 
 @pytest.mark.flaky(retries=3, delay=1)

@@ -11,7 +11,6 @@ import time
 import traceback
 import uuid
 import warnings
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
@@ -35,10 +34,12 @@ from litellm.constants import (
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
+    TokenCountResponse,
 )
 
 if TYPE_CHECKING:
@@ -2999,7 +3000,9 @@ class ProxyConfig:
             
             if should_reload:
                 # Perform the reload
-                from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+                from litellm.litellm_core_utils.get_model_cost_map import (
+                    get_model_cost_map,
+                )
                 model_cost_map_url = litellm.model_cost_map_url
                 new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
                 litellm.model_cost = new_model_cost_map
@@ -3967,8 +3970,22 @@ async def model_info(
     # Validate that the requested model is accessible
     validate_model_access(model_id=model_id, available_models=all_models)
 
-    # Get provider information
-    _, provider, _, _ = litellm.get_llm_provider(model=model_id)
+    # Get provider information from the router deployment
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Router not initialized"
+        )
+    
+    deployment = llm_router.get_deployment_by_model_group_name(model_id)
+    if deployment is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model_id}' not found in router configuration"
+        )
+    
+    # Use the actual litellm model from the deployment to get provider info
+    _, provider, _, _ = litellm.get_llm_provider(model=deployment.litellm_params.model)
 
     # Return the model information in the same format as the list endpoint
     return create_model_info_response(
@@ -4858,7 +4875,9 @@ async def websocket_endpoint(
     await websocket.accept()
 
     # Only use explicit parameters, not all query params
-    query_params: RealtimeQueryParams = {"model": model, "intent": intent}
+    query_params: RealtimeQueryParams = {"model": model}
+    if intent is not None:
+        query_params["intent"] = intent
 
     data = {
         "model": model,
@@ -5728,9 +5747,10 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
+from litellm.llms.base_llm.base_utils import BaseTokenCounter
 
 
-def _get_provider_token_counter(deployment: dict, model_to_use: str):
+def _get_provider_token_counter(deployment: dict, model_to_use: str) -> Tuple[Optional[BaseTokenCounter], Optional[str], Optional[str]]:
     """
     Auto-route to the correct provider's token counter based on model/deployment.
     Uses the existing get_provider_model_info infrastructure with switch-case pattern.
@@ -5741,10 +5761,12 @@ def _get_provider_token_counter(deployment: dict, model_to_use: str):
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     full_model = deployment.get("litellm_params", {}).get("model", "")
+    model: Optional[str] = None
+    custom_llm_provider: Optional[str] = None
 
     try:
         # Use existing LiteLLM logic to determine provider
-        model, provider, dynamic_api_key, api_base = get_llm_provider(
+        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
             model=full_model,
             custom_llm_provider=deployment.get("litellm_params", {}).get(
                 "custom_llm_provider"
@@ -5758,7 +5780,7 @@ def _get_provider_token_counter(deployment: dict, model_to_use: str):
         from litellm.utils import ProviderConfigManager
 
         # Convert string provider to LlmProviders enum
-        llm_provider_enum = LlmProviders(provider)
+        llm_provider_enum = LlmProviders(custom_llm_provider)
         # Add more provider mappings as needed
 
         if llm_provider_enum:
@@ -5766,7 +5788,7 @@ def _get_provider_token_counter(deployment: dict, model_to_use: str):
                 model=full_model, provider=llm_provider_enum
             )
             if provider_model_info is not None:
-                return provider_model_info.get_token_counter()
+                return provider_model_info.get_token_counter(), model, custom_llm_provider
 
     except Exception:
         # If provider detection fails, fall back to manual checks
@@ -5774,9 +5796,9 @@ def _get_provider_token_counter(deployment: dict, model_to_use: str):
             from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
             anthropic_model_info = AnthropicModelInfo()
-            return anthropic_model_info.get_token_counter()
+            return anthropic_model_info.get_token_counter(), model, custom_llm_provider
 
-    return None
+    return None, None, None
 
 
 @router.post(
@@ -5785,62 +5807,82 @@ def _get_provider_token_counter(deployment: dict, model_to_use: str):
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountResponse,
 )
-async def token_counter(request: TokenCountRequest, is_direct_request: bool = True):
-    """ """
+async def token_counter(
+    request: TokenCountRequest, 
+    call_endpoint: bool = False
+):
+    """
+    Args:
+        request: TokenCountRequest
+        call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
+
+    Returns:
+        TokenCountResponse
+    """
     from litellm import token_counter
 
     global llm_router
 
     prompt = request.prompt
     messages = request.messages
-    if prompt is None and messages is None:
+    contents = request.contents
+
+    #########################################################
+    # Validate request
+    #########################################################
+    if prompt is None and messages is None and contents is None:
         raise HTTPException(
-            status_code=400, detail="prompt or messages must be provided"
+            status_code=400, detail="prompt or messages or contents must be provided"
         )
 
-    deployment = None
+    deployment: Optional[Dict[str, Any]] = None
     litellm_model_name = None
     model_info: Optional[ModelMapInfo] = None
     if llm_router is not None:
         # get 1 deployment corresponding to the model
-        for _model in llm_router.model_list:
-            if _model["model_name"] == request.model:
-                deployment = _model
-                model_info = deployment.get("model_info", {})
-                break
+        try:
+            deployment = await llm_router.async_get_available_deployment(
+                model=request.model,
+                request_kwargs={},
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.token_counter(): Exception occured while getting deployment"
+            )
+            pass
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
             litellm_model_name = litellm_model_name.split("/", 1)[1]
 
-    model_to_use = (
+    model_to_use: str = (
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
-    provider_counter = None
-    if deployment is not None and not is_direct_request:
+    provider_counter: Optional[BaseTokenCounter] = None
+    custom_llm_provider: Optional[str] = None
+    if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
-        provider_counter = _get_provider_token_counter(deployment, model_to_use)
+        provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        if _model is not None:
+            model_to_use = _model
 
-    if provider_counter is not None and provider_counter.supports_provider(
-        deployment=deployment, from_endpoint=not is_direct_request
-    ):
-        result = await provider_counter.count_tokens(
-            model_to_use=model_to_use,
-            messages=messages,  # type: ignore
-            deployment=deployment,
-            request_model=request.model,
-        )
-
-        if result is not None:
-            return TokenCountResponse(
-                total_tokens=result["total_tokens"],
-                request_model=result["request_model"],
-                model_used=result["model_used"],
-                tokenizer_type=result["tokenizer_type"],
+    if provider_counter is not None:
+        if provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider) is True:
+            result = await provider_counter.count_tokens(
+                model_to_use=model_to_use or "",
+                messages=messages,  # type: ignore
+                contents=contents,
+                deployment=deployment,
+                request_model=request.model,
             )
+            #########################################################
+            # Transfrom the Response to the well known format
+            #########################################################
+            if result is not None:
+                return result
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None

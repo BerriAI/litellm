@@ -38,6 +38,7 @@ import CacheControlSettings from "./add_model/cache_control_settings";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -211,7 +212,7 @@ export default function ModelInfoView({
           };
         }
       } catch (e) {
-        message.error("Invalid JSON in Model Info");
+        NotificationManager.fromBackend("Invalid JSON in Model Info");
         return;
       }
 
@@ -242,7 +243,7 @@ export default function ModelInfoView({
       setIsEditing(false);
     } catch (error) {
       console.error("Error updating model:", error);
-      message.error("Failed to update model settings");
+      NotificationManager.fromBackend("Failed to update model settings");
     } finally {
       setIsSaving(false);
     }
@@ -280,7 +281,7 @@ export default function ModelInfoView({
       onClose();
     } catch (error) {
       console.error("Error deleting the model:", error);
-      message.error("Failed to delete model");
+      NotificationManager.fromBackend("Failed to delete model");
     }
   };
 
@@ -398,9 +399,15 @@ export default function ModelInfoView({
               </Card>
               <Card>
                 <Text>LiteLLM Model</Text>
-                <pre>
-                  <Title>{modelData.litellm_model_name || "Not Set"}</Title>
-                </pre>
+                <div className="mt-2 overflow-hidden">
+                  <Tooltip title={modelData.litellm_model_name || "Not Set"}>
+                    <div 
+                      className="break-all text-sm font-medium leading-relaxed cursor-pointer"
+                    >
+                      {modelData.litellm_model_name || "Not Set"}
+                    </div>
+                  </Tooltip>
+                </div>
               </Card>
               <Card>
                 <Text>Pricing</Text>

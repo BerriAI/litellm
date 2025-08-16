@@ -4322,8 +4322,10 @@ class Router:
                 deployment_name = kwargs["litellm_params"]["metadata"].get(
                     "deployment", None
                 )  # stable name - works for wildcard routes as well
-                model_group = standard_logging_object.get("model_group", None)
-                id = standard_logging_object.get("model_id", None)
+                # Get model_group and id from kwargs like the sync version does
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+                id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -4351,16 +4353,22 @@ class Router:
                     tpm_model_info = deployment_model_info.get("tpm", None)
                     rpm_model_info = deployment_model_info.get("rpm", None)
 
-                    ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
-                    if (
-                        tpm is None
-                        and rpm is None
-                        and tpm_litellm_params is None
-                        and rpm_litellm_params is None
-                        and tpm_model_info is None
-                        and rpm_model_info is None
-                    ):
-                        return
+                # Always track deployment successes for cooldown logic, regardless of TPM/RPM limits
+                increment_deployment_successes_for_current_minute(
+                    litellm_router_instance=self,
+                    deployment_id=id,
+                )
+
+                ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                if (
+                    tpm is None
+                    and rpm is None
+                    and tpm_litellm_params is None
+                    and rpm_litellm_params is None
+                    and tpm_model_info is None
+                    and rpm_model_info is None
+                ):
+                    return
 
                 parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
                 total_tokens: float = standard_logging_object.get("total_tokens", 0)
@@ -4380,7 +4388,6 @@ class Router:
                 # Update usage
                 # ------------
                 # update cache
-
                 pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
                 ## TPM
@@ -4407,11 +4414,6 @@ class Router:
                 await self.cache.async_increment_cache_pipeline(
                     increment_list=pipeline_operations,
                     parent_otel_span=parent_otel_span,
-                )
-
-                increment_deployment_successes_for_current_minute(
-                    litellm_router_instance=self,
-                    deployment_id=id,
                 )
 
                 return tpm_key
@@ -5474,6 +5476,11 @@ class Router:
                         pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
+        if model is None:
+            # Handle case where base_model is None (e.g., Azure models without base_model set)
+            # Use the original model from litellm_params
+            model = _model
+
         if not model.startswith("{}/".format(custom_llm_provider)):
             model_info_name = "{}/{}".format(custom_llm_provider, model)
         else:

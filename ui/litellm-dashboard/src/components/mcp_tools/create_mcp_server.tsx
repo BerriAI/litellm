@@ -9,6 +9,7 @@ import MCPConnectionStatus from "./mcp_connection_status"
 import StdioConfiguration from "./StdioConfiguration"
 import { isAdminRole } from "@/utils/roles"
 import { validateMCPServerUrl, validateMCPServerName } from "./utils"
+import NotificationManager from "../molecules/notifications_manager"
 
 const asset_logos_folder = "../ui/assets/logos/"
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`
@@ -80,7 +81,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
           console.log("Parsed stdio config:", stdioFields)
         } catch (error) {
-          message.error("Invalid JSON in stdio configuration")
+          NotificationManager.fromBackend("Invalid JSON in stdio configuration")
           return
         }
       }
@@ -113,7 +114,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         onCreateSuccess(response)
       }
     } catch (error) {
-      message.error("Error creating MCP Server: " + error, 20)
+      NotificationManager.fromBackend("Error creating MCP Server: " + error)
     } finally {
       setIsLoading(false)
     }

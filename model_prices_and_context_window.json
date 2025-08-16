@@ -4790,6 +4790,24 @@
         ],
         "source": "https://azuremarketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice"
     },
+    "azure_ai/FLUX-1.1-pro": {
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/black-forest-labs-flux-1-kontext-pro-and-flux1-1-pro-now-available-in-azure-ai-f/4434659"
+    },
+    "azure_ai/FLUX.1-Kontext-pro": {
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://azuremarketplace.microsoft.com/pt-br/marketplace/apps/cohere.cohere-embed-4-offer?tab=PlansAndPrice"
+    },
     "babbage-002": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
@@ -9686,6 +9704,21 @@
         "supports_assistant_prefill": true,
         "supports_tool_choice": true
     },
+    "vertex_ai/deepseek-ai/deepseek-r1-0528-maas": {
+        "max_tokens": 8192,
+        "max_input_tokens": 65336,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 1.35e-06,
+        "output_cost_per_token": 5.4e-06,
+        "litellm_provider": "vertex_ai-deepseek_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_function_calling": true,
+        "supports_assistant_prefill": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true
+    },
     "vertex_ai/meta/llama3-405b-instruct-maas": {
         "max_tokens": 32000,
         "max_input_tokens": 32000,
@@ -11190,6 +11223,17 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "openrouter/deepseek/deepseek-chat-v3-0324": {
+        "max_tokens": 8192,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "litellm_provider": "openrouter",
+        "supports_prompt_caching": true,
+        "mode": "chat",
+        "supports_tool_choice": true
+    },
     "openrouter/deepseek/deepseek-coder": {
         "max_tokens": 8192,
         "max_input_tokens": 66000,
@@ -12588,8 +12632,6 @@
         "output_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
@@ -12602,8 +12644,6 @@
         "output_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
-        "supports_function_calling": true,
-        "supports_vision": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_reasoning": true
