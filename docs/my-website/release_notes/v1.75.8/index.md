@@ -81,7 +81,7 @@ pip install litellm==1.75.8
 - **[CometAPI](../../docs/providers/comet)**
     - New provider support with chat completions and streaming - [PR #13458](https://github.com/BerriAI/litellm/pull/13458)
 - **[SambaNova](../../docs/providers/sambanova)**
-    - Added embedding model support - [PR #13308](https://github.com/BerriAI/litellm/pull/13308)
+    - Added embedding model support - [PR #13308](https://github.com/BerriAI/litellm/pull/13308), [Get Started](../../docs/providers/sambanova#sambanova---embeddings)
 - **[Vertex AI](../../docs/providers/vertex)**
     - Added `/countTokens` endpoint support for Gemini CLI integration - [PR #13545](https://github.com/BerriAI/litellm/pull/13545)
     - Token counter support for VertexAI models - [PR #13558](https://github.com/BerriAI/litellm/pull/13558)
