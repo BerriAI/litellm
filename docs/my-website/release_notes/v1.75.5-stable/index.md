@@ -1,5 +1,5 @@
 ---
-title: "v1.75.5-stable"
+title: "v1.75.5-stable - Redis latency improvements"
 slug: "v1-75-5"
 date: 2025-08-10T10:00:00
 authors:
