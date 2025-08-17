@@ -80,17 +80,17 @@ class GithubCopilotConfig(OpenAIConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get supported OpenAI parameters for GitHub Copilot.
-        
+
         For Anthropic models (like claude-sonnet-4), includes thinking and reasoning parameters.
         For other models, returns standard OpenAI parameters.
         """
         # Get base OpenAI parameters
         base_params = super().get_supported_openai_params(model)
-        
+
         # Add thinking and reasoning parameters for Anthropic Claude models
         if "claude" in model.lower():
             base_params.extend(["thinking", "reasoning_effort"])
-        
+
         return base_params
 
     def _determine_initiator(self, messages: List[AllMessageValues]) -> str:
