@@ -266,10 +266,9 @@ def get_supported_openai_params(  # noqa: PLR0915
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,
             )
-            return (
-                ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(
-                    model=model
-                )
+
+            return ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(
+                model=model
             )
     elif custom_llm_provider == "github_copilot":
         return litellm.GithubCopilotConfig().get_supported_openai_params(model=model)
