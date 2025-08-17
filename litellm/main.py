@@ -845,8 +845,10 @@ def mock_completion(
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
+    optional_params: Optional[dict] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
+    original_model = model
     try:
         model_info = cast(
             dict,
@@ -859,7 +861,7 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
     except Exception as e:
-        verbose_logger.debug("Error getting model info: {}".format(e))
+        verbose_logger.debug("Error getting model info: {}. Original model: {}".format(e, original_model))
 
         if model.startswith(
             "responses/"
@@ -867,6 +869,23 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+
+    # Auto-route reasoning-capable models to Responses API for reasoning summaries
+    if (
+        model_info.get("mode") != "responses" and
+        custom_llm_provider in ["openai", "azure"] and
+        model_info.get("supports_reasoning")
+    ):
+        verbose_logger.debug(
+            f"Auto-routing reasoning-capable model '{model}' to Responses API for reasoning summaries."
+        )
+        model_info["mode"] = "responses"
+
+        if "supported_endpoints" not in model_info:
+            model_info["supported_endpoints"] = ["/v1/responses"]
+        elif "/v1/responses" not in model_info.get("supported_endpoints", []):
+            model_info["supported_endpoints"].append("/v1/responses")
+
     return model_info, model
 
 
@@ -1343,7 +1362,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         model_info, model = responses_api_bridge_check(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model, custom_llm_provider=custom_llm_provider, optional_params=optional_params
         )
 
         if model_info.get("mode") == "responses":

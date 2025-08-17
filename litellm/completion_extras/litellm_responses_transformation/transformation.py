@@ -25,6 +25,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.types.llms.openai import Reasoning
+from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -137,6 +138,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Set instructions if we found a system message
         if instructions:
             responses_api_request["instructions"] = instructions
+
+        # Handle reasoning parameter logic for reasoning-capable models
+        reasoning_effort = self._handle_reasoning_parameters(
+            optional_params, model, litellm_params
+        )
 
         # Map optional parameters
         for key, value in optional_params.items():
@@ -451,6 +457,60 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for tool in tools:
             responses_tools.append(tool)
         return cast(List["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
+
+    def _handle_reasoning_parameters(
+        self, optional_params: dict, model: str, litellm_params: dict
+    ) -> Optional[str]:
+        """Handle reasoning parameter promotion and defaults for reasoning-capable models."""
+        # Get custom provider from litellm_params to check if model supports reasoning
+        custom_llm_provider = litellm_params.get("custom_llm_provider", "openai")
+
+        # Check if model supports reasoning
+        try:
+            model_supports_reasoning = supports_reasoning(model=model, custom_llm_provider=custom_llm_provider)
+        except Exception:
+            # If supports_reasoning check fails, assume no reasoning support
+            model_supports_reasoning = False
+
+        if not model_supports_reasoning:
+            return None
+
+        # Get current reasoning_effort if any
+        reasoning_effort = optional_params.get("reasoning_effort")
+        extra_body = optional_params.get("extra_body", {})
+        extra_body_reasoning_effort = None
+
+        if isinstance(extra_body, dict):
+            extra_body_reasoning_effort = extra_body.get("reasoning_effort")
+
+        has_explicit_reasoning_effort = reasoning_effort is not None or extra_body_reasoning_effort is not None
+
+        # Promote reasoning_effort from extra_body to top-level
+        if extra_body_reasoning_effort and reasoning_effort is None:
+            optional_params["reasoning_effort"] = extra_body_reasoning_effort
+            # Remove from extra_body
+            if isinstance(optional_params.get("extra_body"), dict):
+                optional_params["extra_body"] = {
+                    k: v for k, v in optional_params["extra_body"].items() 
+                    if k != "reasoning_effort"
+                }
+                # Remove empty extra_body
+                if not optional_params["extra_body"]:
+                    optional_params.pop("extra_body", None)
+            reasoning_effort = extra_body_reasoning_effort
+
+        # Set default reasoning_effort if not provided for reasoning-capable models
+        elif not has_explicit_reasoning_effort:
+            reasoning_effort = "medium"
+            optional_params["reasoning_effort"] = reasoning_effort
+
+        effort_value = reasoning_effort or "medium"
+        verbose_logger.debug(
+            f"Applied reasoning parameters for reasoning-capable model '{model}' "
+            f"(reasoning_effort: {effort_value}, explicit: {has_explicit_reasoning_effort})."
+        )
+
+        return effort_value
 
     def _map_reasoning_effort(self, reasoning_effort: str) -> Optional[Reasoning]:
         if reasoning_effort == "high":
