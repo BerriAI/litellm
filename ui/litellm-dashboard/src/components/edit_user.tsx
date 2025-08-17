@@ -17,9 +17,12 @@ import {
     Form,
     Input,
     Select as Select2,
-    InputNumber,
     message,
+    InputNumber,
   } from "antd";
+
+import NumericalInput from "./shared/numerical_input";
+import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
 
 interface EditUserModalProps {
   visible: boolean;
@@ -112,17 +115,25 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
               tooltip="(float) - Spend of all LLM calls completed by this user"
               help="Across all keys (including keys with team_id)."
             >
-              <InputNumber min={0} step={1} />
+              <InputNumber min={0} step={0.01} />
             </Form.Item>
 
             <Form.Item
               label="User Budget (USD)"
               name="max_budget"
               tooltip="(float) - Maximum budget of this user"
-              help="Ignored if the key has a team_id; team budget applies there."
+              help="Maximum budget of this user."
             >
-              <InputNumber min={0} step={1} />
+              <NumericalInput min={0} step={0.01} />
             </Form.Item>
+
+            <Form.Item label="Reset Budget" name="budget_duration"> 
+              <BudgetDurationDropdown />
+            </Form.Item>
+
+            <div style={{ textAlign: "right", marginTop: "10px" }}>
+              <Button2 htmlType="submit">Save</Button2>
+            </div>
 
             <div style={{ textAlign: "right", marginTop: "10px" }}>
                 <Button2 htmlType="submit">Save</Button2>

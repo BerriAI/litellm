@@ -339,7 +339,7 @@ documents = [
 ]
 
 response = rerank(
-    model="azure_ai/rerank-english-v3.0",
+    model="azure_ai/cohere-rerank-v3.5",
     query=query,
     documents=documents,
     top_n=3,
@@ -362,9 +362,9 @@ model_list:
     litellm_params:
       model: together_ai/Salesforce/Llama-Rank-V1
       api_key: os.environ/TOGETHERAI_API_KEY
-  - model_name: rerank-english-v3.0
+  - model_name: cohere-rerank-v3.5
     litellm_params:
-      model: azure_ai/rerank-english-v3.0
+      model: azure_ai/cohere-rerank-v3.5
       api_key: os.environ/AZURE_AI_API_KEY
       api_base: os.environ/AZURE_AI_API_BASE
 ```
@@ -384,7 +384,7 @@ curl http://0.0.0.0:4000/rerank \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rerank-english-v3.0",
+    "model": "cohere-rerank-v3.5",
     "query": "What is the capital of the United States?",
     "documents": [
         "Carson City is the capital city of the American state of Nevada.",

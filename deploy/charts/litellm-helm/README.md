@@ -22,6 +22,8 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | Name                                                       | Description                                                                                                                                                                           | Value |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
 | `replicaCount`                                             | The number of LiteLLM Proxy pods to be deployed                                                                                                                                       | `1`  |
+| `masterkeySecretName`                                      | The name of the Kubernetes Secret that contains the Master API Key for LiteLLM.  If not specified, use the generated secret name.                                                                                                         | N/A  |
+| `masterkeySecretKey`                                      | The key within the Kubernetes Secret that contains the Master API Key for LiteLLM.  If not specified, use `masterkey` as the key.                                                                                                         | N/A  |
 | `masterkey`                                                | The Master API Key for LiteLLM.  If not specified, a random key is generated.                                                                                                         | N/A  |
 | `environmentSecrets`                                       | An optional array of Secret object names.  The keys and values in these secrets will be presented to the LiteLLM proxy pod as environment variables.  See below for an example Secret object.  | `[]`  |
 | `environmentConfigMaps`                                       | An optional array of ConfigMap object names.  The keys and values in these configmaps will be presented to the LiteLLM proxy pod as environment variables.  See below for an example Secret object.  | `[]`  |
@@ -32,6 +34,7 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `serviceAccount.create`                                    | Whether or not to create a Kubernetes Service Account for this deployment.  The default is `false` because LiteLLM has no need to access the Kubernetes API.                          | `false`  |
 | `service.type`                                             | Kubernetes Service type (e.g. `LoadBalancer`, `ClusterIP`, etc.)                                                                                                                      | `ClusterIP`  |
 | `service.port`                                             | TCP port that the Kubernetes Service will listen on.  Also the TCP port within the Pod that the proxy will listen on.                                                                 | `4000`  |
+| `service.loadBalancerClass`                                | Optional LoadBalancer implementation class (only used when `service.type` is `LoadBalancer`)                                                                                                          | `""`  |
 | `ingress.*`                                                | See [values.yaml](./values.yaml) for example settings                                                                                                                                 | N/A  |
 | `proxy_config.*`                                           | See [values.yaml](./values.yaml) for default settings.  See [example_config_yaml](../../../litellm/proxy/example_config_yaml/) for configuration examples.                            | N/A  |
 | `extraContainers[]`                                        | An array of additional containers to be deployed as sidecars alongside the LiteLLM Proxy.                                                                                             | `[]`  |
@@ -106,6 +109,22 @@ data:
 ```
 
 Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472732157221e04c6b15e3b3f094)
+
+### Migration Job Settings
+
+The migration job supports both ArgoCD and Helm hooks to ensure database migrations run at the appropriate time during deployments.
+
+| Name                                                       | Description                                                                                                                                                                           | Value |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `migrationJob.enabled`                                     | Enable or disable the schema migration Job                                                                                                                                           | `true`  |
+| `migrationJob.backoffLimit`                                | Backoff limit for Job restarts                                                                                                                                                       | `4`  |
+| `migrationJob.ttlSecondsAfterFinished`                     | TTL for completed migration jobs                                                                                                                                                      | `120`  |
+| `migrationJob.annotations`                                 | Additional annotations for the migration job pod                                                                                                                                      | `{}`  |
+| `migrationJob.extraContainers`                             | Additional containers to run alongside the migration job                                                                                                                              | `[]`  |
+| `migrationJob.hooks.argocd.enabled`                       | Enable ArgoCD hooks for the migration job (uses PreSync hook with BeforeHookCreation delete policy)                                                                                  | `true`  |
+| `migrationJob.hooks.helm.enabled`                         | Enable Helm hooks for the migration job (uses pre-install,pre-upgrade hooks with before-hook-creation delete policy)                                                                 | `false`  |
+| `migrationJob.hooks.helm.weight`                          | Helm hook execution order (lower weights executed first). Optional - defaults to "1" if not specified.                                                                               | N/A  |
+
 
 ## Accessing the Admin UI
 When browsing to the URL published per the settings in `ingress.*`, you will

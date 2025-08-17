@@ -31,7 +31,7 @@ def get_all_functions_called_in_tests(base_dir):
     specifically in files containing the word 'router'.
     """
     called_functions = set()
-    test_dirs = ["local_testing", "router_unit_tests"]
+    test_dirs = ["local_testing", "router_unit_tests", "test_litellm"]
 
     for test_dir in test_dirs:
         dir_path = os.path.join(base_dir, test_dir)

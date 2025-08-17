@@ -36,6 +36,16 @@ class ImageBlock(TypedDict):
     source: SourceBlock
 
 
+BedrockVideoTypes = Literal[
+    "mp4", "mov", "mkv", "webm", "flv", "mpeg", "mpg", "wmv", "3gp"
+]
+
+
+class VideoBlock(TypedDict):
+    format: Union[BedrockVideoTypes, str]
+    source: SourceBlock
+
+
 BedrockDocumentTypes = Literal[
     "pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"
 ]
@@ -66,13 +76,31 @@ class ToolUseBlock(TypedDict):
     toolUseId: str
 
 
+class BedrockConverseReasoningTextBlock(TypedDict, total=False):
+    text: Required[str]
+    signature: str
+
+
+class BedrockConverseReasoningContentBlock(TypedDict, total=False):
+    reasoningText: BedrockConverseReasoningTextBlock
+    redactedContent: str
+
+
+class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
+    signature: str
+    redactedContent: str
+    text: str
+
+
 class ContentBlock(TypedDict, total=False):
     text: str
     image: ImageBlock
+    video: VideoBlock
     document: DocumentBlock
     toolResult: ToolResultBlock
     toolUse: ToolUseBlock
     cachePoint: CachePointBlock
+    reasoningContent: BedrockConverseReasoningContentBlock
 
 
 class MessageBlock(TypedDict):
@@ -92,6 +120,10 @@ class ConverseTokenUsageBlock(TypedDict):
     inputTokens: int
     outputTokens: int
     totalTokens: int
+    cacheReadInputTokenCount: int
+    cacheReadInputTokens: int
+    cacheWriteInputTokenCount: int
+    cacheWriteInputTokens: int
 
 
 class ConverseResponseBlock(TypedDict):
@@ -104,8 +136,14 @@ class ConverseResponseBlock(TypedDict):
     usage: ConverseTokenUsageBlock
 
 
+class ToolJsonSchemaBlock(TypedDict, total=False):
+    type: Literal["object"]
+    properties: dict
+    required: List[str]
+
+
 class ToolInputSchemaBlock(TypedDict):
-    json: Optional[dict]
+    json: Optional[ToolJsonSchemaBlock]
 
 
 class ToolSpecBlock(TypedDict, total=False):
@@ -114,8 +152,9 @@ class ToolSpecBlock(TypedDict, total=False):
     description: str
 
 
-class ToolBlock(TypedDict):
+class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
+    cachePoint: Optional[CachePointBlock]
 
 
 class SpecificToolChoiceBlock(TypedDict):
@@ -158,6 +197,7 @@ class ToolUseBlockStartEvent(TypedDict):
 
 class ContentBlockStartEvent(TypedDict, total=False):
     toolUse: Optional[ToolUseBlockStartEvent]
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
 
 
 class ContentBlockDeltaEvent(TypedDict, total=False):
@@ -167,6 +207,11 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
     text: str
     toolUse: ToolBlockDeltaEvent
+    reasoningContent: BedrockConverseReasoningContentBlockDelta
+
+
+class PerformanceConfigBlock(TypedDict):
+    latency: Literal["optimized", "throughput"]
 
 
 class CommonRequestObject(
@@ -178,6 +223,7 @@ class CommonRequestObject(
     system: List[SystemContentBlock]
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
+    performanceConfig: Optional[PerformanceConfigBlock]
 
 
 class RequestObject(CommonRequestObject, total=False):
@@ -347,12 +393,119 @@ class AmazonStability3TextToImageResponse(TypedDict, total=False):
     finish_reasons: List[str]
 
 
+class AmazonNovaCanvasRequestBase(TypedDict, total=False):
+    """
+    Base class for Amazon Nova Canvas API requests
+    """
+
+    pass
+
+
+class AmazonNovaCanvasImageGenerationConfig(TypedDict, total=False):
+    """
+    Config for Amazon Nova Canvas Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    cfgScale: int
+    seed: int
+    quality: Literal["standard", "premium"]
+    width: int
+    height: int
+    numberOfImages: int
+
+
+class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Text to Image API
+    """
+
+    text: str
+    negativeText: str
+    controlStrength: float
+    controlMode: Literal["CANNY_EDIT", "SEGMENTATION"]
+    conditionImage: str
+
+
+class AmazonNovaCanvasTextToImageRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
+    """
+    Request for Amazon Nova Canvas Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    textToImageParams: AmazonNovaCanvasTextToImageParams
+    taskType: Literal["TEXT_IMAGE"]
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasColorGuidedGenerationParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Color Guided Generation API
+    """
+
+    colors: List[str]
+    referenceImage: str
+    text: str
+    negativeText: str
+
+
+class AmazonNovaCanvasColorGuidedRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
+    """
+    Request for Amazon Nova Canvas Color Guided Generation API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["COLOR_GUIDED_GENERATION"]
+    colorGuidedGenerationParams: AmazonNovaCanvasColorGuidedGenerationParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+class AmazonNovaCanvasTextToImageResponse(TypedDict, total=False):
+    """
+    Response for Amazon Nova Canvas Text to Image API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    images: List[str]
+
+
+class AmazonNovaCanvasInpaintingParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Canvas Inpainting API
+    """
+
+    text: str
+    maskImage: str
+    inputImage: str
+    negativeText: str
+
+
+class AmazonNovaCanvasInpaintingRequest(
+    AmazonNovaCanvasRequestBase, TypedDict, total=False
+):
+    """
+    Request for Amazon Nova Canvas Inpainting API
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html
+    """
+
+    taskType: Literal["INPAINTING"]
+    inpaintingParams: AmazonNovaCanvasInpaintingParams
+    imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
     AWSPreparedRequest = Any
-
-from pydantic import BaseModel
 
 
 class BedrockPreparedRequest(TypedDict):

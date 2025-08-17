@@ -11,9 +11,9 @@ class DatabricksEmbeddingConfig:
     Reference: https://learn.microsoft.com/en-us/azure/databricks/machine-learning/foundation-models/api-reference#--embedding-task
     """
 
-    instruction: Optional[str] = (
-        None  # An optional instruction to pass to the embedding model. BGE Authors recommend 'Represent this sentence for searching relevant passages:' for retrieval queries
-    )
+    instruction: Optional[
+        str
+    ] = None  # An optional instruction to pass to the embedding model. BGE Authors recommend 'Represent this sentence for searching relevant passages:' for retrieval queries
 
     def __init__(self, instruction: Optional[str] = None) -> None:
         locals_ = locals().copy()

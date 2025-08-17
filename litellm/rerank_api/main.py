@@ -75,7 +75,7 @@ def rerank(  # noqa: PLR0915
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
     custom_llm_provider: Optional[
-        Literal["cohere", "together_ai", "azure_ai", "infinity"]
+        Literal["cohere", "together_ai", "azure_ai", "infinity", "litellm_proxy", "hosted_vllm"]
     ] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
@@ -107,13 +107,16 @@ def rerank(  # noqa: PLR0915
             k for k, v in unique_version_params.items() if v is not None
         ]
 
-        model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = (
-            litellm.get_llm_provider(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=optional_params.api_base,
-                api_key=optional_params.api_key,
-            )
+        (
+            model,
+            _custom_llm_provider,
+            dynamic_api_key,
+            dynamic_api_base,
+        ) = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=optional_params.api_base,
+            api_key=optional_params.api_key,
         )
 
         rerank_provider_config: BaseRerankConfig = (
@@ -162,7 +165,7 @@ def rerank(  # noqa: PLR0915
         )
 
         # Implement rerank logic here based on the custom_llm_provider
-        if _custom_llm_provider == "cohere":
+        if _custom_llm_provider == "cohere" or _custom_llm_provider == "litellm_proxy":
             # Implement Cohere rerank logic
             api_key: Optional[str] = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
@@ -187,7 +190,7 @@ def rerank(  # noqa: PLR0915
                 optional_rerank_params=optional_rerank_params,
                 logging_obj=litellm_logging_obj,
                 timeout=optional_params.timeout,
-                api_key=dynamic_api_key or optional_params.api_key,
+                api_key=api_key,
                 api_base=api_base,
                 _is_async=_is_async,
                 headers=headers or litellm.headers or {},
@@ -272,7 +275,6 @@ def rerank(  # noqa: PLR0915
                 _is_async=_is_async,
             )
         elif _custom_llm_provider == "jina_ai":
-
             if dynamic_api_key is None:
                 raise ValueError(
                     "Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment"
@@ -321,8 +323,65 @@ def rerank(  # noqa: PLR0915
                 logging_obj=litellm_logging_obj,
                 client=client,
             )
+        elif _custom_llm_provider == "hosted_vllm":
+            # Implement Hosted VLLM rerank logic
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or get_secret_str("HOSTED_VLLM_API_KEY")
+            )
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or get_secret_str("HOSTED_VLLM_API_BASE")
+            )
+
+            if api_base is None:
+                raise ValueError(
+                    "api_base must be provided for Hosted VLLM rerank. Set in call or via HOSTED_VLLM_API_BASE env var."
+                )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
         else:
-            raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
+            # Generic handler for all providers that use base_llm_http_handler
+            # Provider-specific logic (API key validation, URL generation, etc.) 
+            # is handled in the respective transformation configs
+            
+            # Check if the provider is actually supported
+            # If rerank_provider_config is a default CohereRerankConfig but the provider is not Cohere or litellm_proxy,
+            # it means the provider is not supported
+            if (isinstance(rerank_provider_config, litellm.CohereRerankConfig) or 
+                isinstance(rerank_provider_config, litellm.CohereRerankV2Config)) and _custom_llm_provider != "cohere" and _custom_llm_provider != "litellm_proxy":
+                raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
+                
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=dynamic_api_base or optional_params.api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
 
         # Placeholder return
         return response

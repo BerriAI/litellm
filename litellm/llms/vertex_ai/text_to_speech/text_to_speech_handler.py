@@ -9,6 +9,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.openai.openai import HttpxBinaryResponseContent
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 
 class VertexInput(TypedDict, total=False):
@@ -45,7 +46,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         logging_obj,
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         api_base: Optional[str],
         timeout: Union[float, httpx.Timeout],
         model: str,

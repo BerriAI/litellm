@@ -190,3 +190,137 @@ Expected Response
 
 </TabItem>
 </Tabs>
+
+
+## Explicitly specify image type 
+
+If you have images without a mime-type, or if litellm is incorrectly inferring the mime type of your image (e.g. calling `gs://` url's with vertex ai), you can set this explicitly via the `format` param. 
+
+```python
+"image_url": {
+  "url": "gs://my-gs-image",
+  "format": "image/jpeg"
+}
+```
+
+LiteLLM will use this for any API endpoint, which supports specifying mime-type (e.g. anthropic/bedrock/vertex ai). 
+
+For others (e.g. openai), it will be ignored. 
+
+<Tabs>
+<TabItem label="SDK" value="sdk">
+
+```python
+import os 
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+# openai call
+response = completion(
+    model = "claude-3-7-sonnet-latest", 
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                            {
+                                "type": "text",
+                                "text": "What’s in this image?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                  "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                                  "format": "image/jpeg"
+                                }
+                            }
+                        ]
+        }
+    ],
+)
+
+```
+
+</TabItem>
+<TabItem label="PROXY" value="proxy">
+
+1. Define vision models on config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-4-vision-preview # OpenAI gpt-4-vision-preview
+    litellm_params:
+      model: openai/gpt-4-vision-preview
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: llava-hf          # Custom OpenAI compatible model
+    litellm_params:
+      model: openai/llava-hf/llava-v1.6-vicuna-7b-hf
+      api_base: http://localhost:8000
+      api_key: fake-key
+    model_info:
+      supports_vision: True        # set supports_vision to True so /model/info returns this attribute as True
+
+```
+
+2. Run proxy server
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it using the OpenAI Python SDK
+
+
+```python
+import os 
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234", # your litellm proxy api key
+)
+
+response = client.chat.completions.create(
+    model = "gpt-4-vision-preview",  # use model="llava-hf" to test your custom OpenAI endpoint
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                            {
+                                "type": "text",
+                                "text": "What’s in this image?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                                "format": "image/jpeg"
+                                }
+                            }
+                        ]
+        }
+    ],
+)
+
+```
+
+
+
+
+</TabItem>
+</Tabs>
+
+
+
+## Spec 
+
+```
+"image_url": str
+
+OR 
+
+"image_url": {
+  "url": "url OR base64 encoded str",
+  "detail": "openai-only param", 
+  "format": "specify mime-type of image"
+}
+```

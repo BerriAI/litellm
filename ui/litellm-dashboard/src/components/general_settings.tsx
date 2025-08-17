@@ -63,6 +63,7 @@ import {
 import AddFallbacks from "./add_fallbacks";
 import openai from "openai";
 import Paragraph from "antd/es/skeleton/Paragraph";
+import NotificationManager from "./molecules/notifications_manager";
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -121,9 +122,8 @@ async function testFallbackModelResponse(
       </span>
     );
   } catch (error) {
-    message.error(
+    NotificationManager.fromBackend(
       `Error occurred while generating model response. Please try again. Error: ${error}`,
-      20
     );
   }
 }
@@ -311,7 +311,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
       setRouterSettings(updatedSettings);
       message.success("Router settings updated successfully");
     } catch (error) {
-      message.error("Failed to update router settings: " + error, 20);
+      NotificationManager.fromBackend("Failed to update router settings: " + error);
     }
   };
 
@@ -432,7 +432,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
     try {
       setCallbacksCall(accessToken, payload);
     } catch (error) {
-      message.error("Failed to update router settings: " + error, 20);
+      NotificationManager.fromBackend("Failed to update router settings: " + error);
     }
 
     message.success("router settings updated successfully");

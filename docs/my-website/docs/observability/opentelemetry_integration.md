@@ -34,8 +34,9 @@ OTEL_HEADERS="Authorization=Bearer%20<your-api-key>"
 <TabItem value="otel-col" label="Log to OTEL HTTP Collector">
 
 ```shell
-OTEL_EXPORTER="otlp_http"
-OTEL_ENDPOINT="http://0.0.0.0:4318"
+OTEL_EXPORTER_OTLP_ENDPOINT="http://0.0.0.0:4318"
+OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+OTEL_EXPORTER_OTLP_HEADERS="api-key=key,other-config-value=value"
 ```
 
 </TabItem>
@@ -43,8 +44,9 @@ OTEL_ENDPOINT="http://0.0.0.0:4318"
 <TabItem value="otel-col-grpc" label="Log to OTEL GRPC Collector">
 
 ```shell
-OTEL_EXPORTER="otlp_grpc"
-OTEL_ENDPOINT="http://0.0.0.0:4317"
+OTEL_EXPORTER_OTLP_ENDPOINT="http://0.0.0.0:4318"
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_EXPORTER_OTLP_HEADERS="api-key=key,other-config-value=value"
 ```
 
 </TabItem>
@@ -98,8 +100,18 @@ LiteLLM emits the user_api_key_metadata
 - user_id
 - team_id
 
-for successful + failed requests 
+for successful + failed requests
 
 click under `litellm_request` in the trace
 
 <Image img={require('../../img/otel_debug_trace.png')} />
+
+### Not seeing traces land on Integration
+
+If you don't see traces landing on your integration, set `OTEL_DEBUG="True"` in your LiteLLM environment and try again.
+
+```shell
+export OTEL_DEBUG="True"
+```
+
+This will emit any logging issues to the console.

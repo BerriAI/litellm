@@ -4,11 +4,15 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 
 import asyncio
 import os
+import random
+import subprocess
+import time
 import urllib
 import urllib.parse
 from datetime import datetime, timedelta
 from typing import Any, Optional, Union
 
+from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
 
 
@@ -84,6 +88,11 @@ class PrismaWrapper:
     ):
         from prisma import Prisma  # type: ignore
 
+        try:
+            await self._original_prisma.disconnect()
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
+
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)
         else:
@@ -112,8 +121,69 @@ class PrismaWrapper:
         return original_attr
 
 
+class PrismaManager:
+    @staticmethod
+    def _get_prisma_dir() -> str:
+        """Get the path to the migrations directory"""
+        abspath = os.path.abspath(__file__)
+        dname = os.path.dirname(os.path.dirname(abspath))
+        return dname
+
+    @staticmethod
+    def setup_database(use_migrate: bool = False) -> bool:
+        """
+        Set up the database using either prisma migrate or prisma db push
+
+        Returns:
+            bool: True if setup was successful, False otherwise
+        """
+
+        for attempt in range(4):
+            original_dir = os.getcwd()
+            prisma_dir = PrismaManager._get_prisma_dir()
+            os.chdir(prisma_dir)
+            try:
+                if use_migrate:
+                    try:
+                        from litellm_proxy_extras.utils import ProxyExtrasDBManager
+                    except ImportError as e:
+                        verbose_proxy_logger.error(
+                            f"\033[1;31mLiteLLM: Failed to import proxy extras. Got {e}\033[0m"
+                        )
+                        return False
+
+                    prisma_dir = PrismaManager._get_prisma_dir()
+
+                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
+                else:
+                    # Use prisma db push with increased timeout
+                    subprocess.run(
+                        ["prisma", "db", "push", "--accept-data-loss"],
+                        timeout=60,
+                        check=True,
+                    )
+                    return True
+            except subprocess.TimeoutExpired:
+                verbose_proxy_logger.warning(f"Attempt {attempt + 1} timed out")
+                time.sleep(random.randrange(5, 15))
+            except subprocess.CalledProcessError as e:
+                attempts_left = 3 - attempt
+                retry_msg = (
+                    f" Retrying... ({attempts_left} attempts left)"
+                    if attempts_left > 0
+                    else ""
+                )
+                verbose_proxy_logger.warning(
+                    f"The process failed to execute. Details: {e}.{retry_msg}"
+                )
+                time.sleep(random.randrange(5, 15))
+            finally:
+                os.chdir(original_dir)
+        return False
+
+
 def should_update_prisma_schema(
-    disable_updates: Optional[Union[bool, str]] = None
+    disable_updates: Optional[Union[bool, str]] = None,
 ) -> bool:
     """
     Determines if Prisma Schema updates should be applied during startup.

@@ -1,13 +1,14 @@
 import { message } from "antd";
 import { provider_map, Providers } from "../provider_info_helpers";
-import { modelCreateCall, Model } from "../networking";
+import { modelCreateCall, Model, testConnectionRequest } from "../networking";
+import React, { useState } from 'react';
+import ConnectionErrorDisplay from './model_connection_test';
+import NotificationManager from "../molecules/notifications_manager";
 
-
-export const handleAddModelSubmit = async (
+export const prepareModelAddRequest = async (
     formValues: Record<string, any>,
     accessToken: string,
     form: any,
-    callback?: ()=>void
   ) => {
     try {
       console.log("handling submit for formValues:", formValues);
@@ -34,6 +35,7 @@ export const handleAddModelSubmit = async (
       }
 
       // Create a deployment for each mapping
+      const deployments = [];
       for (const mapping of modelMappings) {
         const litellmParamsObj: Record<string, any> = {};
         const modelInfoObj: Record<string, any> = {};
@@ -59,7 +61,7 @@ export const handleAddModelSubmit = async (
             continue;
           }
           // Skip the custom_pricing and pricing_model fields as they're only used for UI control
-          if (key === 'custom_pricing' || key === 'pricing_model') {
+          if (key === 'custom_pricing' || key === 'pricing_model' || key === 'cache_control') {
             continue;
           }
           if (key == "model_name") {
@@ -72,7 +74,6 @@ export const handleAddModelSubmit = async (
           } else if (key == "model") {
             continue;
           }
-  
           // Check if key is "base_model"
           else if (key === "base_model") {
             // Add key-value pair to model_info dictionary
@@ -80,6 +81,16 @@ export const handleAddModelSubmit = async (
           }
           else if (key === "team_id") {
             modelInfoObj["team_id"] = value;
+          }
+          else if (key === "model_access_group") {
+            modelInfoObj["access_groups"] = value;
+          }
+          else if (key == "mode") {
+            console.log("placing mode in modelInfo")
+            modelInfoObj["mode"] = value;
+
+            // remove "mode" from litellmParams
+            delete litellmParamsObj["mode"];
           }
           else if (key === "custom_model_name") {
             litellmParamsObj["model"] = value;
@@ -90,9 +101,8 @@ export const handleAddModelSubmit = async (
               try {
                 litellmExtraParams = JSON.parse(value);
               } catch (error) {
-                message.error(
-                  "Failed to parse LiteLLM Extra Params: " + error,
-                  10
+                NotificationManager.fromBackend(
+                  "Failed to parse LiteLLM Extra Params: " + error
                 );
                 throw new Error("Failed to parse litellm_extra_params: " + error);
               }
@@ -107,9 +117,8 @@ export const handleAddModelSubmit = async (
               try {
                 modelInfoParams = JSON.parse(value);
               } catch (error) {
-                message.error(
-                  "Failed to parse LiteLLM Extra Params: " + error,
-                  10
+                NotificationManager.fromBackend(
+                  "Failed to parse LiteLLM Extra Params: " + error
                 );
                 throw new Error("Failed to parse litellm_extra_params: " + error);
               }
@@ -135,20 +144,48 @@ export const handleAddModelSubmit = async (
             litellmParamsObj[key] = value;
           }
         }
-  
+
+        deployments.push({ litellmParamsObj, modelInfoObj, modelName });
+      }
+
+      return deployments;
+    } catch (error) {
+      NotificationManager.fromBackend("Failed to create model: " + error);
+    }
+  };
+
+export const handleAddModelSubmit = async (
+    values: any,
+    accessToken: string,
+    form: any,
+    callback?: () => void,
+  ) => {
+    try {
+      const deployments = await prepareModelAddRequest(values, accessToken, form);
+      
+      if (!deployments || deployments.length === 0) {
+        return; // Exit if preparation failed or no deployments
+      }
+      
+      // Create each deployment
+      for (const deployment of deployments) {
+        const { litellmParamsObj, modelInfoObj, modelName } = deployment;
+        
         const new_model: Model = {
           model_name: modelName,
           litellm_params: litellmParamsObj,
           model_info: modelInfoObj,
         };
-  
+        
         const response: any = await modelCreateCall(accessToken, new_model);
         console.log(`response for model create call: ${response["data"]}`);
       }
-
-      callback && callback()
+      
+      callback && callback();
       form.resetFields();
     } catch (error) {
-      message.error("Failed to create model: " + error, 10);
+      NotificationManager.fromBackend("Failed to add model: " + error);
     }
   };
+
+     

@@ -1,18 +1,7 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
     litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-
-
-general_settings:
-  store_model_in_db: true
-
-
-litellm_settings:
-  cache: true
-  cache_params:
-    type: redis
-    ttl: 600
-    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7100"}] 
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
+  - model_name: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0

@@ -18,7 +18,8 @@ This function is called just before a litellm completion call is made, and allow
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
 from litellm.proxy.proxy_server import UserAPIKeyAuth, DualCache
-from typing import Optional, Literal
+from litellm.types.utils import ModelResponseStream
+from typing import Any, AsyncGenerator, Optional, Literal
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
@@ -44,7 +45,8 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
         self, 
         request_data: dict,
         original_exception: Exception, 
-        user_api_key_dict: UserAPIKeyAuth
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
     ):
         pass
 
@@ -70,6 +72,21 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
         response: str,
     ):
         pass
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_data: dict,
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        """
+        Passes the entire stream to the guardrail
+
+        This is useful for plugins that need to see the entire stream.
+        """
+        async for item in response:
+            yield item
+
 proxy_handler_instance = MyCustomHandler()
 ```
 

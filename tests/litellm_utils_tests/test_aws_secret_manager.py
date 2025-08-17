@@ -137,3 +137,59 @@ async def test_read_nonexistent_secret():
     response = await secret_manager.async_read_secret(secret_name=nonexistent_secret)
 
     assert response is None
+
+
+@pytest.mark.asyncio
+async def test_primary_secret_functionality():
+    """Test storing and retrieving secrets from a primary secret"""
+    check_aws_credentials()
+
+    secret_manager = AWSSecretsManagerV2()
+    primary_secret_name = f"litellm_test_primary_{uuid.uuid4().hex[:8]}"
+
+    # Create a primary secret with multiple key-value pairs
+    primary_secret_value = {
+        "api_key_1": "secret_value_1",
+        "api_key_2": "secret_value_2",
+        "database_url": "postgresql://user:password@localhost:5432/db",
+        "nested_secret": json.dumps({"key": "value", "number": 42}),
+    }
+
+    try:
+        # Write the primary secret
+        write_response = await secret_manager.async_write_secret(
+            secret_name=primary_secret_name,
+            secret_value=json.dumps(primary_secret_value),
+            description="LiteLLM Test Primary Secret",
+        )
+
+        print("Primary Secret Write Response:", write_response)
+        assert write_response is not None
+        assert "ARN" in write_response
+        assert "Name" in write_response
+        assert write_response["Name"] == primary_secret_name
+
+        # Test reading individual secrets from the primary secret
+        for key, expected_value in primary_secret_value.items():
+            # Read using the primary_secret_name parameter
+            value = await secret_manager.async_read_secret(
+                secret_name=key, primary_secret_name=primary_secret_name
+            )
+
+            print(f"Read {key} from primary secret:", value)
+            assert value == expected_value
+
+        # Test reading a non-existent key from the primary secret
+        non_existent_key = "non_existent_key"
+        value = await secret_manager.async_read_secret(
+            secret_name=non_existent_key, primary_secret_name=primary_secret_name
+        )
+        assert value is None, f"Expected None for non-existent key, got {value}"
+
+    finally:
+        # Cleanup: Delete the primary secret
+        delete_response = await secret_manager.async_delete_secret(
+            secret_name=primary_secret_name
+        )
+        print("Delete Response:", delete_response)
+        assert delete_response is not None

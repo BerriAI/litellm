@@ -12,7 +12,10 @@ class AthinaLogger:
             "athina-api-key": self.athina_api_key,
             "Content-Type": "application/json",
         }
-        self.athina_logging_url = os.getenv("ATHINA_BASE_URL", "https://log.athina.ai") + "/api/v1/log/inference"
+        self.athina_logging_url = (
+            os.getenv("ATHINA_BASE_URL", "https://log.athina.ai")
+            + "/api/v1/log/inference"
+        )
         self.additional_keys = [
             "environment",
             "prompt_slug",
@@ -23,6 +26,9 @@ class AthinaLogger:
             "context",
             "expected_response",
             "user_query",
+            "tags",
+            "user_feedback",
+            "model_options",
             "custom_attributes",
         ]
 
@@ -81,7 +87,6 @@ class AthinaLogger:
                 for key in self.additional_keys:
                     if key in metadata:
                         data[key] = metadata[key]
-
             response = litellm.module_level_client.post(
                 self.athina_logging_url,
                 headers=self.headers,

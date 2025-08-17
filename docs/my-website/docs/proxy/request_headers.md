@@ -10,10 +10,14 @@ Special headers that are supported by LiteLLM.
 
 `x-litellm-tags`: Optional[str]: A comma separated list (e.g. `tag1,tag2,tag3`) of tags to use for [tag-based routing](./tag_routing) **OR** [spend-tracking](./enterprise.md#tracking-spend-for-custom-tags).
 
+`x-litellm-num-retries`: Optional[int]: The number of retries for the request.
+
 ## Anthropic Headers
 
 `anthropic-version` Optional[str]: The version of the Anthropic API to use.  
 `anthropic-beta` Optional[str]: The beta version of the Anthropic API to use.
+    - For `/v1/messages` endpoint, this will always be forward the header to the underlying model.
+    - For `/chat/completions` endpoint, this will only be forwarded if `forward_client_headers_to_llm_api` is true.
 
 ## OpenAI Headers
 

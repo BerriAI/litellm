@@ -5,6 +5,7 @@ export interface ModelInfo {
   created_by: string;
   team_id: string;
   db_model: boolean;
+  access_groups: string[] | null;
 }
 
 export interface LiteLLMParams {
@@ -13,6 +14,7 @@ export interface LiteLLMParams {
   input_cost_per_token?: number;
   output_cost_per_token?: number;
   custom_llm_provider?: string;
+  litellm_credential_name?: string;
   [key: string]: any;
 }
 
@@ -41,4 +43,4 @@ export interface ModelDashboardProps {
   setModelData: (data: any) => void;
   premiumUser: boolean;
   teams: any[];
-} 
+}

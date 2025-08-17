@@ -10,7 +10,8 @@ The following caching mechanisms are supported:
 4. **InMemoryCache**
 5. **DiskCache**
 6. **S3Cache**
-7. **DualCache** (updates both Redis and an in-memory cache simultaneously)
+7. **AzureBlobCache**
+8. **DualCache** (updates both Redis and an in-memory cache simultaneously)
 
 ## Folder Structure
 

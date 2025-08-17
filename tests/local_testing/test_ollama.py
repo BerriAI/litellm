@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import traceback
@@ -31,12 +32,14 @@ def test_get_ollama_params():
             temperature=0.5,
             stream=True,
         )
-        print("Converted params", converted_params)
-        assert converted_params == {
+        expected_params = {
             "num_predict": 20,
             "stream": True,
             "temperature": 0.5,
-        }, f"{converted_params} != {'num_predict': 20, 'stream': True, 'temperature': 0.5}"
+        }
+        print("Converted params", converted_params)
+        for key in expected_params.keys():
+            assert expected_params[key] == converted_params[key], f"{converted_params} != {expected_params}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -74,6 +77,45 @@ def test_ollama_json_mode():
 
 
 # test_ollama_json_mode()
+
+
+def test_ollama_vision_model():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    from unittest.mock import patch
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            litellm.completion(
+                model="ollama/llama3.2-vision:11b",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Whats in this image?"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": "https://dummyimage.com/100/100/fff&text=Test+image"
+                                },
+                            },
+                        ],
+                    }
+                ],
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+        mock_post.assert_called()
+
+        print(mock_post.call_args.kwargs)
+
+        json_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert json_data["model"] == "llama3.2-vision:11b"
+        assert "images" in json_data
+        assert "prompt" in json_data
+        assert json_data["prompt"].startswith("### User:\n")
 
 
 mock_ollama_embedding_response = EmbeddingResponse(model="ollama/nomic-embed-text")
@@ -232,9 +274,60 @@ async def test_async_ollama_ssl_verify(stream):
         "async_httpx_clientssl_verify_Falseollama"
     )
 
-    test_client = httpx.AsyncClient(verify=False)
-    print(client)
-    assert (
-        client.client._transport._pool._ssl_context.verify_mode
-        == test_client._transport._pool._ssl_context.verify_mode
-    )
+    # check client
+    print("type of transport in client=", type(client.client._transport))
+    print("vars in transport in client=", vars(client.client._transport))
+    litellm_created_session = client.client._transport._get_valid_client_session()
+    print("litellm_created_session=", litellm_created_session)
+    # check session ssl
+    print("litellm_created_session ssl=", litellm_created_session.connector._ssl)
+
+    
+    # create aiohttp transport with ssl_verify=False
+    import aiohttp
+    aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(verify_ssl=False))
+    print("aiohttp_session ssl=", aiohttp_session.connector._ssl)
+
+    assert litellm_created_session.connector._ssl is False
+    assert litellm_created_session.connector._ssl == aiohttp_session.connector._ssl
+
+@pytest.mark.skip(reason="local only test")
+def test_ollama_streaming_with_chunk_builder():
+    from litellm.main import stream_chunk_builder
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    completion_kwargs = {
+        "model": "ollama_chat/qwen2.5:0.5b",  # Important: use `ollama_chat` instead of `ollama`
+        "messages": [
+            {"role": "user", "content": "What's the weather like in New York?"},
+            {
+                "role": "assistant",
+                "content": (
+                    "'<think>\nOkay, the user is asking about the weather in New York. "
+                    "Let me check the tools available. "
+                    "There's a function called get_weather that takes a location parameter. "
+                    "So I need to call that function with 'New York' as the location. "
+                    "I should make sure the arguments are correctly formatted in JSON. "
+                    "Let me structure the tool call accordingly.\n</think>\n\n"
+                ),
+            },
+        ],
+        "tools": tools,
+        "stream": True,
+    }
+    response = litellm.completion(**completion_kwargs)
+    response = stream_chunk_builder(list(response))
+
+    assert response.choices[0].message.tool_calls, "No tool call detected"

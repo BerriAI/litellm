@@ -10,13 +10,16 @@ import asyncio
 import json
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
+from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
 else:
     SpendLogsPayload = Any
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
@@ -61,18 +64,19 @@ class GcsPubSubLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[SpendLogsPayload] = []
+        self.log_queue: List[Union[SpendLogsPayload, StandardLoggingPayload]] = []
 
     async def construct_request_headers(self) -> Dict[str, str]:
         """Construct authorization headers using Vertex AI auth"""
         from litellm import vertex_chat_completion
 
-        _auth_header, vertex_project = (
-            await vertex_chat_completion._ensure_access_token_async(
-                credentials=self.path_service_account_json,
-                project_id=None,
-                custom_llm_provider="vertex_ai",
-            )
+        (
+            _auth_header,
+            vertex_project,
+        ) = await vertex_chat_completion._ensure_access_token_async(
+            credentials=self.path_service_account_json,
+            project_id=self.project_id,
+            custom_llm_provider="vertex_ai",
         )
 
         auth_header, _ = vertex_chat_completion._get_token_and_url(
@@ -115,13 +119,20 @@ class GcsPubSubLogger(CustomBatchLogger):
             verbose_logger.debug(
                 "PubSub: Logging - Enters logging function for model %s", kwargs
             )
-            spend_logs_payload = get_logging_payload(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                start_time=start_time,
-                end_time=end_time,
-            )
-            self.log_queue.append(spend_logs_payload)
+            standard_logging_payload = kwargs.get("standard_logging_object", None)
+
+            # Backwards compatibility with old logging payload
+            if litellm.gcs_pub_sub_use_v1 is True:
+                spend_logs_payload = get_logging_payload(
+                    kwargs=kwargs,
+                    response_obj=response_obj,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+                self.log_queue.append(spend_logs_payload)
+            else:
+                # New logging payload, StandardLoggingPayload
+                self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
@@ -155,7 +166,7 @@ class GcsPubSubLogger(CustomBatchLogger):
             self.log_queue.clear()
 
     async def publish_message(
-        self, message: SpendLogsPayload
+        self, message: Union[SpendLogsPayload, StandardLoggingPayload]
     ) -> Optional[Dict[str, Any]]:
         """
         Publish message to Google Cloud Pub/Sub using REST API

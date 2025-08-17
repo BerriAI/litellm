@@ -1,11 +1,12 @@
 """
-Supports using JWT's for authenticating into the proxy. 
+Supports using JWT's for authenticating into the proxy.
 
-Currently only supports admin. 
+Currently only supports admin.
 
-JWT token must have 'litellm_proxy_admin' in scope. 
+JWT token must have 'litellm_proxy_admin' in scope.
 """
 
+import fnmatch
 import json
 import os
 from typing import Any, List, Literal, Optional, Set, Tuple, cast
@@ -27,12 +28,19 @@ from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
+    LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    Member,
+    ProxyErrorTypes,
+    ProxyException,
     ScopeMapping,
     Span,
+    TeamMemberAddRequest,
+    UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
@@ -43,6 +51,7 @@ from .auth_checks import (
     get_org_object,
     get_role_based_models,
     get_role_based_routes,
+    get_team_membership,
     get_team_object,
     get_user_object,
 )
@@ -77,7 +86,8 @@ class JWTHandler:
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
 
-    def is_jwt(self, token: str):
+    @staticmethod
+    def is_jwt(token: str):
         parts = token.split(".")
         return len(parts) == 3
 
@@ -154,20 +164,26 @@ class JWTHandler:
         return False
 
     def get_team_ids_from_jwt(self, token: dict) -> List[str]:
-        if (
-            self.litellm_jwtauth.team_ids_jwt_field is not None
-            and token.get(self.litellm_jwtauth.team_ids_jwt_field) is not None
-        ):
-            return token[self.litellm_jwtauth.team_ids_jwt_field]
+        if self.litellm_jwtauth.team_ids_jwt_field is not None:
+            team_ids: Optional[List[str]] = get_nested_value(
+                data=token,
+                key_path=self.litellm_jwtauth.team_ids_jwt_field,
+                default=[],
+            )
+            return team_ids or []
+
         return []
 
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
         try:
-
             if self.litellm_jwtauth.end_user_id_jwt_field is not None:
-                user_id = token[self.litellm_jwtauth.end_user_id_jwt_field]
+                user_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.end_user_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_id = None
         except KeyError:
@@ -201,7 +217,21 @@ class JWTHandler:
     def get_team_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.team_id_jwt_field is not None:
-                team_id = token[self.litellm_jwtauth.team_id_jwt_field]
+                # Use a sentinel value to detect if the path actually exists
+                sentinel = object()
+                team_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.team_id_jwt_field,
+                    default=sentinel,
+                )
+                if team_id is sentinel:
+                    # Path doesn't exist, use team_id_default if available
+                    if self.litellm_jwtauth.team_id_default is not None:
+                        return self.litellm_jwtauth.team_id_default
+                    else:
+                        return default_value
+                # At this point, team_id is not the sentinel, so it should be a string
+                return team_id  # type: ignore[return-value]
             elif self.litellm_jwtauth.team_id_default is not None:
                 team_id = self.litellm_jwtauth.team_id_default
             else:
@@ -223,7 +253,11 @@ class JWTHandler:
     def get_user_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_id_jwt_field is not None:
-                user_id = token[self.litellm_jwtauth.user_id_jwt_field]
+                user_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.user_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_id = default_value
         except KeyError:
@@ -250,6 +284,21 @@ class JWTHandler:
         except KeyError:
             user_roles = default_value
         return user_roles
+
+    def map_jwt_role_to_litellm_role(self, token: dict) -> Optional[LitellmUserRoles]:
+        """Map roles from JWT to LiteLLM user roles"""
+        if not self.litellm_jwtauth.jwt_litellm_role_map:
+            return None
+
+        jwt_roles = self.get_jwt_role(token=token, default_value=[])
+        if not jwt_roles:
+            return None
+
+        for mapping in self.litellm_jwtauth.jwt_litellm_role_map:
+            for role in jwt_roles:
+                if fnmatch.fnmatch(role, mapping.jwt_role):
+                    return mapping.litellm_role
+        return None
 
     def get_jwt_role(
         self, token: dict, default_value: Optional[List[str]]
@@ -295,7 +344,11 @@ class JWTHandler:
     ) -> Optional[str]:
         try:
             if self.litellm_jwtauth.user_email_jwt_field is not None:
-                user_email = token[self.litellm_jwtauth.user_email_jwt_field]
+                user_email = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.user_email_jwt_field,
+                    default=default_value,
+                )
             else:
                 user_email = None
         except KeyError:
@@ -305,7 +358,11 @@ class JWTHandler:
     def get_object_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.object_id_jwt_field is not None:
-                object_id = token[self.litellm_jwtauth.object_id_jwt_field]
+                object_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.object_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 object_id = default_value
         except KeyError:
@@ -315,7 +372,11 @@ class JWTHandler:
     def get_org_id(self, token: dict, default_value: Optional[str]) -> Optional[str]:
         try:
             if self.litellm_jwtauth.org_id_jwt_field is not None:
-                org_id = token[self.litellm_jwtauth.org_id_jwt_field]
+                org_id = get_nested_value(
+                    data=token,
+                    key_path=self.litellm_jwtauth.org_id_jwt_field,
+                    default=default_value,
+                )
             else:
                 org_id = None
         except KeyError:
@@ -338,38 +399,42 @@ class JWTHandler:
         return scopes
 
     async def get_public_key(self, kid: Optional[str]) -> dict:
-
         keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
 
         if keys_url is None:
             raise Exception("Missing JWT Public Key URL from environment.")
 
-        cached_keys = await self.user_api_key_cache.async_get_cache(
-            "litellm_jwt_auth_keys"
-        )
-        if cached_keys is None:
-            response = await self.http_handler.get(keys_url)
+        keys_url_list = [url.strip() for url in keys_url.split(",")]
 
-            response_json = response.json()
-            if "keys" in response_json:
-                keys: JWKKeyValue = response.json()["keys"]
+        for key_url in keys_url_list:
+            cache_key = f"litellm_jwt_auth_keys_{key_url}"
+
+            cached_keys = await self.user_api_key_cache.async_get_cache(cache_key)
+
+            if cached_keys is None:
+                response = await self.http_handler.get(key_url)
+
+                response_json = response.json()
+                if "keys" in response_json:
+                    keys: JWKKeyValue = response.json()["keys"]
+                else:
+                    keys = response_json
+
+                await self.user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=keys,
+                    ttl=self.litellm_jwtauth.public_key_ttl,  # cache for 10 mins
+                )
             else:
-                keys = response_json
+                keys = cached_keys
 
-            await self.user_api_key_cache.async_set_cache(
-                key="litellm_jwt_auth_keys",
-                value=keys,
-                ttl=self.litellm_jwtauth.public_key_ttl,  # cache for 10 mins
-            )
-        else:
-            keys = cached_keys
+            public_key = self.parse_keys(keys=keys, kid=kid)
+            if public_key is not None:
+                return cast(dict, public_key)
 
-        public_key = self.parse_keys(keys=keys, kid=kid)
-        if public_key is None:
-            raise Exception(
-                f"No matching public key found. kid={kid}, keys_url={keys_url}, cached_keys={cached_keys}, len(keys)={len(keys)}"
-            )
-        return cast(dict, public_key)
+        raise Exception(
+            f"No matching public key found. keys={keys_url_list}, kid={kid}"
+        )
 
     def parse_keys(self, keys: JWKKeyValue, kid: Optional[str]) -> Optional[JWTKeyItem]:
         public_key: Optional[JWTKeyItem] = None
@@ -644,6 +709,7 @@ class JWTAuthManager:
             user_id=user_id,
             end_user_id=None,
             org_id=org_id,
+            team_membership=None,
         )
 
     @staticmethod
@@ -700,6 +766,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
         """Find first team with access to the requested model"""
+        from litellm.proxy.proxy_server import llm_router
 
         if not team_ids:
             if jwt_handler.litellm_jwtauth.enforce_team_based_model_access:
@@ -723,8 +790,12 @@ class JWTAuthManager:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or requested_model in team_models
-                        or "*" in team_models
+                        or can_team_access_model(
+                            model=requested_model,
+                            team_object=team_object,
+                            llm_router=llm_router,
+                            team_model_aliases=None,
+                        )
                     ):
                         is_allowed = allowed_routes_check(
                             user_role=LitellmUserRoles.TEAM,
@@ -771,16 +842,19 @@ class JWTAuthManager:
         user_email: Optional[str],
         org_id: Optional[str],
         end_user_id: Optional[str],
+        team_id: Optional[str],
         valid_user_email: Optional[bool],
         jwt_handler: JWTHandler,
         prisma_client: Optional[PrismaClient],
         user_api_key_cache: DualCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
+        route: str,
     ) -> Tuple[
         Optional[LiteLLM_UserTable],
         Optional[LiteLLM_OrganizationTable],
         Optional[LiteLLM_EndUserTable],
+        Optional[LiteLLM_TeamMembership],
     ]:
         """Get user, org, and end user objects"""
         org_object: Optional[LiteLLM_OrganizationTable] = None
@@ -825,12 +899,28 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    route=route,
                 )
                 if end_user_id
                 else None
             )
+        
+        team_membership_object: Optional[LiteLLM_TeamMembership] = None
+        if user_id and team_id:
+            team_membership_object = (
+                await get_team_membership(
+                    user_id=user_id,
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if user_id and team_id
+                else None
+            )
 
-        return user_object, org_object, end_user_object
+        return user_object, org_object, end_user_object, team_membership_object
 
     @staticmethod
     def validate_object_id(
@@ -846,6 +936,106 @@ class JWTAuthManager:
                 detail="No user or team id found in token. enforce_rbac is set to True. Token must belong to a proxy admin, team, or user.",
             )
         return True
+
+    @staticmethod
+    async def map_user_to_teams(
+        user_object: Optional[LiteLLM_UserTable],
+        team_object: Optional[LiteLLM_TeamTable],
+    ):
+        """
+        Map user to teams.
+        - If user is not in team, add them to the team
+        - If user is in team, do nothing
+        """
+        from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+        if not user_object:
+            return None
+
+        if not team_object:
+            return None
+
+        # check if user is in team
+        for member in team_object.members_with_roles:
+            if member.user_id and member.user_id == user_object.user_id:
+                return None
+
+        data = TeamMemberAddRequest(
+            member=Member(
+                user_id=user_object.user_id,
+                role="user",  # [TODO]: allow controlling role within team based on jwt token
+            ),
+            team_id=team_object.team_id,
+        )
+        # add user to team - make this non-blocking to avoid authentication failures
+        try:
+            await team_member_add(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),  # [TODO]: expose an internal service role, for better tracking
+            )
+            verbose_proxy_logger.debug(
+                f"Successfully added user {user_object.user_id} to team {team_object.team_id}"
+            )
+        except ProxyException as e:
+            if e.type == ProxyErrorTypes.team_member_already_in_team:
+                verbose_proxy_logger.debug(
+                    f"User {user_object.user_id} is already a member of team {team_object.team_id}"
+                )
+                return None
+            else:
+                raise e
+        return None
+
+    @staticmethod
+    async def sync_user_role_and_teams(
+        jwt_handler: JWTHandler,
+        jwt_valid_token: dict,
+        user_object: Optional[LiteLLM_UserTable],
+        prisma_client: Optional[PrismaClient],
+    ) -> None:
+        """
+        Sync user role and team memberships with JWT claims
+
+        The goal of this method is to ensure:
+        1. The user role on LiteLLM DB is in sync with the IDP provider role
+        2. The user is a member of the teams specified in the JWT token
+
+        This method is only called if sync_user_role_and_teams is set to True in the JWT config.
+        """
+        if not jwt_handler.litellm_jwtauth.sync_user_role_and_teams:
+            return None
+
+        if user_object is None or prisma_client is None:
+            return None
+
+        # Update user role
+        new_role = jwt_handler.map_jwt_role_to_litellm_role(jwt_valid_token)
+        if new_role and user_object.user_role != new_role.value:
+            await prisma_client.db.litellm_usertable.update(
+                where={"user_id": user_object.user_id},
+                data={"user_role": new_role.value},
+            )
+            user_object.user_role = new_role.value
+
+        # Sync team memberships
+        jwt_team_ids = set(jwt_handler.get_team_ids_from_jwt(jwt_valid_token))
+        existing_teams = set(user_object.teams or [])
+        teams_to_add = jwt_team_ids - existing_teams
+        teams_to_remove = existing_teams - jwt_team_ids
+        if teams_to_add or teams_to_remove:
+            from litellm.proxy.management_endpoints.scim.scim_v2 import (
+                patch_team_membership,
+            )
+
+            await patch_team_membership(
+                user_id=user_object.user_id,
+                teams_ids_to_add_user_to=list(teams_to_add),
+                teams_ids_to_remove_user_from=list(teams_to_remove),
+            )
+            user_object.teams = list(jwt_team_ids)
+        return None
 
     @staticmethod
     async def auth_builder(
@@ -912,7 +1102,6 @@ class JWTAuthManager:
         object_id = jwt_handler.get_object_id(token=jwt_valid_token, default_value=None)
 
         if rbac_role and object_id:
-
             if rbac_role == LitellmUserRoles.TEAM:
                 team_id = object_id
             elif rbac_role == LitellmUserRoles.INTERNAL_USER:
@@ -929,15 +1118,16 @@ class JWTAuthManager:
         ## SPECIFIC TEAM ID
 
         if not team_id:
-            team_id, team_object = (
-                await JWTAuthManager.find_and_validate_specific_team_id(
-                    jwt_handler,
-                    jwt_valid_token,
-                    prisma_client,
-                    user_api_key_cache,
-                    parent_otel_span,
-                    proxy_logging_obj,
-                )
+            (
+                team_id,
+                team_object,
+            ) = await JWTAuthManager.find_and_validate_specific_team_id(
+                jwt_handler,
+                jwt_valid_token,
+                prisma_client,
+                user_api_key_cache,
+                parent_otel_span,
+                proxy_logging_obj,
             )
 
         if not team_object and not team_id:
@@ -955,17 +1145,32 @@ class JWTAuthManager:
             )
 
         # Get other objects
-        user_object, org_object, end_user_object = await JWTAuthManager.get_objects(
+        user_object, org_object, end_user_object, team_membership_object = await JWTAuthManager.get_objects(
             user_id=user_id,
             user_email=user_email,
             org_id=org_id,
             end_user_id=end_user_id,
+            team_id=team_id,
             valid_user_email=valid_user_email,
             jwt_handler=jwt_handler,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            route=route,
+        )
+
+        await JWTAuthManager.sync_user_role_and_teams(
+            jwt_handler=jwt_handler,
+            jwt_valid_token=jwt_valid_token,
+            user_object=user_object,
+            prisma_client=prisma_client,
+        )
+
+        ## MAP USER TO TEAMS
+        await JWTAuthManager.map_user_to_teams(
+            user_object=user_object,
+            team_object=team_object,
         )
 
         # Validate that a valid rbac id is returned for spend tracking
@@ -976,8 +1181,16 @@ class JWTAuthManager:
             is_proxy_admin=False,
         )
 
+        # check if user is proxy admin
+        if user_object and user_object.user_role == LitellmUserRoles.PROXY_ADMIN:
+            is_proxy_admin = True
+        else:
+            is_proxy_admin = False
+        
+
+
         return JWTAuthBuilderResult(
-            is_proxy_admin=False,
+            is_proxy_admin=is_proxy_admin,
             team_id=team_id,
             team_object=team_object,
             user_id=user_id,
@@ -987,4 +1200,5 @@ class JWTAuthManager:
             end_user_id=end_user_id,
             end_user_object=end_user_object,
             token=api_key,
+            team_membership=team_membership_object,
         )

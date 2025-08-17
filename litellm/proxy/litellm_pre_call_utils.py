@@ -9,6 +9,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -17,6 +18,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
@@ -59,12 +61,22 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata
     """
-    if "thread" in request.url.path or "assistant" in request.url.path:
+    if RouteChecks._is_assistants_api_request(request):
         return "litellm_metadata"
-    if "batches" in request.url.path:
-        return "litellm_metadata"
-    if "/v1/messages" in request.url.path:
-        # anthropic API has a field called metadata
+
+    LITELLM_METADATA_ROUTES = [
+        "batches",
+        "/v1/messages",
+        "responses",
+        "files",
+    ]
+
+    if any(
+        [
+            litellm_metadata_route in request.url.path
+            for litellm_metadata_route in LITELLM_METADATA_ROUTES
+        ]
+    ):
         return "litellm_metadata"
     else:
         return "metadata"
@@ -101,17 +113,24 @@ def convert_key_logging_metadata_to_callback(
 
         if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
-    elif data.callback_type == "success_and_failure":
+    elif (
+        not data.callback_type or data.callback_type == "success_and_failure"
+    ):  # assume 'success_and_failure' = litellm.callbacks
         if team_callback_settings_obj.success_callback is None:
             team_callback_settings_obj.success_callback = []
         if team_callback_settings_obj.failure_callback is None:
             team_callback_settings_obj.failure_callback = []
+        if team_callback_settings_obj.callbacks is None:
+            team_callback_settings_obj.callbacks = []
 
         if data.callback_name not in team_callback_settings_obj.success_callback:
             team_callback_settings_obj.success_callback.append(data.callback_name)
 
         if data.callback_name not in team_callback_settings_obj.failure_callback:
             team_callback_settings_obj.failure_callback.append(data.callback_name)
+
+        if data.callback_name not in team_callback_settings_obj.callbacks:
+            team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
@@ -123,19 +142,61 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
+class KeyAndTeamLoggingSettings:
+    """
+    Helper class to get the dynamic logging settings for the key and team
+    """
+
+    @staticmethod
+    def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+        if (
+            user_api_key_dict.metadata is not None
+            and "logging" in user_api_key_dict.metadata
+        ):
+            return user_api_key_dict.metadata["logging"]
+        return None
+
+    @staticmethod
+    def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+        if (
+            user_api_key_dict.team_metadata is not None
+            and "logging" in user_api_key_dict.team_metadata
+        ):
+            return user_api_key_dict.team_metadata["logging"]
+        return None
+
+
 def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    if (
-        user_api_key_dict.metadata is not None
-        and "logging" in user_api_key_dict.metadata
-    ):
-        for item in user_api_key_dict.metadata["logging"]:
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
+    #########################################################################################
+    # Key-based callbacks
+    #########################################################################################
+    if key_dynamic_logging_settings is not None:
+        for item in key_dynamic_logging_settings:
             callback_settings_obj = convert_key_logging_metadata_to_callback(
                 data=AddTeamCallback(**item),
                 team_callback_settings_obj=callback_settings_obj,
             )
+    #########################################################################################
+    # Team-based callbacks
+    #########################################################################################
+    elif team_dynamic_logging_settings is not None:
+        for item in team_dynamic_logging_settings:
+            callback_settings_obj = convert_key_logging_metadata_to_callback(
+                data=AddTeamCallback(**item),
+                team_callback_settings_obj=callback_settings_obj,
+            )
+    #########################################################################################
+    # Deprecated format - maintained for backwards compatibility
+    #########################################################################################
     elif (
         user_api_key_dict.team_metadata is not None
         and "callback_settings" in user_api_key_dict.team_metadata
@@ -155,6 +216,9 @@ def _get_dynamic_logging_metadata(
         verbose_proxy_logger.debug(
             "Team callback settings activated: %s", callback_settings_obj
         )
+    #########################################################################################
+    # Enter here when configured on the config.yaml file.
+    #########################################################################################
     elif user_api_key_dict.team_id is not None:
         callback_settings_obj = (
             LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
@@ -175,6 +239,7 @@ def clean_headers(
     if litellm_key_header_name is not None:
         special_headers.append(litellm_key_header_name.lower())
     clean_headers = {}
+
     for header, value in headers.items():
         if header.lower() not in special_headers:
             clean_headers[header] = value
@@ -208,6 +273,16 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _get_num_retries_from_request(headers: dict) -> Optional[int]:
+        """
+        Workaround for client request from Vercel's AI SDK.
+        """
+        num_retries_header = headers.get("x-litellm-num-retries", None)
+        if num_retries_header is not None:
+            return int(num_retries_header)
+        return None
+
+    @staticmethod
     def _get_forwardable_headers(
         headers: Union[Headers, dict],
     ):
@@ -215,6 +290,8 @@ class LiteLLMProxyRequestSetup:
         Get the headers that should be forwarded to the LLM Provider.
 
         Looks for any `x-` headers and sends them to the LLM Provider.
+
+        [07/09/2025] - Support 'anthropic-beta' header as well.
         """
         forwarded_headers = {}
         for header, value in headers.items():
@@ -222,8 +299,47 @@ class LiteLLMProxyRequestSetup:
                 "x-stainless"
             ):  # causes openai sdk to fail
                 forwarded_headers[header] = value
+            elif header.lower().startswith("anthropic-beta"):
+                forwarded_headers[header] = value
 
         return forwarded_headers
+
+    @staticmethod
+    def _get_case_insensitive_header(headers: dict, key: str) -> Optional[str]:
+        """
+        Get a case-insensitive header from the headers dictionary.
+        """
+        for header, value in headers.items():
+            if header.lower() == key.lower():
+                return value
+        return None
+
+    @staticmethod
+    def get_user_from_headers(
+        headers: dict, general_settings: Optional[Dict] = None
+    ) -> Optional[str]:
+        """
+        Get the user from the specified header if `general_settings.user_header_name` is set.
+        """
+        if general_settings is None:
+            return None
+
+        header_name = general_settings.get("user_header_name")
+        if header_name is None or header_name == "":
+            return None
+
+        if not isinstance(header_name, str):
+            raise TypeError(
+                f"Expected user_header_name to be a str but got {type(header_name)}"
+            )
+
+        user = LiteLLMProxyRequestSetup._get_case_insensitive_header(
+            headers, header_name
+        )
+        if user is not None:
+            verbose_logger.info(f'found user "{user}" in header "{header_name}"')
+
+        return user
 
     @staticmethod
     def get_openai_org_id_from_headers(
@@ -276,10 +392,12 @@ class LiteLLMProxyRequestSetup:
         general_settings: Optional[Dict[str, Any]] = None,
     ) -> LitellmDataForBackendLLMCall:
         """
+        - Adds user from headers
         - Adds forwardable headers
         - Adds org id
         """
         data = LitellmDataForBackendLLMCall()
+
         if (
             general_settings
             and general_settings.get("forward_client_headers_to_llm_api") is True
@@ -299,6 +417,10 @@ class LiteLLMProxyRequestSetup:
         if timeout is not None:
             data["timeout"] = timeout
 
+        num_retries = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers)
+        if num_retries is not None:
+            data["num_retries"] = num_retries
+
         return data
 
     @staticmethod
@@ -314,8 +436,35 @@ class LiteLLMProxyRequestSetup:
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
+            user_api_key_request_route=user_api_key_dict.request_route,
         )
         return user_api_key_logged_metadata
+    
+    @staticmethod
+    def add_user_api_key_auth_to_request_metadata(
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        _metadata_variable_name: str,
+    ) -> dict:
+        """
+        Adds the `UserAPIKeyAuth` object to the request metadata.
+        """
+        user_api_key_logged_metadata = (
+            LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+                user_api_key_dict=user_api_key_dict
+            )
+        )
+        data[_metadata_variable_name].update(user_api_key_logged_metadata)
+        data[_metadata_variable_name][
+            "user_api_key"
+        ] = (
+            user_api_key_dict.api_key
+        )  # this is just the hashed token
+
+        data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
+            user_api_key_dict, "end_user_max_budget", None
+        )
+        return data
 
     @staticmethod
     def add_key_level_controls(
@@ -416,17 +565,16 @@ class LiteLLMProxyRequestSetup:
     ) -> Optional[List[str]]:
         tags = None
 
-        if llm_router and llm_router.enable_tag_filtering is True:
-            # Check request headers for tags
-            if "x-litellm-tags" in headers:
-                if isinstance(headers["x-litellm-tags"], str):
-                    _tags = headers["x-litellm-tags"].split(",")
-                    tags = [tag.strip() for tag in _tags]
-                elif isinstance(headers["x-litellm-tags"], list):
-                    tags = headers["x-litellm-tags"]
-            # Check request body for tags
-            if "tags" in data and isinstance(data["tags"], list):
-                tags = data["tags"]
+        # Check request headers for tags
+        if "x-litellm-tags" in headers:
+            if isinstance(headers["x-litellm-tags"], str):
+                _tags = headers["x-litellm-tags"].split(",")
+                tags = [tag.strip() for tag in _tags]
+            elif isinstance(headers["x-litellm-tags"], list):
+                tags = headers["x-litellm-tags"]
+        # Check request body for tags
+        if "tags" in data and isinstance(data["tags"], list):
+            tags = data["tags"]
 
         return tags
 
@@ -455,6 +603,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     """
 
     from litellm.proxy.proxy_server import llm_router, premium_user
+    from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 
     safe_add_api_version_from_query_params(data, request)
 
@@ -475,6 +624,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         )
     )
 
+    # Parse user info from headers
+    user = LiteLLMProxyRequestSetup.get_user_from_headers(_headers, general_settings)
+    if user is not None:
+        if user_api_key_dict.end_user_id is None:
+            user_api_key_dict.end_user_id = user
+        if "user" not in data:
+            data["user"] = user
+
     # Include original request and headers in the data
     data["proxy_server_request"] = {
         "url": str(request.url),
@@ -482,6 +639,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         "headers": _headers,
         "body": copy.copy(data),  # use copy instead of deepcopy
     }
+
+    data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
     try:
@@ -512,31 +671,26 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     _metadata_variable_name = _get_metadata_variable_name(request)
 
-    if _metadata_variable_name not in data:
+    if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
-    # We want to log the "metadata" from the client side request. Avoid circular reference by not directly assigning metadata to itself.
+    # Parse metadata if it's a string (e.g., from multipart/form-data)
     if "metadata" in data and data["metadata"] is not None:
+        if isinstance(data["metadata"], str):
+            data["metadata"] = safe_json_loads(data["metadata"])
+            if not isinstance(data["metadata"], dict):
+                verbose_proxy_logger.warning(
+                    f"Failed to parse 'metadata' as JSON dict. Received value: {data['metadata']}"
+                )
         data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
             data["metadata"]
         )
 
-    user_api_key_logged_metadata = (
-        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-            user_api_key_dict=user_api_key_dict
-        )
+    data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name=_metadata_variable_name,
     )
-    data[_metadata_variable_name].update(user_api_key_logged_metadata)
-    data[_metadata_variable_name][
-        "user_api_key"
-    ] = (
-        user_api_key_dict.api_key
-    )  # this is just the hashed token. [TODO]: replace variable name in repo.
-
-    data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
-        user_api_key_dict, "end_user_max_budget", None
-    )
-
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
@@ -581,6 +735,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_team_spend"
     ] = user_api_key_dict.team_spend
+    data[_metadata_variable_name][
+        "user_api_key_request_route"
+    ] = user_api_key_dict.request_route
 
     # API Key spend, budget - used by prometheus.py
     data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend
@@ -657,6 +814,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             for k, v in callback_settings_obj.callback_vars.items():
                 data[k] = v
 
+    # Add disabled callbacks from key metadata
+    if (
+        user_api_key_dict.metadata
+        and "litellm_disabled_callbacks" in user_api_key_dict.metadata
+    ):
+        disabled_callbacks = user_api_key_dict.metadata["litellm_disabled_callbacks"]
+        if disabled_callbacks and isinstance(disabled_callbacks, list):
+            data["litellm_disabled_callbacks"] = disabled_callbacks
+
     # Guardrails
     move_guardrails_to_metadata(
         data=data,
@@ -731,7 +897,10 @@ def _get_enforced_params(
     enforced_params: Optional[list] = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
-        if "service_account_settings" in general_settings:
+        if (
+            "service_account_settings" in general_settings
+            and check_if_token_is_service_account(user_api_key_dict) is True
+        ):
             service_account_settings = general_settings["service_account_settings"]
             if "enforced_params" in service_account_settings:
                 if enforced_params is None:
@@ -742,6 +911,20 @@ def _get_enforced_params(
             enforced_params = []
         enforced_params.extend(user_api_key_dict.metadata["enforced_params"])
     return enforced_params
+
+
+def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
+    """
+    Checks if the token is a service account
+
+    Returns:
+        bool: True if token is a service account
+
+    """
+    if valid_token.metadata:
+        if "service_account_id" in valid_token.metadata:
+            return True
+    return False
 
 
 def _enforced_params_check(

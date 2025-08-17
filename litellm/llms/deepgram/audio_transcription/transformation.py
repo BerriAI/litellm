@@ -3,20 +3,22 @@ Translates from OpenAI's `/v1/audio/transcriptions` to Deepgram's `/v1/listen`
 """
 
 from typing import List, Optional, Union
+from urllib.parse import urlencode
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ...base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
-    LiteLLMLoggingObj,
 )
 from ..common_utils import DeepgramException
 
@@ -47,16 +49,37 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             message=error_message, status_code=status_code, headers=headers
         )
 
-    def transform_audio_transcription_response(
+    def transform_audio_transcription_request(
         self,
         model: str,
-        raw_response: Response,
-        model_response: TranscriptionResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
+    ) -> AudioTranscriptionRequestData:
+        """
+        Processes the audio file input based on its type and returns AudioTranscriptionRequestData.
+        
+        For Deepgram, the binary audio data is sent directly as the request body.
+
+        Args:
+            audio_file: Can be a file path (str), a tuple (filename, file_content), or binary data (bytes).
+
+        Returns:
+            AudioTranscriptionRequestData with binary data and no files.
+        """
+        # Use common utility to process the audio file
+        processed_audio = process_audio_file(audio_file)
+        
+        # Return structured data with binary content and no files
+        # For Deepgram, we send binary data directly as request body
+        return AudioTranscriptionRequestData(
+            data=processed_audio.file_content,
+            files=None
+        )
+
+    def transform_audio_transcription_response(
+        self,
+        raw_response: Response,
     ) -> TranscriptionResponse:
         """
         Transforms the raw response from Deepgram to the TranscriptionResponse format
@@ -101,8 +124,10 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_complete_url(
         self,
         api_base: Optional[str],
+        api_key: Optional[str],
         model: str,
         optional_params: dict,
+        litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
         if api_base is None:
@@ -111,7 +136,59 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             )
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
-        return f"{api_base}/listen?model={model}"
+        # Build query parameters including the model
+        all_query_params = {"model": model}
+
+        # Add filtered optional parameters
+        additional_params = self._build_query_params(optional_params, model)
+        all_query_params.update(additional_params)
+
+        # Construct URL with proper query string encoding
+        base_url = f"{api_base}/listen"
+        query_string = urlencode(all_query_params)
+        url = f"{base_url}?{query_string}"
+
+        return url
+
+
+    def _format_param_value(self, value) -> str:
+        """
+        Formats a parameter value for use in query string.
+
+        Args:
+            value: The parameter value to format
+
+        Returns:
+            Formatted string value
+        """
+        if isinstance(value, bool):
+            return str(value).lower()
+        return str(value)
+
+    def _build_query_params(self, optional_params: dict, model: str) -> dict:
+        """
+        Builds a dictionary of query parameters from optional_params.
+
+        Args:
+            optional_params: Dictionary of optional parameters
+            model: Model name
+
+        Returns:
+            Dictionary of filtered and formatted query parameters
+        """
+        query_params = {}
+        provider_specific_params = self.get_provider_specific_params(
+            optional_params=optional_params,
+            model=model,
+            openai_params=self.get_supported_openai_params(model)
+        )
+
+        for key, value in provider_specific_params.items():
+            # Format and add the parameter
+            formatted_value = self._format_param_value(value)
+            query_params[key] = formatted_value
+
+        return query_params
 
     def validate_environment(
         self,
@@ -119,6 +196,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:

@@ -1,5 +1,5 @@
 import json
-from typing import List, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 import httpx
 
@@ -14,15 +14,11 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
     VertexLLM,
 )
-from litellm.types.llms.vertex_ai import (
-    Instance,
-    InstanceImage,
-    InstanceVideo,
-    MultimodalPredictions,
-    VertexMultimodalEmbeddingRequest,
-)
-from litellm.types.utils import Embedding, EmbeddingResponse
-from litellm.utils import is_base64_encoded
+from litellm.types.utils import EmbeddingResponse
+
+from .transformation import VertexAIMultimodalEmbeddingConfig
+
+vertex_multimodal_embedding_handler = VertexAIMultimodalEmbeddingConfig()
 
 
 class VertexMultimodalEmbedding(VertexLLM):
@@ -41,9 +37,11 @@ class VertexMultimodalEmbedding(VertexLLM):
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
+        litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        headers: dict = {},
         encoding=None,
         vertex_project=None,
         vertex_location=None,
@@ -52,7 +50,6 @@ class VertexMultimodalEmbedding(VertexLLM):
         timeout=300,
         client=None,
     ) -> EmbeddingResponse:
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -86,31 +83,19 @@ class VertexMultimodalEmbedding(VertexLLM):
         else:
             sync_handler = client  # type: ignore
 
-        optional_params = optional_params or {}
+        request_data = vertex_multimodal_embedding_handler.transform_embedding_request(
+            model, input, optional_params, headers
+        )
 
-        request_data = VertexMultimodalEmbeddingRequest()
-
-        if "instances" in optional_params:
-            request_data["instances"] = optional_params["instances"]
-        elif isinstance(input, list):
-            vertex_instances: List[Instance] = self.process_openai_embedding_input(
-                _input=input
-            )
-            request_data["instances"] = vertex_instances
-
-        else:
-            # construct instances
-            vertex_request_instance = Instance(**optional_params)
-
-            if isinstance(input, str):
-                vertex_request_instance = self._process_input_element(input)
-
-            request_data["instances"] = [vertex_request_instance]
-
-        headers = {
-            "Content-Type": "application/json; charset=utf-8",
-            "Authorization": f"Bearer {auth_header}",
-        }
+        headers = vertex_multimodal_embedding_handler.validate_environment(
+            headers=headers,
+            model=model,
+            messages=[],
+            optional_params=optional_params,
+            api_key=auth_header,
+            api_base=api_base,
+            litellm_params=litellm_params,
+        )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -132,6 +117,10 @@ class VertexMultimodalEmbedding(VertexLLM):
                 headers=headers,
                 client=client,
                 model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                api_key=api_key,
             )
 
         response = sync_handler.post(
@@ -140,34 +129,30 @@ class VertexMultimodalEmbedding(VertexLLM):
             data=json.dumps(request_data),
         )
 
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-
-        _json_response = response.json()
-        if "predictions" not in _json_response:
-            raise litellm.InternalServerError(
-                message=f"embedding response does not contain 'predictions', got {_json_response}",
-                llm_provider="vertex_ai",
-                model=model,
-            )
-        _predictions = _json_response["predictions"]
-        vertex_predictions = MultimodalPredictions(predictions=_predictions)
-        model_response.data = self.transform_embedding_response_to_openai(
-            predictions=vertex_predictions
+        return vertex_multimodal_embedding_handler.transform_embedding_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=request_data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
         )
-        model_response.model = model
-
-        return model_response
 
     async def async_multimodal_embedding(
         self,
         model: str,
         api_base: str,
-        data: VertexMultimodalEmbeddingRequest,
+        optional_params: dict,
+        litellm_params: dict,
+        data: dict,
         model_response: litellm.EmbeddingResponse,
         timeout: Optional[Union[float, httpx.Timeout]],
+        logging_obj: LiteLLMLoggingObj,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
+        api_key: Optional[str] = None,
     ) -> litellm.EmbeddingResponse:
         if client is None:
             _params = {}
@@ -191,104 +176,13 @@ class VertexMultimodalEmbedding(VertexLLM):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        _json_response = response.json()
-        if "predictions" not in _json_response:
-            raise litellm.InternalServerError(
-                message=f"embedding response does not contain 'predictions', got {_json_response}",
-                llm_provider="vertex_ai",
-                model=model,
-            )
-        _predictions = _json_response["predictions"]
-
-        vertex_predictions = MultimodalPredictions(predictions=_predictions)
-        model_response.data = self.transform_embedding_response_to_openai(
-            predictions=vertex_predictions
+        return vertex_multimodal_embedding_handler.transform_embedding_response(
+            model=model,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            api_key=api_key,
+            request_data=data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
         )
-        model_response.model = model
-
-        return model_response
-
-    def _process_input_element(self, input_element: str) -> Instance:
-        """
-        Process the input element for multimodal embedding requests. checks if the if the input is gcs uri, base64 encoded image or plain text.
-
-        Args:
-            input_element (str): The input element to process.
-
-        Returns:
-            Dict[str, Any]: A dictionary representing the processed input element.
-        """
-        if len(input_element) == 0:
-            return Instance(text=input_element)
-        elif "gs://" in input_element:
-            if "mp4" in input_element:
-                return Instance(video=InstanceVideo(gcsUri=input_element))
-            else:
-                return Instance(image=InstanceImage(gcsUri=input_element))
-        elif is_base64_encoded(s=input_element):
-            return Instance(image=InstanceImage(bytesBase64Encoded=input_element))
-        else:
-            return Instance(text=input_element)
-
-    def process_openai_embedding_input(
-        self, _input: Union[list, str]
-    ) -> List[Instance]:
-        """
-        Process the input for multimodal embedding requests.
-
-        Args:
-            _input (Union[list, str]): The input data to process.
-
-        Returns:
-            List[Instance]: A list of processed VertexAI Instance objects.
-        """
-
-        _input_list = None
-        if not isinstance(_input, list):
-            _input_list = [_input]
-        else:
-            _input_list = _input
-
-        processed_instances = []
-        for element in _input_list:
-            if isinstance(element, str):
-                instance = Instance(**self._process_input_element(element))
-            elif isinstance(element, dict):
-                instance = Instance(**element)
-            else:
-                raise ValueError(f"Unsupported input type: {type(element)}")
-            processed_instances.append(instance)
-
-        return processed_instances
-
-    def transform_embedding_response_to_openai(
-        self, predictions: MultimodalPredictions
-    ) -> List[Embedding]:
-
-        openai_embeddings: List[Embedding] = []
-        if "predictions" in predictions:
-            for idx, _prediction in enumerate(predictions["predictions"]):
-                if _prediction:
-                    if "textEmbedding" in _prediction:
-                        openai_embedding_object = Embedding(
-                            embedding=_prediction["textEmbedding"],
-                            index=idx,
-                            object="embedding",
-                        )
-                        openai_embeddings.append(openai_embedding_object)
-                    elif "imageEmbedding" in _prediction:
-                        openai_embedding_object = Embedding(
-                            embedding=_prediction["imageEmbedding"],
-                            index=idx,
-                            object="embedding",
-                        )
-                        openai_embeddings.append(openai_embedding_object)
-                    elif "videoEmbeddings" in _prediction:
-                        for video_embedding in _prediction["videoEmbeddings"]:
-                            openai_embedding_object = Embedding(
-                                embedding=video_embedding["embedding"],
-                                index=idx,
-                                object="embedding",
-                            )
-                            openai_embeddings.append(openai_embedding_object)
-        return openai_embeddings

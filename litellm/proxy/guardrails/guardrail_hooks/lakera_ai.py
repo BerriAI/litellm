@@ -134,6 +134,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "responses",
+            "mcp_call",
         ],
     ):
         if (
@@ -147,9 +149,9 @@ class lakeraAI_Moderation(CustomGuardrail):
         text = ""
         _json_data: str = ""
         if "messages" in data and isinstance(data["messages"], list):
-            prompt_injection_obj: Optional[GuardrailItem] = (
-                litellm.guardrail_name_config_map.get("prompt_injection")
-            )
+            prompt_injection_obj: Optional[
+                GuardrailItem
+            ] = litellm.guardrail_name_config_map.get("prompt_injection")
             if prompt_injection_obj is not None:
                 enabled_roles = prompt_injection_obj.enabled_roles
             else:
@@ -312,6 +314,7 @@ class lakeraAI_Moderation(CustomGuardrail):
             "audio_transcription",
             "pass_through_endpoint",
             "rerank",
+            "mcp_call",
         ],
     ) -> Optional[Union[Exception, str, Dict]]:
         from litellm.types.guardrails import GuardrailEventHooks
@@ -335,7 +338,7 @@ class lakeraAI_Moderation(CustomGuardrail):
         )
 
     @log_guardrail_information
-    async def async_moderation_hook(  ### 👈 KEY CHANGE ###
+    async def async_moderation_hook(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -345,6 +348,8 @@ class lakeraAI_Moderation(CustomGuardrail):
             "image_generation",
             "moderation",
             "audio_transcription",
+            "responses",
+            "mcp_call",
         ],
     ):
         if self.event_hook is None:

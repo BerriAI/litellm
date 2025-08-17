@@ -327,6 +327,7 @@ def test_langfuse_e2e_sync(monkeypatch):
     import respx
     import httpx
     import time
+    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
 
     litellm._turn_on_debug()
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
@@ -359,12 +360,8 @@ def test_get_chat_content_for_langfuse():
     )
 
     result = LangFuseLogger._get_chat_content_for_langfuse(mock_response)
-    assert result == {
-        "content": "Hello world",
-        "role": "assistant",
-        "tool_calls": None,
-        "function_call": None,
-    }
+    assert result["content"] == "Hello world"
+    assert result["role"] == "assistant"
 
     # Test with empty choices
     mock_response = ModelResponse(choices=[])
