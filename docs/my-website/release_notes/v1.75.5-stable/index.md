@@ -1,5 +1,5 @@
 ---
-title: "[PRE-RELEASE]v1.75.5-stable"
+title: "v1.75.5-stable"
 slug: "v1-75-5"
 date: 2025-08-10T10:00:00
 authors:
@@ -42,6 +42,13 @@ pip install litellm==1.75.5.post1
 </Tabs>
 
 ---
+
+## Key Highlights
+
+- **Reduce P99 Latency with Redis** - In-memory caching for Redis requests, enabling faster response times in high-traffic. 
+- **Responses API Session Management** - Support for managing responses API sessions with images.
+- **Oracle Cloud Infrastructure** - New LLM provider for calling models on Oracle Cloud Infrastructure.
+- **Digital Ocean's Gradient AI** - New LLM provider for calling models on Digital Ocean's Gradient AI platform.
 
 ---
 
