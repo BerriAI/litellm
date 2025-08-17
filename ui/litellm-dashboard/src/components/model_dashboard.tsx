@@ -13,6 +13,7 @@ import {
   Grid,
   Col,
   DateRangePicker,
+  TextInput,
 } from "@tremor/react";
 import {
   CredentialItem,
@@ -219,6 +220,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   );
   const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] =
     useState<string | null>(null);
+
+    const [modelNameSearch, setModelNameSearch] = useState<string>("");
 
   // Add new state for current team and model view mode
   const [currentTeam, setCurrentTeam] = useState<string>("personal"); // 'personal' or team_id
@@ -1272,7 +1275,18 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
                             {/* Other Filters */}
                             <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2">
+                                {/* Model Name Search */}
+                                <div className="flex items-center gap-2">
+                                  <Text>Search Public Model Name:</Text>
+                                  <TextInput
+                                    className="w-64"
+                                    placeholder="Search model names..."
+                                    value={modelNameSearch}
+                                    onValueChange={setModelNameSearch}
+                                  />
+                                </div>
+                                
                                 {/* Model Name Filter */}
                                 <div className="flex items-center gap-2">
                                   <Text>Filter by Public Model Name:</Text>
@@ -1336,6 +1350,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 Showing{" "}
                                 {modelData && modelData.data.length > 0
                                   ? modelData.data.filter((model: any) => {
+                                      const searchMatch = modelNameSearch === "" || 
+                                      model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase());
+
                                       const modelNameMatch =
                                         selectedModelGroup === "all" ||
                                         model.model_name ===
@@ -1365,6 +1382,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                       }
 
                                       return (
+                                        searchMatch &&
                                         modelNameMatch &&
                                         accessGroupMatch &&
                                         teamAccessMatch
@@ -1393,6 +1411,10 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                       )}
                       data={modelData.data.filter(
                         (model: any) => {
+                          // Model name search filter
+                          const searchMatch = modelNameSearch === "" || 
+                            model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase());
+
                           // Model name filter
                           const modelNameMatch = selectedModelGroup === "all" ||
                           model.model_name === selectedModelGroup ||
@@ -1422,6 +1444,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           // For 'all' mode, show all models (teamAccessMatch remains true)
 
                           return (
+                            searchMatch &&
                             modelNameMatch &&
                             accessGroupMatch &&
                             teamAccessMatch
