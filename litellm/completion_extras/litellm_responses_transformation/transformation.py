@@ -140,7 +140,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             responses_api_request["instructions"] = instructions
 
         # Handle reasoning parameter logic for reasoning-capable models
-        reasoning_effort = self._handle_reasoning_parameters(
+        self._handle_reasoning_parameters(
             optional_params, model, litellm_params
         )
 
