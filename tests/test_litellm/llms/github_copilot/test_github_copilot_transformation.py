@@ -362,3 +362,43 @@ def test_x_initiator_header_system_only_messages():
     )
     
     assert headers["X-Initiator"] == "user"
+
+
+def test_get_supported_openai_params_claude_model():
+    """Test that Claude models support thinking and reasoning parameters."""
+    config = GithubCopilotConfig()
+    
+    # Test Claude model supports thinking and reasoning_effort parameters
+    supported_params = config.get_supported_openai_params("claude-sonnet-4")
+    assert "thinking" in supported_params
+    assert "reasoning_effort" in supported_params
+    
+    # Test Claude model with different naming
+    supported_params_claude = config.get_supported_openai_params("claude-3.5-sonnet")
+    assert "thinking" in supported_params_claude
+    assert "reasoning_effort" in supported_params_claude
+    
+    # Test non-Claude model doesn't include thinking/reasoning parameters
+    supported_params_gpt = config.get_supported_openai_params("gpt-4o")
+    assert "thinking" not in supported_params_gpt
+    assert "reasoning_effort" not in supported_params_gpt
+    
+    # Test with other non-Claude models
+    supported_params_o3 = config.get_supported_openai_params("o3-mini")
+    assert "thinking" not in supported_params_o3
+    assert "reasoning_effort" not in supported_params_o3
+
+
+def test_get_supported_openai_params_case_insensitive():
+    """Test that Claude model detection is case-insensitive."""
+    config = GithubCopilotConfig()
+    
+    # Test uppercase
+    supported_params_upper = config.get_supported_openai_params("CLAUDE-SONNET-4")
+    assert "thinking" in supported_params_upper
+    assert "reasoning_effort" in supported_params_upper
+    
+    # Test mixed case
+    supported_params_mixed = config.get_supported_openai_params("Claude-3.5-Sonnet")
+    assert "thinking" in supported_params_mixed
+    assert "reasoning_effort" in supported_params_mixed
