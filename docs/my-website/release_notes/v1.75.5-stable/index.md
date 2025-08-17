@@ -45,12 +45,30 @@ pip install litellm==1.75.5.post1
 
 ## Key Highlights
 
-- **Reduce P99 Latency with Redis** - In-memory caching for Redis requests, enabling faster response times in high-traffic. 
+- **Redis - Latency Improvements** - Reduces P99 latency by 50% with Redis enabled. 
 - **Responses API Session Management** - Support for managing responses API sessions with images.
 - **Oracle Cloud Infrastructure** - New LLM provider for calling models on Oracle Cloud Infrastructure.
 - **Digital Ocean's Gradient AI** - New LLM provider for calling models on Digital Ocean's Gradient AI platform.
 
 ---
+
+## Redis - Latency Improvements
+
+<Image 
+  img={require('../../img/release_notes/faster_caching_calls.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+This release adds in-memory caching for Redis requests, enabling faster response times in high-traffic. Now, LiteLLM instances will check their in-memory cache for a cache hit, before checking Redis. This reduces caching-related latency from 100ms for LLM API calls to sub-1ms, on cache hits. 
+
+
+
+
+
+
+
+
+
 
 ## New Models / Updated Models
 
