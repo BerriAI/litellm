@@ -59,22 +59,31 @@ Users of our Docker image, are **not** affected by this change.
 
 ---
 
-## Redis - Latency Improvements
+## Redis Latency Improvements
 
 <Image 
   img={require('../../img/release_notes/faster_caching_calls.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
+<br/>
+
 This release adds in-memory caching for Redis requests, enabling faster response times in high-traffic. Now, LiteLLM instances will check their in-memory cache for a cache hit, before checking Redis. This reduces caching-related latency from 100ms for LLM API calls to sub-1ms, on cache hits. 
 
+---
 
+## Responses API Session Management w/ Images
 
+<Image 
+  img={require('../../img/release_notes/responses_api_session_mgt_images.jpg')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
 
+<br/>
 
+LiteLLM now supports session management for Responses API requests with images. This is great for use-cases like chatbots, that are using the Responses API to track the state of a conversation. LiteLLM session management works across **ALL** LLM API's (including Anthropic, Bedrock, OpenAI, etc). LiteLLM session management works by storing the request and response content in an s3 bucket, you can specify. 
 
-
-
+---
 
 
 ## New Models / Updated Models
