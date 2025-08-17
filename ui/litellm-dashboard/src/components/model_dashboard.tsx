@@ -1396,7 +1396,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                           // Model name filter
                           const modelNameMatch = selectedModelGroup === "all" ||
                           model.model_name === selectedModelGroup ||
-                          !selectedModelGroup || (selectedModelGroup === "wildcard" && model.model_name.includes('*'));
+                          !selectedModelGroup || (selectedModelGroup === "wildcard" && model.model_name?.includes('*'));
                            // Model access group filter
                            const accessGroupMatch =
                            selectedModelAccessGroupFilter === "all" ||
