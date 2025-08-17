@@ -1,5 +1,5 @@
 """
-Test GPT-5 reasoning routing functionality
+Test reasoning routing and parameter transformation functionality
 """
 import os
 import sys
@@ -12,8 +12,8 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.types.router import GenericLiteLLMParams
 
 
-class TestGPT5ReasoningRouting:
-    """Test suite for GPT-5 reasoning routing logic"""
+class TestReasoningRouting:
+    """Test suite for reasoning model auto-routing logic"""
 
     def test_explicit_responses_prefix(self):
         """Test explicit responses/ prefix routing"""
@@ -58,10 +58,10 @@ class TestGPT5ReasoningRouting:
         assert model == "gpt-5"
 
 
-class TestTransformationLayerReasoningHandling:
-    """Test suite for reasoning parameter handling in transformation layer"""
+class TestReasoningParameterTransformation:
+    """Test suite for reasoning parameter handling in completion_extras transformation layer"""
 
-    def test_openai_reasoning_parameter_promotion_from_extra_body(self):
+    def test_reasoning_parameter_promotion_from_extra_body(self):
         """Test completion_extras transformation promotes reasoning_effort from extra_body"""
         handler = LiteLLMResponsesTransformationHandler()
         optional_params = {"extra_body": {"reasoning_effort": "high"}}
@@ -72,7 +72,7 @@ class TestTransformationLayerReasoningHandling:
         assert optional_params.get("reasoning_effort") == "high"
         assert optional_params.get("extra_body") is None or "reasoning_effort" not in optional_params.get("extra_body", {})
 
-    def test_openai_reasoning_default_medium_effort(self):
+    def test_reasoning_default_medium_effort(self):
         """Test completion_extras transformation sets default reasoning_effort=medium"""
         handler = LiteLLMResponsesTransformationHandler()
         optional_params = {}
@@ -82,7 +82,7 @@ class TestTransformationLayerReasoningHandling:
         assert result == "medium"
         assert optional_params.get("reasoning_effort") == "medium"
 
-    def test_openai_reasoning_preserves_explicit_effort(self):
+    def test_reasoning_preserves_explicit_effort(self):
         """Test completion_extras transformation preserves explicit reasoning_effort"""
         handler = LiteLLMResponsesTransformationHandler()
         optional_params = {"reasoning_effort": "low"}
@@ -92,7 +92,7 @@ class TestTransformationLayerReasoningHandling:
         assert result == "low"
         assert optional_params.get("reasoning_effort") == "low"
 
-    def test_openai_reasoning_extra_body_priority_over_default(self):
+    def test_reasoning_extra_body_priority_over_default(self):
         """Test extra_body reasoning_effort takes priority over default"""
         handler = LiteLLMResponsesTransformationHandler()
         optional_params = {"extra_body": {"reasoning_effort": "minimal", "other_param": "value"}}
