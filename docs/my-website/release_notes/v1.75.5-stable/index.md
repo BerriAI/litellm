@@ -50,6 +50,13 @@ pip install litellm==1.75.5.post1
 - **Oracle Cloud Infrastructure** - New LLM provider for calling models on Oracle Cloud Infrastructure.
 - **Digital Ocean's Gradient AI** - New LLM provider for calling models on Digital Ocean's Gradient AI platform.
 
+
+### Risk of Upgrade
+
+If you build the proxy from the pip package, you should hold off on upgrading. This version makes `prisma migrate deploy` our default for managing the DB. This is safer, as it doesn't reset the DB, but it requires a manual `prisma generate` step. 
+
+Users of our Docker image, are **not** affected by this change. 
+
 ---
 
 ## Redis - Latency Improvements
