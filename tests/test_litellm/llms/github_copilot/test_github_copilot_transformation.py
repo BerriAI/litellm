@@ -378,15 +378,17 @@ def test_get_supported_openai_params_claude_model():
     assert "thinking" in supported_params_claude
     assert "reasoning_effort" in supported_params_claude
     
-    # Test non-Claude model doesn't include thinking/reasoning parameters
+    # Test non-Claude model doesn't include thinking parameters but may include reasoning_effort
     supported_params_gpt = config.get_supported_openai_params("gpt-4o")
     assert "thinking" not in supported_params_gpt
+    # gpt-4o should NOT have reasoning_effort (not a reasoning model)
     assert "reasoning_effort" not in supported_params_gpt
     
-    # Test with other non-Claude models
+    # Test O-series reasoning models include reasoning_effort but not thinking
     supported_params_o3 = config.get_supported_openai_params("o3-mini")
     assert "thinking" not in supported_params_o3
-    assert "reasoning_effort" not in supported_params_o3
+    # o3-mini should have reasoning_effort (it's an O-series reasoning model)
+    assert "reasoning_effort" in supported_params_o3
 
 
 def test_get_supported_openai_params_case_insensitive():
