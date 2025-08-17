@@ -82,14 +82,18 @@ class GithubCopilotConfig(OpenAIConfig):
         Get supported OpenAI parameters for GitHub Copilot.
 
         For Anthropic models (like claude-sonnet-4), includes thinking and reasoning parameters.
-        For other models, returns standard OpenAI parameters.
+        For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
         """
         # Get base OpenAI parameters
         base_params = super().get_supported_openai_params(model)
 
-        # Add thinking and reasoning parameters for Anthropic Claude models
+        # Add Claude-specific parameters for Anthropic models
         if "claude" in model.lower():
-            base_params.extend(["thinking", "reasoning_effort"])
+            if "thinking" not in base_params:
+                base_params.append("thinking")
+            # reasoning_effort is not included by parent for Claude models, so add it
+            if "reasoning_effort" not in base_params:
+                base_params.append("reasoning_effort")
 
         return base_params
 
