@@ -24,6 +24,7 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
 )
 
 
@@ -122,6 +123,13 @@ def create_standard_logging_payload_with_failure() -> StandardLoggingPayload:
         messages=[{"role": "user", "content": "Hello, world!"}],
         response=None,
         error_str="RateLimitError: You exceeded your current quota",
+        error_information=StandardLoggingPayloadErrorInformation(
+            error_code="rate_limit_exceeded",
+            error_class="RateLimitError",
+            llm_provider="openai",
+            traceback="Traceback (most recent call last):\n  File test.py, line 1\n    RateLimitError: You exceeded your current quota",
+            error_message="RateLimitError: You exceeded your current quota"
+        ),
         model_parameters={"stream": False},
         hidden_params=StandardLoggingHiddenParams(
             model_id="model-123",
@@ -309,7 +317,7 @@ class TestDataDogLLMObsLogger:
                 # Verify error information follows DD LLM Obs API spec
                 assert payload["meta"]["error"]["message"] == "RateLimitError: You exceeded your current quota"
                 assert payload["meta"]["error"]["type"] == "RateLimitError"
-                assert payload["meta"]["error"]["stack"] is None
+                assert payload["meta"]["error"]["stack"] == "Traceback (most recent call last):\n  File test.py, line 1\n    RateLimitError: You exceeded your current quota"
                 
                 assert payload["metrics"]["total_cost"] == 0.0
                 assert payload["metrics"]["total_tokens"] == 0
