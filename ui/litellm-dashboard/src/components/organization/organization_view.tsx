@@ -41,6 +41,7 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
 import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils"
 import { CheckIcon, CopyIcon } from "lucide-react"
+import NotificationManager from "../molecules/notifications_manager"
 
 interface OrganizationInfoProps {
   organizationId: string
@@ -78,7 +79,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       const response = await organizationInfoCall(accessToken, organizationId)
       setOrgData(response)
     } catch (error) {
-      message.error("Failed to load organization information")
+      NotificationManager.fromBackend("Failed to load organization information")
       console.error("Error fetching organization info:", error)
     } finally {
       setLoading(false)
@@ -107,7 +108,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       form.resetFields()
       fetchOrgInfo()
     } catch (error) {
-      message.error("Failed to add organization member")
+      NotificationManager.fromBackend("Failed to add organization member")
       console.error("Error adding organization member:", error)
     }
   }
@@ -128,7 +129,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       form.resetFields()
       fetchOrgInfo()
     } catch (error) {
-      message.error("Failed to update organization member")
+      NotificationManager.fromBackend("Failed to update organization member")
       console.error("Error updating organization member:", error)
     }
   }
@@ -143,7 +144,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       form.resetFields()
       fetchOrgInfo()
     } catch (error) {
-      message.error("Failed to delete organization member")
+      NotificationManager.fromBackend("Failed to delete organization member")
       console.error("Error deleting organization member:", error)
     }
   }
@@ -192,7 +193,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       setIsEditing(false)
       fetchOrgInfo()
     } catch (error) {
-      message.error("Failed to update organization settings")
+      NotificationManager.fromBackend("Failed to update organization settings")
       console.error("Error updating organization:", error)
     }
   }

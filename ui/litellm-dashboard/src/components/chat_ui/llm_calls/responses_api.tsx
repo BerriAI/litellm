@@ -4,6 +4,7 @@ import { MessageType } from "../types";
 import { TokenUsage } from "../ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPTool } from "@/components/chat_ui/llm_calls/fetch_mcp_tools";
+import NotificationManager from "@/components/molecules/notifications_manager";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -181,7 +182,7 @@ export async function makeOpenAIResponsesRequest(
     if (signal?.aborted) {
       console.log("Responses API request was cancelled");
     } else {
-      message.error(`Error occurred while generating model response. Please try again. Error: ${error}`, 20);
+      NotificationManager.fromBackend(`Error occurred while generating model response. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

@@ -54,6 +54,7 @@ import LoggingSettingsView from "../logging_settings_view";
 import { fetchMCPAccessGroups } from "../networking";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils"
+import NotificationManager from "../molecules/notifications_manager";
 
 export interface TeamMembership {
   user_id: string;
@@ -105,6 +106,8 @@ export interface TeamData {
     team_member_budget_table: {
       max_budget: number;
       budget_duration: string;
+      tpm_limit: number | null;
+      rpm_limit: number | null;
     } | null;
   };
   keys: any[];
@@ -160,7 +163,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const response = await teamInfoCall(accessToken, teamId);
       setTeamData(response);
     } catch (error) {
-      message.error("Failed to load team information");
+      NotificationManager.fromBackend("Failed to load team information");
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
@@ -236,7 +239,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         errMsg = error.message;
       }
 
-      message.error(errMsg);
+      NotificationManager.fromBackend(errMsg);
       console.error("Error adding team member:", error);
     }
   };
@@ -251,7 +254,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
+        max_budget_in_team: values.max_budget_in_team,
+        tpm_limit: values.tpm_limit,
+        rpm_limit: values.rpm_limit,
       };
+      console.log("Updating member with values:", member);
       message.destroy(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
@@ -281,7 +288,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       message.destroy(); // Remove all existing toasts
 
-      message.error(errMsg);
+      NotificationManager.fromBackend(errMsg);
       console.error("Error updating team member:", error);
     }
   };
@@ -303,7 +310,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Notify parent component of the update
       onUpdate(updatedTeamData);
     } catch (error) {
-      message.error("Failed to remove team member");
+      NotificationManager.fromBackend("Failed to remove team member");
       console.error("Error removing team member:", error);
     }
   };
@@ -316,7 +323,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       try {
         parsedMetadata = values.metadata ? JSON.parse(values.metadata) : {};
       } catch (e) {
-        message.error("Invalid JSON in metadata field");
+        NotificationManager.fromBackend("Invalid JSON in metadata field");
         return;
       }
 
@@ -349,6 +356,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       if (values.team_member_key_duration !== undefined) {
         updateData.team_member_key_duration = values.team_member_key_duration;
+      }
+
+      if (values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined) {
+        updateData.team_member_tpm_limit = sanitizeNumeric(values.team_member_tpm_limit);
+        updateData.team_member_rpm_limit = sanitizeNumeric(values.team_member_rpm_limit);
       }
 
       // Handle object_permission updates
@@ -581,6 +593,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     rpm_limit: info.rpm_limit,
                     max_budget: info.max_budget,
                     budget_duration: info.budget_duration,
+                    team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
+                    team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
                     guardrails: info.metadata?.guardrails || [],
                     metadata: info.metadata
                       ? JSON.stringify(
@@ -653,6 +667,30 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
                   >
                     <TextInput placeholder="e.g., 30d" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Team Member TPM Limit"
+                    name="team_member_tpm_limit"
+                    tooltip="Default tokens per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
+                  >
+                    <NumericalInput 
+                      step={1} 
+                      style={{ width: "100%" }}
+                      placeholder="e.g., 1000"
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Team Member RPM Limit"
+                    name="team_member_rpm_limit"
+                    tooltip="Default requests per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
+                  >
+                    <NumericalInput 
+                      step={1} 
+                      style={{ width: "100%" }}
+                      placeholder="e.g., 100"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Reset Budget" name="budget_duration">
@@ -810,6 +848,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       Key Duration:{" "}
                       {info.metadata?.team_member_key_duration || "No Limit"}
                     </div>
+                    <div>
+                      TPM Limit:{" "}
+                      {info.team_member_budget_table?.tpm_limit || "No Limit"}
+                    </div>
+                    <div>
+                      RPM Limit:{" "}
+                      {info.team_member_budget_table?.rpm_limit || "No Limit"}
+                    </div>
                   </div>
                   <div>
                     <Text className="font-medium">Organization ID</Text>
@@ -856,6 +902,53 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             { label: "Admin", value: "admin" },
             { label: "User", value: "user" },
           ],
+          additionalFields: [
+            {
+              name: "max_budget_in_team",
+              label: (
+                <span>
+                  Team Member Budget (USD){' '}
+                  <Tooltip title="Maximum amount in USD this member can spend within this team. This is separate from any global user budget limits">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 0.01,
+              min: 0,
+              placeholder: "Budget limit for this member within this team"
+            },
+            {
+              name: "tpm_limit",
+              label: (
+                <span>
+                  Team Member TPM Limit{' '}
+                  <Tooltip title="Maximum tokens per minute this member can use within this team. This is separate from any global user TPM limit">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 1,
+              min: 0,
+              placeholder: "Tokens per minute limit for this member in this team"
+            },
+            {
+              name: "rpm_limit",
+              label: (
+                <span>
+                  Team Member RPM Limit{' '}
+                  <Tooltip title="Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit">
+                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "numerical" as const,
+              step: 1,
+              min: 0,
+              placeholder: "Requests per minute limit for this member in this team"
+            }
+          ]
         }}
       />
 

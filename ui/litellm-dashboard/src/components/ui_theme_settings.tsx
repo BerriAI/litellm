@@ -9,6 +9,7 @@ import {
 import { message } from "antd"
 import { useTheme } from "@/contexts/ThemeContext"
 import { getProxyBaseUrl } from "@/components/networking"
+import NotificationManager from "./molecules/notifications_manager";
 
 interface UIThemeSettingsProps {
   userID: string | null;
@@ -79,7 +80,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       }
     } catch (error) {
       console.error("Error updating logo settings:", error);
-      message.error("Failed to update logo settings");
+      NotificationManager.fromBackend("Failed to update logo settings");
     } finally {
       setLoading(false);
     }
@@ -112,7 +113,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       }
     } catch (error) {
       console.error("Error resetting logo:", error);
-      message.error("Failed to reset logo");
+      NotificationManager.fromBackend("Failed to reset logo");
     } finally {
       setLoading(false);
     }

@@ -4322,8 +4322,10 @@ class Router:
                 deployment_name = kwargs["litellm_params"]["metadata"].get(
                     "deployment", None
                 )  # stable name - works for wildcard routes as well
-                model_group = standard_logging_object.get("model_group", None)
-                id = standard_logging_object.get("model_id", None)
+                # Get model_group and id from kwargs like the sync version does
+                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+                id = model_info.get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -4386,7 +4388,6 @@ class Router:
                 # Update usage
                 # ------------
                 # update cache
-
                 pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
                 ## TPM
@@ -5475,6 +5476,11 @@ class Router:
                         pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
+        if model is None:
+            # Handle case where base_model is None (e.g., Azure models without base_model set)
+            # Use the original model from litellm_params
+            model = _model
+
         if not model.startswith("{}/".format(custom_llm_provider)):
             model_info_name = "{}/{}".format(custom_llm_provider, model)
         else:

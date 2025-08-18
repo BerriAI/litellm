@@ -156,6 +156,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const [isButtonClicked, setIsButtonClicked] = useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
   const [keyToDelete, setKeyToDelete] = useState<string | null>(null)
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("")
   const [selectedItem, setSelectedItem] = useState<KeyResponse | null>(null)
   const [spendData, setSpendData] = useState<{ day: string; spend: number }[] | null>(null)
 
@@ -274,7 +275,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   }, [teams])
 
   const confirmDelete = async () => {
-    if (keyToDelete == null || data == null) {
+    if (keyToDelete == null || keys == null) {
       return
     }
 
@@ -282,8 +283,8 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
       if (!accessToken) return
       await keyDeleteCall(accessToken, keyToDelete)
       // Successfully completed the deletion. Update the state to trigger a rerender.
-      const filteredData = data.filter((item) => item.token !== keyToDelete)
-      setData(filteredData)
+      const filteredKeys = keys.filter((item) => item.token !== keyToDelete)
+      setKeys(filteredKeys)
     } catch (error) {
       NotificationManager.error({ description: "Error deleting the key" })
     }
@@ -291,12 +292,14 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
     // Close the confirmation modal and reset the keyToDelete
     setIsDeleteModalOpen(false)
     setKeyToDelete(null)
+    setDeleteConfirmInput("")
   }
 
   const cancelDelete = () => {
     // Close the confirmation modal and reset the keyToDelete
     setIsDeleteModalOpen(false)
     setKeyToDelete(null)
+    setDeleteConfirmInput("")
   }
 
   const handleRegenerateClick = (token: any) => {
@@ -378,40 +381,80 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
         setAccessToken={setAccessToken}
       />
 
-      {isDeleteModalOpen && (
-        <div className="fixed z-10 inset-0 overflow-y-auto">
-          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 transition-opacity" aria-hidden="true">
-              <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
+      {isDeleteModalOpen && (() => {
+  const keyData = keys?.find((k) => k.token === keyToDelete);
+  const keyName = keyData?.key_alias || keyData?.token_id || keyToDelete;
+  const isValid = deleteConfirmInput === keyName;
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl min-h-[380px] py-6 overflow-hidden transform transition-all flex flex-col justify-between">
+        <div>
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-semibold text-gray-900">Delete Key</h3>
+            <button
+              onClick={() => { cancelDelete(); setDeleteConfirmInput(""); }}
+              className="text-gray-400 hover:text-gray-500 focus:outline-none"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div className="px-6 py-4">
+            <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-100 rounded-md mb-5">
+              <div className="text-red-500 mt-0.5">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-base font-medium text-red-600">
+                  Warning: You are about to delete this API key.
+                </p>
+                <p className="text-base text-red-600 mt-2">
+                  This action is irreversible and will immediately revoke access for any applications using this key.
+                </p>
+              </div>
             </div>
-
-            {/* Modal Panel */}
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">
-              &#8203;
-            </span>
-
-            {/* Confirmation Modal Content */}
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                <div className="sm:flex sm:items-start">
-                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Delete Key</h3>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-500">Are you sure you want to delete this key ?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                <Button onClick={confirmDelete} color="red" className="ml-2">
-                  Delete
-                </Button>
-                <Button onClick={cancelDelete}>Cancel</Button>
-              </div>
+            <p className="text-base text-gray-600 mb-5">
+              Are you sure you want to delete this API key?
+            </p>
+            <div className="mb-5">
+              <label className="block text-base font-medium text-gray-700 mb-2">
+                {`Type `}
+                <span className="underline">{keyName}</span>
+                {` to confirm deletion:`}
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmInput}
+                onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                placeholder="Enter key name exactly"
+                className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base"
+                autoFocus
+              />
             </div>
           </div>
         </div>
-      )}
+        <div className="px-6 py-4 bg-gray-50 flex justify-end gap-4">
+          <button
+            onClick={() => { cancelDelete(); setDeleteConfirmInput(""); }}
+            className="px-5 py-3 bg-white border border-gray-300 rounded-md text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmDelete}
+            disabled={!isValid}
+            className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? 'bg-red-600 hover:bg-red-700' : 'bg-red-300 cursor-not-allowed'}`}
+          >
+            Delete Key
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+})()}
 
       {/* Regenerate Key Form Modal */}
       <Modal

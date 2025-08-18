@@ -489,7 +489,7 @@ class LiteLLMAnthropicMessagesAdapter:
         text: str = ""
         partial_json: Optional[str] = None
         for choice in choices:
-            if choice.delta.content is not None:
+            if choice.delta.content is not None and len(choice.delta.content) > 0:
                 text += choice.delta.content
             elif choice.delta.tool_calls is not None:
                 partial_json = ""
@@ -499,7 +499,6 @@ class LiteLLMAnthropicMessagesAdapter:
                         and tool.function.arguments is not None
                     ):
                         partial_json += tool.function.arguments
-
         if partial_json is not None:
             return "input_json_delta", ContentJsonBlockDelta(
                 type="input_json_delta", partial_json=partial_json
