@@ -513,26 +513,27 @@ def test_latency_metrics_in_metadata(mock_env_vars):
         
         # Test the metadata generation directly
         metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
+        latency_metadata = metadata.get("latency_metrics", {})
         
         # Verify time to first token is included (800ms)
-        assert "time_to_first_token_ms" in metadata
-        assert metadata["time_to_first_token_ms"] == 800.0  # 0.8 seconds * 1000
+        assert "time_to_first_token_ms" in latency_metadata
+        assert latency_metadata["time_to_first_token_ms"] == 800.0  # 0.8 seconds * 1000
         
         # Verify litellm overhead is included (150ms)
-        assert "litellm_overhead_time_ms" in metadata
-        assert metadata["litellm_overhead_time_ms"] == 150.0
+        assert "litellm_overhead_time_ms" in latency_metadata
+        assert latency_metadata["litellm_overhead_time_ms"] == 150.0
         
         # Verify guardrail overhead is included (500ms) 
-        assert "guardrail_overhead_time_ms" in metadata
-        assert metadata["guardrail_overhead_time_ms"] == 500.0  # 0.5 seconds * 1000
+        assert "guardrail_overhead_time_ms" in latency_metadata
+        assert latency_metadata["guardrail_overhead_time_ms"] == 500.0  # 0.5 seconds * 1000
         
         # Verify these metrics are also included in the full payload
         payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
-        payload_metadata = payload["meta"]["metadata"]
+        payload_metadata_latency = payload["meta"]["metadata"]["latency_metrics"]
         
-        assert payload_metadata["time_to_first_token_ms"] == 800.0
-        assert payload_metadata["litellm_overhead_time_ms"] == 150.0
-        assert payload_metadata["guardrail_overhead_time_ms"] == 500.0
+        assert payload_metadata_latency["time_to_first_token_ms"] == 800.0
+        assert payload_metadata_latency["litellm_overhead_time_ms"] == 150.0
+        assert payload_metadata_latency["guardrail_overhead_time_ms"] == 500.0
 
 
 def test_latency_metrics_edge_cases(mock_env_vars):
