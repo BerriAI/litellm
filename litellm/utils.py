@@ -4654,6 +4654,80 @@ def _is_potential_model_name_in_model_cost(
         for potential_model_name in potential_model_names.values()
     )
 
+def _get_model_info_open_router(model_name: str) -> Optional[ModelInfoBase]:
+    """
+    Get model information from OpenRouter API endpoints.
+
+    Args:
+        model_name: The model name (e.g., "openai/gpt-4")
+
+    Returns:
+        ModelInfoBase object with all model information, or None if the request fails.
+    """
+    # Construct the URL for the OpenRouter model endpoints
+    endpoints_url = f"https://openrouter.ai/api/v1/models/{model_name}/endpoints"
+
+    try:
+        # Make the HTTP request to get the model endpoints info
+        response = litellm.module_level_client.get(endpoints_url)
+        response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
+
+        # Parse the JSON response
+        response_json = response.json()
+ 
+        # Extract model data
+        model_data = response_json.get("data")
+        if model_data is None:
+            return None
+
+        # Get the first endpoint (usually the primary one)
+        endpoints = model_data.get("endpoints", [])
+        if not endpoints:
+            return None
+
+        primary_endpoint = endpoints[0]
+        pricing_info = primary_endpoint.get("pricing", {})
+        supported_params = primary_endpoint.get("supported_parameters", [])
+
+        # Map supported parameters to ModelInfoBase features
+        supports_function_calling = "tools" in supported_params
+        supports_tool_choice = "tool_choice" in supported_params
+        supports_response_schema = "response_format" in supported_params or "structured_outputs" in supported_params
+        supports_web_search = "web_search_options" in supported_params
+        supports_reasoning = "reasoning" in supported_params or "include_reasoning" in supported_params
+
+        # Create and return ModelInfoBase object
+        return ModelInfoBase(
+            key=model_name,
+            max_tokens=primary_endpoint.get("context_length"),
+            max_input_tokens=primary_endpoint.get("max_prompt_tokens"),
+            max_output_tokens=primary_endpoint.get("max_completion_tokens"),
+            input_cost_per_token=float(pricing_info.get("prompt", 0)) if pricing_info.get("prompt") else 0.0,
+            output_cost_per_token=float(pricing_info.get("completion", 0)) if pricing_info.get("completion") else 0.0,
+            input_cost_per_image=float(pricing_info.get("image", 0)) if pricing_info.get("image") else None,
+            input_cost_per_audio_token=float(pricing_info.get("audio", 0)) if pricing_info.get("audio") else None,
+            cache_read_input_token_cost=float(pricing_info.get("input_cache_read", 0))
+            if pricing_info.get("input_cache_read")
+            else None,
+            output_cost_per_reasoning_token=float(pricing_info.get("internal_reasoning", 0))
+            if pricing_info.get("internal_reasoning")
+            else None,
+            litellm_provider="openrouter",
+            mode="chat",
+            supports_function_calling=supports_function_calling,
+            supports_tool_choice=supports_tool_choice,
+            supports_response_schema=supports_response_schema,
+            supports_web_search=supports_web_search,
+            supports_reasoning=supports_reasoning,
+            supports_system_messages=None,
+            supports_assistant_prefill=None,
+            supports_prompt_caching=None,
+            supports_computer_use=None,
+            supports_pdf_input=None,
+        )
+
+    except Exception:
+        return None
 
 def _get_model_info_helper(  # noqa: PLR0915
     model: str, custom_llm_provider: Optional[str] = None
@@ -4691,6 +4765,13 @@ def _get_model_info_helper(  # noqa: PLR0915
         split_model = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         #########################
+
+        # OpenRouter has an API endpoint to get model info
+        if custom_llm_provider == "openrouter":
+            model_info = _get_model_info_open_router(model_name=model.strip(custom_llm_provider + "/"))
+            if model_info:
+                return model_info
+
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
