@@ -21,7 +21,7 @@ from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
-    ResponseTextConfig,
+    ResponseFormatTextConfig,
     ResponseAPIUsage,
     IncompleteDetails,
 )
@@ -78,7 +78,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
         "previous_response_id": (str, type(None)),
         "reasoning": dict,
         "status": str,
-        "text": ResponseTextConfig,
+        "text": ResponseFormatTextConfig,
         "truncation": (str, type(None)),
         "usage": ResponseAPIUsage,
         "user": (str, type(None)),

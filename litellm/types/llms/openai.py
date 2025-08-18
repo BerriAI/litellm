@@ -37,7 +37,7 @@ from openai.types.responses.response import (
     IncompleteDetails,
     Response,
     ResponseOutputItem,
-    ResponseTextConfig,
+    ResponseFormatTextConfig,
     Tool,
     ToolChoice,
 )
@@ -45,7 +45,7 @@ from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
-    ResponseTextConfigParam,
+    ResponseFormatTextConfigParam,
     ToolChoice,
     ToolParam,
 )
@@ -959,7 +959,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     background: Optional[bool]
     stream: Optional[bool]
     temperature: Optional[float]
-    text: Optional[ResponseTextConfigParam]
+    text: Optional[ResponseFormatTextConfigParam]
     tool_choice: Optional[ToolChoice]
     tools: Optional[List[ALL_RESPONSES_API_TOOL_PARAMS]]
     top_p: Optional[float]
@@ -1034,7 +1034,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     previous_response_id: Optional[str]
     reasoning: Optional[Reasoning]
     status: Optional[str]
-    text: Optional[ResponseTextConfig]
+    text: Optional[ResponseFormatTextConfig]
     truncation: Optional[Literal["auto", "disabled"]]
     usage: Optional[ResponseAPIUsage]
     user: Optional[str]

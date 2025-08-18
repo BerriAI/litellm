@@ -33,7 +33,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponseTextConfig,
+    ResponseFormatTextConfig,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
@@ -659,7 +659,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             reasoning=Reasoning(),
             status=getattr(chat_completion_response, "status", "completed"),
-            text=ResponseTextConfig(),
+            text=ResponseFormatTextConfig(),
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response
