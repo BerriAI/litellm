@@ -24,6 +24,7 @@ from litellm.types.utils import (
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
 )
 
 
@@ -81,6 +82,67 @@ def create_standard_logging_payload_with_cache() -> StandardLoggingPayload:
     )
 
 
+def create_standard_logging_payload_with_failure() -> StandardLoggingPayload:
+    """Create a StandardLoggingPayload object for failure testing"""
+    return StandardLoggingPayload(
+        id="test-request-id-failure-789",
+        call_type="completion",
+        response_cost=0.0,
+        response_cost_failure_debug_info=None,
+        status="failure",
+        total_tokens=0,
+        prompt_tokens=10,
+        completion_tokens=0,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=1234567890.5,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-4", model_map_value=None
+        ),
+        model="gpt-4",
+        model_id="model-123",
+        model_group="openai-gpt",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_org_id=None,
+            user_api_key_alias="test_alias",
+            user_api_key_team_id="test_team",
+            user_api_key_user_id="test_user",
+            user_api_key_team_alias="test_team_alias",
+            spend_logs_metadata=None,
+            requester_ip_address="127.0.0.1",
+            requester_metadata=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address="127.0.0.1",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        response=None,
+        error_str="RateLimitError: You exceeded your current quota",
+        error_information=StandardLoggingPayloadErrorInformation(
+            error_code="rate_limit_exceeded",
+            error_class="RateLimitError",
+            llm_provider="openai",
+            traceback="Traceback (most recent call last):\n  File test.py, line 1\n    RateLimitError: You exceeded your current quota",
+            error_message="RateLimitError: You exceeded your current quota"
+        ),
+        model_parameters={"stream": False},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.0",
+            additional_headers=None,
+        ),
+        trace_id="test-trace-id-failure-456",
+        custom_llm_provider="openai",
+    )
+
+
 class TestDataDogLLMObsLogger:
     """Test suite for DataDog LLM Observability Logger"""
 
@@ -118,7 +180,7 @@ class TestDataDogLLMObsLogger:
             start_time = datetime.now()
             end_time = datetime.now()
             
-            payload = logger.create_llm_obs_payload(kwargs, mock_response_obj, start_time, end_time)
+            payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
             
             # Test 1: Verify total_cost is correctly extracted from response_cost
             assert payload["metrics"].get("total_cost") == 0.05
@@ -148,7 +210,7 @@ class TestDataDogLLMObsLogger:
             start_time = datetime.now()
             end_time = datetime.now()
             
-            payload = logger.create_llm_obs_payload(kwargs, mock_response_obj, start_time, end_time)
+            payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
             
             # Test the _get_dd_llm_obs_payload_metadata method directly
             metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
@@ -217,9 +279,56 @@ class TestDataDogLLMObsLogger:
         assert logger._get_datadog_span_kind("unknown_call_type") == "llm"
         assert logger._get_datadog_span_kind(None) == "llm"
 
+    @pytest.mark.asyncio
+    async def test_async_log_failure_event(self, mock_env_vars):
+        """Test that async_log_failure_event correctly processes failure payloads according to DD LLM Obs API spec"""
+        with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \
+             patch('asyncio.create_task'):
+            logger = DataDogLLMObsLogger()
+            
+            # Ensure log_queue starts empty
+            logger.log_queue = []
+            
+            standard_failure_payload = create_standard_logging_payload_with_failure()
+            
+            kwargs = {
+                "standard_logging_object": standard_failure_payload,
+                "model": "gpt-4",
+                "litellm_params": {"metadata": {}}
+            }
+            
+            start_time = datetime.now()
+            end_time = datetime.now() + timedelta(seconds=2)
+            
+            # Mock async_send_batch to prevent actual network calls
+            with patch.object(logger, 'async_send_batch') as mock_send_batch:
+                # Call the method under test
+                await logger.async_log_failure_event(kwargs, None, start_time, end_time)
+                
+                # Verify payload was added to queue
+                assert len(logger.log_queue) == 1
+                
+                # Verify the payload has correct failure characteristics according to DD LLM Obs API spec
+                payload = logger.log_queue[0]
+                assert payload["trace_id"] == "test-trace-id-failure-456"
+                assert payload["meta"]["metadata"]["id"] == "test-request-id-failure-789"
+                assert payload["status"] == "error"
+                
+                # Verify error information follows DD LLM Obs API spec
+                assert payload["meta"]["error"]["message"] == "RateLimitError: You exceeded your current quota"
+                assert payload["meta"]["error"]["type"] == "RateLimitError"
+                assert payload["meta"]["error"]["stack"] == "Traceback (most recent call last):\n  File test.py, line 1\n    RateLimitError: You exceeded your current quota"
+                
+                assert payload["metrics"]["total_cost"] == 0.0
+                assert payload["metrics"]["total_tokens"] == 0
+                assert payload["metrics"]["output_tokens"] == 0
+                
+                # Verify batch sending not triggered (queue size < batch_size)
+                mock_send_batch.assert_not_called()
 
 
-class TestDataDogLLMObsLogger(DataDogLLMObsLogger):
+
+class TestDataDogLLMObsLoggerForRedaction(DataDogLLMObsLogger):
     """Test suite for DataDog LLM Observability Logger"""
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
