@@ -33,7 +33,6 @@ from openai.types.chat.chat_completion_prediction_content_param import (
 )
 from openai.types.embedding import Embedding as OpenAIEmbedding
 from openai.types.fine_tuning.fine_tuning_job import FineTuningJob
-from openai.types.responses import response_create_params
 from openai.types.responses.response import (
     IncompleteDetails,
     Response,
