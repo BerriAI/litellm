@@ -1326,14 +1326,23 @@ def test_anthropic_mcp_server_responses_api(model: str):
         },
     ]
 
+    # Use mock response to avoid real API calls
+    mock_response = "Argentina won the World Cup in 2022, defeating France in a thrilling final match that went to penalties."
+    
     response = litellm.responses(
         model=model,
         input="Who won the World Cup in 2022?",
         max_output_tokens=100,
         tools=tools,
+        mock_response=mock_response,
     )
 
     assert response is not None
+    assert response.output is not None
+    assert len(response.output) > 0
+    assert response.output[0].content is not None
+    assert len(response.output[0].content) > 0
+    assert response.output[0].content[0].text == mock_response
 
 
 def test_anthropic_prefix_prompt():
