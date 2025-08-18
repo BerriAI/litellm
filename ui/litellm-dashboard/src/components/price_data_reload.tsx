@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Button, Popconfirm, message, Modal, InputNumber, Space, Typography, Tag, Card } from "antd";
 import { ReloadOutlined, ClockCircleOutlined, StopOutlined } from "@ant-design/icons";
 import { reloadModelCostMap, scheduleModelCostMapReload, cancelModelCostMapReload, getModelCostMapReloadStatus } from "./networking";
+import NotificationManager from "./molecules/notifications_manager";
 
 const { Text } = Typography;
 
@@ -77,7 +78,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleHardRefresh = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationManager.fromBackend("No access token available");
       return;
     }
     
@@ -93,23 +94,23 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         // Refresh status after successful reload
         await fetchReloadStatus();
       } else {
-        message.error("Failed to reload price data");
+        NotificationManager.fromBackend("Failed to reload price data");
       }
     } catch (error) {
       console.error("Error reloading price data:", error);
-      message.error("Failed to reload price data. Please try again.");
+      NotificationManager.fromBackend("Failed to reload price data. Please try again.");
     } finally {
       setIsLoading(false);
     }
   };
   const handleScheduleReload = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationManager.fromBackend("No access token available");
       return;
     }
 
     if (hours <= 0) {
-      message.error("Hours must be greater than 0");
+      NotificationManager.fromBackend("Hours must be greater than 0");
       return;
     }
     
@@ -122,11 +123,11 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         setShowScheduleModal(false);
         await fetchReloadStatus();
       } else {
-        message.error("Failed to schedule periodic reload");
+        NotificationManager.fromBackend("Failed to schedule periodic reload");
       }
     } catch (error) {
       console.error("Error scheduling reload:", error);
-      message.error("Failed to schedule periodic reload. Please try again.");
+      NotificationManager.fromBackend("Failed to schedule periodic reload. Please try again.");
     } finally {
       setIsScheduling(false);
     }
@@ -134,7 +135,7 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
 
   const handleCancelReload = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationManager.fromBackend("No access token available");
       return;
     }
     
@@ -146,11 +147,11 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
         message.success("Periodic reload cancelled successfully");
         await fetchReloadStatus();
       } else {
-        message.error("Failed to cancel periodic reload");
+        NotificationManager.fromBackend("Failed to cancel periodic reload");
       }
     } catch (error) {
       console.error("Error cancelling reload:", error);
-      message.error("Failed to cancel periodic reload. Please try again.");
+      NotificationManager.fromBackend("Failed to cancel periodic reload. Please try again.");
     } finally {
       setIsCancelling(false);
     }
