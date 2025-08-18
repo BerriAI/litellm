@@ -27,7 +27,11 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.datadog_llm_obs import *
-from litellm.types.utils import CallTypes, StandardLoggingPayload
+from litellm.types.utils import (
+    CallTypes,
+    StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
+)
 
 
 class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
@@ -192,11 +196,14 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             call_type=standard_logging_payload.get("call_type")
         ))
 
+        error_info = self._assemble_error_info(standard_logging_payload)
+
         meta = Meta(
             kind=self._get_datadog_span_kind(standard_logging_payload.get("call_type")),
             input=input_meta,
             output=output_meta,
             metadata=self._get_dd_llm_obs_payload_metadata(standard_logging_payload),
+            error=error_info,
         )
 
         # Calculate metrics (you may need to adjust these based on available data)
@@ -217,11 +224,31 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             start_ns=int(start_time.timestamp() * 1e9),
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
+            status="error" if error_info else "ok",
             tags=[
                 self._get_datadog_tags(standard_logging_object=standard_logging_payload)
             ],
         )
     
+    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> Optional[DDLLMObsError]:
+        """
+        Assemble error information for failure cases according to DD LLM Obs API spec
+        """
+        # Handle error information for failure cases according to DD LLM Obs API spec
+        error_info: Optional[DDLLMObsError] = None
+        
+        if standard_logging_payload.get("status") == "failure":
+            # Try to get structured error information first
+            error_information: Optional[StandardLoggingPayloadErrorInformation] = standard_logging_payload.get("error_information")
+            
+            if error_information:
+                error_info = DDLLMObsError(
+                    message=error_information.get("error_message") or standard_logging_payload.get("error_str") or "Unknown error",
+                    type=error_information.get("error_class"),
+                    stack=error_information.get("traceback")
+                )
+        return error_info
+
     def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
         """
         Get the time to first token in seconds
@@ -250,8 +277,20 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
         for now this handles logging /chat/completions responses
         """
+        if response_obj is None:
+            return []
+        
         if call_type in [CallTypes.completion.value, CallTypes.acompletion.value]:
-            return [response_obj["choices"][0]["message"]]
+            try:
+                # Safely extract message from response_obj, handle failure cases
+                if isinstance(response_obj, dict) and "choices" in response_obj:
+                    choices = response_obj["choices"]
+                    if choices and len(choices) > 0 and "message" in choices[0]:
+                        return [choices[0]["message"]]
+                return []
+            except (KeyError, IndexError, TypeError):
+                # In case of any error accessing the response structure, return empty list
+                return []
         return []
 
     def _get_datadog_span_kind(self, call_type: Optional[str]) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
