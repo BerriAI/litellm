@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
-    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     OpenAIMcpServerTool,
@@ -33,7 +33,6 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponseFormatTextConfig,
 )
 from openai.types.shared.response_format_text import ResponseFormatText
 from litellm.types.responses.main import (
