@@ -355,7 +355,7 @@ async def test_dd_llms_obs_redaction(mock_env_vars):
     litellm._turn_on_debug()
     from litellm.types.utils import LiteLLMCommonStrings
     litellm.datadog_llm_observability_params = DatadogLLMObsInitParams(turn_off_message_logging=True)
-    dd_llms_obs_logger = TestDataDogLLMObsLogger()
+    dd_llms_obs_logger = TestDataDogLLMObsLoggerForRedaction()
     test_s3_logger = TestS3Logger()
     litellm.callbacks = [
         dd_llms_obs_logger,
@@ -517,7 +517,7 @@ def test_latency_metrics_in_metadata(mock_env_vars):
         
         # Verify time to first token is included (800ms)
         assert "time_to_first_token_ms" in latency_metadata
-        assert latency_metadata["time_to_first_token_ms"] == 800.0  # 0.8 seconds * 1000
+        assert abs(latency_metadata["time_to_first_token_ms"] - 800.0) < 0.001  # 0.8 seconds * 1000 with tolerance for floating-point precision
         
         # Verify litellm overhead is included (150ms)
         assert "litellm_overhead_time_ms" in latency_metadata
@@ -531,7 +531,7 @@ def test_latency_metrics_in_metadata(mock_env_vars):
         payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
         payload_metadata_latency = payload["meta"]["metadata"]["latency_metrics"]
         
-        assert payload_metadata_latency["time_to_first_token_ms"] == 800.0
+        assert abs(payload_metadata_latency["time_to_first_token_ms"] - 800.0) < 0.001
         assert payload_metadata_latency["litellm_overhead_time_ms"] == 150.0
         assert payload_metadata_latency["guardrail_overhead_time_ms"] == 500.0
 
