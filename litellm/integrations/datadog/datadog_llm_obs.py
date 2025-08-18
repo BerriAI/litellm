@@ -428,7 +428,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         # Add latency metrics to metadata
         #########################################################
         latency_metrics = self._get_latency_metrics(standard_logging_payload)
-        _metadata.update(latency_metrics)
+        _metadata.update({"latency_metrics": latency_metrics})
 
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
