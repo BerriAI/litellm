@@ -1041,7 +1041,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     previous_response_id: Optional[str]
     reasoning: Optional[Reasoning]
     status: Optional[str]
-    text: Optional["ResponseText"]
+    text: Optional[Union["ResponseText", Dict[str, Any]]]
     truncation: Optional[Literal["auto", "disabled"]]
     usage: Optional[ResponseAPIUsage]
     user: Optional[str]
