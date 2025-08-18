@@ -29,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import (
     CallTypes,
+    StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -422,8 +423,42 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
         }
+
+        #########################################################
+        # Add latency metrics to metadata
+        #########################################################
+        latency_metrics = self._get_latency_metrics(standard_logging_payload)
+        _metadata.update(latency_metrics)
+
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
         )
         _metadata.update(_standard_logging_metadata)
         return _metadata
+
+    def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> Dict:
+        """
+        Get the latency metrics from the standard logging payload
+        """
+        latency_metrics: DDLLMObsLatencyMetrics = DDLLMObsLatencyMetrics()
+        # Add latency metrics to metadata
+        # Time to first token (convert from seconds to milliseconds for consistency)
+        time_to_first_token_seconds = self._get_time_to_first_token_seconds(standard_logging_payload)
+        if time_to_first_token_seconds > 0:
+            latency_metrics["time_to_first_token_ms"] = time_to_first_token_seconds * 1000
+
+        # LiteLLM overhead time
+        hidden_params = standard_logging_payload.get("hidden_params", {})
+        litellm_overhead_ms = hidden_params.get("litellm_overhead_time_ms")
+        if litellm_overhead_ms is not None:
+            latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
+
+        # Guardrail overhead latency
+        guardrail_info: Optional[StandardLoggingGuardrailInformation] = standard_logging_payload.get("guardrail_information")
+        if guardrail_info is not None:
+            _guardrail_duration_seconds: Optional[float] = guardrail_info.get("duration")
+            if _guardrail_duration_seconds is not None:
+                # Convert from seconds to milliseconds for consistency
+                latency_metrics["guardrail_overhead_time_ms"] = _guardrail_duration_seconds * 1000
+            
+        return dict(latency_metrics)
