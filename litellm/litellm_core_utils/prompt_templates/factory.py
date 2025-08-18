@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import MessageBlock as BedrockMessageBlock
+from litellm.types.llms.bedrock import CachePointBlock
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.ollama import OllamaVisionModelObject
 from litellm.types.llms.openai import (
@@ -2685,6 +2686,11 @@ def _convert_to_bedrock_tool_call_invoke(
                 )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
+                
+                # Check for cache_control and add a separate cachePoint block
+                if tool.get("cache_control", None) is not None:
+                    cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                    _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
         raise Exception(
@@ -2745,6 +2751,7 @@ def _convert_to_bedrock_tool_call_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
+    
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
 
@@ -2753,6 +2760,7 @@ def _convert_to_bedrock_tool_call_result(
         content=[tool_result_content_block],
         toolUseId=id,
     )
+    
     content_block = BedrockContentBlock(toolResult=tool_result)
 
     return content_block
@@ -3516,8 +3524,30 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         tool_content: List[BedrockContentBlock] = []
         while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
-
+            current_message = messages[msg_i]
+            
+            # Add the tool result first
             tool_content.append(tool_call_result)
+            
+            # Check if we need to add a separate cachePoint block
+            has_cache_control = False
+            
+            # Check for message-level cache_control
+            if current_message.get("cache_control", None) is not None:
+                has_cache_control = True
+            # Check for content-level cache_control in list content
+            elif isinstance(current_message.get("content"), list):
+                for content_element in current_message["content"]:
+                    if (isinstance(content_element, dict) and 
+                        content_element.get("cache_control", None) is not None):
+                        has_cache_control = True
+                        break
+            
+            # Add a separate cachePoint block if cache_control is present
+            if has_cache_control:
+                cache_point_block = BedrockContentBlock(cachePoint=CachePointBlock(type="default"))
+                tool_content.append(cache_point_block)
+            
             msg_i += 1
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
@@ -3589,9 +3619,28 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url=image_url
                             )
                             assistants_parts.append(assistants_part)
+                        # Add cache point block for assistant content elements
+                        _cache_point_block = (
+                            litellm.AmazonConverseConfig()._get_cache_point_block(
+                                message_block=cast(
+                                    OpenAIMessageContentListBlock, element
+                                ),
+                                block_type="content_block",
+                            )
+                        )
+                        if _cache_point_block is not None:
+                            assistants_parts.append(_cache_point_block)
                 assistant_content.extend(assistants_parts)
             elif _assistant_content is not None and isinstance(_assistant_content, str):
                 assistant_content.append(BedrockContentBlock(text=_assistant_content))
+                # Add cache point block for assistant string content
+                _cache_point_block = (
+                    litellm.AmazonConverseConfig()._get_cache_point_block(
+                        assistant_message_block, block_type="content_block"
+                    )
+                )
+                if _cache_point_block is not None:
+                    assistant_content.append(_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(

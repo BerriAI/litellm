@@ -1,4 +1,7 @@
 model_list:
-  - model_name: vertex_ai/*
+  - model_name: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
     litellm_params:
-      model: vertex_ai/*
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
+  - model_name: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0

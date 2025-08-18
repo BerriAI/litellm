@@ -1055,7 +1055,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
     ), patch(
         "litellm.proxy.auth.auth_checks._cache_team_object"
     ) as mock_cache_team, patch(
-        "litellm.proxy.management_endpoints.team_endpoints._upsert_team_member_budget_table"
+        "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
     ) as mock_upsert_budget:
 
         # Setup mock prisma client
@@ -1082,7 +1082,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
 
         # Mock budget upsert to return updated_kv without team_member_budget
         def mock_upsert_side_effect(
-            team_table, updated_kv, team_member_budget, user_api_key_dict
+            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()

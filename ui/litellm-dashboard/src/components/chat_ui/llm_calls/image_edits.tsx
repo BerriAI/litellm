@@ -1,6 +1,7 @@
 import openai from "openai";
 import { message } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
+import NotificationManager from "@/components/molecules/notifications_manager";
 
 export async function makeOpenAIImageEditsRequest(
   imageFile: File,
@@ -54,7 +55,7 @@ export async function makeOpenAIImageEditsRequest(
     if (signal?.aborted) {
       console.log("Image edits request was cancelled");
     } else {
-      message.error(`Error occurred while editing image. Please try again. Error: ${error}`, 20);
+      NotificationManager.fromBackend(`Error occurred while editing image. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

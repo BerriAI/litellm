@@ -1,11 +1,17 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Literal, Optional, Tuple, cast
+from typing import Any, Literal, Optional, Tuple, cast
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.types.utils import CallTypes, ModelInfo, PassthroughCallTypes, Usage
+from litellm.types.utils import (
+    CallTypes,
+    ImageResponse,
+    ModelInfo,
+    PassthroughCallTypes,
+    Usage,
+)
 from litellm.utils import get_model_info
 
 
@@ -377,3 +383,84 @@ class CostCalculatorUtils:
         ]:
             return True
         return False
+    
+    @staticmethod
+    def route_image_generation_cost_calculator(
+        model: str,
+        completion_response: Any,
+        custom_llm_provider: Optional[str] = None,
+        quality: Optional[str] = None,
+        n: Optional[int] = None,
+        size: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+    ) -> float:
+        """
+        Route the image generation cost calculator based on the custom_llm_provider
+        """
+        from litellm.cost_calculator import default_image_cost_calculator
+        from litellm.llms.azure_ai.image_generation.cost_calculator import (
+            cost_calculator as azure_ai_image_cost_calculator,
+        )
+        from litellm.llms.bedrock.image.cost_calculator import (
+            cost_calculator as bedrock_image_cost_calculator,
+        )
+        from litellm.llms.gemini.image_generation.cost_calculator import (
+            cost_calculator as gemini_image_cost_calculator,
+        )
+        from litellm.llms.recraft.cost_calculator import (
+            cost_calculator as recraft_image_cost_calculator,
+        )
+        from litellm.llms.vertex_ai.image_generation.cost_calculator import (
+            cost_calculator as vertex_ai_image_cost_calculator,
+        )
+
+        if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
+            if isinstance(completion_response, ImageResponse):
+                return vertex_ai_image_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                )
+        elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
+            if isinstance(completion_response, ImageResponse):
+                return bedrock_image_cost_calculator(
+                    model=model,
+                    size=size,
+                    image_response=completion_response,
+                    optional_params=optional_params,
+                )
+            raise TypeError(
+                "completion_response must be of type ImageResponse for bedrock image cost calculation"
+            )
+        elif custom_llm_provider == litellm.LlmProviders.RECRAFT.value:
+            from litellm.llms.recraft.cost_calculator import (
+                cost_calculator as recraft_image_cost_calculator,
+            )
+
+            return recraft_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
+            from litellm.llms.gemini.image_generation.cost_calculator import (
+                cost_calculator as gemini_image_cost_calculator,
+            )
+
+            return gemini_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.AZURE_AI.value:
+            return azure_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        else:
+            return default_image_cost_calculator(
+                model=model,
+                quality=quality,
+                custom_llm_provider=custom_llm_provider,
+                n=n,
+                size=size,
+                optional_params=optional_params,
+            )
+        return 0.0

@@ -27,6 +27,7 @@ import { modelInfoCall } from "../networking";
 import { tagCreateCall, tagListCall, tagDeleteCall } from "../networking";
 import { Tag } from "./types";
 import TagTable from "./TagTable";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface ModelInfo {
   model_name: string;
@@ -67,7 +68,7 @@ const TagManagement: React.FC<TagProps> = ({
       setTags(Object.values(response));
     } catch (error) {
       console.error("Error fetching tags:", error);
-      message.error("Error fetching tags: " + error);
+      NotificationManager.fromBackend("Error fetching tags: " + error);
     }
   };
 
@@ -91,7 +92,7 @@ const TagManagement: React.FC<TagProps> = ({
       fetchTags();
     } catch (error) {
       console.error("Error creating tag:", error);
-      message.error("Error creating tag: " + error);
+      NotificationManager.fromBackend("Error creating tag: " + error);
     }
   };
 
@@ -108,7 +109,7 @@ const TagManagement: React.FC<TagProps> = ({
       fetchTags();
     } catch (error) {
       console.error("Error deleting tag:", error);
-      message.error("Error deleting tag: " + error);
+      NotificationManager.fromBackend("Error deleting tag: " + error);
     }
     setIsDeleteModalOpen(false);
     setTagToDelete(null);
@@ -124,7 +125,7 @@ const TagManagement: React.FC<TagProps> = ({
           }
         } catch (error) {
           console.error("Error fetching models:", error);
-          message.error("Error fetching models: " + error);
+          NotificationManager.fromBackend("Error fetching models: " + error);
         }
       };
       fetchModels();

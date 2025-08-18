@@ -4,6 +4,7 @@ import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "../chat_ui/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/router_config_builder";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface EditAutoRouterModalProps {
   isVisible: boolean;
@@ -92,7 +93,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
     } catch (error) {
       console.error("Error parsing auto router config:", error);
-      message.error("Error loading auto router configuration");
+      NotificationManager.fromBackend("Error loading auto router configuration");
     }
   };
 
@@ -135,7 +136,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       onCancel();
     } catch (error) {
       console.error("Error updating auto router:", error);
-      message.error("Failed to update auto router configuration");
+      NotificationManager.fromBackend("Failed to update auto router configuration");
     } finally {
       setLoading(false);
     }

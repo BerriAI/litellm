@@ -237,16 +237,16 @@ def test_all_model_configs():
         drop_params=False,
     ) == {"max_tokens": 10}
 
-    from litellm import AmazonAnthropicClaude3Config, AmazonAnthropicConfig
+    from litellm import AmazonAnthropicClaudeConfig, AmazonAnthropicConfig
 
     assert (
         "max_completion_tokens"
-        in AmazonAnthropicClaude3Config().get_supported_openai_params(
+        in AmazonAnthropicClaudeConfig().get_supported_openai_params(
             model="anthropic.claude-3-sonnet-20240229-v1:0"
         )
     )
 
-    assert AmazonAnthropicClaude3Config().map_openai_params(
+    assert AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 10},
         optional_params={},
         model="anthropic.claude-3-sonnet-20240229-v1:0",
@@ -2234,7 +2234,7 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-        AmazonAnthropicClaude3Config,
+        AmazonAnthropicClaudeConfig,
     )
     from litellm.utils import ProviderConfigManager
 
@@ -2243,7 +2243,7 @@ def test_anthropic_claude_4_invoke_chat_provider_config():
         provider=LlmProviders.BEDROCK,
     )
     print(config)
-    assert isinstance(config, AmazonAnthropicClaude3Config)
+    assert isinstance(config, AmazonAnthropicClaudeConfig)
 
 
 def test_bedrock_application_inference_profile():
@@ -2416,3 +2416,16 @@ def test_generate_gcp_iam_access_token_import_error():
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
+
+
+def test_model_info_for_vertex_ai_deepseek_model():
+    model_info = litellm.get_model_info(
+        model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas"
+    )
+    assert model_info is not None
+    assert model_info["litellm_provider"] == "vertex_ai-deepseek_models"
+    assert model_info["mode"] == "chat"
+
+    assert model_info["input_cost_per_token"] is not None
+    assert model_info["output_cost_per_token"] is not None
+    print("vertex deepseek model info", model_info)

@@ -1,5 +1,5 @@
 import base64
-from typing import Any, Dict, Optional, Union, cast, get_type_hints
+from typing import Any, Dict, Optional, Union, cast, get_type_hints, overload
 
 import litellm
 from litellm._logging import verbose_logger
@@ -95,28 +95,57 @@ class ResponsesAPIRequestUtils:
             )
 
         return cast(ResponsesAPIOptionalRequestParams, filtered_params)
-
+    
+    @overload
     @staticmethod
     def _update_responses_api_response_id_with_model_id(
         responses_api_response: ResponsesAPIResponse,
         custom_llm_provider: Optional[str],
         litellm_metadata: Optional[Dict[str, Any]] = None,
     ) -> ResponsesAPIResponse:
-        """
-        Update the responses_api_response_id with model_id and custom_llm_provider
+        ...
 
-        This builds a composite ID containing the custom LLM provider, model ID, and original response ID
+    @overload
+    @staticmethod
+    def _update_responses_api_response_id_with_model_id(
+        responses_api_response: Dict[str, Any],
+        custom_llm_provider: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        ...
+
+    @staticmethod
+    def _update_responses_api_response_id_with_model_id(
+        responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
+        custom_llm_provider: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
+        """Update the responses_api_response_id with model_id and custom_llm_provider.
+
+        Handles both ``ResponsesAPIResponse`` objects and plain dictionaries returned
+        by some streaming providers.
         """
         litellm_metadata = litellm_metadata or {}
         model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
+
+        # access the response id based on the object type
+        response_id = (
+            responses_api_response["id"]
+            if isinstance(responses_api_response, dict)
+            else responses_api_response.id
+        )
+
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
             custom_llm_provider=custom_llm_provider,
-            response_id=responses_api_response.id,
+            response_id=response_id,
         )
 
-        responses_api_response.id = updated_id
+        if isinstance(responses_api_response, dict):
+            responses_api_response["id"] = updated_id
+        else:
+            responses_api_response.id = updated_id
         return responses_api_response
 
     @staticmethod

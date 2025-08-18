@@ -4,6 +4,7 @@ import { Button, TextInput } from '@tremor/react';
 import { GuardrailProviders, guardrail_provider_map, guardrailLogoMap, getGuardrailProviders } from './guardrail_info_helpers';
 import { getGuardrailUISettings } from '../networking';
 import PiiConfiguration from './pii_configuration';
+import NotificationManager from '../molecules/notifications_manager';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -59,7 +60,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         setGuardrailSettings(data);
       } catch (error) {
         console.error('Error fetching guardrail settings:', error);
-        message.error('Failed to load guardrail settings');
+        NotificationManager.fromBackend('Failed to load guardrail settings');
       }
     };
     
@@ -165,7 +166,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
             guardrailData.guardrail.guardrail_info = configObj;
           }
         } catch (error) {
-          message.error('Invalid JSON in configuration');
+          NotificationManager.fromBackend('Invalid JSON in configuration');
           setLoading(false);
           return;
         }
@@ -200,7 +201,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
       onClose();
     } catch (error) {
       console.error("Failed to update guardrail:", error);
-      message.error('Failed to update guardrail: ' + (error instanceof Error ? error.message : String(error)));
+      NotificationManager.fromBackend('Failed to update guardrail: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       setLoading(false);
     }

@@ -6,6 +6,7 @@ import { updateMCPServer, testMCPToolsListRequest } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import { MinusCircleOutlined, PlusOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import NotificationManager from "../molecules/notifications_manager";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -131,7 +132,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({ mcpServer, accessToken, o
       message.success("MCP Server updated successfully");
       onSuccess(updated);
     } catch (error: any) {
-      message.error("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
+      NotificationManager.fromBackend("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
     }
   };
 

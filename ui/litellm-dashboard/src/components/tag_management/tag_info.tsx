@@ -6,6 +6,7 @@ import { fetchUserModels } from "../organisms/create_key_button"
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key"
 import { tagInfoCall, tagUpdateCall } from "../networking"
 import { Tag, TagInfoResponse } from "./types"
+import NotificationManager from "../molecules/notifications_manager";
 
 interface TagInfoViewProps {
   tagId: string
@@ -38,7 +39,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       }
     } catch (error) {
       console.error("Error fetching tag details:", error)
-      message.error("Error fetching tag details: " + error)
+      NotificationManager.fromBackend("Error fetching tag details: " + error)
     }
   }
 
@@ -67,7 +68,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       fetchTagDetails()
     } catch (error) {
       console.error("Error updating tag:", error)
-      message.error("Error updating tag: " + error)
+      NotificationManager.fromBackend("Error updating tag: " + error)
     }
   }
 

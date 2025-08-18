@@ -311,7 +311,7 @@ def image_generation(  # noqa: PLR0915
             ) or get_secret_str("AZURE_AD_TOKEN")
 
             default_headers = {
-                "Content-Type": "application/json;",
+                "Content-Type": "application/json",
                 "api-key": api_key,
             }
             for k, v in default_headers.items():
@@ -325,6 +325,38 @@ def image_generation(  # noqa: PLR0915
                 api_key=api_key,
                 api_base=api_base,
                 azure_ad_token=azure_ad_token,
+                azure_ad_token_provider=azure_ad_token_provider,
+                logging_obj=litellm_logging_obj,
+                optional_params=optional_params,
+                model_response=model_response,
+                api_version=api_version,
+                aimg_generation=aimg_generation,
+                client=client,
+                headers=headers,
+                litellm_params=litellm_params_dict,
+            )
+        elif custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            api_base = AzureFoundryModelInfo.get_api_base(api_base)
+            api_key = AzureFoundryModelInfo.get_api_key(api_key)
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
+            default_headers = {
+                "Content-Type": "application/json",
+                "api-key": api_key,
+            }
+            for k, v in default_headers.items():
+                if k not in headers:
+                    headers[k] = v
+
+            model_response = azure_chat_completions.image_generation(
+                model=model,
+                prompt=prompt,
+                timeout=timeout,
+                api_key=api_key,
+                api_base=api_base,
+                azure_ad_token=None,
                 azure_ad_token_provider=azure_ad_token_provider,
                 logging_obj=litellm_logging_obj,
                 optional_params=optional_params,
