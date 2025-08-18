@@ -45,8 +45,8 @@ from openai.types.responses.response import (
 # Handle OpenAI SDK version compatibility for Text type
 try:
     from openai.types.responses.response_create_params import Text as ResponseText
-except ImportError:
-    # Fall back to the concrete config type available in older SDKs
+except (ImportError, AttributeError):
+    # Fall back to the concrete config type available in all SDK versions
     from openai.types.responses.response_text_config_param import ResponseTextConfigParam as ResponseText
 
 from openai.types.responses.response_create_params import (
