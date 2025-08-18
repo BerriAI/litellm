@@ -251,7 +251,6 @@ class OpenTelemetry(CustomLogger):
 
         from opentelemetry import metrics
         from opentelemetry.sdk.metrics import Histogram, MeterProvider
-        from opentelemetry.semconv._incubating.metrics import gen_ai_metrics
 
         # Only create OTLP infrastructure if no custom meter provider is provided
         if meter_provider is None:
@@ -283,13 +282,13 @@ class OpenTelemetry(CustomLogger):
         metrics.set_meter_provider(meter_provider)
 
         self._operation_duration_histogram = meter.create_histogram(
-            name=gen_ai_metrics.GEN_AI_CLIENT_OPERATION_DURATION,
+            name="gen_ai.client.operation.duration", # Replace with semconv constant post incubating status
             description="GenAI operation duration",
             unit="s",
             explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
         )
         self._token_usage_histogram = meter.create_histogram(
-            name=gen_ai_metrics.GEN_AI_CLIENT_TOKEN_USAGE,
+            name="gen_ai.client.token.usage", # Replace with semconv constant post incubating status
             description="GenAI token usage",
             unit="{token}",
             explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS,
