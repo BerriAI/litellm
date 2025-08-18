@@ -722,7 +722,7 @@
             "/v1/batch",
             "/v1/responses"
         ],
-        "supported_modalities": [
+        "supported_modalities": [   
             "text",
             "image"
         ],
