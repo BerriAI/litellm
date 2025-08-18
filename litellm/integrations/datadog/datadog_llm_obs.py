@@ -102,6 +102,24 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             verbose_logger.exception(
                 f"DataDogLLMObs: Error logging success event - {str(e)}"
             )
+    
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            verbose_logger.debug(
+                f"DataDogLLMObs: Logging failure event for model {kwargs.get('model', 'unknown')}"
+            )
+            payload = self.create_llm_obs_payload(
+                kwargs, start_time, end_time
+            )
+            verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
+            self.log_queue.append(payload)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
+        except Exception as e:
+            verbose_logger.exception(
+                f"DataDogLLMObs: Error logging failure event - {str(e)}"
+            )
 
     async def async_send_batch(self):
         try:
