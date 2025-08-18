@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolMessage,
     ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
+    ChatCompletionToolCallFunctionChunk,
     ChatCompletionUserMessage,
     GenericChatCompletionMessage,
     OpenAIMcpServerTool,
@@ -35,6 +35,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponseFormatTextConfig,
 )
+from openai.types.shared.response_format_text import ResponseFormatText
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
@@ -659,7 +660,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             reasoning=Reasoning(),
             status=getattr(chat_completion_response, "status", "completed"),
-            text=ResponseFormatTextConfig(),
+            text=ResponseFormatText(type="text"),
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response

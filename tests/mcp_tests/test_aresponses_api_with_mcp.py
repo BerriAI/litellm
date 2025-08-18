@@ -118,7 +118,7 @@ async def test_mcp_output_elements_addition():
             "reasoning": {"effort": None, "summary": None},
             "store": True,
             "temperature": 1.0,
-            "text": {"format": {"type": "text"}},
+            "text": {"type": "text"},
             "tool_choice": "auto",
             "tools": [],
             "top_p": 1.0,
