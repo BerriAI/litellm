@@ -76,6 +76,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         extra_body = optional_params.pop("extra_body", {})
+        if optional_params.get("usage") is None:
+            optional_params["usage"] = {}
+        optional_params["usage"]["include"] = True  # Get the cost of the request
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
