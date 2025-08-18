@@ -21,9 +21,9 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponseTextConfigParam,
     ToolChoice,
     ToolParam,
+    response_create_params,
 )
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -104,7 +104,7 @@ async def aresponses_api_with_mcp(
     background: Optional[bool] = None,
     stream: Optional[bool] = None,
     temperature: Optional[float] = None,
-    text: Optional[ResponseTextConfigParam] = None,
+    text: Optional[response_create_params.Text] = None,
     tool_choice: Optional[ToolChoice] = None,
     tools: Optional[Iterable[ToolParam]] = None,
     top_p: Optional[float] = None,
@@ -237,7 +237,7 @@ async def aresponses(
     background: Optional[bool] = None,
     stream: Optional[bool] = None,
     temperature: Optional[float] = None,
-    text: Optional[ResponseTextConfigParam] = None,
+    text: Optional[response_create_params.Text] = None,
     tool_choice: Optional[ToolChoice] = None,
     tools: Optional[Iterable[ToolParam]] = None,
     top_p: Optional[float] = None,
@@ -348,7 +348,7 @@ def responses(
     background: Optional[bool] = None,
     stream: Optional[bool] = None,
     temperature: Optional[float] = None,
-    text: Optional[ResponseTextConfigParam] = None,
+    text: Optional[response_create_params.Text] = None,
     tool_choice: Optional[ToolChoice] = None,
     tools: Optional[Iterable[ToolParam]] = None,
     top_p: Optional[float] = None,
