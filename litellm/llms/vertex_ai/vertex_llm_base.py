@@ -286,7 +286,7 @@ class VertexBase:
     def _check_custom_proxy(
         self,
         api_base: Optional[str],
-        custom_llm_provider: str,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         gemini_api_key: Optional[str],
         endpoint: str,
         stream: Optional[bool],
@@ -301,7 +301,7 @@ class VertexBase:
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
+                url = "{}/{}".format(api_base.rstrip("/"), endpoint.lstrip("/"))
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
@@ -310,7 +310,7 @@ class VertexBase:
                     gemini_api_key  # cloudflare expects api key as bearer token
                 )
             else:
-                url = "{}:{}".format(api_base, endpoint)
+                url = "{}/{}".format(api_base.rstrip("/"), endpoint.lstrip("/"))
 
             if stream is True:
                 url = url + "?alt=sse"

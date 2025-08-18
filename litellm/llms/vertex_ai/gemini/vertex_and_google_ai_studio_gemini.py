@@ -1891,6 +1891,20 @@ class VertexLLM(VertexBase):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
+            # If proxy returns 404 for Gemini native endpoint, provide actionable hint
+            if error_code == 404 and ("generateContent" in url or "streamGenerateContent" in url):
+                hint = (
+                    "Proxy server returned 404 for Gemini native endpoint. "
+                    "Most LiteLLM proxies only expose OpenAI-compatible routes (e.g., /v1/chat/completions) "
+                    "and do not support /generateContent. "
+                    "Fix: use custom_llm_provider='openai' to hit OpenAI-compatible endpoints, "
+                    "or configure your proxy to expose Gemini endpoints."
+                )
+                raise VertexAIError(
+                    status_code=error_code,
+                    message=f"{err.response.text or 'Not Found'} | {hint}",
+                    headers=err.response.headers,
+                )
             raise VertexAIError(
                 status_code=error_code,
                 message=err.response.text,
