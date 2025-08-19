@@ -1,10 +1,10 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
-import { getProviderLogoAndName } from "../provider_info_helpers";
-import { ModelData } from "./types";
+import { getProviderLogoAndName } from "../../provider_info_helpers";
+import { ModelData } from "../../model_dashboard/types";
 import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
-import DeleteModelButton from "../delete_model_button";
+import DeleteModelButton from "../../delete_model_button";
 import { useState } from "react";
 
 export const columns = (

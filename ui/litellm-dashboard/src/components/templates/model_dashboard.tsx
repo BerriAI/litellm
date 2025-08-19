@@ -55,7 +55,7 @@ import ModelInfoView from "../model_info_view"
 import AddModelTab from "../add_model/add_model_tab"
 
 import { ModelDataTable } from "../model_dashboard/table"
-import { columns } from "../model_dashboard/columns"
+import { columns } from "../molecules/models/columns"
 import PriceDataReload from "../price_data_reload"
 import HealthCheckComponent from "../model_dashboard/HealthCheckComponent"
 import PassThroughSettings from "../pass_through_settings"
