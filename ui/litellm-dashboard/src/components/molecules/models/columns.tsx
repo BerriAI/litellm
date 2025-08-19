@@ -3,7 +3,7 @@ import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { ModelData } from "../../model_dashboard/types";
-import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
+import { TrashIcon, PencilIcon, PencilAltIcon, KeyIcon } from "@heroicons/react/outline";
 import DeleteModelButton from "../../delete_model_button";
 import { useState } from "react";
 
@@ -93,6 +93,31 @@ export const columns = (
             </div>
           </div>
         </Tooltip>
+      );
+    },
+  },
+  {
+    header: () => <span className="text-sm font-semibold">Credentials</span>,
+    accessorKey: "litellm_credential_name",
+    size: 180, // Fixed column width
+    cell: ({ row }) => {
+      const model = row.original;
+      const credentialName = model.litellm_params?.litellm_credential_name;
+      
+      return credentialName ? (
+        <Tooltip title={`Credential: ${credentialName}`}>
+          <div className="flex items-center space-x-2 max-w-[180px]">
+            <KeyIcon className="w-4 h-4 text-blue-500 flex-shrink-0" />
+            <span className="text-xs truncate" title={credentialName}>
+              {credentialName}
+            </span>
+          </div>
+        </Tooltip>
+      ) : (
+        <div className="flex items-center space-x-2 max-w-[180px]">
+          <KeyIcon className="w-4 h-4 text-gray-300 flex-shrink-0" />
+          <span className="text-xs text-gray-400">No credentials</span>
+        </div>
       );
     },
   },
@@ -250,22 +275,6 @@ export const columns = (
             </button>
           )}
         </div>
-      );
-    },
-  },
-  {
-    header: () => <span className="text-sm font-semibold">Credentials</span>,
-    accessorKey: "litellm_credential_name",
-    cell: ({ row }) => {
-      const model = row.original;
-      return model.litellm_params && model.litellm_params.litellm_credential_name ? (
-        <div className="overflow-hidden">
-          <Tooltip title={model.litellm_params.litellm_credential_name}>
-            {model.litellm_params.litellm_credential_name.slice(0, 7)}...
-          </Tooltip>
-        </div>
-      ) : (
-        <span className="text-gray-400">-</span>
       );
     },
   },
