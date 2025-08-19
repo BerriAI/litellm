@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from io import BytesIO
 from unittest.mock import AsyncMock
 
 sys.path.insert(
@@ -182,6 +183,59 @@ async def test_litellm_gateway_from_sdk_image_generation(is_async):
             == mock_method.call_args.kwargs["prompt"]
         )
         assert "dall-e-3" == mock_method.call_args.kwargs["model"]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_litellm_gateway_from_sdk_image_edit(is_async):
+    litellm._turn_on_debug()
+
+    mock_response = {
+        "created": 1,
+        "data": [{"b64_json": ""}],
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    image_file = BytesIO(b"fake-image")
+
+    if is_async:
+        mock_post = AsyncMock(return_value=MockResponse(mock_response, 200))
+        patch_target = "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post"
+    else:
+        mock_post = MagicMock(return_value=MockResponse(mock_response, 200))
+        patch_target = "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+
+    with patch(patch_target, new=mock_post):
+        if is_async:
+            await litellm.aimage_edit(
+                model="litellm_proxy/gpt-image-1",
+                prompt="A test prompt",
+                image=[image_file],
+                api_base="http://my-proxy",
+                api_key="sk-1234",
+            )
+            mock_post.assert_awaited_once()
+        else:
+            litellm.image_edit(
+                model="litellm_proxy/gpt-image-1",
+                prompt="A test prompt",
+                image=[image_file],
+                api_base="http://my-proxy",
+                api_key="sk-1234",
+            )
+            mock_post.assert_called_once()
+
+    called_kwargs = mock_post.call_args.kwargs
+    assert called_kwargs["url"] == "http://my-proxy/images/edits"
+    assert called_kwargs["headers"]["Authorization"] == "Bearer sk-1234"
 
 
 @pytest.mark.parametrize("is_async", [False, True])
