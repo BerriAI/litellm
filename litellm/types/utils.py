@@ -913,22 +913,37 @@ class Usage(CompletionUsage):
     ):
         # handle reasoning_tokens
         _completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
-        if reasoning_tokens:
-            text_tokens = (
-                completion_tokens - reasoning_tokens if completion_tokens else None
-            )
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=reasoning_tokens, text_tokens=text_tokens
-            )
-
-        # Ensure completion_tokens_details is properly handled
+        
+        # Ensure completion_tokens_details is properly handled first
         if completion_tokens_details:
             if isinstance(completion_tokens_details, dict):
                 _completion_tokens_details = CompletionTokensDetailsWrapper(
                     **completion_tokens_details
                 )
             elif isinstance(completion_tokens_details, CompletionTokensDetails):
+                _completion_tokens_details = CompletionTokensDetailsWrapper(
+                    **completion_tokens_details.model_dump()
+                )
+            elif isinstance(completion_tokens_details, CompletionTokensDetailsWrapper):
                 _completion_tokens_details = completion_tokens_details
+        
+        # Now handle reasoning_tokens - this should take precedence if provided
+        if reasoning_tokens is not None:
+            text_tokens = (
+                completion_tokens - reasoning_tokens if completion_tokens else None
+            )
+            # Create new completion_tokens_details with reasoning_tokens
+            _completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=reasoning_tokens, 
+                text_tokens=text_tokens
+            )
+            # If there were existing details, preserve them but update reasoning_tokens
+            if completion_tokens_details and hasattr(completion_tokens_details, 'audio_tokens'):
+                _completion_tokens_details.audio_tokens = getattr(completion_tokens_details, 'audio_tokens', None)
+            if completion_tokens_details and hasattr(completion_tokens_details, 'accepted_prediction_tokens'):
+                _completion_tokens_details.accepted_prediction_tokens = getattr(completion_tokens_details, 'accepted_prediction_tokens', None)
+            if completion_tokens_details and hasattr(completion_tokens_details, 'rejected_prediction_tokens'):
+                _completion_tokens_details.rejected_prediction_tokens = getattr(completion_tokens_details, 'rejected_prediction_tokens', None)
 
         # handle prompt_tokens_details
         _prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None

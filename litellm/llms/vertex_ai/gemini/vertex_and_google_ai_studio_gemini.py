@@ -1946,7 +1946,7 @@ class ModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
-            from litellm.types.utils import ModelResponseStream
+            from litellm.types.utils import ModelResponseStream, Usage, CompletionTokensDetailsWrapper
 
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
             response_id = processed_chunk.get("responseId")
@@ -1984,6 +1984,14 @@ class ModelResponseIterator:
                     cast(
                         PromptTokensDetailsWrapper, usage.prompt_tokens_details
                     ).web_search_requests = web_search_requests
+            # Ensure usage is always set
+            if usage is None:
+                # Fallback: create empty usage
+                usage = Usage(
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0
+                )
 
             setattr(model_response, "usage", usage)  # type: ignore
 
