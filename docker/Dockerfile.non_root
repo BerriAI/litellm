@@ -47,8 +47,8 @@ RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ \
   && rm -f *.whl \
   && rm -rf /wheels
 
-# Install semantic_router without dependencies
-RUN pip install semantic_router --no-deps
+# Install semantic_router and aurelio-sdk using script
+RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
 # Ensure correct JWT library is used (pyjwt not jwt)
 RUN pip uninstall jwt -y && \
