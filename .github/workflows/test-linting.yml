@@ -23,7 +23,7 @@ jobs:
     - name: Install dependencies
       run: |
         poetry install --with dev
-        pip install openai==1.100.1
+        poetry run pip install openai==1.100.1
 
     - name: Run Black formatting
       run: |
