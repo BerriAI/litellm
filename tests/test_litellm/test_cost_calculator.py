@@ -665,4 +665,3 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     print(f"Expected actual cost: {expected_actual_cost}")
 
     assert expected_actual_cost == total_cost
-
