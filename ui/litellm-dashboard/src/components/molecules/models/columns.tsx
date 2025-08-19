@@ -40,6 +40,7 @@ export const columns = (
   {
     header: () => <span className="text-sm font-semibold">Model Information</span>,
     accessorKey: "model_name",
+    size: 250, // Fixed column width
     cell: ({ row }) => {
       const model = row.original;
       const displayName = getDisplayModelName(row.original) || "-";
@@ -53,7 +54,7 @@ export const columns = (
       
       return (
         <Tooltip title={tooltipContent}>
-          <div className="flex items-start space-x-2 min-w-0">
+          <div className="flex items-start space-x-2 min-w-0 w-full max-w-[250px]">
             {/* Provider Icon */}
             <div className="flex-shrink-0 mt-0.5">
               {model.provider ? (
@@ -82,11 +83,11 @@ export const columns = (
             {/* Model Names Container */}
             <div className="flex flex-col min-w-0 flex-1">
               {/* Public Model Name */}
-              <div className="text-xs font-medium text-gray-900 truncate">
+              <div className="text-xs font-medium text-gray-900 truncate max-w-[210px]" title={displayName}>
                 {displayName}
               </div>
               {/* LiteLLM Model Name */}
-              <div className="text-xs text-gray-500 truncate mt-0.5">
+              <div className="text-xs text-gray-500 truncate mt-0.5 max-w-[210px]" title={model.litellm_model_name || "-"}>
                 {model.litellm_model_name || "-"}
               </div>
             </div>
