@@ -73,6 +73,10 @@ spec:
           volumeMounts:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.migrationJob.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
       {{- with .Values.migrationJob.extraContainers }}
         {{- toYaml . | nindent 8 }}
       {{- end }}
