@@ -38,57 +38,58 @@ export const columns = (
     },
   },
   {
-    header: "Public Model Name",
+    header: "Model Information",
     accessorKey: "model_name",
     cell: ({ row }) => {
-      const displayName = getDisplayModelName(row.original) || "-";
-      return (
-        <Tooltip title={displayName}>
-          <div className="text-xs truncate whitespace-nowrap">
-            {displayName}
-          </div>
-        </Tooltip>
-      );
-    },
-  },
-  {
-    header: "Provider",
-    accessorKey: "provider",
-    cell: ({ row }) => {
       const model = row.original;
-      return (
-        <div className="flex items-center space-x-2">
-          {model.provider && (
-            <img
-              src={getProviderLogoAndName(model.provider).logo}
-              alt={`${model.provider} logo`}
-              className="w-4 h-4"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                const parent = target.parentElement;
-                if (parent) {
-                  const fallbackDiv = document.createElement('div');
-                  fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                  fallbackDiv.textContent = model.provider?.charAt(0) || '-';
-                  parent.replaceChild(fallbackDiv, target);
-                }
-              }}
-            />
-          )}
-          <p className="text-xs">{model.provider || "-"}</p>
+      const displayName = getDisplayModelName(row.original) || "-";
+      const tooltipContent = (
+        <div>
+          <div><strong>Provider:</strong> {model.provider || "-"}</div>
+          <div><strong>Public Model Name:</strong> {displayName}</div>
+          <div><strong>LiteLLM Model Name:</strong> {model.litellm_model_name || "-"}</div>
         </div>
       );
-    },
-  },
-  {
-    header: "LiteLLM Model Name",
-    accessorKey: "litellm_model_name",
-    cell: ({ row }) => {
-      const model = row.original;
+      
       return (
-        <Tooltip title={model.litellm_model_name}>
-          <div className="text-xs truncate whitespace-nowrap">
-            {model.litellm_model_name || "-"}
+        <Tooltip title={tooltipContent}>
+          <div className="flex items-start space-x-2 min-w-0">
+            {/* Provider Icon */}
+            <div className="flex-shrink-0 mt-0.5">
+              {model.provider ? (
+                <img
+                  src={getProviderLogoAndName(model.provider).logo}
+                  alt={`${model.provider} logo`}
+                  className="w-4 h-4"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    const parent = target.parentElement;
+                    if (parent) {
+                      const fallbackDiv = document.createElement('div');
+                      fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                      fallbackDiv.textContent = model.provider?.charAt(0) || '-';
+                      parent.replaceChild(fallbackDiv, target);
+                    }
+                  }}
+                />
+              ) : (
+                <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                  -
+                </div>
+              )}
+            </div>
+            
+            {/* Model Names Container */}
+            <div className="flex flex-col min-w-0 flex-1">
+              {/* Public Model Name */}
+              <div className="text-xs font-medium text-gray-900 truncate">
+                {displayName}
+              </div>
+              {/* LiteLLM Model Name */}
+              <div className="text-xs text-gray-500 truncate mt-0.5">
+                {model.litellm_model_name || "-"}
+              </div>
+            </div>
           </div>
         </Tooltip>
       );
