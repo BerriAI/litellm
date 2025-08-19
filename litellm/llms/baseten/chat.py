@@ -13,12 +13,12 @@ class BasetenConfig(OpenAIGPTConfig):
     response_format: Optional[dict] = None
     seed: Optional[int] = None
     stream: Optional[bool] = None
-    top_p: Optional[float] = None
+    top_p: Optional[int] = None
     tool_choice: Optional[str] = None
     tools: Optional[list] = None
     user: Optional[str] = None
-    presence_penalty: Optional[float] = None
-    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[int] = None
+    frequency_penalty: Optional[int] = None
     stream_options: Optional[dict] = None
 
     def __init__(
@@ -29,12 +29,12 @@ class BasetenConfig(OpenAIGPTConfig):
         stop: Optional[list] = None,
         stream: Optional[bool] = None,
         temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        top_p: Optional[int] = None,
         tool_choice: Optional[str] = None,
         tools: Optional[list] = None,
         user: Optional[str] = None,
-        presence_penalty: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[int] = None,
+        frequency_penalty: Optional[int] = None,
         stream_options: Optional[dict] = None,
     ) -> None:
         locals_ = locals().copy()
