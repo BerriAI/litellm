@@ -122,15 +122,28 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Created At</span>,
-    accessorKey: "model_info.created_at",
+    header: () => <span className="text-sm font-semibold">Created By</span>,
+    accessorKey: "model_info.created_by",
     sortingFn: "datetime",
+    size: 160, // Fixed column width
     cell: ({ row }) => {
       const model = row.original;
+      const createdBy = model.model_info.created_by;
+      const createdAt = model.model_info.created_at 
+        ? new Date(model.model_info.created_at).toLocaleDateString() 
+        : null;
+      
       return (
-        <span className="text-xs">
-          {model.model_info.created_at ? new Date(model.model_info.created_at).toLocaleDateString() : "-"}
-        </span>
+        <div className="flex flex-col min-w-0 max-w-[160px]">
+          {/* Created By - Primary */}
+          <div className="text-xs font-medium text-gray-900 truncate" title={createdBy || "Unknown"}>
+            {createdBy || "Unknown"}
+          </div>
+          {/* Created At - Secondary */}
+          <div className="text-xs text-gray-500 truncate mt-0.5" title={createdAt || "Unknown date"}>
+            {createdAt || "Unknown date"}
+          </div>
+        </div>
       );
     },
   },
@@ -143,18 +156,6 @@ export const columns = (
       return (
         <span className="text-xs">
           {model.model_info.updated_at ? new Date(model.model_info.updated_at).toLocaleDateString() : "-"}
-        </span>
-      );
-    },
-  },
-  {
-    header: () => <span className="text-sm font-semibold">Created By</span>,
-    accessorKey: "model_info.created_by",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <span className="text-xs">
-          {model.model_info.created_by || "-"}
         </span>
       );
     },
