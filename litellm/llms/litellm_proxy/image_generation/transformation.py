@@ -1,10 +1,9 @@
-from typing import List, Optional
+from typing import Optional
 
 from litellm.llms.openai.image_generation.gpt_transformation import (
     GPTImageGenerationConfig,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 
 
 class LiteLLMProxyImageGenerationConfig(GPTImageGenerationConfig):
