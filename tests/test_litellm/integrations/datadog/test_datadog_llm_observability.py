@@ -20,6 +20,7 @@ from litellm.types.integrations.datadog_llm_obs import (
     LLMObsPayload,
 )
 from litellm.types.utils import (
+    StandardLoggingGuardrailInformation,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
     StandardLoggingModelInformation,
@@ -354,7 +355,7 @@ async def test_dd_llms_obs_redaction(mock_env_vars):
     litellm._turn_on_debug()
     from litellm.types.utils import LiteLLMCommonStrings
     litellm.datadog_llm_observability_params = DatadogLLMObsInitParams(turn_off_message_logging=True)
-    dd_llms_obs_logger = TestDataDogLLMObsLogger()
+    dd_llms_obs_logger = TestDataDogLLMObsLoggerForRedaction()
     test_s3_logger = TestS3Logger()
     litellm.callbacks = [
         dd_llms_obs_logger,
@@ -424,3 +425,145 @@ async def test_create_llm_obs_payload(mock_env_vars):
     assert payload["metrics"]["input_tokens"] == 10
     assert payload["metrics"]["output_tokens"] == 20
     assert payload["metrics"]["total_tokens"] == 30
+
+
+def create_standard_logging_payload_with_latency_metrics() -> StandardLoggingPayload:
+    """Create a StandardLoggingPayload object with latency metrics for testing"""
+    guardrail_info = StandardLoggingGuardrailInformation(
+        guardrail_name="test_guardrail",
+        guardrail_status="success",
+        start_time=1234567890.0,
+        end_time=1234567890.5,
+        duration=0.5,  # 500ms
+    )
+    
+    hidden_params = StandardLoggingHiddenParams(
+        model_id="model-123",
+        cache_key="test-cache-key",
+        api_base="https://api.openai.com",
+        response_cost="0.05",
+        litellm_overhead_time_ms=150.0,  # 150ms
+        additional_headers=None,
+    )
+    
+    return StandardLoggingPayload(
+        id="test-request-id-latency",
+        call_type="completion",
+        response_cost=0.05,
+        response_cost_failure_debug_info=None,
+        status="success",
+        total_tokens=30,
+        prompt_tokens=10,
+        completion_tokens=20,
+        startTime=1234567890.0,
+        endTime=1234567892.0,
+        completionStartTime=1234567890.8,  # 800ms after start
+        response_time=2.0,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-4", model_map_value=None
+        ),
+        model="gpt-4",
+        model_id="model-123",
+        model_group="openai-gpt",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_org_id=None,
+            user_api_key_alias="test_alias",
+            user_api_key_team_id="test_team",
+            user_api_key_user_id="test_user",
+            user_api_key_team_alias="test_team_alias",
+            spend_logs_metadata=None,
+            requester_ip_address="127.0.0.1",
+            requester_metadata=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address="127.0.0.1",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        response={"choices": [{"message": {"content": "Hi there!"}}]},
+        error_str=None,
+        error_information=None,
+        model_parameters={"stream": True},
+        hidden_params=hidden_params,
+        guardrail_information=guardrail_info,
+        trace_id="test-trace-id-latency",
+        custom_llm_provider="openai",
+    )
+
+
+def test_latency_metrics_in_metadata(mock_env_vars):
+    """Test that time to first token, litellm overhead, and guardrail overhead are included in metadata"""
+    with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \
+         patch('asyncio.create_task'):
+        logger = DataDogLLMObsLogger()
+        
+        standard_payload = create_standard_logging_payload_with_latency_metrics()
+        
+        kwargs = {
+            "standard_logging_object": standard_payload,
+            "litellm_params": {"metadata": {}}
+        }
+        
+        start_time = datetime.now()
+        end_time = datetime.now()
+        
+        # Test the metadata generation directly
+        metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
+        latency_metadata = metadata.get("latency_metrics", {})
+        
+        # Verify time to first token is included (800ms)
+        assert "time_to_first_token_ms" in latency_metadata
+        assert abs(latency_metadata["time_to_first_token_ms"] - 800.0) < 0.001  # 0.8 seconds * 1000 with tolerance for floating-point precision
+        
+        # Verify litellm overhead is included (150ms)
+        assert "litellm_overhead_time_ms" in latency_metadata
+        assert latency_metadata["litellm_overhead_time_ms"] == 150.0
+        
+        # Verify guardrail overhead is included (500ms) 
+        assert "guardrail_overhead_time_ms" in latency_metadata
+        assert latency_metadata["guardrail_overhead_time_ms"] == 500.0  # 0.5 seconds * 1000
+        
+        # Verify these metrics are also included in the full payload
+        payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
+        payload_metadata_latency = payload["meta"]["metadata"]["latency_metrics"]
+        
+        assert abs(payload_metadata_latency["time_to_first_token_ms"] - 800.0) < 0.001
+        assert payload_metadata_latency["litellm_overhead_time_ms"] == 150.0
+        assert payload_metadata_latency["guardrail_overhead_time_ms"] == 500.0
+
+
+def test_latency_metrics_edge_cases(mock_env_vars):
+    """Test latency metrics with edge cases (missing fields, zero values, etc.)"""
+    with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \
+         patch('asyncio.create_task'):
+        logger = DataDogLLMObsLogger()
+        
+        # Test case 1: No latency metrics present
+        standard_payload = create_standard_logging_payload_with_cache()
+        metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
+        
+        # Should not have latency fields if data is missing/zero
+        assert "time_to_first_token_ms" not in metadata  # Will be 0, so not included
+        assert "litellm_overhead_time_ms" not in metadata  # Not present in hidden_params
+        assert "guardrail_overhead_time_ms" not in metadata  # No guardrail_information
+        
+        # Test case 2: Zero time to first token should not be included
+        standard_payload = create_standard_logging_payload_with_cache()
+        standard_payload["startTime"] = 1000.0
+        standard_payload["completionStartTime"] = 1000.0  # Same time = 0 difference
+        metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
+        assert "time_to_first_token_ms" not in metadata
+        
+        # Test case 3: Missing guardrail duration should not crash
+        standard_payload = create_standard_logging_payload_with_cache()
+        standard_payload["guardrail_information"] = StandardLoggingGuardrailInformation(
+            guardrail_name="test",
+            guardrail_status="success",
+            # duration is missing
+        )
+        metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
+        assert "guardrail_overhead_time_ms" not in metadata

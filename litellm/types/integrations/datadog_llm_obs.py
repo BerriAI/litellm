@@ -72,3 +72,9 @@ class DatadogLLMObsInitParams(StandardCustomLoggerInitParams):
     Params for initializing a DatadogLLMObs logger on litellm
     """
     pass
+
+
+class DDLLMObsLatencyMetrics(TypedDict, total=False):
+    time_to_first_token_ms: float
+    litellm_overhead_time_ms: float
+    guardrail_overhead_time_ms: float
