@@ -7305,6 +7305,12 @@ class ProviderConfigManager:
             )
 
             return get_gemini_image_generation_config(model)
+        elif LlmProviders.LITELLM_PROXY == provider:
+            from litellm.llms.litellm_proxy.image_generation.transformation import (
+                LiteLLMProxyImageGenerationConfig,
+            )
+
+            return LiteLLMProxyImageGenerationConfig()
         return None
 
     @staticmethod
