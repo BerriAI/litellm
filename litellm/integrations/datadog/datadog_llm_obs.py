@@ -422,6 +422,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
             "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
+            "guardrail_information": standard_logging_payload.get("guardrail_information", None),
         }
 
         #########################################################
