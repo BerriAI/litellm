@@ -70,8 +70,13 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
+        from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+
         return BaseAzureLLM._get_base_azure_url(
-            api_base=api_base, litellm_params=litellm_params, route="/openai/responses"
+            api_base=api_base,
+            litellm_params=litellm_params,
+            route="/openai/responses",
+            default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
 
     #########################################################
