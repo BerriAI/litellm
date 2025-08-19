@@ -93,9 +93,6 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group,
     run_async_fallback,
 )
-from litellm.router_utils.forward_clientside_headers_by_model_group import (
-    ForwardClientSideHeadersByModelGroup,
-)
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
