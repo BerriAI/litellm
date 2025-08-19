@@ -300,7 +300,7 @@ class AimGuardrail(CustomGuardrail):
         )
         call_id = request_data.get("litellm_call_id")
         async with connect(
-            f"{self.ws_api_base}/detect/output/ws",
+            f"{self.ws_api_base}/fw/v1/analyze/stream",
             additional_headers=self._build_aim_headers(
                 hook="output",
                 key_alias=user_api_key_dict.key_alias,
