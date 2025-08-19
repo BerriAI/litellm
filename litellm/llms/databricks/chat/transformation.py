@@ -219,20 +219,26 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
         is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+        # Prevent parent from rewriting max_completion_tokens so we can preserve user choice for Databricks
         mapped_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            replace_max_completion_tokens_with_max_tokens=False,
         )
         if "tools" in mapped_params:
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(
                 model=model, tools=mapped_params["tools"]
             )
-        if (
-            "max_completion_tokens" in non_default_params
-            and replace_max_completion_tokens_with_max_tokens
-        ):
-            mapped_params["max_tokens"] = non_default_params[
+        # Preserve user's explicit choice and avoid sending both params
+        if "max_completion_tokens" in non_default_params:
+            mapped_params["max_completion_tokens"] = non_default_params[
                 "max_completion_tokens"
-            ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'
+            ]
+            mapped_params.pop("max_tokens", None)
+        elif "max_tokens" in non_default_params:
+            mapped_params["max_tokens"] = non_default_params["max_tokens"]
             mapped_params.pop("max_completion_tokens", None)
 
         if "response_format" in non_default_params and "claude" in model:

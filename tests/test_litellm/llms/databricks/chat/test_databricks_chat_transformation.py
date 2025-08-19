@@ -90,3 +90,46 @@ def test_transform_choices_without_signature():
     thinking_block = choices[0].message.thinking_blocks[0]
     assert thinking_block["type"] == "thinking"
     assert thinking_block["thinking"] == "i'm thinking without signature."
+
+
+def test_map_openai_params_preserves_max_completion_tokens_not_max_tokens():
+    config = DatabricksConfig()
+    non_default_params = {"max_completion_tokens": 20000}
+    optional_params = {}
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="databricks/se-gpt-5-mini",
+        drop_params=False,
+    )
+    assert result.get("max_completion_tokens") == 20000
+    assert "max_tokens" not in result
+
+
+def test_map_openai_params_preserves_max_tokens_not_max_completion_tokens():
+    config = DatabricksConfig()
+    non_default_params = {"max_tokens": 1024}
+    optional_params = {}
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="databricks/databricks-dbrx-instruct",
+        drop_params=False,
+    )
+    assert result.get("max_tokens") == 1024
+    assert "max_completion_tokens" not in result
+
+
+def test_map_openai_params_prefers_max_completion_tokens_when_both_provided():
+    config = DatabricksConfig()
+    non_default_params = {"max_tokens": 512, "max_completion_tokens": 20000}
+    optional_params = {}
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="databricks/se-gpt-5-mini",
+        drop_params=False,
+    )
+    # Should keep only max_completion_tokens
+    assert result.get("max_completion_tokens") == 20000
+    assert "max_tokens" not in result
