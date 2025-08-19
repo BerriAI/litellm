@@ -408,11 +408,11 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
 
     def _get_dd_llm_obs_payload_metadata(
         self, standard_logging_payload: StandardLoggingPayload
-    ) -> Dict:
+    ) -> Dict[str, Any]:
         """
         Fields to track in DD LLM Observability metadata from litellm standard logging payload
         """
-        _metadata = {
+        _metadata: Dict[str, Any] = {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get(
                 "custom_llm_provider", "unknown"
@@ -428,7 +428,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         # Add latency metrics to metadata
         #########################################################
         latency_metrics = self._get_latency_metrics(standard_logging_payload)
-        _metadata.update({"latency_metrics": latency_metrics})
+        _metadata.update({"latency_metrics": dict(latency_metrics)})
 
         _standard_logging_metadata: dict = (
             dict(standard_logging_payload.get("metadata", {})) or {}
@@ -436,7 +436,7 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
         _metadata.update(_standard_logging_metadata)
         return _metadata
 
-    def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> Dict:
+    def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsLatencyMetrics:
         """
         Get the latency metrics from the standard logging payload
         """
@@ -461,4 +461,4 @@ class DataDogLLMObsLogger(DataDogLogger, CustomBatchLogger):
                 # Convert from seconds to milliseconds for consistency
                 latency_metrics["guardrail_overhead_time_ms"] = _guardrail_duration_seconds * 1000
             
-        return dict(latency_metrics)
+        return latency_metrics
