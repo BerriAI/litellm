@@ -181,12 +181,21 @@ class BaseAWSLLM:
         elif aws_role_name is not None:
             # Check if we're in IRSA and trying to assume the same role we already have
             current_role_arn = os.getenv("AWS_ROLE_ARN")
-            if (current_role_arn and current_role_arn == aws_role_name and 
-                aws_access_key_id is None and aws_secret_access_key is None):
+            web_identity_token_file = os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
+            
+            # In IRSA environments, we should skip role assumption if we're already running as the target role
+            # This is true when:
+            # 1. We have AWS_ROLE_ARN set (current role)
+            # 2. We have AWS_WEB_IDENTITY_TOKEN_FILE set (IRSA environment)
+            # 3. The current role matches the requested role
+            if (current_role_arn and web_identity_token_file and 
+                current_role_arn == aws_role_name):
+                verbose_logger.debug("Using IRSA same-role optimization: calling _auth_with_env_vars")
                 # We're already running as this role via IRSA, no need to assume it again
                 # Use the default boto3 credentials (which will use the IRSA credentials)
                 credentials, _cache_ttl = self._auth_with_env_vars()
             else:
+                verbose_logger.debug("Using role assumption: calling _auth_with_aws_role")
                 # If aws_session_name is not provided, generate a default one
                 if aws_session_name is None:
                     aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
