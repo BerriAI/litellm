@@ -91,8 +91,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         # Add Claude-specific parameters for models that support extended thinking
         if "claude" in model.lower() and supports_reasoning(
-            model=model,
-            custom_llm_provider="github_copilot",
+            model=model.lower(),
         ):
             if "thinking" not in base_params:
                 base_params.append("thinking")
