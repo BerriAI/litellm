@@ -22,11 +22,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install openai==1.99.5
         poetry install --with dev
-        pip install openai==1.99.5
-
-
+        poetry run pip install openai==1.100.1
 
     - name: Run Black formatting
       run: |
@@ -39,6 +36,10 @@ jobs:
         cd litellm
         poetry run ruff check .
         cd ..
+
+    - name: Print OpenAI version
+      run: |
+        poetry run python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
     - name: Run MyPy type checking
       run: |
