@@ -803,11 +803,18 @@ LiteLLM Proxy supports session management for non-OpenAI models. This allows you
 
 1. Enable storing request / response content in the database
 
-Set `store_prompts_in_spend_logs: true` in your proxy config.yaml. When this is enabled, LiteLLM will store the request and response content in the database.
+Set `store_prompts_in_cold_storage: true` in your proxy config.yaml. When this is enabled, LiteLLM will store the request and response content in the s3 bucket you specify.
 
 ```yaml
+litellm_settings:
+  callbacks: ["s3_v2"]
+  s3_callback_params: # learn more https://docs.litellm.ai/docs/proxy/logging#s3-buckets
+    s3_bucket_name: litellm-logs   # AWS Bucket Name for S3
+    s3_region_name: us-west-2       
+
 general_settings:
-  store_prompts_in_spend_logs: true
+  cold_storage_custom_logger: s3_v2
+  store_prompts_in_cold_storage: true
 ```
 
 2. Make request 1 with no `previous_response_id` (new session)

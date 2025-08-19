@@ -5,3 +5,13 @@ model_list:
   - model_name: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
     litellm_params:
       model: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
+litellm_settings:
+  callbacks: ["datadog_llm_observability"]
+
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
