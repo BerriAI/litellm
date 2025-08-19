@@ -480,3 +480,69 @@ def test_gemini_25_implicit_caching_cost():
     ), f"Expected cost {expected_cost}, but got {result}"
 
     print(f"✓ Gemini 2.5 implicit caching cost calculation is correct: ${result:.8f}")
+
+
+def test_gemini_25_explicit_caching_cost_direct_usage():
+    """
+    Test that Gemini 2.5 models correctly calculate costs with explicit caching.
+
+    This test reproduces the issue from #11156 where cached tokens should receive
+    a 75% discount.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import (
+        CompletionTokensDetailsWrapper,
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+    from litellm.utils import get_model_info
+
+    model_info = get_model_info(model="gemini-2.5-pro", custom_llm_provider="gemini")
+
+    usage = Usage(
+        completion_tokens=2522,
+        prompt_tokens=42001,
+        total_tokens=44523,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            accepted_prediction_tokens=None,
+            audio_tokens=None,
+            reasoning_tokens=1908,
+            rejected_prediction_tokens=None,
+            text_tokens=614,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=None, cached_tokens=40938, text_tokens=1063, image_tokens=None
+        ),
+    )
+
+    input_cost, output_cost = generic_cost_per_token(
+        model="gemini/gemini-2.5-pro",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+
+    total_cost = input_cost + output_cost
+
+    expected_higher_than_actual_cost = (
+        model_info["input_cost_per_token"] * usage.prompt_tokens
+        + model_info["output_cost_per_token"] * usage.completion_tokens
+    )
+
+    print(f"expected_higher_than_actual_cost: {expected_higher_than_actual_cost}")
+
+    assert expected_higher_than_actual_cost > total_cost
+
+    expected_actual_cost = (
+        model_info["input_cost_per_token"] * usage.prompt_tokens_details.text_tokens
+        + model_info["cache_read_input_token_cost"]
+        * usage.prompt_tokens_details.cached_tokens
+        + model_info["output_cost_per_token"] * usage.completion_tokens
+    )
+
+    print(
+        f"model_info['input_cost_per_token']: {model_info['input_cost_per_token']}, usage.prompt_tokens_details.text_tokens: {usage.prompt_tokens_details.text_tokens}, model_info['cache_read_input_token_cost']: {model_info['cache_read_input_token_cost']}, model_info['output_cost_per_token']: {model_info['output_cost_per_token']}"
+    )
+
+    print(f"Expected actual cost: {expected_actual_cost}")
+
+    assert expected_actual_cost == total_cost
