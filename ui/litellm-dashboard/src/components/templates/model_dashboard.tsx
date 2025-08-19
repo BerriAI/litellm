@@ -942,7 +942,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
           <div className="flex justify-between items-center mb-4">
             <div>
               <h2 className="text-lg font-semibold">Model Management</h2>
-              <p className="text-sm text-gray-600">Manage your models and configurations</p>
+              {!all_admin_roles.includes(userRole) ? (
+                <p className="text-sm text-gray-600">Add models for teams you are an admin for.</p>
+              ) : (
+                <p className="text-sm text-gray-600">Add and manage models for the proxy</p>
+              )}
             </div>
           </div>
           {selectedModelId ? (
@@ -1003,16 +1007,6 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                 <TabPanel>
                   <Grid>
                     <div className="flex flex-col space-y-4">
-                      <div className="flex justify-between items-center mb-4">
-                        <div>
-                          <Title>Model Management</Title>
-                          {!all_admin_roles.includes(userRole) ? (
-                            <Text className="text-tremor-content">Add models for teams you are an admin for.</Text>
-                          ) : (
-                            <Text className="text-tremor-content">Add and manage models for the proxy</Text>
-                          )}
-                        </div>
-                      </div>
 
                       <div className="bg-white rounded-lg shadow">
                         <div className="border-b px-6 py-4">

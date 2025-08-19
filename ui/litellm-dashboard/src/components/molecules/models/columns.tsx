@@ -21,7 +21,7 @@ export const columns = (
   setExpandedRows: (expandedRows: Set<string>) => void,
 ): ColumnDef<ModelData>[] => [
   {
-    header: "Model ID",
+    header: () => <span className="text-sm font-semibold">Model ID</span>,
     accessorKey: "model_info.id",
     cell: ({ row }) => {
       const model = row.original;
@@ -38,7 +38,7 @@ export const columns = (
     },
   },
   {
-    header: "Model Information",
+    header: () => <span className="text-sm font-semibold">Model Information</span>,
     accessorKey: "model_name",
     cell: ({ row }) => {
       const model = row.original;
@@ -96,7 +96,7 @@ export const columns = (
     },
   },
   {
-    header: "Created At",
+    header: () => <span className="text-sm font-semibold">Created At</span>,
     accessorKey: "model_info.created_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
@@ -109,7 +109,7 @@ export const columns = (
     },
   },
   {
-    header: "Updated At",
+    header: () => <span className="text-sm font-semibold">Updated At</span>,
     accessorKey: "model_info.updated_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
@@ -122,7 +122,7 @@ export const columns = (
     },
   },
   {
-    header: "Created By",
+    header: () => <span className="text-sm font-semibold">Created By</span>,
     accessorKey: "model_info.created_by",
     cell: ({ row }) => {
       const model = row.original;
@@ -136,7 +136,7 @@ export const columns = (
   {
     header: () => (
       <Tooltip title="Cost per 1M tokens">
-        <span>Input Cost</span>
+        <span className="text-sm font-semibold">Input Cost</span>
       </Tooltip>
     ),
     accessorKey: "input_cost",
@@ -152,7 +152,7 @@ export const columns = (
   {
     header: () => (
       <Tooltip title="Cost per 1M tokens">
-        <span>Output Cost</span>
+        <span className="text-sm font-semibold">Output Cost</span>
       </Tooltip>
     ),
     accessorKey: "output_cost",
@@ -166,7 +166,7 @@ export const columns = (
     },
   },
   {
-    header: "Team ID",
+    header: () => <span className="text-sm font-semibold">Team ID</span>,
     accessorKey: "model_info.team_id",
     cell: ({ row }) => {
       const model = row.original;
@@ -189,7 +189,7 @@ export const columns = (
     },
   },
   {
-    header: "Model Access Group",
+    header: () => <span className="text-sm font-semibold">Model Access Group</span>,
     accessorKey: "model_info.model_access_group",
     enableSorting: false,
     cell: ({ row }) => {
@@ -253,7 +253,7 @@ export const columns = (
     },
   },
   {
-    header: "Credentials",
+    header: () => <span className="text-sm font-semibold">Credentials</span>,
     accessorKey: "litellm_credential_name",
     cell: ({ row }) => {
       const model = row.original;
@@ -269,7 +269,7 @@ export const columns = (
     },
   },
   {
-    header: "Status",
+    header: () => <span className="text-sm font-semibold">Status</span>,
     accessorKey: "model_info.db_model",
     cell: ({ row }) => {
       const model = row.original;
