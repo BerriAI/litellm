@@ -311,17 +311,6 @@ export const columns = (
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
           <Icon
-            icon={PencilAltIcon}
-            size="sm"
-            onClick={() => {
-              if (canEditModel) {
-                setSelectedModelId(model.model_info.id);
-                setEditModel(true);
-              }
-            }}
-            className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
-          />
-          <Icon
             icon={TrashIcon}
             size="sm"
             onClick={() => {
