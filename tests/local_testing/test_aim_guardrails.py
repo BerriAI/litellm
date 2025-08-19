@@ -216,12 +216,13 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
     ) as mock_post:
 
         def mock_post_detect_side_effect(url, *args, **kwargs):
-            if url.endswith("/detect/openai/v2"):
+            request_body = kwargs.get("json", {})
+            if request_body["messages"][-1]["role"] == "user":
                 return response_with_detections
-            elif url.endswith("/detect/output/v2"):
+            elif request_body["messages"][-1]["role"] == "assistant":
                 return response_without_detections
             else:
-                raise ValueError("Unexpected URL: {}".format(url))
+                raise ValueError("Unexpected request: {}".format(request_body))
 
         mock_post.side_effect = mock_post_detect_side_effect
 
