@@ -37,6 +37,10 @@ jobs:
         poetry run ruff check .
         cd ..
 
+    - name: Print OpenAI version
+      run: |
+        poetry run python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
+
     - name: Run MyPy type checking
       run: |
         cd litellm
