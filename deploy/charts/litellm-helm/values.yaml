@@ -208,6 +208,10 @@ migrationJob:
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   annotations: {}
   ttlSecondsAfterFinished: 120
+  resources: {}
+  #  requests:
+  #    cpu: 100m
+  #    memory: 100Mi
   extraContainers: []
   
   # Hook configuration
