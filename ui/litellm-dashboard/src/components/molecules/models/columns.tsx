@@ -83,11 +83,11 @@ export const columns = (
             {/* Model Names Container */}
             <div className="flex flex-col min-w-0 flex-1">
               {/* Public Model Name */}
-              <div className="text-xs font-medium text-gray-900 truncate max-w-[210px]" title={displayName}>
+              <div className="text-xs font-medium text-gray-900 truncate max-w-[210px]">
                 {displayName}
               </div>
               {/* LiteLLM Model Name */}
-              <div className="text-xs text-gray-500 truncate mt-0.5 max-w-[210px]" title={model.litellm_model_name || "-"}>
+              <div className="text-xs text-gray-500 truncate mt-0.5 max-w-[210px]">
                 {model.litellm_model_name || "-"}
               </div>
             </div>
