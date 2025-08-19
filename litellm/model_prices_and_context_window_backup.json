@@ -722,7 +722,7 @@
             "/v1/batch",
             "/v1/responses"
         ],
-        "supported_modalities": [
+        "supported_modalities": [   
             "text",
             "image"
         ],
@@ -730,13 +730,13 @@
             "text"
         ],
         "supports_pdf_input": true,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_native_streaming": true,
         "supports_reasoning": true
     },
@@ -762,13 +762,13 @@
             "text"
         ],
         "supports_pdf_input": true,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
         "supports_response_schema": true,
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_native_streaming": true,
         "supports_reasoning": true
     },
@@ -11480,9 +11480,9 @@
     },
     "openrouter/anthropic/claude-sonnet-4": {
         "supports_computer_use": true,
-        "max_tokens": 8192,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 64000,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 1.5e-05,
         "input_cost_per_image": 0.0048,

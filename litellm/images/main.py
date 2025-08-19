@@ -369,6 +369,7 @@ def image_generation(  # noqa: PLR0915
             )
         elif (
             custom_llm_provider == "openai"
+            or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
             model_response = openai_chat_completions.image_generation(
@@ -444,7 +445,6 @@ def image_generation(  # noqa: PLR0915
         elif custom_llm_provider in (
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.GEMINI,
-            
         ):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
