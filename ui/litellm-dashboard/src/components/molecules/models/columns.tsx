@@ -161,34 +161,40 @@ export const columns = (
     },
   },
   {
-    header: () => (
-      <Tooltip title="Cost per 1M tokens">
-        <span className="text-sm font-semibold">Input Cost</span>
-      </Tooltip>
-    ),
+    header: () => <span className="text-sm font-semibold">Costs</span>,
     accessorKey: "input_cost",
+    size: 120, // Fixed column width
     cell: ({ row }) => {
       const model = row.original;
+      const inputCost = model.input_cost;
+      const outputCost = model.output_cost;
+      
+      // If both costs are missing or undefined, show "-"
+      if (!inputCost && !outputCost) {
+        return (
+          <div className="max-w-[120px]">
+            <span className="text-xs text-gray-400">-</span>
+          </div>
+        );
+      }
+      
       return (
-        <pre className="text-xs">
-          {model.input_cost || "-"}
-        </pre>
-      );
-    },
-  },
-  {
-    header: () => (
-      <Tooltip title="Cost per 1M tokens">
-        <span className="text-sm font-semibold">Output Cost</span>
-      </Tooltip>
-    ),
-    accessorKey: "output_cost",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <pre className="text-xs">
-          {model.output_cost || "-"}
-        </pre>
+        <Tooltip title="Cost per 1M tokens">
+          <div className="flex flex-col min-w-0 max-w-[120px]">
+            {/* Input Cost - Primary */}
+            {inputCost && (
+              <div className="text-xs font-medium text-gray-900 truncate">
+                In: ${inputCost}
+              </div>
+            )}
+            {/* Output Cost - Secondary */}
+            {outputCost && (
+              <div className="text-xs text-gray-500 truncate mt-0.5">
+                Out: ${outputCost}
+              </div>
+            )}
+          </div>
+        </Tooltip>
       );
     },
   },
