@@ -111,7 +111,7 @@ class ResponsesAPIRequestUtils:
 
         valid_keys = get_type_hints(ResponsesAPIOptionalRequestParams).keys()
         custom_llm_provider = params.pop("custom_llm_provider", None)
-        special_params = params.pop("kwargs")
+        special_params = params.pop("kwargs", {})
 
         additional_drop_params = params.pop("additional_drop_params", None)
         non_default_params = (
