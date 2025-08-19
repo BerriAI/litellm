@@ -606,7 +606,6 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
 
 
-
 def test_get_num_retries_from_request():
     """
     Test LiteLLMProxyRequestSetup._get_num_retries_from_request method
@@ -668,6 +667,7 @@ def test_get_num_retries_from_request():
     )
     assert result == -1
 
+
 def test_add_user_api_key_auth_to_request_metadata():
     """
     Test that add_user_api_key_auth_to_request_metadata properly adds user API key authentication data to request metadata
@@ -676,9 +676,9 @@ def test_add_user_api_key_auth_to_request_metadata():
     data = {
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "Hello"}],
-        "litellm_metadata": {}  # This will be the metadata variable name
+        "litellm_metadata": {},  # This will be the metadata variable name
     }
-    
+
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-test-key-123",
         user_id="test-user-123",
@@ -689,21 +689,21 @@ def test_add_user_api_key_auth_to_request_metadata():
         team_alias="test-team-alias",
         end_user_id="test-end-user-123",
         request_route="/chat/completions",
-        end_user_max_budget=500.0
+        end_user_max_budget=500.0,
     )
-    
+
     metadata_variable_name = "litellm_metadata"
-    
+
     # Call the function
     result = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
         user_api_key_dict=user_api_key_dict,
-        _metadata_variable_name=metadata_variable_name
+        _metadata_variable_name=metadata_variable_name,
     )
-    
+
     # Verify the metadata was properly added
     metadata = result[metadata_variable_name]
-    
+
     # Check that user API key information was added
     assert metadata["user_api_key_hash"] == "hashed-test-key-123"
     assert metadata["user_api_key_alias"] == "test-key-alias"
@@ -714,13 +714,224 @@ def test_add_user_api_key_auth_to_request_metadata():
     assert metadata["user_api_key_end_user_id"] == "test-end-user-123"
     assert metadata["user_api_key_user_email"] == "test@example.com"
     assert metadata["user_api_key_request_route"] == "/chat/completions"
-    
+
     # Check that the hashed API key was added
     assert metadata["user_api_key"] == "hashed-test-key-123"
-    
+
     # Check that end user max budget was added
     assert metadata["user_api_end_user_max_budget"] == 500.0
-    
+
     # Verify original data is preserved
     assert result["model"] == "gpt-3.5-turbo"
     assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+
+@pytest.mark.parametrize(
+    "data, model_group_settings, expected_headers_added",
+    [
+        # Test case 1: Model is in forward_client_headers_to_llm_api list
+        (
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]},
+            MagicMock(forward_client_headers_to_llm_api=["gpt-4"]),
+            True,
+        ),
+        # Test case 2: Model is not in forward_client_headers_to_llm_api list
+        (
+            {"model": "claude-3", "messages": [{"role": "user", "content": "Hello"}]},
+            MagicMock(forward_client_headers_to_llm_api=["gpt-4"]),
+            False,
+        ),
+        # Test case 3: Model group settings is None
+        (
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]},
+            None,
+            False,
+        ),
+        # Test case 4: forward_client_headers_to_llm_api is None
+        (
+            {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]},
+            MagicMock(forward_client_headers_to_llm_api=None),
+            False,
+        ),
+        # Test case 5: Data has no model
+        (
+            {"messages": [{"role": "user", "content": "Hello"}]},
+            MagicMock(forward_client_headers_to_llm_api=["gpt-4"]),
+            False,
+        ),
+        # Test case 6: Model is None
+        (
+            {"model": None, "messages": [{"role": "user", "content": "Hello"}]},
+            MagicMock(forward_client_headers_to_llm_api=["gpt-4"]),
+            False,
+        ),
+    ],
+)
+def test_add_headers_to_llm_call_by_model_group(
+    data, model_group_settings, expected_headers_added
+):
+    """
+    Test LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group method
+
+    This tests various scenarios:
+    1. When model is in the forward_client_headers_to_llm_api list
+    2. When model is not in the list
+    3. When model_group_settings is None
+    4. When forward_client_headers_to_llm_api is None
+    5. When data has no model
+    6. When model is None
+    """
+    import litellm
+
+    # Setup test headers and user API key
+    headers = {
+        "Authorization": "Bearer token123",
+        "User-Agent": "test-client/1.0",
+        "X-Custom-Header": "custom-value",
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key", user_id="test-user", org_id="test-org"
+    )
+
+    # Mock the model_group_settings
+    original_model_group_settings = getattr(litellm, "model_group_settings", None)
+    litellm.model_group_settings = model_group_settings
+
+    try:
+        # Mock the add_headers_to_llm_call method to return expected headers
+        expected_returned_headers = {
+            "X-LiteLLM-User": "test-user",
+            "X-LiteLLM-Org": "test-org",
+        }
+
+        with patch.object(
+            LiteLLMProxyRequestSetup,
+            "add_headers_to_llm_call",
+            return_value=expected_returned_headers if expected_headers_added else {},
+        ) as mock_add_headers:
+
+            # Make a copy of original data to verify it's not mutated unexpectedly
+            original_data = copy.deepcopy(data)
+
+            # Call the method under test
+            result = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
+                data=data, headers=headers, user_api_key_dict=user_api_key_dict
+            )
+
+            # Verify the result
+            assert result is not None
+            assert isinstance(result, dict)
+
+            if expected_headers_added:
+                # Verify that add_headers_to_llm_call was called
+                mock_add_headers.assert_called_once_with(headers, user_api_key_dict)
+                # Verify that headers were added to the data
+                assert "headers" in result
+                assert result["headers"] == expected_returned_headers
+            else:
+                # Verify that add_headers_to_llm_call was not called
+                mock_add_headers.assert_not_called()
+                # Verify that no headers were added
+                assert "headers" not in result or result.get("headers") is None
+
+            # Verify that original data fields are preserved
+            for key, value in original_data.items():
+                if key != "headers":  # headers might be added
+                    assert result[key] == value
+
+    finally:
+        # Restore original model_group_settings
+        litellm.model_group_settings = original_model_group_settings
+
+
+def test_add_headers_to_llm_call_by_model_group_empty_headers_returned():
+    """
+    Test that when add_headers_to_llm_call returns empty dict, no headers are added to data
+    """
+    import litellm
+
+    # Setup test data
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}
+    headers = {"Authorization": "Bearer token123"}
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    # Mock model_group_settings with model in the list
+    mock_settings = MagicMock(forward_client_headers_to_llm_api=["gpt-4"])
+    original_model_group_settings = getattr(litellm, "model_group_settings", None)
+    litellm.model_group_settings = mock_settings
+
+    try:
+        with patch.object(
+            LiteLLMProxyRequestSetup,
+            "add_headers_to_llm_call",
+            return_value={},  # Return empty dict
+        ) as mock_add_headers:
+
+            result = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
+                data=data, headers=headers, user_api_key_dict=user_api_key_dict
+            )
+
+            # Verify that add_headers_to_llm_call was called
+            mock_add_headers.assert_called_once_with(headers, user_api_key_dict)
+
+            # Verify that no headers were added since returned headers were empty
+            assert "headers" not in result
+
+            # Verify original data is preserved
+            assert result["model"] == "gpt-4"
+            assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+    finally:
+        # Restore original model_group_settings
+        litellm.model_group_settings = original_model_group_settings
+
+
+def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
+    """
+    Test that existing headers in data are overwritten when new headers are added
+    """
+    import litellm
+
+    # Setup test data with existing headers
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "headers": {"Existing-Header": "existing-value"},
+    }
+    headers = {"Authorization": "Bearer token123"}
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    # Mock model_group_settings with model in the list
+    mock_settings = MagicMock(forward_client_headers_to_llm_api=["gpt-4"])
+    original_model_group_settings = getattr(litellm, "model_group_settings", None)
+    litellm.model_group_settings = mock_settings
+
+    try:
+        new_headers = {"X-LiteLLM-User": "test-user"}
+
+        with patch.object(
+            LiteLLMProxyRequestSetup,
+            "add_headers_to_llm_call",
+            return_value=new_headers,
+        ) as mock_add_headers:
+
+            result = LiteLLMProxyRequestSetup.add_headers_to_llm_call_by_model_group(
+                data=data, headers=headers, user_api_key_dict=user_api_key_dict
+            )
+
+            # Verify that add_headers_to_llm_call was called
+            mock_add_headers.assert_called_once_with(headers, user_api_key_dict)
+
+            # Verify that headers were overwritten
+            assert "headers" in result
+            assert result["headers"] == new_headers
+            assert result["headers"] != {"Existing-Header": "existing-value"}
+
+            # Verify original data is preserved
+            assert result["model"] == "gpt-4"
+            assert result["messages"] == [{"role": "user", "content": "Hello"}]
+
+    finally:
+        # Restore original model_group_settings
+        litellm.model_group_settings = original_model_group_settings

@@ -93,9 +93,6 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group,
     run_async_fallback,
 )
-from litellm.router_utils.forward_clientside_headers_by_model_group import (
-    ForwardClientSideHeadersByModelGroup,
-)
 from litellm.router_utils.get_retry_from_policy import (
     get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
 )
@@ -624,9 +621,7 @@ class Router:
         Apply the default settings to the router.
         """
 
-        default_pre_call_checks: OptionalPreCallChecks = [
-            "forward_client_headers_by_model_group",
-        ]
+        default_pre_call_checks: OptionalPreCallChecks = []
         self.add_optional_pre_call_checks(default_pre_call_checks)
         return None
 
@@ -892,8 +887,6 @@ class Router:
                     )
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
-                elif pre_call_check == "forward_client_headers_by_model_group":
-                    _callback = ForwardClientSideHeadersByModelGroup()
                 if _callback is not None:
                     if self.optional_callbacks is None:
                         self.optional_callbacks = []
@@ -4323,7 +4316,9 @@ class Router:
                     "deployment", None
                 )  # stable name - works for wildcard routes as well
                 # Get model_group and id from kwargs like the sync version does
-                model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group = kwargs["litellm_params"]["metadata"].get(
+                    "model_group", None
+                )
                 model_info = kwargs["litellm_params"].get("model_info", {}) or {}
                 id = model_info.get("id", None)
                 if model_group is None or id is None:
