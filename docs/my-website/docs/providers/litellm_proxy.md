@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 | Description | LiteLLM Proxy is an OpenAI-compatible gateway that allows you to interact with multiple LLM providers through a unified API. Simply use the `litellm_proxy/` prefix before the model name to route your requests through the proxy. |
 | Provider Route on LiteLLM | `litellm_proxy/` (add this prefix to the model name, to route any requests to litellm_proxy - e.g. `litellm_proxy/your-model-name`) |
 | Setup LiteLLM Gateway | [LiteLLM Gateway ↗](../simple_proxy) |
-| Supported Endpoints |`/chat/completions`, `/completions`, `/embeddings`, `/audio/speech`, `/audio/transcriptions`, `/images`, `/rerank` |
+| Supported Endpoints |`/chat/completions`, `/completions`, `/embeddings`, `/audio/speech`, `/audio/transcriptions`, `/images`, `/images/edits`, `/rerank` |
 
 
 
@@ -109,6 +109,21 @@ response = litellm.image_generation(
     api_base="your-litellm-proxy-url",
     api_key="your-litellm-proxy-api-key"
 )
+```
+
+## Image Edit
+
+```python
+import litellm
+
+with open("your-image.png", "rb") as f:
+    response = litellm.image_edit(
+        model="litellm_proxy/gpt-image-1",
+        prompt="Make this image a watercolor painting",
+        image=[f],
+        api_base="your-litellm-proxy-url",
+        api_key="your-litellm-proxy-api-key",
+    )
 ```
 
 ## Audio Transcription

@@ -37,15 +37,21 @@ from openai.types.responses.response import (
     IncompleteDetails,
     Response,
     ResponseOutputItem,
-    ResponseTextConfig,
     Tool,
     ToolChoice,
 )
+
+# Handle OpenAI SDK version compatibility for Text type
+try:
+    from openai.types.responses.response_create_params import Text as ResponseText
+except (ImportError, AttributeError):
+    # Fall back to the concrete config type available in all SDK versions
+    from openai.types.responses.response_text_config_param import ResponseTextConfigParam as ResponseText
+
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
-    ResponseTextConfigParam,
     ToolChoice,
     ToolParam,
 )
@@ -959,7 +965,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     background: Optional[bool]
     stream: Optional[bool]
     temperature: Optional[float]
-    text: Optional[ResponseTextConfigParam]
+    text: Optional["ResponseText"]
     tool_choice: Optional[ToolChoice]
     tools: Optional[List[ALL_RESPONSES_API_TOOL_PARAMS]]
     top_p: Optional[float]
@@ -1034,7 +1040,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     previous_response_id: Optional[str]
     reasoning: Optional[Reasoning]
     status: Optional[str]
-    text: Optional[ResponseTextConfig]
+    text: Optional[Union["ResponseText", Dict[str, Any]]]
     truncation: Optional[Literal["auto", "disabled"]]
     usage: Optional[ResponseAPIUsage]
     user: Optional[str]
