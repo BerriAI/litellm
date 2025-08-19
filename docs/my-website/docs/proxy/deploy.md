@@ -1021,5 +1021,3 @@ A: We explored MySQL but that was hard to maintain and led to bugs for customers
 
 A: You can actually gracefully handle DB unavailability if it's on your VPC. See our production guide for more details: [Gracefully Handle DB Unavailability](https://docs.litellm.ai/docs/proxy/prod#6-if-running-litellm-on-vpc-gracefully-handle-db-unavailability)
 
-
-
