@@ -1,0 +1,103 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: qa-gate-template-v1
+  name: Quality Gate Decision
+  version: 1.0
+  output:
+    format: yaml
+    filename: qa.qaLocation/gates/{{epic_num}}.{{story_num}}-{{story_slug}}.yml
+    title: "Quality Gate: {{epic_num}}.{{story_num}}"
+
+# Required fields (keep these first)
+schema: 1
+story: "{{epic_num}}.{{story_num}}"
+story_title: "{{story_title}}"
+gate: "{{gate_status}}" # PASS|CONCERNS|FAIL|WAIVED
+status_reason: "{{status_reason}}" # 1-2 sentence summary of why this gate decision
+reviewer: "Quinn (Test Architect)"
+updated: "{{iso_timestamp}}"
+
+# Always present but only active when WAIVED
+waiver: { active: false }
+
+# Issues (if any) - Use fixed severity: low | medium | high
+top_issues: []
+
+# Risk summary (from risk-profile task if run)
+risk_summary:
+  totals: { critical: 0, high: 0, medium: 0, low: 0 }
+  recommendations:
+    must_fix: []
+    monitor: []
+
+# Examples section using block scalars for clarity
+examples:
+  with_issues: |
+    top_issues:
+      - id: "SEC-001"
+        severity: high  # ONLY: low|medium|high
+        finding: "No rate limiting on login endpoint"
+        suggested_action: "Add rate limiting middleware before production"
+      - id: "TEST-001"  
+        severity: medium
+        finding: "Missing integration tests for auth flow"
+        suggested_action: "Add test coverage for critical paths"
+
+  when_waived: |
+    waiver:
+      active: true
+      reason: "Accepted for MVP release - will address in next sprint"
+      approved_by: "Product Owner"
+
+# ============ Optional Extended Fields ============
+# Uncomment and use if your team wants more detail
+
+optional_fields_examples:
+  quality_and_expiry: |
+    quality_score: 75  # 0-100 (optional scoring)
+    expires: "2025-01-26T00:00:00Z"  # Optional gate freshness window
+
+  evidence: |
+    evidence:
+      tests_reviewed: 15
+      risks_identified: 3
+      trace:
+        ac_covered: [1, 2, 3]  # AC numbers with test coverage
+        ac_gaps: [4]  # AC numbers lacking coverage
+
+  nfr_validation: |
+    nfr_validation:
+      security: { status: CONCERNS, notes: "Rate limiting missing" }
+      performance: { status: PASS, notes: "" }
+      reliability: { status: PASS, notes: "" }
+      maintainability: { status: PASS, notes: "" }
+
+  history: |
+    history:  # Append-only audit trail
+      - at: "2025-01-12T10:00:00Z"
+        gate: FAIL
+        note: "Initial review - missing tests"
+      - at: "2025-01-12T15:00:00Z"  
+        gate: CONCERNS
+        note: "Tests added but rate limiting still missing"
+
+  risk_summary: |
+    risk_summary:  # From risk-profile task
+      totals:
+        critical: 0
+        high: 0
+        medium: 0
+        low: 0
+      # 'highest' is emitted only when risks exist
+      recommendations:
+        must_fix: []
+        monitor: []
+
+  recommendations: |
+    recommendations:
+      immediate:  # Must fix before production
+        - action: "Add rate limiting to auth endpoints"
+          refs: ["api/auth/login.ts:42-68"]
+      future:  # Can be addressed later
+        - action: "Consider caching for better performance"
+          refs: ["services/data.service.ts"]

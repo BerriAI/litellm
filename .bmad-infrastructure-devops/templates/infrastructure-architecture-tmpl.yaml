@@ -1,0 +1,425 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: infrastructure-architecture-template-v2
+  name: Infrastructure Architecture
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/infrastructure-architecture.md
+    title: "{{project_name}} Infrastructure Architecture"
+
+workflow:
+  mode: interactive
+  elicitation: advanced-elicitation
+  custom_elicitation:
+    title: "Infrastructure Architecture Elicitation Actions"
+    sections:
+      - id: infrastructure-overview
+        options:
+          - "Multi-Cloud Strategy Analysis - Evaluate cloud provider options and vendor lock-in considerations"
+          - "Regional Distribution Planning - Analyze latency requirements and data residency needs"
+          - "Environment Isolation Strategy - Design security boundaries and resource segregation"
+          - "Scalability Patterns Review - Assess auto-scaling needs and traffic patterns"
+          - "Compliance Requirements Analysis - Review regulatory and security compliance needs"
+          - "Cost-Benefit Analysis - Compare infrastructure options and TCO"
+          - "Proceed to next section"
+
+sections:
+  - id: initial-setup
+    instruction: |
+      Initial Setup
+
+      1. Replace {{project_name}} with the actual project name throughout the document
+      2. Gather and review required inputs:
+         - Product Requirements Document (PRD) - Required for business needs and scale requirements
+         - Main System Architecture - Required for infrastructure dependencies
+         - Technical Preferences/Tech Stack Document - Required for technology choices
+         - PRD Technical Assumptions - Required for cross-referencing repository and service architecture
+
+      If any required documents are missing, ask user: "I need the following documents to create a comprehensive infrastructure architecture: [list missing]. Would you like to proceed with available information or provide the missing documents first?"
+
+      3. <critical_rule>Cross-reference with PRD Technical Assumptions to ensure infrastructure decisions align with repository and service architecture decisions made in the system architecture.</critical_rule>
+
+      Output file location: `docs/infrastructure-architecture.md`
+
+  - id: infrastructure-overview
+    title: Infrastructure Overview
+    instruction: |
+      Review the product requirements document to understand business needs and scale requirements. Analyze the main system architecture to identify infrastructure dependencies. Document non-functional requirements (performance, scalability, reliability, security). Cross-reference with PRD Technical Assumptions to ensure alignment with repository and service architecture decisions.
+    elicit: true
+    custom_elicitation: infrastructure-overview
+    template: |
+      - Cloud Provider(s)
+      - Core Services & Resources
+      - Regional Architecture
+      - Multi-environment Strategy
+    examples:
+      - |
+        - **Cloud Provider:** AWS (primary), with multi-cloud capability for critical services
+        - **Core Services:** EKS for container orchestration, RDS for databases, S3 for storage, CloudFront for CDN
+        - **Regional Architecture:** Multi-region active-passive with primary in us-east-1, DR in us-west-2
+        - **Multi-environment Strategy:** Development, Staging, UAT, Production with identical infrastructure patterns
+
+  - id: iac
+    title: Infrastructure as Code (IaC)
+    instruction: Define IaC approach based on technical preferences and existing patterns. Consider team expertise, tooling ecosystem, and maintenance requirements.
+    template: |
+      - Tools & Frameworks
+      - Repository Structure
+      - State Management
+      - Dependency Management
+
+      <critical_rule>All infrastructure must be defined as code. No manual resource creation in production environments.</critical_rule>
+
+  - id: environment-configuration
+    title: Environment Configuration
+    instruction: Design environment strategy that supports the development workflow while maintaining security and cost efficiency. Reference the Environment Transition Strategy section for promotion details.
+    template: |
+      - Environment Promotion Strategy
+      - Configuration Management
+      - Secret Management
+      - Feature Flag Integration
+    sections:
+      - id: environments
+        repeatable: true
+        title: "{{environment_name}} Environment"
+        template: |
+          - **Purpose:** {{environment_purpose}}
+          - **Resources:** {{environment_resources}}
+          - **Access Control:** {{environment_access}}
+          - **Data Classification:** {{environment_data_class}}
+
+  - id: environment-transition
+    title: Environment Transition Strategy
+    instruction: Detail the complete lifecycle of code and configuration changes from development to production. Include governance, testing gates, and rollback procedures.
+    template: |
+      - Development to Production Pipeline
+      - Deployment Stages and Gates
+      - Approval Workflows and Authorities
+      - Rollback Procedures
+      - Change Cadence and Release Windows
+      - Environment-Specific Configuration Management
+
+  - id: network-architecture
+    title: Network Architecture
+    instruction: |
+      Design network topology considering security zones, traffic patterns, and compliance requirements. Reference main architecture for service communication patterns.
+
+      Create Mermaid diagram showing:
+      - VPC/Network structure
+      - Security zones and boundaries
+      - Traffic flow patterns
+      - Load balancer placement
+      - Service mesh topology (if applicable)
+    template: |
+      - VPC/VNET Design
+      - Subnet Strategy
+      - Security Groups & NACLs
+      - Load Balancers & API Gateways
+      - Service Mesh (if applicable)
+    sections:
+      - id: network-diagram
+        type: mermaid
+        mermaid_type: graph
+        template: |
+          graph TB
+              subgraph "Production VPC"
+                  subgraph "Public Subnets"
+                      ALB[Application Load Balancer]
+                  end
+                  subgraph "Private Subnets"
+                      EKS[EKS Cluster]
+                      RDS[(RDS Database)]
+                  end
+              end
+              Internet((Internet)) --> ALB
+              ALB --> EKS
+              EKS --> RDS
+      - id: service-mesh
+        title: Service Mesh Architecture
+        condition: Uses service mesh
+        template: |
+          - **Mesh Technology:** {{service_mesh_tech}}
+          - **Traffic Management:** {{traffic_policies}}
+          - **Security Policies:** {{mesh_security}}
+          - **Observability Integration:** {{mesh_observability}}
+
+  - id: compute-resources
+    title: Compute Resources
+    instruction: Select compute strategy based on application architecture (microservices, serverless, monolithic). Consider cost, scalability, and operational complexity.
+    template: |
+      - Container Strategy
+      - Serverless Architecture
+      - VM/Instance Configuration
+      - Auto-scaling Approach
+    sections:
+      - id: kubernetes
+        title: Kubernetes Architecture
+        condition: Uses Kubernetes
+        template: |
+          - **Cluster Configuration:** {{k8s_cluster_config}}
+          - **Node Groups:** {{k8s_node_groups}}
+          - **Networking:** {{k8s_networking}}
+          - **Storage Classes:** {{k8s_storage}}
+          - **Security Policies:** {{k8s_security}}
+
+  - id: data-resources
+    title: Data Resources
+    instruction: |
+      Design data infrastructure based on data architecture from main system design. Consider data volumes, access patterns, compliance, and recovery requirements.
+
+      Create data flow diagram showing:
+      - Database topology
+      - Replication patterns
+      - Backup flows
+      - Data migration paths
+    template: |
+      - Database Deployment Strategy
+      - Backup & Recovery
+      - Replication & Failover
+      - Data Migration Strategy
+
+  - id: security-architecture
+    title: Security Architecture
+    instruction: Implement defense-in-depth strategy. Reference security requirements from PRD and compliance needs. Consider zero-trust principles where applicable.
+    template: |
+      - IAM & Authentication
+      - Network Security
+      - Data Encryption
+      - Compliance Controls
+      - Security Scanning & Monitoring
+
+      <critical_rule>Apply principle of least privilege for all access controls. Document all security exceptions with business justification.</critical_rule>
+
+  - id: shared-responsibility
+    title: Shared Responsibility Model
+    instruction: Clearly define boundaries between cloud provider, platform team, development team, and security team responsibilities. This is critical for operational success.
+    template: |
+      - Cloud Provider Responsibilities
+      - Platform Team Responsibilities
+      - Development Team Responsibilities
+      - Security Team Responsibilities
+      - Operational Monitoring Ownership
+      - Incident Response Accountability Matrix
+    examples:
+      - |
+        | Component            | Cloud Provider | Platform Team | Dev Team       | Security Team |
+        | -------------------- | -------------- | ------------- | -------------- | ------------- |
+        | Physical Security    | ✓              | -             | -              | Audit         |
+        | Network Security     | Partial        | ✓             | Config         | Audit         |
+        | Application Security | -              | Tools         | ✓              | Review        |
+        | Data Encryption      | Engine         | Config        | Implementation | Standards     |
+
+  - id: monitoring-observability
+    title: Monitoring & Observability
+    instruction: Design comprehensive observability strategy covering metrics, logs, traces, and business KPIs. Ensure alignment with SLA/SLO requirements.
+    template: |
+      - Metrics Collection
+      - Logging Strategy
+      - Tracing Implementation
+      - Alerting & Incident Response
+      - Dashboards & Visualization
+
+  - id: cicd-pipeline
+    title: CI/CD Pipeline
+    instruction: |
+      Design deployment pipeline that balances speed with safety. Include progressive deployment strategies and automated quality gates.
+
+      Create pipeline diagram showing:
+      - Build stages
+      - Test gates
+      - Deployment stages
+      - Approval points
+      - Rollback triggers
+    template: |
+      - Pipeline Architecture
+      - Build Process
+      - Deployment Strategy
+      - Rollback Procedures
+      - Approval Gates
+    sections:
+      - id: progressive-deployment
+        title: Progressive Deployment Strategy
+        condition: Uses progressive deployment
+        template: |
+          - **Canary Deployment:** {{canary_config}}
+          - **Blue-Green Deployment:** {{blue_green_config}}
+          - **Feature Flags:** {{feature_flag_integration}}
+          - **Traffic Splitting:** {{traffic_split_rules}}
+
+  - id: disaster-recovery
+    title: Disaster Recovery
+    instruction: Design DR strategy based on business continuity requirements. Define clear RTO/RPO targets and ensure they align with business needs.
+    template: |
+      - Backup Strategy
+      - Recovery Procedures
+      - RTO & RPO Targets
+      - DR Testing Approach
+
+      <critical_rule>DR procedures must be tested at least quarterly. Document test results and improvement actions.</critical_rule>
+
+  - id: cost-optimization
+    title: Cost Optimization
+    instruction: Balance cost efficiency with performance and reliability requirements. Include both immediate optimizations and long-term strategies.
+    template: |
+      - Resource Sizing Strategy
+      - Reserved Instances/Commitments
+      - Cost Monitoring & Reporting
+      - Optimization Recommendations
+
+  - id: bmad-integration
+    title: BMad Integration Architecture
+    instruction: Design infrastructure to specifically support other BMad agents and their workflows. This ensures the infrastructure enables the entire BMad methodology.
+    sections:
+      - id: dev-agent-support
+        title: Development Agent Support
+        template: |
+          - Container platform for development environments
+          - GitOps workflows for application deployment
+          - Service mesh integration for development testing
+          - Developer self-service platform capabilities
+      - id: product-architecture-alignment
+        title: Product & Architecture Alignment
+        template: |
+          - Infrastructure implementing PRD scalability requirements
+          - Deployment automation supporting product iteration speed
+          - Service reliability meeting product SLAs
+          - Architecture patterns properly implemented in infrastructure
+      - id: cross-agent-integration
+        title: Cross-Agent Integration Points
+        template: |
+          - CI/CD pipelines supporting Frontend, Backend, and Full Stack development workflows
+          - Monitoring and observability data accessible to QA and DevOps agents
+          - Infrastructure enabling Design Architect's UI/UX performance requirements
+          - Platform supporting Analyst's data collection and analysis needs
+
+  - id: feasibility-review
+    title: DevOps/Platform Feasibility Review
+    instruction: |
+      CRITICAL STEP - Present architectural blueprint summary to DevOps/Platform Engineering Agent for feasibility review. Request specific feedback on:
+
+      - **Operational Complexity:** Are the proposed patterns implementable with current tooling and expertise?
+      - **Resource Constraints:** Do infrastructure requirements align with available resources and budgets?
+      - **Security Implementation:** Are security patterns achievable with current security toolchain?
+      - **Operational Overhead:** Will the proposed architecture create excessive operational burden?
+      - **Technology Constraints:** Are selected technologies compatible with existing infrastructure?
+
+      Document all feasibility feedback and concerns raised. Iterate on architectural decisions based on operational constraints and feedback.
+
+      <critical_rule>Address all critical feasibility concerns before proceeding to final architecture documentation. If critical blockers identified, revise architecture before continuing.</critical_rule>
+    sections:
+      - id: feasibility-results
+        title: Feasibility Assessment Results
+        template: |
+          - **Green Light Items:** {{feasible_items}}
+          - **Yellow Light Items:** {{items_needing_adjustment}}
+          - **Red Light Items:** {{items_requiring_redesign}}
+          - **Mitigation Strategies:** {{mitigation_plans}}
+
+  - id: infrastructure-verification
+    title: Infrastructure Verification
+    sections:
+      - id: validation-framework
+        title: Validation Framework
+        content: |
+          This infrastructure architecture will be validated using the comprehensive `infrastructure-checklist.md`, with particular focus on Section 12: Architecture Documentation Validation. The checklist ensures:
+
+          - Completeness of architecture documentation
+          - Consistency with broader system architecture
+          - Appropriate level of detail for different stakeholders
+          - Clear implementation guidance
+          - Future evolution considerations
+      - id: validation-process
+        title: Validation Process
+        content: |
+          The architecture documentation validation should be performed:
+
+          - After initial architecture development
+          - After significant architecture changes
+          - Before major implementation phases
+          - During periodic architecture reviews
+
+          The Platform Engineer should use the infrastructure checklist to systematically validate all aspects of this architecture document.
+
+  - id: implementation-handoff
+    title: Implementation Handoff
+    instruction: Create structured handoff documentation for implementation team. This ensures architecture decisions are properly communicated and implemented.
+    sections:
+      - id: adrs
+        title: Architecture Decision Records (ADRs)
+        content: |
+          Create ADRs for key infrastructure decisions:
+
+          - Cloud provider selection rationale
+          - Container orchestration platform choice
+          - Networking architecture decisions
+          - Security implementation choices
+          - Cost optimization trade-offs
+      - id: implementation-validation
+        title: Implementation Validation Criteria
+        content: |
+          Define specific criteria for validating correct implementation:
+
+          - Infrastructure as Code quality gates
+          - Security compliance checkpoints
+          - Performance benchmarks
+          - Cost targets
+          - Operational readiness criteria
+      - id: knowledge-transfer
+        title: Knowledge Transfer Requirements
+        template: |
+          - Technical documentation for operations team
+          - Runbook creation requirements
+          - Training needs for platform team
+          - Handoff meeting agenda items
+
+  - id: infrastructure-evolution
+    title: Infrastructure Evolution
+    instruction: Document the long-term vision and evolution path for the infrastructure. Consider technology trends, anticipated growth, and technical debt management.
+    template: |
+      - Technical Debt Inventory
+      - Planned Upgrades and Migrations
+      - Deprecation Schedule
+      - Technology Roadmap
+      - Capacity Planning
+      - Scalability Considerations
+
+  - id: app-integration
+    title: Integration with Application Architecture
+    instruction: Map infrastructure components to application services. Ensure infrastructure design supports application requirements and patterns defined in main architecture.
+    template: |
+      - Service-to-Infrastructure Mapping
+      - Application Dependency Matrix
+      - Performance Requirements Implementation
+      - Security Requirements Implementation
+      - Data Flow to Infrastructure Correlation
+      - API Gateway and Service Mesh Integration
+
+  - id: cross-team-collaboration
+    title: Cross-Team Collaboration
+    instruction: Define clear interfaces and communication patterns between teams. This section is critical for operational success and should include specific touchpoints and escalation paths.
+    template: |
+      - Platform Engineer and Developer Touchpoints
+      - Frontend/Backend Integration Requirements
+      - Product Requirements to Infrastructure Mapping
+      - Architecture Decision Impact Analysis
+      - Design Architect UI/UX Infrastructure Requirements
+      - Analyst Research Integration
+
+  - id: change-management
+    title: Infrastructure Change Management
+    instruction: Define structured process for infrastructure changes. Include risk assessment, testing requirements, and rollback procedures.
+    template: |
+      - Change Request Process
+      - Risk Assessment
+      - Testing Strategy
+      - Validation Procedures
+
+  - id: final-review
+    instruction: Final Review - Ensure all sections are complete and consistent. Verify feasibility review was conducted and all concerns addressed. Apply final validation against infrastructure checklist.
+    content: |
+      ---
+
+      _Document Version: 1.0_
+      _Last Updated: {{current_date}}_
+      _Next Review: {{review_date}}_

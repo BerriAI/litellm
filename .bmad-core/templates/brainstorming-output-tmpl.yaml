@@ -1,0 +1,156 @@
+template:
+  id: brainstorming-output-template-v2
+  name: Brainstorming Session Results
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/brainstorming-session-results.md
+    title: "Brainstorming Session Results"
+
+workflow:
+  mode: non-interactive
+
+sections:
+  - id: header
+    content: |
+      **Session Date:** {{date}}
+      **Facilitator:** {{agent_role}} {{agent_name}}
+      **Participant:** {{user_name}}
+
+  - id: executive-summary
+    title: Executive Summary
+    sections:
+      - id: summary-details
+        template: |
+          **Topic:** {{session_topic}}
+
+          **Session Goals:** {{stated_goals}}
+
+          **Techniques Used:** {{techniques_list}}
+
+          **Total Ideas Generated:** {{total_ideas}}
+      - id: key-themes
+        title: "Key Themes Identified:"
+        type: bullet-list
+        template: "- {{theme}}"
+
+  - id: technique-sessions
+    title: Technique Sessions
+    repeatable: true
+    sections:
+      - id: technique
+        title: "{{technique_name}} - {{duration}}"
+        sections:
+          - id: description
+            template: "**Description:** {{technique_description}}"
+          - id: ideas-generated
+            title: "Ideas Generated:"
+            type: numbered-list
+            template: "{{idea}}"
+          - id: insights
+            title: "Insights Discovered:"
+            type: bullet-list
+            template: "- {{insight}}"
+          - id: connections
+            title: "Notable Connections:"
+            type: bullet-list
+            template: "- {{connection}}"
+
+  - id: idea-categorization
+    title: Idea Categorization
+    sections:
+      - id: immediate-opportunities
+        title: Immediate Opportunities
+        content: "*Ideas ready to implement now*"
+        repeatable: true
+        type: numbered-list
+        template: |
+          **{{idea_name}}**
+          - Description: {{description}}
+          - Why immediate: {{rationale}}
+          - Resources needed: {{requirements}}
+      - id: future-innovations
+        title: Future Innovations
+        content: "*Ideas requiring development/research*"
+        repeatable: true
+        type: numbered-list
+        template: |
+          **{{idea_name}}**
+          - Description: {{description}}
+          - Development needed: {{development_needed}}
+          - Timeline estimate: {{timeline}}
+      - id: moonshots
+        title: Moonshots
+        content: "*Ambitious, transformative concepts*"
+        repeatable: true
+        type: numbered-list
+        template: |
+          **{{idea_name}}**
+          - Description: {{description}}
+          - Transformative potential: {{potential}}
+          - Challenges to overcome: {{challenges}}
+      - id: insights-learnings
+        title: Insights & Learnings
+        content: "*Key realizations from the session*"
+        type: bullet-list
+        template: "- {{insight}}: {{description_and_implications}}"
+
+  - id: action-planning
+    title: Action Planning
+    sections:
+      - id: top-priorities
+        title: Top 3 Priority Ideas
+        sections:
+          - id: priority-1
+            title: "#1 Priority: {{idea_name}}"
+            template: |
+              - Rationale: {{rationale}}
+              - Next steps: {{next_steps}}
+              - Resources needed: {{resources}}
+              - Timeline: {{timeline}}
+          - id: priority-2
+            title: "#2 Priority: {{idea_name}}"
+            template: |
+              - Rationale: {{rationale}}
+              - Next steps: {{next_steps}}
+              - Resources needed: {{resources}}
+              - Timeline: {{timeline}}
+          - id: priority-3
+            title: "#3 Priority: {{idea_name}}"
+            template: |
+              - Rationale: {{rationale}}
+              - Next steps: {{next_steps}}
+              - Resources needed: {{resources}}
+              - Timeline: {{timeline}}
+
+  - id: reflection-followup
+    title: Reflection & Follow-up
+    sections:
+      - id: what-worked
+        title: What Worked Well
+        type: bullet-list
+        template: "- {{aspect}}"
+      - id: areas-exploration
+        title: Areas for Further Exploration
+        type: bullet-list
+        template: "- {{area}}: {{reason}}"
+      - id: recommended-techniques
+        title: Recommended Follow-up Techniques
+        type: bullet-list
+        template: "- {{technique}}: {{reason}}"
+      - id: questions-emerged
+        title: Questions That Emerged
+        type: bullet-list
+        template: "- {{question}}"
+      - id: next-session
+        title: Next Session Planning
+        template: |
+          - **Suggested topics:** {{followup_topics}}
+          - **Recommended timeframe:** {{timeframe}}
+          - **Preparation needed:** {{preparation}}
+
+  - id: footer
+    content: |
+      ---
+
+      *Session facilitated using the BMAD-METHOD™ brainstorming framework*

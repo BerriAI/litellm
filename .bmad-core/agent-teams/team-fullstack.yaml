@@ -1,0 +1,19 @@
+# <!-- Powered by BMAD™ Core -->
+bundle:
+  name: Team Fullstack
+  icon: 🚀
+  description: Team capable of full stack, front end only, or service development.
+agents:
+  - bmad-orchestrator
+  - analyst
+  - pm
+  - ux-expert
+  - architect
+  - po
+workflows:
+  - brownfield-fullstack.yaml
+  - brownfield-service.yaml
+  - brownfield-ui.yaml
+  - greenfield-fullstack.yaml
+  - greenfield-service.yaml
+  - greenfield-ui.yaml

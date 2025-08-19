@@ -1,0 +1,253 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: market-research-template-v2
+  name: Market Research Report
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/market-research.md
+    title: "Market Research Report: {{project_product_name}}"
+
+workflow:
+  mode: interactive
+  elicitation: advanced-elicitation
+  custom_elicitation:
+    title: "Market Research Elicitation Actions"
+    options:
+      - "Expand market sizing calculations with sensitivity analysis"
+      - "Deep dive into a specific customer segment"
+      - "Analyze an emerging market trend in detail"
+      - "Compare this market to an analogous market"
+      - "Stress test market assumptions"
+      - "Explore adjacent market opportunities"
+      - "Challenge market definition and boundaries"
+      - "Generate strategic scenarios (best/base/worst case)"
+      - "If only we had considered [X market factor]..."
+      - "Proceed to next section"
+
+sections:
+  - id: executive-summary
+    title: Executive Summary
+    instruction: Provide a high-level overview of key findings, market opportunity assessment, and strategic recommendations. Write this section LAST after completing all other sections.
+
+  - id: research-objectives
+    title: Research Objectives & Methodology
+    instruction: This template guides the creation of a comprehensive market research report. Begin by understanding what market insights the user needs and why. Work through each section systematically, using the appropriate analytical frameworks based on the research objectives.
+    sections:
+      - id: objectives
+        title: Research Objectives
+        instruction: |
+          List the primary objectives of this market research:
+          - What decisions will this research inform?
+          - What specific questions need to be answered?
+          - What are the success criteria for this research?
+      - id: methodology
+        title: Research Methodology
+        instruction: |
+          Describe the research approach:
+          - Data sources used (primary/secondary)
+          - Analysis frameworks applied
+          - Data collection timeframe
+          - Limitations and assumptions
+
+  - id: market-overview
+    title: Market Overview
+    sections:
+      - id: market-definition
+        title: Market Definition
+        instruction: |
+          Define the market being analyzed:
+          - Product/service category
+          - Geographic scope
+          - Customer segments included
+          - Value chain position
+      - id: market-size-growth
+        title: Market Size & Growth
+        instruction: |
+          Guide through TAM, SAM, SOM calculations with clear assumptions. Use one or more approaches:
+          - Top-down: Start with industry data, narrow down
+          - Bottom-up: Build from customer/unit economics
+          - Value theory: Based on value provided vs. alternatives
+        sections:
+          - id: tam
+            title: Total Addressable Market (TAM)
+            instruction: Calculate and explain the total market opportunity
+          - id: sam
+            title: Serviceable Addressable Market (SAM)
+            instruction: Define the portion of TAM you can realistically reach
+          - id: som
+            title: Serviceable Obtainable Market (SOM)
+            instruction: Estimate the portion you can realistically capture
+      - id: market-trends
+        title: Market Trends & Drivers
+        instruction: Analyze key trends shaping the market using appropriate frameworks like PESTEL
+        sections:
+          - id: key-trends
+            title: Key Market Trends
+            instruction: |
+              List and explain 3-5 major trends:
+              - Trend 1: Description and impact
+              - Trend 2: Description and impact
+              - etc.
+          - id: growth-drivers
+            title: Growth Drivers
+            instruction: Identify primary factors driving market growth
+          - id: market-inhibitors
+            title: Market Inhibitors
+            instruction: Identify factors constraining market growth
+
+  - id: customer-analysis
+    title: Customer Analysis
+    sections:
+      - id: segment-profiles
+        title: Target Segment Profiles
+        instruction: For each segment, create detailed profiles including demographics/firmographics, psychographics, behaviors, needs, and willingness to pay
+        repeatable: true
+        sections:
+          - id: segment
+            title: "Segment {{segment_number}}: {{segment_name}}"
+            template: |
+              - **Description:** {{brief_overview}}
+              - **Size:** {{number_of_customers_market_value}}
+              - **Characteristics:** {{key_demographics_firmographics}}
+              - **Needs & Pain Points:** {{primary_problems}}
+              - **Buying Process:** {{purchasing_decisions}}
+              - **Willingness to Pay:** {{price_sensitivity}}
+      - id: jobs-to-be-done
+        title: Jobs-to-be-Done Analysis
+        instruction: Uncover what customers are really trying to accomplish
+        sections:
+          - id: functional-jobs
+            title: Functional Jobs
+            instruction: List practical tasks and objectives customers need to complete
+          - id: emotional-jobs
+            title: Emotional Jobs
+            instruction: Describe feelings and perceptions customers seek
+          - id: social-jobs
+            title: Social Jobs
+            instruction: Explain how customers want to be perceived by others
+      - id: customer-journey
+        title: Customer Journey Mapping
+        instruction: Map the end-to-end customer experience for primary segments
+        template: |
+          For primary customer segment:
+
+          1. **Awareness:** {{discovery_process}}
+          2. **Consideration:** {{evaluation_criteria}}
+          3. **Purchase:** {{decision_triggers}}
+          4. **Onboarding:** {{initial_expectations}}
+          5. **Usage:** {{interaction_patterns}}
+          6. **Advocacy:** {{referral_behaviors}}
+
+  - id: competitive-landscape
+    title: Competitive Landscape
+    sections:
+      - id: market-structure
+        title: Market Structure
+        instruction: |
+          Describe the overall competitive environment:
+          - Number of competitors
+          - Market concentration
+          - Competitive intensity
+      - id: major-players
+        title: Major Players Analysis
+        instruction: |
+          For top 3-5 competitors:
+          - Company name and brief description
+          - Market share estimate
+          - Key strengths and weaknesses
+          - Target customer focus
+          - Pricing strategy
+      - id: competitive-positioning
+        title: Competitive Positioning
+        instruction: |
+          Analyze how competitors are positioned:
+          - Value propositions
+          - Differentiation strategies
+          - Market gaps and opportunities
+
+  - id: industry-analysis
+    title: Industry Analysis
+    sections:
+      - id: porters-five-forces
+        title: Porter's Five Forces Assessment
+        instruction: Analyze each force with specific evidence and implications
+        sections:
+          - id: supplier-power
+            title: "Supplier Power: {{power_level}}"
+            template: "{{analysis_and_implications}}"
+          - id: buyer-power
+            title: "Buyer Power: {{power_level}}"
+            template: "{{analysis_and_implications}}"
+          - id: competitive-rivalry
+            title: "Competitive Rivalry: {{intensity_level}}"
+            template: "{{analysis_and_implications}}"
+          - id: threat-new-entry
+            title: "Threat of New Entry: {{threat_level}}"
+            template: "{{analysis_and_implications}}"
+          - id: threat-substitutes
+            title: "Threat of Substitutes: {{threat_level}}"
+            template: "{{analysis_and_implications}}"
+      - id: adoption-lifecycle
+        title: Technology Adoption Lifecycle Stage
+        instruction: |
+          Identify where the market is in the adoption curve:
+          - Current stage and evidence
+          - Implications for strategy
+          - Expected progression timeline
+
+  - id: opportunity-assessment
+    title: Opportunity Assessment
+    sections:
+      - id: market-opportunities
+        title: Market Opportunities
+        instruction: Identify specific opportunities based on the analysis
+        repeatable: true
+        sections:
+          - id: opportunity
+            title: "Opportunity {{opportunity_number}}: {{name}}"
+            template: |
+              - **Description:** {{what_is_the_opportunity}}
+              - **Size/Potential:** {{quantified_potential}}
+              - **Requirements:** {{needed_to_capture}}
+              - **Risks:** {{key_challenges}}
+      - id: strategic-recommendations
+        title: Strategic Recommendations
+        sections:
+          - id: go-to-market
+            title: Go-to-Market Strategy
+            instruction: |
+              Recommend approach for market entry/expansion:
+              - Target segment prioritization
+              - Positioning strategy
+              - Channel strategy
+              - Partnership opportunities
+          - id: pricing-strategy
+            title: Pricing Strategy
+            instruction: |
+              Based on willingness to pay analysis and competitive landscape:
+              - Recommended pricing model
+              - Price points/ranges
+              - Value metric
+              - Competitive positioning
+          - id: risk-mitigation
+            title: Risk Mitigation
+            instruction: |
+              Key risks and mitigation strategies:
+              - Market risks
+              - Competitive risks
+              - Execution risks
+              - Regulatory/compliance risks
+
+  - id: appendices
+    title: Appendices
+    sections:
+      - id: data-sources
+        title: A. Data Sources
+        instruction: List all sources used in the research
+      - id: calculations
+        title: B. Detailed Calculations
+        instruction: Include any complex calculations or models
+      - id: additional-analysis
+        title: C. Additional Analysis
+        instruction: Any supplementary analysis not included in main body

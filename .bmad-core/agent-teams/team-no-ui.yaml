@@ -1,0 +1,14 @@
+# <!-- Powered by BMAD™ Core -->
+bundle:
+  name: Team No UI
+  icon: 🔧
+  description: Team with no UX or UI Planning.
+agents:
+  - bmad-orchestrator
+  - analyst
+  - pm
+  - architect
+  - po
+workflows:
+  - greenfield-service.yaml
+  - brownfield-service.yaml

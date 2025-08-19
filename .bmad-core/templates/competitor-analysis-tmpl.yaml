@@ -1,0 +1,307 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: competitor-analysis-template-v2
+  name: Competitive Analysis Report
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/competitor-analysis.md
+    title: "Competitive Analysis Report: {{project_product_name}}"
+
+workflow:
+  mode: interactive
+  elicitation: advanced-elicitation
+  custom_elicitation:
+    title: "Competitive Analysis Elicitation Actions"
+    options:
+      - "Deep dive on a specific competitor's strategy"
+      - "Analyze competitive dynamics in a specific segment"
+      - "War game competitive responses to your moves"
+      - "Explore partnership vs. competition scenarios"
+      - "Stress test differentiation claims"
+      - "Analyze disruption potential (yours or theirs)"
+      - "Compare to competition in adjacent markets"
+      - "Generate win/loss analysis insights"
+      - "If only we had known about [competitor X's plan]..."
+      - "Proceed to next section"
+
+sections:
+  - id: executive-summary
+    title: Executive Summary
+    instruction: Provide high-level competitive insights, main threats and opportunities, and recommended strategic actions. Write this section LAST after completing all analysis.
+
+  - id: analysis-scope
+    title: Analysis Scope & Methodology
+    instruction: This template guides comprehensive competitor analysis. Start by understanding the user's competitive intelligence needs and strategic objectives. Help them identify and prioritize competitors before diving into detailed analysis.
+    sections:
+      - id: analysis-purpose
+        title: Analysis Purpose
+        instruction: |
+          Define the primary purpose:
+          - New market entry assessment
+          - Product positioning strategy
+          - Feature gap analysis
+          - Pricing strategy development
+          - Partnership/acquisition targets
+          - Competitive threat assessment
+      - id: competitor-categories
+        title: Competitor Categories Analyzed
+        instruction: |
+          List categories included:
+          - Direct Competitors: Same product/service, same target market
+          - Indirect Competitors: Different product, same need/problem
+          - Potential Competitors: Could enter market easily
+          - Substitute Products: Alternative solutions
+          - Aspirational Competitors: Best-in-class examples
+      - id: research-methodology
+        title: Research Methodology
+        instruction: |
+          Describe approach:
+          - Information sources used
+          - Analysis timeframe
+          - Confidence levels
+          - Limitations
+
+  - id: competitive-landscape
+    title: Competitive Landscape Overview
+    sections:
+      - id: market-structure
+        title: Market Structure
+        instruction: |
+          Describe the competitive environment:
+          - Number of active competitors
+          - Market concentration (fragmented/consolidated)
+          - Competitive dynamics
+          - Recent market entries/exits
+      - id: prioritization-matrix
+        title: Competitor Prioritization Matrix
+        instruction: |
+          Help categorize competitors by market share and strategic threat level
+
+          Create a 2x2 matrix:
+          - Priority 1 (Core Competitors): High Market Share + High Threat
+          - Priority 2 (Emerging Threats): Low Market Share + High Threat
+          - Priority 3 (Established Players): High Market Share + Low Threat
+          - Priority 4 (Monitor Only): Low Market Share + Low Threat
+
+  - id: competitor-profiles
+    title: Individual Competitor Profiles
+    instruction: Create detailed profiles for each Priority 1 and Priority 2 competitor. For Priority 3 and 4, create condensed profiles.
+    repeatable: true
+    sections:
+      - id: competitor
+        title: "{{competitor_name}} - Priority {{priority_level}}"
+        sections:
+          - id: company-overview
+            title: Company Overview
+            template: |
+              - **Founded:** {{year_founders}}
+              - **Headquarters:** {{location}}
+              - **Company Size:** {{employees_revenue}}
+              - **Funding:** {{total_raised_investors}}
+              - **Leadership:** {{key_executives}}
+          - id: business-model
+            title: Business Model & Strategy
+            template: |
+              - **Revenue Model:** {{revenue_model}}
+              - **Target Market:** {{customer_segments}}
+              - **Value Proposition:** {{value_promise}}
+              - **Go-to-Market Strategy:** {{gtm_approach}}
+              - **Strategic Focus:** {{current_priorities}}
+          - id: product-analysis
+            title: Product/Service Analysis
+            template: |
+              - **Core Offerings:** {{main_products}}
+              - **Key Features:** {{standout_capabilities}}
+              - **User Experience:** {{ux_assessment}}
+              - **Technology Stack:** {{tech_stack}}
+              - **Pricing:** {{pricing_model}}
+          - id: strengths-weaknesses
+            title: Strengths & Weaknesses
+            sections:
+              - id: strengths
+                title: Strengths
+                type: bullet-list
+                template: "- {{strength}}"
+              - id: weaknesses
+                title: Weaknesses
+                type: bullet-list
+                template: "- {{weakness}}"
+          - id: market-position
+            title: Market Position & Performance
+            template: |
+              - **Market Share:** {{market_share_estimate}}
+              - **Customer Base:** {{customer_size_notables}}
+              - **Growth Trajectory:** {{growth_trend}}
+              - **Recent Developments:** {{key_news}}
+
+  - id: comparative-analysis
+    title: Comparative Analysis
+    sections:
+      - id: feature-comparison
+        title: Feature Comparison Matrix
+        instruction: Create a detailed comparison table of key features across competitors
+        type: table
+        columns:
+          [
+            "Feature Category",
+            "{{your_company}}",
+            "{{competitor_1}}",
+            "{{competitor_2}}",
+            "{{competitor_3}}",
+          ]
+        rows:
+          - category: "Core Functionality"
+            items:
+              - ["Feature A", "{{status}}", "{{status}}", "{{status}}", "{{status}}"]
+              - ["Feature B", "{{status}}", "{{status}}", "{{status}}", "{{status}}"]
+          - category: "User Experience"
+            items:
+              - ["Mobile App", "{{rating}}", "{{rating}}", "{{rating}}", "{{rating}}"]
+              - ["Onboarding Time", "{{time}}", "{{time}}", "{{time}}", "{{time}}"]
+          - category: "Integration & Ecosystem"
+            items:
+              - [
+                  "API Availability",
+                  "{{availability}}",
+                  "{{availability}}",
+                  "{{availability}}",
+                  "{{availability}}",
+                ]
+              - ["Third-party Integrations", "{{number}}", "{{number}}", "{{number}}", "{{number}}"]
+          - category: "Pricing & Plans"
+            items:
+              - ["Starting Price", "{{price}}", "{{price}}", "{{price}}", "{{price}}"]
+              - ["Free Tier", "{{yes_no}}", "{{yes_no}}", "{{yes_no}}", "{{yes_no}}"]
+      - id: swot-comparison
+        title: SWOT Comparison
+        instruction: Create SWOT analysis for your solution vs. top competitors
+        sections:
+          - id: your-solution
+            title: Your Solution
+            template: |
+              - **Strengths:** {{strengths}}
+              - **Weaknesses:** {{weaknesses}}
+              - **Opportunities:** {{opportunities}}
+              - **Threats:** {{threats}}
+          - id: vs-competitor
+            title: "vs. {{main_competitor}}"
+            template: |
+              - **Competitive Advantages:** {{your_advantages}}
+              - **Competitive Disadvantages:** {{their_advantages}}
+              - **Differentiation Opportunities:** {{differentiation}}
+      - id: positioning-map
+        title: Positioning Map
+        instruction: |
+          Describe competitor positions on key dimensions
+
+          Create a positioning description using 2 key dimensions relevant to the market, such as:
+          - Price vs. Features
+          - Ease of Use vs. Power
+          - Specialization vs. Breadth
+          - Self-Serve vs. High-Touch
+
+  - id: strategic-analysis
+    title: Strategic Analysis
+    sections:
+      - id: competitive-advantages
+        title: Competitive Advantages Assessment
+        sections:
+          - id: sustainable-advantages
+            title: Sustainable Advantages
+            instruction: |
+              Identify moats and defensible positions:
+              - Network effects
+              - Switching costs
+              - Brand strength
+              - Technology barriers
+              - Regulatory advantages
+          - id: vulnerable-points
+            title: Vulnerable Points
+            instruction: |
+              Where competitors could be challenged:
+              - Weak customer segments
+              - Missing features
+              - Poor user experience
+              - High prices
+              - Limited geographic presence
+      - id: blue-ocean
+        title: Blue Ocean Opportunities
+        instruction: |
+          Identify uncontested market spaces
+
+          List opportunities to create new market space:
+          - Underserved segments
+          - Unaddressed use cases
+          - New business models
+          - Geographic expansion
+          - Different value propositions
+
+  - id: strategic-recommendations
+    title: Strategic Recommendations
+    sections:
+      - id: differentiation-strategy
+        title: Differentiation Strategy
+        instruction: |
+          How to position against competitors:
+          - Unique value propositions to emphasize
+          - Features to prioritize
+          - Segments to target
+          - Messaging and positioning
+      - id: competitive-response
+        title: Competitive Response Planning
+        sections:
+          - id: offensive-strategies
+            title: Offensive Strategies
+            instruction: |
+              How to gain market share:
+              - Target competitor weaknesses
+              - Win competitive deals
+              - Capture their customers
+          - id: defensive-strategies
+            title: Defensive Strategies
+            instruction: |
+              How to protect your position:
+              - Strengthen vulnerable areas
+              - Build switching costs
+              - Deepen customer relationships
+      - id: partnership-ecosystem
+        title: Partnership & Ecosystem Strategy
+        instruction: |
+          Potential collaboration opportunities:
+          - Complementary players
+          - Channel partners
+          - Technology integrations
+          - Strategic alliances
+
+  - id: monitoring-plan
+    title: Monitoring & Intelligence Plan
+    sections:
+      - id: key-competitors
+        title: Key Competitors to Track
+        instruction: Priority list with rationale
+      - id: monitoring-metrics
+        title: Monitoring Metrics
+        instruction: |
+          What to track:
+          - Product updates
+          - Pricing changes
+          - Customer wins/losses
+          - Funding/M&A activity
+          - Market messaging
+      - id: intelligence-sources
+        title: Intelligence Sources
+        instruction: |
+          Where to gather ongoing intelligence:
+          - Company websites/blogs
+          - Customer reviews
+          - Industry reports
+          - Social media
+          - Patent filings
+      - id: update-cadence
+        title: Update Cadence
+        instruction: |
+          Recommended review schedule:
+          - Weekly: {{weekly_items}}
+          - Monthly: {{monthly_items}}
+          - Quarterly: {{quarterly_analysis}}

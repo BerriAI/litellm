@@ -1,0 +1,241 @@
+# <!-- Powered by BMAD™ Core -->
+workflow:
+  id: greenfield-fullstack
+  name: Greenfield Full-Stack Application Development
+  description: >-
+    Agent workflow for building full-stack applications from concept to development.
+    Supports both comprehensive planning for complex projects and rapid prototyping for simple ones.
+  type: greenfield
+  project_types:
+    - web-app
+    - saas
+    - enterprise-app
+    - prototype
+    - mvp
+
+  sequence:
+    - agent: analyst
+      creates: project-brief.md
+      optional_steps:
+        - brainstorming_session
+        - market_research_prompt
+      notes: "Can do brainstorming first, then optional deep research before creating project brief. SAVE OUTPUT: Copy final project-brief.md to your project's docs/ folder."
+
+    - agent: pm
+      creates: prd.md
+      requires: project-brief.md
+      notes: "Creates PRD from project brief using prd-tmpl. SAVE OUTPUT: Copy final prd.md to your project's docs/ folder."
+
+    - agent: ux-expert
+      creates: front-end-spec.md
+      requires: prd.md
+      optional_steps:
+        - user_research_prompt
+      notes: "Creates UI/UX specification using front-end-spec-tmpl. SAVE OUTPUT: Copy final front-end-spec.md to your project's docs/ folder."
+
+    - agent: ux-expert
+      creates: v0_prompt (optional)
+      requires: front-end-spec.md
+      condition: user_wants_ai_generation
+      notes: "OPTIONAL BUT RECOMMENDED: Generate AI UI prompt for tools like v0, Lovable, etc. Use the generate-ai-frontend-prompt task. User can then generate UI in external tool and download project structure."
+
+    - agent: architect
+      creates: fullstack-architecture.md
+      requires:
+        - prd.md
+        - front-end-spec.md
+      optional_steps:
+        - technical_research_prompt
+        - review_generated_ui_structure
+      notes: "Creates comprehensive architecture using fullstack-architecture-tmpl. If user generated UI with v0/Lovable, can incorporate the project structure into architecture. May suggest changes to PRD stories or new stories. SAVE OUTPUT: Copy final fullstack-architecture.md to your project's docs/ folder."
+
+    - agent: pm
+      updates: prd.md (if needed)
+      requires: fullstack-architecture.md
+      condition: architecture_suggests_prd_changes
+      notes: "If architect suggests story changes, update PRD and re-export the complete unredacted prd.md to docs/ folder."
+
+    - agent: po
+      validates: all_artifacts
+      uses: po-master-checklist
+      notes: "Validates all documents for consistency and completeness. May require updates to any document."
+
+    - agent: various
+      updates: any_flagged_documents
+      condition: po_checklist_issues
+      notes: "If PO finds issues, return to relevant agent to fix and re-export updated documents to docs/ folder."
+
+    - project_setup_guidance:
+      action: guide_project_structure
+      condition: user_has_generated_ui
+      notes: "If user generated UI with v0/Lovable: For polyrepo setup, place downloaded project in separate frontend repo alongside backend repo. For monorepo, place in apps/web or packages/frontend directory. Review architecture document for specific guidance."
+
+    - development_order_guidance:
+      action: guide_development_sequence
+      notes: "Based on PRD stories: If stories are frontend-heavy, start with frontend project/directory first. If backend-heavy or API-first, start with backend. For tightly coupled features, follow story sequence in monorepo setup. Reference sharded PRD epics for development order."
+
+    - agent: po
+      action: shard_documents
+      creates: sharded_docs
+      requires: all_artifacts_in_project
+      notes: |
+        Shard documents for IDE development:
+        - Option A: Use PO agent to shard: @po then ask to shard docs/prd.md
+        - Option B: Manual: Drag shard-doc task + docs/prd.md into chat
+        - Creates docs/prd/ and docs/architecture/ folders with sharded content
+
+    - agent: sm
+      action: create_story
+      creates: story.md
+      requires: sharded_docs
+      repeats: for_each_epic
+      notes: |
+        Story creation cycle:
+        - SM Agent (New Chat): @sm → *create
+        - Creates next story from sharded docs
+        - Story starts in "Draft" status
+
+    - agent: analyst/pm
+      action: review_draft_story
+      updates: story.md
+      requires: story.md
+      optional: true
+      condition: user_wants_story_review
+      notes: |
+        OPTIONAL: Review and approve draft story
+        - NOTE: story-review task coming soon
+        - Review story completeness and alignment
+        - Update story status: Draft → Approved
+
+    - agent: dev
+      action: implement_story
+      creates: implementation_files
+      requires: story.md
+      notes: |
+        Dev Agent (New Chat): @dev
+        - Implements approved story
+        - Updates File List with all changes
+        - Marks story as "Review" when complete
+
+    - agent: qa
+      action: review_implementation
+      updates: implementation_files
+      requires: implementation_files
+      optional: true
+      notes: |
+        OPTIONAL: QA Agent (New Chat): @qa → review-story
+        - Senior dev review with refactoring ability
+        - Fixes small issues directly
+        - Leaves checklist for remaining items
+        - Updates story status (Review → Done or stays Review)
+
+    - agent: dev
+      action: address_qa_feedback
+      updates: implementation_files
+      condition: qa_left_unchecked_items
+      notes: |
+        If QA left unchecked items:
+        - Dev Agent (New Chat): Address remaining items
+        - Return to QA for final approval
+
+    - repeat_development_cycle:
+      action: continue_for_all_stories
+      notes: |
+        Repeat story cycle (SM → Dev → QA) for all epic stories
+        Continue until all stories in PRD are complete
+
+    - agent: po
+      action: epic_retrospective
+      creates: epic-retrospective.md
+      condition: epic_complete
+      optional: true
+      notes: |
+        OPTIONAL: After epic completion
+        - NOTE: epic-retrospective task coming soon
+        - Validate epic was completed correctly
+        - Document learnings and improvements
+
+    - workflow_end:
+      action: project_complete
+      notes: |
+        All stories implemented and reviewed!
+        Project development phase complete.
+
+        Reference: .bmad-core/data/bmad-kb.md#IDE Development Workflow
+
+  flow_diagram: |
+    ```mermaid
+    graph TD
+        A[Start: Greenfield Project] --> B[analyst: project-brief.md]
+        B --> C[pm: prd.md]
+        C --> D[ux-expert: front-end-spec.md]
+        D --> D2{Generate v0 prompt?}
+        D2 -->|Yes| D3[ux-expert: create v0 prompt]
+        D2 -->|No| E[architect: fullstack-architecture.md]
+        D3 --> D4[User: generate UI in v0/Lovable]
+        D4 --> E
+        E --> F{Architecture suggests PRD changes?}
+        F -->|Yes| G[pm: update prd.md]
+        F -->|No| H[po: validate all artifacts]
+        G --> H
+        H --> I{PO finds issues?}
+        I -->|Yes| J[Return to relevant agent for fixes]
+        I -->|No| K[po: shard documents]
+        J --> H
+        
+        K --> L[sm: create story]
+        L --> M{Review draft story?}
+        M -->|Yes| N[analyst/pm: review & approve story]
+        M -->|No| O[dev: implement story]
+        N --> O
+        O --> P{QA review?}
+        P -->|Yes| Q[qa: review implementation]
+        P -->|No| R{More stories?}
+        Q --> S{QA found issues?}
+        S -->|Yes| T[dev: address QA feedback]
+        S -->|No| R
+        T --> Q
+        R -->|Yes| L
+        R -->|No| U{Epic retrospective?}
+        U -->|Yes| V[po: epic retrospective]
+        U -->|No| W[Project Complete]
+        V --> W
+
+        B -.-> B1[Optional: brainstorming]
+        B -.-> B2[Optional: market research]
+        D -.-> D1[Optional: user research]
+        E -.-> E1[Optional: technical research]
+
+        style W fill:#90EE90
+        style K fill:#ADD8E6
+        style L fill:#ADD8E6
+        style O fill:#ADD8E6
+        style D3 fill:#E6E6FA
+        style D4 fill:#E6E6FA
+        style B fill:#FFE4B5
+        style C fill:#FFE4B5
+        style D fill:#FFE4B5
+        style E fill:#FFE4B5
+        style N fill:#F0E68C
+        style Q fill:#F0E68C
+        style V fill:#F0E68C
+    ```
+
+  decision_guidance:
+    when_to_use:
+      - Building production-ready applications
+      - Multiple team members will be involved
+      - Complex feature requirements
+      - Need comprehensive documentation
+      - Long-term maintenance expected
+      - Enterprise or customer-facing applications
+
+  handoff_prompts:
+    analyst_to_pm: "Project brief is complete. Save it as docs/project-brief.md in your project, then create the PRD."
+    pm_to_ux: "PRD is ready. Save it as docs/prd.md in your project, then create the UI/UX specification."
+    ux_to_architect: "UI/UX spec complete. Save it as docs/front-end-spec.md in your project, then create the fullstack architecture."
+    architect_review: "Architecture complete. Save it as docs/fullstack-architecture.md. Do you suggest any changes to the PRD stories or need new stories added?"
+    architect_to_pm: "Please update the PRD with the suggested story changes, then re-export the complete prd.md to docs/."
+    updated_to_po: "All documents ready in docs/ folder. Please validate all artifacts for consistency."
+    po_issues: "PO found issues with [document]. Please return to [agent] to fix and re-save the updated document."
+    complete: "All planning artifacts validated and saved in docs/ folder. Move to IDE environment to begin development."

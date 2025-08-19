@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(poetry --version)",
+      "Bash(test:*)",
+      "Bash(export PATH=\"$HOME/.local/bin:$PATH\")",
+      "Bash(poetry install:*)",
+      "Bash(export DATABASE_URL=\"postgresql://llmproxy:dbpassword9090@localhost:5432/litellm\")",
+      "Bash(poetry run:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
