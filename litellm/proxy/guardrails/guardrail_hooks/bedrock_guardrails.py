@@ -16,6 +16,7 @@ import json
 import sys
 from typing import Any, AsyncGenerator, List, Literal, Optional, Tuple, Union
 
+import httpx
 from fastapi import HTTPException
 
 import litellm
@@ -284,6 +285,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: Optional[Union[Any, litellm.ModelResponse]] = None,
         request_data: Optional[dict] = None
     ) -> BedrockGuardrailResponse:
+        from datetime import datetime
+        start_time = datetime.now()
         credentials, aws_region_name = self._load_credentials()
         bedrock_request_data: dict = dict(
             self.convert_to_bedrock_format(
@@ -317,6 +320,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             data=prepared_request.body,  # type: ignore
             headers=prepared_request.headers,  # type: ignore
         )
+        #########################################################
+        # Add guardrail information to request trace
+        #########################################################
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=response.json(),
+            request_data=request_data or {},
+            guardrail_status=self._get_bedrock_guardrail_response_status(response=response),
+            start_time=start_time.timestamp(),
+            end_time=datetime.now().timestamp(),
+            duration=(datetime.now() - start_time).total_seconds(),
+        )
+        #########################################################
         if response.status_code == 200:
             # check if the response was flagged
             _json_response = response.json()
@@ -338,6 +353,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return bedrock_guardrail_response
     
+    def _get_bedrock_guardrail_response_status(self, response: httpx.Response) -> Literal["success", "failure"]:
+        """
+        Get the status of the bedrock guardrail response.
+        """
+        if response.status_code == 200:
+            return "success"
+        return "failure"
 
     def _get_http_exception_for_blocked_guardrail(self, response: BedrockGuardrailResponse) -> HTTPException:
         """
@@ -501,10 +523,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         add_guardrail_to_applied_guardrails_header(
             request_data=data, guardrail_name=self.guardrail_name
         )
-
         return data
 
-    @log_guardrail_information
     async def async_moderation_hook(
         self,
         data: dict,
@@ -561,7 +581,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return data
 
-    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,
