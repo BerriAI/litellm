@@ -4,9 +4,10 @@ Tests for DeepInfra rerank functionality following repository patterns.
 import asyncio
 import json
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Add litellm to path
 sys.path.insert(0, os.path.abspath("../../../.."))
@@ -248,7 +249,10 @@ def test_deepinfra_rerank_request_format(mock_post):
 
     # Verify request body format
     request_data = json.loads(mock_post.call_args.kwargs["data"])
-    assert request_data["queries"] == ["test query", "test query"]  # DeepInfra requires queries to match documents length
+    assert request_data["queries"] == [
+        "test query",
+        "test query",
+    ]  # DeepInfra requires queries to match documents length
     assert request_data["documents"] == ["doc1", "doc2"]
     assert request_data["instruction"] == "custom instruction"
     assert request_data["webhook"] == "https://webhook.example.com"
@@ -281,9 +285,11 @@ def test_deepinfra_rerank_error_handling(mock_post):
         api_key="invalid_key",
         api_base="https://api.deepinfra.com",
     )
-    
+
     # Verify that the response contains error information
-    assert response._hidden_params["status"] == "unknown"  # Default status when error occurs
+    assert (
+        response._hidden_params["status"] == "unknown"
+    )  # Default status when error occurs
 
 
 def test_deepinfra_rerank_models():
@@ -302,7 +308,9 @@ def test_deepinfra_rerank_models():
         except Exception as e:
             # We expect this to potentially fail due to missing api_base/key
             # but the model format should be recognized
-            assert "api_base" in str(e) or "API key" in str(e), f"Unexpected error for model {model}: {e}"
+            assert "api_base" in str(e) or "API key" in str(
+                e
+            ), f"Unexpected error for model {model}: {e}"
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
