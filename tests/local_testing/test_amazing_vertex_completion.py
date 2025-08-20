@@ -835,20 +835,20 @@ from test_completion import response_format_tests
 
 
 @pytest.mark.parametrize(
-    "model",
+    "model,region",
     [
-        "vertex_ai/mistral-large-2411",
-        "vertex_ai/mistral-nemo@2407",
-        # "vertex_ai/meta/llama3-405b-instruct-maas",
-    ],  #
-)  # "vertex_ai",
+        ("vertex_ai/mistral-large-2411", "us-central1"),
+        ("vertex_ai/mistral-nemo@2407", "us-central1"),
+        ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1")
+    ],
+)
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],
 )  #
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
-async def test_partner_models_httpx(model, sync_mode):
+async def test_partner_models_httpx(model, region, sync_mode):
     try:
         load_vertex_ai_credentials()
         litellm.set_verbose = True
@@ -869,6 +869,7 @@ async def test_partner_models_httpx(model, sync_mode):
             "model": model,
             "messages": messages,
             "timeout": 10,
+            "vertex_ai_location": region,
         }
         if sync_mode:
             response = litellm.completion(**data)
@@ -881,16 +882,22 @@ async def test_partner_models_httpx(model, sync_mode):
 
         assert isinstance(response._hidden_params["response_cost"], float)
     except litellm.RateLimitError as e:
+        print("RateLimitError", e)
         pass
     except litellm.Timeout as e:
+        print("Timeout", e)
         pass
     except litellm.InternalServerError as e:
+        print("InternalServerError", e)
         pass
     except litellm.APIConnectionError as e:
+        print("APIConnectionError", e)
         pass
     except litellm.ServiceUnavailableError as e:
+        print("ServiceUnavailableError", e)
         pass
     except Exception as e:
+        print("got generic exception", e)
         if "429 Quota exceeded" in str(e):
             pass
         else:
