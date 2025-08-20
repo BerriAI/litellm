@@ -20,6 +20,7 @@ import { Button, Card, Title, Text } from "@tremor/react";
 import { RobotOutlined, ApiOutlined, KeyOutlined, SafetyOutlined, ToolOutlined } from "@ant-design/icons";
 
 import { AUTH_TYPE } from "./types";
+import NotificationsManager from "../molecules/notifications_manager"
 
 type AuthModalProps = {
   visible: boolean;
@@ -189,7 +190,7 @@ const MCPToolsViewer = ({
     setMcpAuthValue(authValue);
     if (authValue && mcpServerHasAuth(auth_type)) {
       setMCPAuthToken(serverId, authValue, auth_type || 'none', serverAlias || undefined);
-      message.success('Authentication token saved locally');
+      NotificationsManager.success('Authentication token saved locally');
     }
   };
 
@@ -197,7 +198,7 @@ const MCPToolsViewer = ({
   const handleClearAuth = () => {
     setMcpAuthValue("");
     removeMCPAuthToken(serverId);
-    message.info('Authentication token cleared');
+    NotificationsManager.info('Authentication token cleared');
   };
 
   // Query to fetch MCP tools

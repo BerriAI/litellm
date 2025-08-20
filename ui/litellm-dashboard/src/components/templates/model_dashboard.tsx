@@ -54,15 +54,15 @@ import { Providers, provider_map, getPlaceholder, getProviderModels } from "../p
 import ModelInfoView from "../model_info_view"
 import AddModelTab from "../add_model/add_model_tab"
 
-import { ModelDataTable } from "../model_dashboard/table"
-import { columns } from "../molecules/models/columns"
-import PriceDataReload from "../price_data_reload"
-import HealthCheckComponent from "../model_dashboard/HealthCheckComponent"
-import PassThroughSettings from "../pass_through_settings"
-import ModelGroupAliasSettings from "../model_group_alias_settings"
-import { all_admin_roles } from "@/utils/roles"
-import { Table as TableInstance } from "@tanstack/react-table"
-import NotificationManager from "../molecules/notifications_manager"
+import { ModelDataTable } from "../model_dashboard/table";
+import { columns } from "../molecules/models/columns";
+import PriceDataReload from "../price_data_reload";
+import HealthCheckComponent from "../model_dashboard/HealthCheckComponent";
+import PassThroughSettings from "../pass_through_settings";
+import ModelGroupAliasSettings from "../model_group_alias_settings";
+import { all_admin_roles } from "@/utils/roles";
+import { Table as TableInstance } from "@tanstack/react-table";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface ModelDashboardProps {
   accessToken: string | null
@@ -386,9 +386,9 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         console.log(info.file, info.fileList)
       }
       if (info.file.status === "done") {
-        message.success(`${info.file.name} file uploaded successfully`)
+        NotificationsManager.success(`${info.file.name} file uploaded successfully`);
       } else if (info.file.status === "error") {
-        NotificationManager.fromBackend(`${info.file.name} file upload failed.`)
+        NotificationsManager.fromBackend(`${info.file.name} file upload failed.`);
       }
     },
   }
@@ -416,20 +416,20 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         if (globalRetryPolicy) {
           payload.router_settings.retry_policy = globalRetryPolicy
         }
-        message.success("Global retry settings saved successfully")
+        NotificationsManager.success("Global retry settings saved successfully");
       } else {
         // Only update model group retry policy
         console.log("Saving model group retry policy for", selectedModelGroup, ":", modelGroupRetryPolicy)
         if (modelGroupRetryPolicy) {
           payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy
         }
-        message.success(`Retry settings saved successfully for ${selectedModelGroup}`)
+        NotificationsManager.success(`Retry settings saved successfully for ${selectedModelGroup}`);
       }
 
       await setCallbacksCall(accessToken, payload)
     } catch (error) {
-      console.error("Failed to save retry settings:", error)
-      NotificationManager.fromBackend("Failed to save retry settings")
+      console.error("Failed to save retry settings:", error);
+      NotificationsManager.fromBackend("Failed to save retry settings");
     }
   }
 
@@ -719,11 +719,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
 
   const runHealthCheck = async () => {
     try {
-      message.info("Running health check...")
-      setIsHealthCheckLoading(true)
-      setHealthCheckResponse(null)
-      const response = await healthCheckCall(accessToken)
-      setHealthCheckResponse(response)
+      NotificationsManager.info("Running health check...");
+      setIsHealthCheckLoading(true);
+      setHealthCheckResponse(null);
+      const response = await healthCheckCall(accessToken);
+      setHealthCheckResponse(response);
     } catch (error) {
       console.error("Error running health check:", error)
       setHealthCheckResponse("Error running health check")
@@ -892,17 +892,14 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         handleAddModelSubmit(values, accessToken, addModelForm, handleRefreshClick)
       })
       .catch((error: any) => {
-        console.error("❌ Validation failed:", error)
-        console.error("Form errors:", error.errorFields)
-        const errorMessages =
-          error.errorFields
-            ?.map((field: any) => {
-              return `${field.name.join(".")}: ${field.errors.join(", ")}`
-            })
-            .join(" | ") || "Unknown validation error"
-        NotificationManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`)
-      })
-  }
+        console.error("❌ Validation failed:", error);
+        console.error("Form errors:", error.errorFields);
+        const errorMessages = error.errorFields?.map((field: any) => {
+          return `${field.name.join('.')}: ${field.errors.join(', ')}`;
+        }).join(' | ') || 'Unknown validation error';
+        NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
+      });
+  };
 
   console.log(`selectedProvider: ${selectedProvider}`)
   console.log(`providerModels.length: ${providerModels.length}`)

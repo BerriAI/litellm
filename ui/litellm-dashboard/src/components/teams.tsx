@@ -75,6 +75,7 @@ import { formatNumberWithCommas } from "../utils/dataUtils";
 import { AlertTriangleIcon, XIcon } from 'lucide-react';
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -111,7 +112,6 @@ import {
   v2TeamListCall,
 } from "./networking";
 import { updateExistingKeys } from "@/utils/dataUtils";
-import NotificationManager from "./molecules/notifications_manager";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -377,7 +377,7 @@ const Teams: React.FC<TeamProps> = ({
           );
         }
 
-        message.info("Creating Team");
+        NotificationsManager.info("Creating Team");
 
         // Handle logging settings in metadata
         if (loggingSettings.length > 0) {
@@ -457,7 +457,7 @@ const Teams: React.FC<TeamProps> = ({
           setTeams([response]);
         }
         console.log(`response for team create call: ${response}`);
-        message.success("Team created");
+        NotificationsManager.success("Team created");
         form.resetFields();
         setLoggingSettings([]);
         setModelAliases({});
@@ -465,7 +465,7 @@ const Teams: React.FC<TeamProps> = ({
       }
     } catch (error) {
       console.error("Error creating the team:", error);
-      NotificationManager.fromBackend("Error creating the team: " + error);
+      NotificationsManager.fromBackend("Error creating the team: " + error);
     }
   };
 
