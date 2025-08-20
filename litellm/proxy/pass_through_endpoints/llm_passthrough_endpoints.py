@@ -25,7 +25,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_form_data,
     get_request_body,
 )
-from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key, encode_bedrock_runtime_modelid_arn
+from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
