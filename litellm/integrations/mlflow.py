@@ -166,7 +166,6 @@ class MlflowLogger(CustomLogger):
             if value := kwargs.get("optional_params", {}).pop(key, None):
                 inputs[key] = value
 
-        # Include prediction parameter if present
         if prediction := kwargs.get("prediction"):
             inputs["prediction"] = prediction
 
