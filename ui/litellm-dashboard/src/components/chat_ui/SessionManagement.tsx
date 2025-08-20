@@ -23,7 +23,7 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
   const handleCopySessionId = () => {
     if (responsesSessionId) {
       navigator.clipboard.writeText(responsesSessionId);
-      message.success("Response ID copied to clipboard!");
+      NotificationsManager.success("Response ID copied to clipboard!");
     }
   };
 

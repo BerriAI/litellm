@@ -15,7 +15,7 @@ import { UserEditView } from "../user_edit_view"
 import OnboardingModal, { InvitationLink } from "../onboarding_link"
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CopyIcon, CheckIcon } from "lucide-react";
-import NotificationManager from "../molecules/notifications_manager";
+import NotificationsManager from "../molecules/notifications_manager";
 import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 
 interface UserInfoViewProps {
@@ -86,7 +86,7 @@ export default function UserInfoView({
         setUserModels(availableModels)
       } catch (error) {
         console.error("Error fetching user data:", error)
-        NotificationManager.fromBackend("Failed to fetch user data")
+        NotificationsManager.fromBackend("Failed to fetch user data")
       } finally {
         setIsLoading(false)
       }
@@ -97,16 +97,16 @@ export default function UserInfoView({
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      NotificationManager.fromBackend("Access token not found")
+      NotificationsManager.fromBackend("Access token not found")
       return
     }
     try {
-      message.success("Generating password reset link...")
+      NotificationsManager.success("Generating password reset link...")
       const data = await invitationCreateCall(accessToken, userId)
       setInvitationLinkData(data)
       setIsInvitationLinkModalVisible(true)
     } catch (error) {
-      NotificationManager.fromBackend("Failed to generate password reset link")
+      NotificationsManager.fromBackend("Failed to generate password reset link")
     }
   }
 
@@ -114,14 +114,14 @@ export default function UserInfoView({
     try {
       if (!accessToken) return
       await userDeleteCall(accessToken, [userId])
-      message.success("User deleted successfully")
+      NotificationsManager.success("User deleted successfully")
       if (onDelete) {
         onDelete()
       }
       onClose()
     } catch (error) {
       console.error("Error deleting user:", error)
-      NotificationManager.fromBackend("Failed to delete user")
+      NotificationsManager.fromBackend("Failed to delete user")
     }
   }
 
@@ -144,11 +144,11 @@ export default function UserInfoView({
         },
       })
 
-      message.success("User updated successfully")
+      NotificationsManager.success("User updated successfully")
       setIsEditing(false)
     } catch (error) {
       console.error("Error updating user:", error)
-      NotificationManager.fromBackend("Failed to update user")
+      NotificationsManager.fromBackend("Failed to update user")
     }
   }
 

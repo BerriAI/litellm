@@ -9,7 +9,7 @@ import {
 import { message } from "antd"
 import { useTheme } from "@/contexts/ThemeContext"
 import { getProxyBaseUrl } from "@/components/networking"
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface UIThemeSettingsProps {
   userID: string | null;
@@ -73,14 +73,14 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       });
 
       if (response.ok) {
-        message.success("Logo settings updated successfully!");
+        NotificationsManager.success("Logo settings updated successfully!");
         setLogoUrl(logoUrlInput || null);
       } else {
         throw new Error("Failed to update settings");
       }
     } catch (error) {
       console.error("Error updating logo settings:", error);
-      NotificationManager.fromBackend("Failed to update logo settings");
+      NotificationsManager.fromBackend("Failed to update logo settings");
     } finally {
       setLoading(false);
     }
@@ -107,13 +107,13 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({
       });
 
       if (response.ok) {
-        message.success("Logo reset to default!");
+        NotificationsManager.success("Logo reset to default!");
       } else {
         throw new Error("Failed to reset logo");
       }
     } catch (error) {
       console.error("Error resetting logo:", error);
-      NotificationManager.fromBackend("Failed to reset logo");
+      NotificationsManager.fromBackend("Failed to reset logo");
     } finally {
       setLoading(false);
     }
