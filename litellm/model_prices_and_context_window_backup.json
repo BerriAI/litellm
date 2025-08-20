@@ -2483,7 +2483,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_native_streaming": true,
         "supports_reasoning": true,
         "source": "https://azure.microsoft.com/en-us/blog/gpt-5-in-azure-ai-foundry-the-future-of-ai-apps-and-agents-starts-here/"
@@ -2516,7 +2516,7 @@
         "supports_vision": true,
         "supports_prompt_caching": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_native_streaming": true,
         "supports_reasoning": true
     },
