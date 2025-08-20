@@ -203,7 +203,7 @@ class VertexAIPartnerModels(VertexBase):
                     client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
-            elif "llama" in model:
+            elif self.should_use_openai_handler(model):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,
