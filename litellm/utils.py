@@ -541,9 +541,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1287,9 +1287,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -2928,19 +2928,19 @@ def _remove_strict_from_schema(schema):
 def _remove_json_schema_refs(schema, max_depth=10):
     """
     Remove JSON schema reference fields like '$id' and '$schema' that can cause issues with some providers.
-    
+
     These fields are used for schema validation but can cause problems when the schema references
     are not accessible to the provider's validation system.
-    
+
     Args:
         schema: The schema object to clean (dict, list, or other)
         max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
-    
+
     Relevant Issues: Mistral API grammar validation fails when schema contains $id and $schema references
     """
     if max_depth <= 0:
         return schema
-        
+
     if isinstance(schema, dict):
         # Remove JSON schema reference fields
         schema.pop("$id", None)
@@ -3081,10 +3081,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3211,16 +3211,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4314,9 +4314,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
@@ -6664,7 +6664,8 @@ def validate_and_fix_openai_messages(messages: List):
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
 
-def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]: 
+
+def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
@@ -6677,6 +6678,7 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
         elif isinstance(tool, dict):
             new_tools.append(tool)
     return new_tools
+
 
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
@@ -7059,6 +7061,8 @@ class ProviderConfigManager:
             return litellm.JinaAIRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingFaceRerankConfig()
+        elif litellm.LlmProviders.DEEPINFRA == provider:
+            return litellm.DeepinfraRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -7072,6 +7076,7 @@ class ProviderConfigManager:
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
@@ -7143,6 +7148,7 @@ class ProviderConfigManager:
             return litellm.GeminiModelInfo()
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.common_utils import VertexAIModelInfo
+
             return VertexAIModelInfo()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
