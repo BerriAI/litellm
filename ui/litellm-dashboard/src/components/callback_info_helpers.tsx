@@ -3,6 +3,7 @@ export enum Callbacks {
   CustomCallbackAPI = "Custom Callback API",
   Datadog = "Datadog",
   Langfuse = "Langfuse",
+  LangfuseOtel = "Langfuse OTEL",
   LangSmith = "LangSmith",
   Lago = "Lago",
   OpenMeter = "OpenMeter",
@@ -16,6 +17,7 @@ export const callback_map: Record<string, string> = {
   CustomCallbackAPI: "custom_callback_api",
   Datadog: "datadog",
   Langfuse: "langfuse",
+  LangfuseOtel: "langfuse_otel",
   LangSmith: "langsmith",
   Lago: "lago",
   OpenMeter: "openmeter",
@@ -56,6 +58,15 @@ export const callbackInfo: Record<string, CallbackInfo> = {
         "langfuse_secret_key": "password",
         "langfuse_host": "text"
     }
+    },
+    [Callbacks.LangfuseOtel]: {
+      logo: `${asset_logos_folder}langfuse.png`,
+      supports_key_team_logging: true,
+      dynamic_params: {
+        "langfuse_public_key": "text",
+        "langfuse_secret_key": "password",
+        "langfuse_host": "text"
+      }
     },
     [Callbacks.Arize]: {
       logo: `${asset_logos_folder}arize.png`,
