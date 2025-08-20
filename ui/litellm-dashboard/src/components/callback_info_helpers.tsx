@@ -3,7 +3,7 @@ export enum Callbacks {
   CustomCallbackAPI = "Custom Callback API",
   Datadog = "Datadog",
   Langfuse = "Langfuse",
-  LangfuseOtel = "Langfuse OTEL",
+  LangfuseOtel = "LangfuseOtel",
   LangSmith = "LangSmith",
   Lago = "Lago",
   OpenMeter = "OpenMeter",
@@ -66,7 +66,7 @@ export const callbackInfo: Record<string, CallbackInfo> = {
         "langfuse_public_key": "text",
         "langfuse_secret_key": "password",
         "langfuse_host": "text"
-      }
+      },
     },
     [Callbacks.Arize]: {
       logo: `${asset_logos_folder}arize.png`,
