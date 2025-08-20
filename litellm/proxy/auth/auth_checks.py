@@ -1212,7 +1212,7 @@ def _check_model_access_helper(
     team_model_aliases: Optional[Dict[str, str]] = None,
     team_id: Optional[str] = None,
     object_type: Literal["user", "team", "key", "org"] = "user",
-) -> Literal[True]:
+) -> bool:
     ## check if model in allowed model names
     from collections import defaultdict
 
@@ -1252,14 +1252,7 @@ def _check_model_access_helper(
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:
-        raise ProxyException(
-            message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
-            type=ProxyErrorTypes.get_model_access_error_type_for_object(
-                object_type=object_type
-            ),
-            param="model",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
+        return False
     return True
 
 
