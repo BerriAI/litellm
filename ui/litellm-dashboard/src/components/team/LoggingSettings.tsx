@@ -164,18 +164,21 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           >
             {allCallbacks.map((callbackName) => {
               const logo = callbackInfo[callbackName]?.logo;
+              const description = callbackInfo[callbackName]?.description;
               return (
                 <Option key={callbackName} value={callbackName} label={callbackName}>
-                  <div className="flex items-center space-x-2">
-                    {logo && (
-                      <img 
-                        src={logo} 
-                        alt={callbackName} 
-                        className="w-4 h-4 object-contain" 
-                      />
-                    )}
-                    <span>{callbackName}</span>
-                  </div>
+                  <Tooltip title={description} placement="right">
+                    <div className="flex items-center space-x-2">
+                      {logo && (
+                        <img 
+                          src={logo} 
+                          alt={callbackName} 
+                          className="w-4 h-4 object-contain" 
+                        />
+                      )}
+                      <span>{callbackName}</span>
+                    </div>
+                  </Tooltip>
                 </Option>
               );
             })}
@@ -257,18 +260,21 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                     >
                       {supportedCallbacks.map((callbackName) => {
                         const logo = callbackInfo[callbackName]?.logo;
+                        const description = callbackInfo[callbackName]?.description;
                         return (
                           <Option key={callbackName} value={callbackName} label={callbackName}>
-                            <div className="flex items-center space-x-2">
-                              {logo && (
-                                <img 
-                                  src={logo} 
-                                  alt={callbackName} 
-                                  className="w-4 h-4 object-contain" 
-                                />
-                              )}
-                              <span>{callbackName}</span>
-                            </div>
+                            <Tooltip title={description} placement="right">
+                              <div className="flex items-center space-x-2">
+                                {logo && (
+                                  <img 
+                                    src={logo} 
+                                    alt={callbackName} 
+                                    className="w-4 h-4 object-contain" 
+                                  />
+                                )}
+                                <span>{callbackName}</span>
+                              </div>
+                            </Tooltip>
                           </Option>
                         );
                       })}

@@ -118,7 +118,7 @@ class AimGuardrail(CustomGuardrail):
             litellm_call_id=call_id,
         )
         response = await self.async_handler.post(
-            f"{self.api_base}/detect/openai/v2",
+            f"{self.api_base}/fw/v1/analyze",
             headers=headers,
             json={"messages": data.get("messages", [])},
         )
@@ -183,14 +183,17 @@ class AimGuardrail(CustomGuardrail):
         )
         call_id = request_data.get("litellm_call_id")
         response = await self.async_handler.post(
-            f"{self.api_base}/detect/output/v2",
+            f"{self.api_base}/fw/v1/analyze",
             headers=self._build_aim_headers(
                 hook=hook,
                 key_alias=key_alias,
                 user_email=user_email,
                 litellm_call_id=call_id,
             ),
-            json={"output": output, "messages": request_data.get("messages", [])},
+            json={
+                "messages": request_data.get("messages", [])
+                + [{"role": "assistant", "content": output}]
+            },
         )
         response.raise_for_status()
         res = response.json()
@@ -297,7 +300,7 @@ class AimGuardrail(CustomGuardrail):
         )
         call_id = request_data.get("litellm_call_id")
         async with connect(
-            f"{self.ws_api_base}/detect/output/ws",
+            f"{self.ws_api_base}/fw/v1/analyze/stream",
             additional_headers=self._build_aim_headers(
                 hook="output",
                 key_alias=user_api_key_dict.key_alias,

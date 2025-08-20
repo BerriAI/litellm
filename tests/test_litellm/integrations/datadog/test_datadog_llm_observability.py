@@ -435,6 +435,8 @@ def create_standard_logging_payload_with_latency_metrics() -> StandardLoggingPay
         start_time=1234567890.0,
         end_time=1234567890.5,
         duration=0.5,  # 500ms
+        guardrail_request={"input": "test input message", "user_id": "test_user"},
+        guardrail_response={"output": "filtered output", "flagged": False, "score": 0.1},
     )
     
     hidden_params = StandardLoggingHiddenParams(
@@ -567,3 +569,46 @@ def test_latency_metrics_edge_cases(mock_env_vars):
         )
         metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
         assert "guardrail_overhead_time_ms" not in metadata
+
+
+def test_guardrail_information_in_metadata(mock_env_vars):
+    """Test that guardrail_information is included in metadata with input/output fields"""
+    with patch('litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client'), \
+         patch('asyncio.create_task'):
+        logger = DataDogLLMObsLogger()
+        
+        # Create a standard payload with guardrail information
+        standard_payload = create_standard_logging_payload_with_latency_metrics()
+        
+        kwargs = {
+            "standard_logging_object": standard_payload,
+            "litellm_params": {"metadata": {}}
+        }
+        
+        start_time = datetime.now()
+        end_time = datetime.now()
+        
+        # Create the payload and verify guardrail_information is in metadata
+        payload = logger.create_llm_obs_payload(kwargs, start_time, end_time)
+        metadata = payload["meta"]["metadata"]
+        
+        # Verify guardrail_information is present in metadata
+        assert "guardrail_information" in metadata
+        assert metadata["guardrail_information"] is not None
+        
+        # Verify the guardrail information structure
+        guardrail_info = metadata["guardrail_information"]
+        assert guardrail_info["guardrail_name"] == "test_guardrail"
+        assert guardrail_info["guardrail_status"] == "success"
+        assert guardrail_info["duration"] == 0.5
+        
+        # Verify input/output fields are present
+        assert "guardrail_request" in guardrail_info
+        assert "guardrail_response" in guardrail_info
+        
+        # Validate the input/output content
+        assert guardrail_info["guardrail_request"]["input"] == "test input message"
+        assert guardrail_info["guardrail_request"]["user_id"] == "test_user"
+        assert guardrail_info["guardrail_response"]["output"] == "filtered output"
+        assert guardrail_info["guardrail_response"]["flagged"] == False
+        assert guardrail_info["guardrail_response"]["score"] == 0.1

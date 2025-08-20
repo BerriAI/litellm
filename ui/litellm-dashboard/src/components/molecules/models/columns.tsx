@@ -1,10 +1,10 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Icon } from "@tremor/react";
 import { Tooltip } from "antd";
-import { getProviderLogoAndName } from "../provider_info_helpers";
-import { ModelData } from "./types";
-import { TrashIcon, PencilIcon, PencilAltIcon } from "@heroicons/react/outline";
-import DeleteModelButton from "../delete_model_button";
+import { getProviderLogoAndName } from "../../provider_info_helpers";
+import { ModelData } from "../../model_dashboard/types";
+import { TrashIcon, PencilIcon, PencilAltIcon, KeyIcon } from "@heroicons/react/outline";
+import DeleteModelButton from "../../delete_model_button";
 import { useState } from "react";
 
 export const columns = (
@@ -21,7 +21,7 @@ export const columns = (
   setExpandedRows: (expandedRows: Set<string>) => void,
 ): ColumnDef<ModelData>[] => [
   {
-    header: "Model ID",
+    header: () => <span className="text-sm font-semibold">Model ID</span>,
     accessorKey: "model_info.id",
     cell: ({ row }) => {
       const model = row.original;
@@ -38,77 +38,117 @@ export const columns = (
     },
   },
   {
-    header: "Public Model Name",
+    header: () => <span className="text-sm font-semibold">Model Information</span>,
     accessorKey: "model_name",
+    size: 250, // Fixed column width
     cell: ({ row }) => {
+      const model = row.original;
       const displayName = getDisplayModelName(row.original) || "-";
+      const tooltipContent = (
+        <div>
+          <div><strong>Provider:</strong> {model.provider || "-"}</div>
+          <div><strong>Public Model Name:</strong> {displayName}</div>
+          <div><strong>LiteLLM Model Name:</strong> {model.litellm_model_name || "-"}</div>
+        </div>
+      );
+      
       return (
-        <Tooltip title={displayName}>
-          <div className="text-xs truncate whitespace-nowrap">
-            {displayName}
+        <Tooltip title={tooltipContent}>
+          <div className="flex items-start space-x-2 min-w-0 w-full max-w-[250px]">
+            {/* Provider Icon */}
+            <div className="flex-shrink-0 mt-0.5">
+              {model.provider ? (
+                <img
+                  src={getProviderLogoAndName(model.provider).logo}
+                  alt={`${model.provider} logo`}
+                  className="w-4 h-4"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    const parent = target.parentElement;
+                    if (parent) {
+                      const fallbackDiv = document.createElement('div');
+                      fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
+                      fallbackDiv.textContent = model.provider?.charAt(0) || '-';
+                      parent.replaceChild(fallbackDiv, target);
+                    }
+                  }}
+                />
+              ) : (
+                <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">
+                  -
+                </div>
+              )}
+            </div>
+            
+            {/* Model Names Container */}
+            <div className="flex flex-col min-w-0 flex-1">
+              {/* Public Model Name */}
+              <div className="text-xs font-medium text-gray-900 truncate max-w-[210px]">
+                {displayName}
+              </div>
+              {/* LiteLLM Model Name */}
+              <div className="text-xs text-gray-500 truncate mt-0.5 max-w-[210px]">
+                {model.litellm_model_name || "-"}
+              </div>
+            </div>
           </div>
         </Tooltip>
       );
     },
   },
   {
-    header: "Provider",
-    accessorKey: "provider",
+    header: () => <span className="text-sm font-semibold">Credentials</span>,
+    accessorKey: "litellm_credential_name",
+    size: 180, // Fixed column width
     cell: ({ row }) => {
       const model = row.original;
-      return (
-        <div className="flex items-center space-x-2">
-          {model.provider && (
-            <img
-              src={getProviderLogoAndName(model.provider).logo}
-              alt={`${model.provider} logo`}
-              className="w-4 h-4"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                const parent = target.parentElement;
-                if (parent) {
-                  const fallbackDiv = document.createElement('div');
-                  fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                  fallbackDiv.textContent = model.provider?.charAt(0) || '-';
-                  parent.replaceChild(fallbackDiv, target);
-                }
-              }}
-            />
-          )}
-          <p className="text-xs">{model.provider || "-"}</p>
+      const credentialName = model.litellm_params?.litellm_credential_name;
+      
+      return credentialName ? (
+        <Tooltip title={`Credential: ${credentialName}`}>
+          <div className="flex items-center space-x-2 max-w-[180px]">
+            <KeyIcon className="w-4 h-4 text-blue-500 flex-shrink-0" />
+            <span className="text-xs truncate" title={credentialName}>
+              {credentialName}
+            </span>
+          </div>
+        </Tooltip>
+      ) : (
+        <div className="flex items-center space-x-2 max-w-[180px]">
+          <KeyIcon className="w-4 h-4 text-gray-300 flex-shrink-0" />
+          <span className="text-xs text-gray-400">No credentials</span>
         </div>
       );
     },
   },
   {
-    header: "LiteLLM Model Name",
-    accessorKey: "litellm_model_name",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <Tooltip title={model.litellm_model_name}>
-          <div className="text-xs truncate whitespace-nowrap">
-            {model.litellm_model_name || "-"}
-          </div>
-        </Tooltip>
-      );
-    },
-  },
-  {
-    header: "Created At",
-    accessorKey: "model_info.created_at",
+    header: () => <span className="text-sm font-semibold">Created By</span>,
+    accessorKey: "model_info.created_by",
     sortingFn: "datetime",
+    size: 160, // Fixed column width
     cell: ({ row }) => {
       const model = row.original;
+      const createdBy = model.model_info.created_by;
+      const createdAt = model.model_info.created_at 
+        ? new Date(model.model_info.created_at).toLocaleDateString() 
+        : null;
+      
       return (
-        <span className="text-xs">
-          {model.model_info.created_at ? new Date(model.model_info.created_at).toLocaleDateString() : "-"}
-        </span>
+        <div className="flex flex-col min-w-0 max-w-[160px]">
+          {/* Created By - Primary */}
+          <div className="text-xs font-medium text-gray-900 truncate" title={createdBy || "Unknown"}>
+            {createdBy || "Unknown"}
+          </div>
+          {/* Created At - Secondary */}
+          <div className="text-xs text-gray-500 truncate mt-0.5" title={createdAt || "Unknown date"}>
+            {createdAt || "Unknown date"}
+          </div>
+        </div>
       );
     },
   },
   {
-    header: "Updated At",
+    header: () => <span className="text-sm font-semibold">Updated At</span>,
     accessorKey: "model_info.updated_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
@@ -121,51 +161,45 @@ export const columns = (
     },
   },
   {
-    header: "Created By",
-    accessorKey: "model_info.created_by",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <span className="text-xs">
-          {model.model_info.created_by || "-"}
-        </span>
-      );
-    },
-  },
-  {
-    header: () => (
-      <Tooltip title="Cost per 1M tokens">
-        <span>Input Cost</span>
-      </Tooltip>
-    ),
+    header: () => <span className="text-sm font-semibold">Costs</span>,
     accessorKey: "input_cost",
+    size: 120, // Fixed column width
     cell: ({ row }) => {
       const model = row.original;
+      const inputCost = model.input_cost;
+      const outputCost = model.output_cost;
+      
+      // If both costs are missing or undefined, show "-"
+      if (!inputCost && !outputCost) {
+        return (
+          <div className="max-w-[120px]">
+            <span className="text-xs text-gray-400">-</span>
+          </div>
+        );
+      }
+      
       return (
-        <pre className="text-xs">
-          {model.input_cost || "-"}
-        </pre>
+        <Tooltip title="Cost per 1M tokens">
+          <div className="flex flex-col min-w-0 max-w-[120px]">
+            {/* Input Cost - Primary */}
+            {inputCost && (
+              <div className="text-xs font-medium text-gray-900 truncate">
+                In: ${inputCost}
+              </div>
+            )}
+            {/* Output Cost - Secondary */}
+            {outputCost && (
+              <div className="text-xs text-gray-500 truncate mt-0.5">
+                Out: ${outputCost}
+              </div>
+            )}
+          </div>
+        </Tooltip>
       );
     },
   },
   {
-    header: () => (
-      <Tooltip title="Cost per 1M tokens">
-        <span>Output Cost</span>
-      </Tooltip>
-    ),
-    accessorKey: "output_cost",
-    cell: ({ row }) => {
-      const model = row.original;
-      return (
-        <pre className="text-xs">
-          {model.output_cost || "-"}
-        </pre>
-      );
-    },
-  },
-  {
-    header: "Team ID",
+    header: () => <span className="text-sm font-semibold">Team ID</span>,
     accessorKey: "model_info.team_id",
     cell: ({ row }) => {
       const model = row.original;
@@ -188,7 +222,7 @@ export const columns = (
     },
   },
   {
-    header: "Model Access Group",
+    header: () => <span className="text-sm font-semibold">Model Access Group</span>,
     accessorKey: "model_info.model_access_group",
     enableSorting: false,
     cell: ({ row }) => {
@@ -252,23 +286,7 @@ export const columns = (
     },
   },
   {
-    header: "Credentials",
-    accessorKey: "litellm_credential_name",
-    cell: ({ row }) => {
-      const model = row.original;
-      return model.litellm_params && model.litellm_params.litellm_credential_name ? (
-        <div className="overflow-hidden">
-          <Tooltip title={model.litellm_params.litellm_credential_name}>
-            {model.litellm_params.litellm_credential_name.slice(0, 7)}...
-          </Tooltip>
-        </div>
-      ) : (
-        <span className="text-gray-400">-</span>
-      );
-    },
-  },
-  {
-    header: "Status",
+    header: () => <span className="text-sm font-semibold">Status</span>,
     accessorKey: "model_info.db_model",
     cell: ({ row }) => {
       const model = row.original;
@@ -292,17 +310,6 @@ export const columns = (
       const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
-          <Icon
-            icon={PencilAltIcon}
-            size="sm"
-            onClick={() => {
-              if (canEditModel) {
-                setSelectedModelId(model.model_info.id);
-                setEditModel(true);
-              }
-            }}
-            className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
-          />
           <Icon
             icon={TrashIcon}
             size="sm"
