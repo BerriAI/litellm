@@ -15,14 +15,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     - Mapping ``max_tokens`` -> ``max_completion_tokens``.
     - Dropping unsupported ``temperature`` values when requested.
     """
+
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
         return "gpt-5" in model
-    
+
     def get_supported_openai_params(self, model: str) -> list:
+        from litellm.utils import supports_tool_choice
+
         base_gpt_series_params = super().get_supported_openai_params(model=model)
         gpt_5_only_params = ["reasoning_effort"]
         base_gpt_series_params.extend(gpt_5_only_params)
+        if not supports_tool_choice(model=model):
+            base_gpt_series_params.remove("tool_choice")
         return base_gpt_series_params
 
     def map_openai_params(
@@ -61,4 +66,3 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             model=model,
             drop_params=drop_params,
         )
-
