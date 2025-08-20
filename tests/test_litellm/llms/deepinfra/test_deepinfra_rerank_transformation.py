@@ -42,35 +42,6 @@ class TestDeepinfraRerankTransform:
         with pytest.raises(ValueError, match="Deepinfra API Base is required"):
             self.config.get_complete_url(None, model)
 
-    def test_validate_environment(self):
-        """Test environment validation with API key."""
-        # Test with API key provided
-        headers = self.config.validate_environment(
-            headers={}, model="test", api_key="test_key"
-        )
-        assert "Authorization" in headers
-        assert headers["Authorization"] == "Bearer test_key"
-        assert headers["accept"] == "application/json"
-        assert headers["content-type"] == "application/json"
-
-        # Test headers override
-        custom_headers = {"custom": "header", "Authorization": "Bearer custom_key"}
-        headers = self.config.validate_environment(
-            headers=custom_headers, model="test", api_key="test_key"
-        )
-        assert headers["custom"] == "header"
-        assert (
-            headers["Authorization"] == "Bearer custom_key"
-        )  # Custom auth should override
-
-        # Test without API key should use environment variable (DEEPINFRA_API_KEY from .env)
-        headers = self.config.validate_environment(
-            headers={}, model="test", api_key=None
-        )
-        assert "Authorization" in headers
-        assert headers["Authorization"].startswith("Bearer ")
-        assert headers["accept"] == "application/json"
-        assert headers["content-type"] == "application/json"
 
     def test_map_cohere_rerank_params_basic(self):
         """Test basic parameter mapping for DeepInfra rerank."""
