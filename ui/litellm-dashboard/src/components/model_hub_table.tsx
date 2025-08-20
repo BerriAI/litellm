@@ -21,6 +21,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Table as TableInstance } from '@tanstack/react-table';
 import { Copy } from "lucide-react";
 import { isAdminRole } from "../utils/roles";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -146,7 +147,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    message.success("Copied to clipboard!");
+    NotificationsManager.success("Copied to clipboard!");
   };
 
   const formatCapabilityName = (key: string) => {

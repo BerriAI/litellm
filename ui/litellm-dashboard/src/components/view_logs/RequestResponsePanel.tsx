@@ -1,6 +1,6 @@
 import { LogEntry } from "./columns";
 import { message } from "antd";
-import NotificationManager from "../molecules/notifications_manager";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface RequestResponsePanelProps {
   row: {
@@ -56,18 +56,18 @@ export function RequestResponsePanel({
   const handleCopyRequest = async () => {
     const success = await copyToClipboard(JSON.stringify(getRawRequest(), null, 2));
     if (success) {
-      message.success('Request copied to clipboard');
+      NotificationsManager.success('Request copied to clipboard');
     } else {
-      NotificationManager.fromBackend('Failed to copy request');
+      NotificationsManager.fromBackend('Failed to copy request');
     }
   };
 
   const handleCopyResponse = async () => {
     const success = await copyToClipboard(JSON.stringify(formattedResponse(), null, 2));
     if (success) {
-      message.success('Response copied to clipboard');
+      NotificationsManager.success('Response copied to clipboard');
     } else {
-      NotificationManager.fromBackend('Failed to copy response');
+      NotificationsManager.fromBackend('Failed to copy response');
     }
   };
 
