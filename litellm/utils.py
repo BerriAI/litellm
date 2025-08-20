@@ -5207,6 +5207,7 @@ def validate_environment(  # noqa: PLR0915
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
 ) -> dict:
     """
     Checks if the environment variables are valid for the given model.
@@ -5552,19 +5553,18 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("NEBIUS_API_KEY")
 
+    def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
+        """Filter out keys that contain the exclude_pattern (case insensitive)."""
+        return [key for key in keys if exclude_pattern not in key.lower()]
+
     if api_key is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_key" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_key")
 
     if api_base is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_base" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_base")
+
+    if api_version is not None:
+        missing_keys = filter_missing_keys(missing_keys, "api_version")
 
     if len(missing_keys) == 0:  # no missing keys
         keys_in_environment = True
