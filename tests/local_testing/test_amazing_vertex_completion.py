@@ -905,9 +905,10 @@ async def test_partner_models_httpx(model, region, sync_mode):
 
 
 @pytest.mark.parametrize(
-    "model",
+    "model,region",
     [
-        "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas",
+        ("vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas", "us-east5"),
+        ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
     ],
 )
 @pytest.mark.parametrize(
@@ -916,9 +917,9 @@ async def test_partner_models_httpx(model, region, sync_mode):
 )  #
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_partner_models_httpx_streaming(model, sync_mode):
+async def test_partner_models_httpx_streaming(model, region, sync_mode):
     try:
-        load_vertex_ai_credentials()
+        #load_vertex_ai_credentials()
         litellm._turn_on_debug()
 
         messages = [
@@ -937,7 +938,7 @@ async def test_partner_models_httpx_streaming(model, sync_mode):
             "model": model,
             "messages": messages,
             "stream": True,
-            "vertex_ai_location": "us-east5",
+            "vertex_ai_location": region,
         }
         if sync_mode:
             response = litellm.completion(**data)
