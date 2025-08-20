@@ -900,10 +900,9 @@ async def test_partner_models_httpx(model, sync_mode):
 @pytest.mark.parametrize(
     "model",
     [
-        "vertex_ai/mistral-large-2411",
-        # "vertex_ai/meta/llama3-405b-instruct-maas",
+        "vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas",
     ],
-)  # "vertex_ai",
+)
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],  #
@@ -913,7 +912,7 @@ async def test_partner_models_httpx(model, sync_mode):
 async def test_partner_models_httpx_streaming(model, sync_mode):
     try:
         load_vertex_ai_credentials()
-        litellm.set_verbose = True
+        litellm._turn_on_debug()
 
         messages = [
             {
@@ -931,6 +930,7 @@ async def test_partner_models_httpx_streaming(model, sync_mode):
             "model": model,
             "messages": messages,
             "stream": True,
+            "vertex_ai_location": "us-east5",
         }
         if sync_mode:
             response = litellm.completion(**data)
