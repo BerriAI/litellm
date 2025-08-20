@@ -315,7 +315,7 @@ const Settings: React.FC<SettingsPageProps> = ({
     addForm.validateFields().then((values) => {
       // Call API to add the callback
       let payload;
-      if (values.callback === "langfuse") {
+      if (values.callback === "langfuse" || values.callback === "langfuse_otel") {
         payload = {
           environment_variables: {
             LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
