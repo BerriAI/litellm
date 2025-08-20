@@ -245,6 +245,21 @@ async def set_scim_content_type(response: Response):
     response.headers["Content-Type"] = "application/scim+json"
 
 
+@scim_router.get(
+    "/ServiceProviderConfig",
+    response_model=SCIMServiceProviderConfig,
+    status_code=200,
+    dependencies=[Depends(user_api_key_auth), Depends(set_scim_content_type)],
+)
+async def get_service_provider_config(request: Request):
+    """Return SCIM Service Provider Configuration."""
+    meta = {
+        "resourceType": "ServiceProviderConfig",
+        "location": str(request.url),
+    }
+    return SCIMServiceProviderConfig(meta=meta)
+
+
 # User Endpoints
 @scim_router.get(
     "/Users",
@@ -886,12 +901,14 @@ async def update_group(
 
         # Update team in database
         existing_metadata = existing_team.metadata if existing_team.metadata else {}
+        updated_metadata = {**existing_metadata, "scim_data": group.model_dump()}
+        
         updated_team = await prisma_client.db.litellm_teamtable.update(
             where={"team_id": group_id},
             data={
                 "team_alias": group.displayName,
                 "members": member_ids,
-                "metadata": {**existing_metadata, "scim_data": group.model_dump()},
+                "metadata": safe_dumps(updated_metadata),
             },
         )
 

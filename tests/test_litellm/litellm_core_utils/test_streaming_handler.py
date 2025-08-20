@@ -714,3 +714,102 @@ def test_streaming_handler_with_created_time_propagation(
             created = chunk.created
         else:
             assert created == chunk.created
+
+
+def test_streaming_handler_with_stream_options(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Test that the stream options are propagated to the response"""
+
+    mr = initialized_custom_stream_wrapper.model_response_creator()
+    mr_dict = mr.model_dump()
+    print(mr_dict)
+    assert "stream_options" not in mr_dict
+
+
+def test_optional_combine_thinking_block_with_none_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Test that reasoning_content is properly combined when delta.content is None"""
+    # Setup the wrapper to use the merge feature
+    initialized_custom_stream_wrapper.merge_reasoning_content_in_choices = True
+
+    # First chunk with reasoning_content and None content - should handle None gracefully
+    first_chunk = {
+        "id": "chunk1",
+        "object": "chat.completion.chunk",
+        "created": 1741037890,
+        "model": "deepseek-reasoner",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,  # This is None, not empty string
+                    "reasoning_content": "Let me think about this problem",
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    # Second chunk with reasoning_content and None content
+    second_chunk = {
+        "id": "chunk2", 
+        "object": "chat.completion.chunk",
+        "created": 1741037891,
+        "model": "deepseek-reasoner",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,  # This is None, not empty string
+                    "reasoning_content": " step by step",
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    # Final chunk with actual content - should add </think> tag
+    final_chunk = {
+        "id": "chunk3",
+        "object": "chat.completion.chunk", 
+        "created": 1741037892,
+        "model": "deepseek-reasoner",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": "The answer is 42",
+                    "reasoning_content": None
+                },
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    # Process first chunk - should not raise TypeError
+    first_response = ModelResponseStream(**first_chunk)
+    initialized_custom_stream_wrapper._optional_combine_thinking_block_in_choices(
+        first_response
+    )
+    assert first_response.choices[0].delta.content == "<think>Let me think about this problem"
+    assert not hasattr(first_response.choices[0].delta, "reasoning_content")
+    assert initialized_custom_stream_wrapper.sent_first_thinking_block is True
+
+    # Process second chunk - should work with continued reasoning
+    second_response = ModelResponseStream(**second_chunk) 
+    initialized_custom_stream_wrapper._optional_combine_thinking_block_in_choices(
+        second_response
+    )
+    assert second_response.choices[0].delta.content == " step by step"
+    assert not hasattr(second_response.choices[0].delta, "reasoning_content")
+
+    # Process final chunk - should add </think> tag
+    final_response = ModelResponseStream(**final_chunk)
+    initialized_custom_stream_wrapper._optional_combine_thinking_block_in_choices(
+        final_response
+    )
+    assert final_response.choices[0].delta.content == "</think>The answer is 42"
+    assert initialized_custom_stream_wrapper.sent_last_thinking_block is True
+    assert not hasattr(final_response.choices[0].delta, "reasoning_content")

@@ -34,7 +34,7 @@ class BaseUpdateQueue:
         while not self.update_queue.empty():
             # Circuit breaker to ensure we're not stuck dequeuing updates. Protect CPU utilization
             if len(updates) >= MAX_IN_MEMORY_QUEUE_FLUSH_COUNT:
-                verbose_proxy_logger.warning(
+                verbose_proxy_logger.debug(
                     "Max in memory queue flush count reached, stopping flush"
                 )
                 break

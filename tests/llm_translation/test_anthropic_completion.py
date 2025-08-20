@@ -1276,16 +1276,20 @@ def test_anthropic_mcp_server_tool_use(spec: str):
         tools = [
             {
                 "type": "url",
-                "url": "https://mcp.deepwiki.com/mcp",
-                "name": "deepwiki-mcp",
+                "url": "https://mcp.zapier.com/api/mcp/mcp",
+                "name": "zapier-mcp",
+                "authorization_token": os.getenv("ZAPIER_CI_CD_MCP_TOKEN"),
             }
         ]
     elif spec == "openai":
         tools = [
             {
                 "type": "mcp",
-                "server_label": "deepwiki",
-                "server_url": "https://mcp.deepwiki.com/mcp",
+                "server_label": "zapier",
+                "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+                "headers": {
+                    "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+                },
                 "require_approval": "never",
             },
         ]
@@ -1298,10 +1302,9 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 
     try:
         response = litellm.completion(**params)
+        assert response is not None
     except litellm.InternalServerError as e:
-        print(e)
-
-    assert response is not None
+        pytest.skip(f"Skipping test due to internal server error: {e}")
 
 
 @pytest.mark.parametrize(
@@ -1310,12 +1313,16 @@ def test_anthropic_mcp_server_tool_use(spec: str):
 def test_anthropic_mcp_server_responses_api(model: str):
     from litellm import responses
 
+    litellm._turn_on_debug()
     tools = [
         {
             "type": "mcp",
-            "server_label": "deepwiki",
-            "server_url": "https://mcp.deepwiki.com/mcp",
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
             "require_approval": "never",
+            "headers": {
+                "Authorization": f"Bearer {os.getenv('ZAPIER_CI_CD_MCP_TOKEN')}"
+            },
         },
     ]
 
@@ -1342,3 +1349,148 @@ def test_anthropic_prefix_prompt():
     print(f"response: {response}")
     assert response is not None
     assert response.choices[0].message.content.startswith("Argentina")
+
+
+@pytest.mark.asyncio
+async def test_claude_tool_use_with_anthropic_acreate():
+    response = await litellm.anthropic.messages.acreate(
+        messages=[
+            {"role": "user", "content": "Hello, can you tell me the weather in Boston?"}
+        ],
+        model="anthropic/claude-3-5-sonnet-20240620",
+        stream=True,
+        max_tokens=100,
+        tools=[
+            {
+                "name": "get_weather",
+                "description": "Get current weather information for a specific location",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            }
+        ],
+    )
+
+    async for chunk in response:
+        print(chunk)
+
+
+def test_anthropic_tool_cache_control():
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+    import json
+
+    tool_content = "Result: 4. " * 1000  # ~10k chars
+    messages = [
+        {"role": "user", "content": "Calculate 2+2"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_proxy_123",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_proxy_123",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "1234567890",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "calc",
+                "description": "Calculator",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    vertex_ai_model = "vertex_ai/claude-sonnet-4@20250514"
+    anthropic_api_model = "claude-sonnet-4-20250514"
+    result = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": anthropic_api_model,
+            "messages": messages + [{"role": "user", "content": "What's 1+1?"}],
+            "tools": tools,
+            "max_tokens": 50,
+        },
+    )
+
+    print(f"result: {result}")
+
+    print(result["raw_request_body"]["messages"][2])
+
+    assert "cache_control" in json.dumps(
+        result["raw_request_body"]["messages"][2]["content"]
+    )
+
+
+def test_anthropic_streaming():
+    from litellm import completion
+
+    request_data = {
+        "messages": [
+            {
+                "role": "system",
+                "content": "Call the tool, please, but tell me what you are doing before you do it.",  # (so we get some pre-tool streaming output)
+            },
+            {
+                "role": "user",
+                "content": "Do what you are told to do in the system prompt",
+            },
+        ],
+        "model": "anthropic/claude-3-5-sonnet-latest",
+        "max_tokens": 7000,
+        "parallel_tool_calls": False,
+        "stream": True,
+        "temperature": 0,
+        "tool_choice": "auto",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "call_me_please",
+                    "strict": True,
+                    "parameters": {
+                        "properties": {
+                            "a_number": {
+                                "description": "String that is text version of a number, e.g. sixty-five. At least a 5 digit number.",
+                                "type": "string",
+                                "title": "A Number Function",
+                            }
+                        },
+                        "title": "call_me_please",
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["a_number"],
+                    },
+                    "description": "Call this tool with a number to get a random number back",
+                },
+            }
+        ],
+    }
+
+    response = completion(**request_data)
+
+    role_set_count = 0
+    for chunk in response:
+        if chunk.choices[0].delta.role is not None:
+            print(f"role: {chunk.choices[0].delta.role}")
+            role_set_count += 1
+
+    assert role_set_count == 1

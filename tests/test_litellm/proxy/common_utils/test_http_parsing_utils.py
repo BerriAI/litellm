@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     get_form_data,
 )
+from litellm.proxy._types import ProxyException
 
 
 @pytest.mark.asyncio
@@ -148,6 +149,92 @@ async def test_circular_reference_handling():
     assert (
         "proxy_server_request" not in result2
     )  # This will pass, showing the cache pollution
+
+
+@pytest.mark.asyncio
+async def test_json_parsing_error_handling():
+    """
+    Test that JSON parsing errors are properly handled and raise ProxyException
+    with appropriate error messages.
+    """
+    # Test case 1: Trailing comma error
+    mock_request = MagicMock()
+    invalid_json_with_trailing_comma = b'''{
+        "model": "gpt-4o",
+        "tools": [
+            {
+                "type": "mcp",
+                "server_label": "litellm",
+                "headers": {
+                    "x-litellm-api-key": "Bearer sk-1234",
+                }
+            }
+        ],
+        "input": "Run available tools"
+    }'''
+    
+    mock_request.body = AsyncMock(return_value=invalid_json_with_trailing_comma)
+    mock_request.headers = {"content-type": "application/json"}
+    mock_request.scope = {}
+
+    # Should raise ProxyException for trailing comma
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(mock_request)
+    
+    assert exc_info.value.code == "400"
+    assert "Invalid JSON payload" in exc_info.value.message
+    assert "trailing comma" in exc_info.value.message
+
+    # Test case 2: Unquoted property name error
+    mock_request2 = MagicMock()
+    invalid_json_unquoted_property = b'''{
+        "model": "gpt-4o",
+        "tools": [
+            {
+                type: "mcp",
+                "server_label": "litellm"
+            }
+        ],
+        "input": "Run available tools"
+    }'''
+    
+    mock_request2.body = AsyncMock(return_value=invalid_json_unquoted_property)
+    mock_request2.headers = {"content-type": "application/json"}
+    mock_request2.scope = {}
+
+    # Should raise ProxyException for unquoted property
+    with pytest.raises(ProxyException) as exc_info2:
+        await _read_request_body(mock_request2)
+    
+    assert exc_info2.value.code == "400"
+    assert "Invalid JSON payload" in exc_info2.value.message
+
+    # Test case 3: Valid JSON should work normally
+    mock_request3 = MagicMock()
+    valid_json = b'''{
+        "model": "gpt-4o",
+        "tools": [
+            {
+                "type": "mcp",
+                "server_label": "litellm",
+                "headers": {
+                    "x-litellm-api-key": "Bearer sk-1234"
+                }
+            }
+        ],
+        "input": "Run available tools"
+    }'''
+    
+    mock_request3.body = AsyncMock(return_value=valid_json)
+    mock_request3.headers = {"content-type": "application/json"}
+    mock_request3.scope = {}
+
+    # Should parse successfully
+    result = await _read_request_body(mock_request3)
+    assert result["model"] == "gpt-4o"
+    assert result["input"] == "Run available tools"
+    assert len(result["tools"]) == 1
+    assert result["tools"][0]["type"] == "mcp"
 
 
 @pytest.mark.asyncio

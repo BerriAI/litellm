@@ -1,3 +1,10 @@
+// Shared date formatter for daily activity endpoints
+export const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -17,6 +24,8 @@ import {
   EmailEventSettingsResponse,
   EmailEventSettingsUpdateRequest,
 } from "./email_events/types";
+import { jsonFields } from "./common_components/check_openapi_schema"
+import NotificationManager from "./molecules/notifications_manager";
 
 const isLocal = process.env.NODE_ENV === "development";
 export const defaultProxyBaseUrl = isLocal ? "http://localhost:4000" : null;
@@ -74,6 +83,33 @@ export interface Model {
   model_info: Object | null;
 }
 
+interface PromptInfo {
+  prompt_type: string;
+}
+
+export interface PromptSpec {
+  prompt_id: string;
+  litellm_params: Object;
+  prompt_info: PromptInfo;
+  created_at?: string
+  updated_at?: string
+}
+
+export interface PromptTemplateBase {
+  litellm_prompt_id: string;
+  content: string;
+  metadata?: Record<string, any> | null;
+}
+
+export interface PromptInfoResponse {
+  prompt_spec: PromptSpec;
+  raw_prompt_template: PromptTemplateBase | null;
+}
+
+export interface ListPromptsResponse {
+  prompts: PromptSpec[];
+}
+
 export interface Organization {
   organization_id: string | null;
   organization_alias: string;
@@ -93,6 +129,7 @@ export interface Organization {
   object_permission?: {
     object_permission_id: string;
     mcp_servers: string[];
+    mcp_access_groups?: string[];
     vector_stores: string[];
   };
 }
@@ -105,6 +142,13 @@ export interface CredentialItem {
     description?: string;
     required?: boolean;
   };
+}
+
+export interface PublicModelHubInfo {
+  docs_title: string;
+  custom_docs_description: string | null;
+  litellm_version: string;
+  useful_links: Record<string, string>;
 }
 
 export interface LiteLLMWellKnownUiConfig {
@@ -147,6 +191,21 @@ export function setGlobalLitellmHeaderName(
   globalLitellmHeaderName = headerName;
 }
 
+export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model_groups: modelGroups,
+    }),
+  });
+  return response.json();
+};
+
 export const getUiConfig = async () => {
   console.log("Getting UI config");
   /**Special route to get the proxy base url and server root path */
@@ -160,6 +219,15 @@ export const getUiConfig = async () => {
    */
   console.log("jsonData in getUiConfig:", jsonData);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
+  return jsonData;
+};
+
+export const getPublicModelHubInfo = async () => {
+  const url = defaultProxyBaseUrl
+    ? `${defaultProxyBaseUrl}/public/model_hub/info`
+    : `/public/model_hub/info`;
+  const response = await fetch(url);
+  const jsonData: PublicModelHubInfo = await response.json();
   return jsonData;
 };
 
@@ -190,6 +258,99 @@ export const modelCostMap = async (accessToken: string) => {
     throw error;
   }
 };
+
+export const reloadModelCostMap = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/reload/model_cost_map`
+      : `/reload/model_cost_map`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to reload model cost map:", error);
+    throw error;
+  }
+};
+
+export const scheduleModelCostMapReload = async (accessToken: string, hours: number) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload?hours=${hours}`
+      : `/schedule/model_cost_map_reload?hours=${hours}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Schedule model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to schedule model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const cancelModelCostMapReload = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload`
+      : `/schedule/model_cost_map_reload`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const jsonData = await response.json();
+    console.log(`Cancel model cost map reload response: ${jsonData}`);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to cancel model cost map reload:", error);
+    throw error;
+  }
+};
+
+export const getModelCostMapReloadStatus = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/schedule/model_cost_map_reload/status`
+      : `/schedule/model_cost_map_reload/status`;
+    console.log("Fetching status from URL:", url);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    
+    if (!response.ok) {
+      console.error(`Status request failed with status: ${response.status}`);
+      const errorText = await response.text();
+      console.error("Error response:", errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    const jsonData = await response.json();
+    console.log(`Model cost map reload status:`, jsonData);
+    return jsonData;
+  } catch (error) {
+    console.error("Failed to get model cost map reload status:", error);
+    throw error;
+  }
+};
 export const modelCreateCall = async (
   accessToken: string,
   formValues: Model
@@ -208,11 +369,12 @@ export const modelCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      const errorMsg = errorData || "Network response was not ok";
-      message.error(errorMsg);
-      throw new Error(errorMsg);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -249,10 +411,12 @@ export const modelSettingsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -282,11 +446,12 @@ export const modelDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -323,11 +488,12 @@ export const budgetDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log("API Response:", data);
     return data;
@@ -358,11 +524,12 @@ export const budgetCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -397,11 +564,12 @@ export const budgetUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -433,11 +601,12 @@ export const invitationCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -472,11 +641,12 @@ export const invitationClaimCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -507,10 +677,12 @@ export const alertingSettingsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -522,13 +694,12 @@ export const alertingSettingsCall = async (accessToken: String) => {
   }
 };
 
-export const keyCreateCall = async (
+export const keyCreateServiceAccountCall = async (
   accessToken: string,
-  userID: string,
-  formValues: Record<string, any> // Assuming formValues is an object
+  formValues: Record<string, any>, // Assuming formValues is an object
 ) => {
   try {
-    console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call
+    console.log("Form Values in keyCreateServiceAccountCall:", formValues); // Log the form values before making the API call
 
     // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
     if (formValues.description) {
@@ -542,14 +713,79 @@ export const keyCreateCall = async (
       delete formValues.description;
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
-    // if formValues.metadata is not undefined, make it a valid dict
-    if (formValues.metadata) {
-      console.log("formValues.metadata:", formValues.metadata);
-      // if there's an exception JSON.parse, show it in the message
-      try {
-        formValues.metadata = JSON.parse(formValues.metadata);
-      } catch (error) {
-        throw new Error("Failed to parse metadata: " + error);
+    // Parse JSON fields if they exist
+    for (const field of jsonFields) {
+      if (formValues[field]) {
+        console.log(`formValues.${field}:`, formValues[field]);
+        // if there's an exception JSON.parse, show it in the message
+        try {
+          formValues[field] = JSON.parse(formValues[field]);
+        } catch (error) {
+          throw new Error(`Failed to parse ${field}: ` + error);
+        }
+      }
+    }
+
+    console.log("Form Values after check:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/key/service-account/generate` : `/key/service-account/generate`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formValues, // Include formValues in the request body
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      handleError(errorData);
+      console.error("Error response from the server:", errorData);
+      throw new Error(errorData);
+    }
+
+    const data = await response.json();
+    console.log("API Response:", data);
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const keyCreateCall = async (
+  accessToken: string,
+  userID: string,
+  formValues: Record<string, any>, // Assuming formValues is an object
+) => {
+  try {
+    console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call
+
+    // check if formValues.description is not undefined, make it a string and add it to formValues.metadata
+    if (formValues.description) {
+      // add to formValues.metadat
+      if (!formValues.metadata) {
+        formValues.metadata = {};
+      }
+      // value needs to be in "", valid JSON
+      formValues.metadata.description = formValues.description;
+      // remove descrption from formValues
+      delete formValues.description;
+      formValues.metadata = JSON.stringify(formValues.metadata);
+    }
+    // Parse JSON fields if they exist
+    for (const field of jsonFields) {
+      if (formValues[field]) {
+        console.log(`formValues.${field}:`, formValues[field]);
+        // if there's an exception JSON.parse, show it in the message
+        try {
+          formValues[field] = JSON.parse(formValues[field]);
+        } catch (error) {
+          throw new Error(`Failed to parse ${field}: ` + error);
+        }
       }
     }
 
@@ -665,10 +901,12 @@ export const keyDeleteCall = async (accessToken: String, user_key: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -701,10 +939,12 @@ export const userDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -732,10 +972,12 @@ export const teamDeleteCall = async (accessToken: String, teamID: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -826,10 +1068,12 @@ export const userListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = (await response.json()) as UserListResponse;
     console.log("/user/list API Response:", data);
@@ -887,10 +1131,12 @@ export const userInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -920,10 +1166,12 @@ export const teamInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -992,10 +1240,12 @@ export const v2TeamListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/v2/team/list API Response:", data);
@@ -1052,10 +1302,12 @@ export const teamListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/team/list API Response:", data);
@@ -1085,10 +1337,12 @@ export const availableTeamListCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/team/available_teams API Response:", data);
@@ -1115,10 +1369,12 @@ export const organizationListCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1149,10 +1405,12 @@ export const organizationInfoCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -1197,11 +1455,12 @@ export const organizationCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -1235,11 +1494,12 @@ export const organizationUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log("Update Team Response:", data);
     return data;
@@ -1306,10 +1566,12 @@ export const transformRequestCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1333,13 +1595,6 @@ export const userDailyActivityCall = async (
       ? `${proxyBaseUrl}/user/daily/activity`
       : `/user/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1358,10 +1613,12 @@ export const userDailyActivityCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1386,13 +1643,6 @@ export const tagDailyActivityCall = async (
       ? `${proxyBaseUrl}/tag/daily/activity`
       : `/tag/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1414,10 +1664,12 @@ export const tagDailyActivityCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1442,13 +1694,6 @@ export const teamDailyActivityCall = async (
       ? `${proxyBaseUrl}/team/daily/activity`
       : `/team/daily/activity`;
     const queryParams = new URLSearchParams();
-    // Format dates as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    };
     queryParams.append("start_date", formatDate(startTime));
     queryParams.append("end_date", formatDate(endTime));
     queryParams.append("page_size", "1000");
@@ -1471,10 +1716,12 @@ export const teamDailyActivityCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1501,10 +1748,12 @@ export const getTotalSpendCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1533,10 +1782,12 @@ export const getOnboardingCredentials = async (inviteUUID: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -1571,10 +1822,12 @@ export const claimOnboardingToken = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -1605,10 +1858,12 @@ export const regenerateKeyCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Regenerate key Response:", data);
@@ -1695,9 +1950,12 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("modelInfoV1Call:", data);
@@ -1706,6 +1964,17 @@ export const modelInfoV1Call = async (accessToken: String, modelId: String) => {
     console.error("Failed to create key:", error);
     throw error;
   }
+};
+
+export const modelHubPublicModelsCall = async () => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/model_hub` : `/public/model_hub`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return response.json();
 };
 
 export const modelHubCall = async (accessToken: String) => {
@@ -1727,9 +1996,12 @@ export const modelHubCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("modelHubCall:", data);
@@ -1758,9 +2030,12 @@ export const getAllowedIPs = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`Network response was not ok: ${errorData}`);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("getAllowedIPs:", data);
@@ -1788,9 +2063,12 @@ export const addAllowedIP = async (accessToken: String, ip: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`Network response was not ok: ${errorData}`);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("addAllowedIP:", data);
@@ -1818,9 +2096,12 @@ export const deleteAllowedIP = async (accessToken: String, ip: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`Network response was not ok: ${errorData}`);
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("deleteAllowedIP:", data);
@@ -1859,10 +2140,12 @@ export const modelMetricsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     // message.info("Received model data");
     return data;
@@ -1898,10 +2181,12 @@ export const streamingModelMetricsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     // message.info("Received model data");
     return data;
@@ -1943,10 +2228,12 @@ export const modelMetricsSlowResponsesCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     // message.info("Received model data");
     return data;
@@ -1987,14 +2274,41 @@ export const modelExceptionsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     // message.info("Received model data");
     return data;
     // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const updateUsefulLinksCall = async (accessToken: String, useful_links: Record<string, string>) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ useful_links: useful_links }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2044,10 +2358,12 @@ export const modelAvailableCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -2073,10 +2389,12 @@ export const keySpendLogsCall = async (accessToken: String, token: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2101,10 +2419,12 @@ export const teamSpendLogsCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2144,9 +2464,12 @@ export const tagsSpendLogsCall = async (
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2172,9 +2495,12 @@ export const allTagNamesCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2200,9 +2526,12 @@ export const allEndUsersCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2237,10 +2566,12 @@ export const userFilterUICall = async (
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
@@ -2273,10 +2604,12 @@ export const userSpendLogsCall = async (
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2298,6 +2631,7 @@ export const uiSpendLogsCall = async (
   page?: number,
   page_size?: number,
   user_id?: string,
+  end_user?: string,
   status_filter?: string,
   model?: string
 ) => {
@@ -2315,6 +2649,7 @@ export const uiSpendLogsCall = async (
     if (page) queryParams.append("page", page.toString());
     if (page_size) queryParams.append("page_size", page_size.toString());
     if (user_id) queryParams.append("user_id", user_id);
+    if (end_user) queryParams.append("end_user", end_user);
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
     // Append query parameters to URL if any exist
@@ -2332,10 +2667,12 @@ export const uiSpendLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Spend Logs Response:", data);
@@ -2361,10 +2698,12 @@ export const adminSpendLogsCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2391,10 +2730,12 @@ export const adminTopKeysCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2442,10 +2783,12 @@ export const adminTopEndUsersCall = async (
 
     const response = await fetch(url, requestOptions);
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2486,10 +2829,12 @@ export const adminspendByProvider = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2524,9 +2869,12 @@ export const adminGlobalActivity = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2560,9 +2908,12 @@ export const adminGlobalCacheActivity = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2596,9 +2947,12 @@ export const adminGlobalActivityPerModel = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2637,9 +2991,12 @@ export const adminGlobalActivityExceptions = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2678,9 +3035,12 @@ export const adminGlobalActivityExceptionsPerDeployment = async (
     const response = await fetch(url, requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -2705,10 +3065,12 @@ export const adminTopModelsCall = async (accessToken: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2837,7 +3199,7 @@ export const keyInfoV1Call = async (accessToken: string, key: string) => {
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      message.error("Failed to fetch key info - " + errorData);
+      NotificationManager.fromBackend("Failed to fetch key info - " + errorData);
     }
 
     const data = await response.json();
@@ -2921,10 +3283,12 @@ export const keyListCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/team/list API Response:", data);
@@ -2948,10 +3312,12 @@ export const spendUsersCall = async (accessToken: String, userID: String) => {
       },
     });
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -2986,10 +3352,12 @@ export const userRequestModelCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     //message.success("");
@@ -3016,10 +3384,12 @@ export const userGetRequesedtModelsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     //message.success("");
@@ -3037,6 +3407,57 @@ export interface User {
   user_email: string;
   [key: string]: string; // Include any other potential keys in the dictionary
 }
+
+export const userDailyActivityAggregatedCall = async (
+  accessToken: String,
+  startTime: Date,
+  endTime: Date
+) => {
+  /**
+   * Get aggregated daily user activity (no pagination)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/daily/activity/aggregated`
+      : `/user/daily/activity/aggregated`;
+    const queryParams = new URLSearchParams();
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
 
 export const userGetAllUsersCall = async (
   accessToken: String,
@@ -3056,10 +3477,12 @@ export const userGetAllUsersCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     //message.success("Got all users");
@@ -3085,9 +3508,12 @@ export const getPossibleUserRoles = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = (await response.json()) as Record<
       string,
       Record<string, string>
@@ -3129,11 +3555,12 @@ export const teamCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3174,11 +3601,12 @@ export const credentialCreateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3207,10 +3635,12 @@ export const credentialListCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/credentials API Response:", data);
@@ -3247,10 +3677,12 @@ export const credentialGetCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("/credentials API Response:", data);
@@ -3280,10 +3712,12 @@ export const credentialDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     const data = await response.json();
     console.log(data);
     return data;
@@ -3326,11 +3760,12 @@ export const credentialUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3384,7 +3819,7 @@ export const keyUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
     const data = await response.json();
     console.log("Update key Response:", data);
@@ -3419,7 +3854,7 @@ export const teamUpdateCall = async (
       const errorData = await response.text();
       handleError(errorData);
       console.error("Error response from the server:", errorData);
-      message.error("Failed to update team settings: " + errorData);
+      NotificationManager.fromBackend("Failed to update team settings: " + errorData);
       throw new Error(errorData);
     }
     const data = (await response.json()) as { data: Team; team_id: string };
@@ -3516,6 +3951,9 @@ export interface Member {
   role: string;
   user_id: string | null;
   user_email?: string | null;
+  max_budget_in_team?: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
 }
 
 export const teamMemberAddCall = async (
@@ -3569,6 +4007,70 @@ export const teamMemberAddCall = async (
   }
 };
 
+export const teamBulkMemberAddCall = async (
+  accessToken: string,
+  teamId: string,
+  members: Member[] | null,
+  maxBudgetInTeam?: number,
+  allUsers?: boolean
+) => {
+  try {
+    console.log("Bulk add team members:", { teamId, members, maxBudgetInTeam });
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/team/bulk_member_add`
+      : `/team/bulk_member_add`;
+
+    let requestBody: any = {
+      team_id: teamId,
+    };
+
+    if (allUsers) {
+      requestBody.all_users = true;
+    } else {
+      requestBody.members = members;
+    }
+
+    if (maxBudgetInTeam !== undefined && maxBudgetInTeam !== null) {
+      requestBody.max_budget_in_team = maxBudgetInTeam;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      // Read and parse JSON error body
+      const errorText = await response.text();
+      let parsedError: any = {};
+
+      try {
+        parsedError = JSON.parse(errorText);
+      } catch (e) {
+        console.warn("Failed to parse error body as JSON:", errorText);
+      }
+
+      const rawMessage =
+        parsedError?.detail?.error || "Failed to bulk add team members";
+      const err = new Error(rawMessage);
+      (err as any).raw = parsedError;
+      throw err;
+    }
+
+    const data = await response.json();
+    console.log("Bulk team member add API Response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to bulk add team members:", error);
+    throw error;
+  }
+};
+
 export const teamMemberUpdateCall = async (
   accessToken: string,
   teamId: string,
@@ -3576,21 +4078,43 @@ export const teamMemberUpdateCall = async (
 ) => {
   try {
     console.log("Form Values in teamMemberUpdateCall:", formValues);
+    console.log("Budget value:", formValues.max_budget_in_team);
+    console.log("TPM limit:", formValues.tpm_limit);
+    console.log("RPM limit:", formValues.rpm_limit);
 
     const url = proxyBaseUrl
       ? `${proxyBaseUrl}/team/member_update`
       : `/team/member_update`;
+    
+    const requestBody: any = {
+      team_id: teamId,
+      role: formValues.role,
+      user_id: formValues.user_id,
+    };
+
+    // Add optional budget and rate limit fields
+    if (formValues.user_email !== undefined) {
+      requestBody.user_email = formValues.user_email;
+    }
+    if (formValues.max_budget_in_team !== undefined && formValues.max_budget_in_team !== null) {
+      requestBody.max_budget_in_team = formValues.max_budget_in_team;
+    }
+    if (formValues.tpm_limit !== undefined && formValues.tpm_limit !== null) {
+      requestBody.tpm_limit = formValues.tpm_limit;
+    }
+    if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
+      requestBody.rpm_limit = formValues.rpm_limit;
+    }
+
+    console.log("Final request body:", requestBody);
+
     const response = await fetch(url, {
       method: "POST",
       headers: {
         [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        team_id: teamId,
-        role: formValues.role,
-        user_id: formValues.user_id,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -3649,11 +4173,12 @@ export const teamMemberDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3730,11 +4255,12 @@ export const organizationMemberDeleteCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3769,11 +4295,12 @@ export const organizationMemberUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("API Response:", data);
@@ -3808,15 +4335,92 @@ export const userUpdateUserCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = (await response.json()) as {
       user_id: string;
       data: UserInfo;
+    };
+    console.log("API Response:", data);
+    //message.success("User role updated");
+    return data;
+    // Handle success - you might want to update some state or UI based on the created key
+  } catch (error) {
+    console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const userBulkUpdateUserCall = async (
+  accessToken: string,
+  formValues: any, // Assuming formValues is an object
+  userIds?: string[], // Optional - if not provided, will update all users
+  allUsers: boolean = false // Flag to update all users
+) => {
+  try {
+    console.log("Form Values in userUpdateUserCall:", formValues); // Log the form values before making the API call
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/user/bulk_update`
+      : `/user/bulk_update`;
+    
+    let request_body_json: string;
+    
+    if (allUsers) {
+      // Update all users mode
+      request_body_json = JSON.stringify({
+        all_users: true,
+        user_updates: formValues,
+      });
+    } else if (userIds && userIds.length > 0) {
+      // Update specific users mode
+      let request_body = [] 
+      for (const user_id of userIds) {
+        request_body.push({
+          user_id: user_id,
+          ...formValues,
+        });
+      }
+      request_body_json = JSON.stringify({
+        users: request_body,
+      });
+    } else {
+      throw new Error("Must provide either userIds or set allUsers=true");
+    }
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: request_body_json,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = (await response.json()) as {
+      results: Array<{
+        user_id?: string;
+        user_email?: string;
+        success: boolean;
+        error?: string;
+        updated_user?: any;
+      }>;
+      total_requested: number;
+      successful_updates: number;
+      failed_updates: number;
     };
     console.log("API Response:", data);
     //message.success("User role updated");
@@ -3851,10 +4455,12 @@ export const PredictedSpendLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log(data);
@@ -3930,9 +4536,6 @@ export const serviceHealthCheck = async (
     }
 
     const data = await response.json();
-    message.success(
-      `Test request to ${service} made - check logs/alerts on ${service} to verify`
-    );
     // You can add additional logic here based on the response if needed
     return data;
   } catch (error) {
@@ -3958,10 +4561,12 @@ export const getBudgetList = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -3991,10 +4596,12 @@ export const getBudgetSettings = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4029,10 +4636,12 @@ export const getCallbacksCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4060,10 +4669,12 @@ export const getGeneralSettingsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4091,10 +4702,12 @@ export const getPassThroughEndpointsCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4125,9 +4738,12 @@ export const getConfigFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -4163,10 +4779,12 @@ export const updatePassThroughFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4204,10 +4822,12 @@ export const createPassThroughEndpoint = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4245,10 +4865,12 @@ export const updateConfigFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4285,10 +4907,12 @@ export const deleteConfigFieldSetting = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     message.success("Field reset on proxy");
@@ -4307,7 +4931,7 @@ export const deletePassThroughEndpointsCall = async (
   try {
     let url = proxyBaseUrl
       ? `${proxyBaseUrl}/config/pass_through_endpoint?endpoint_id=${endpointId}`
-      : `/config/pass_through_endpoint${endpointId}`;
+      : `/config/pass_through_endpoint?endpoint_id=${endpointId}`;
 
     //message.info("Requesting model data");
     const response = await fetch(url, {
@@ -4319,10 +4943,12 @@ export const deletePassThroughEndpointsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4357,10 +4983,12 @@ export const setCallbacksCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4389,10 +5017,12 @@ export const healthCheckCall = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4425,9 +5055,12 @@ export const individualModelHealthCheckCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(errorData || "Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -4516,6 +5149,7 @@ export const healthCheckHistoryCall = async (
   }
 };
 
+
 export const latestHealthChecksCall = async (accessToken: String) => {
   /**
    * Get the latest health check status for all models
@@ -4566,9 +5200,12 @@ export const getProxyUISettings = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     //message.info("Received model data");
@@ -4594,15 +5231,237 @@ export const getGuardrailsList = async (accessToken: String) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to get guardrails list:", error);
+    throw error;
+  }
+};
+
+export const getPromptsList = async (accessToken: String) : Promise<ListPromptsResponse> => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/prompts/list`
+      : `/prompts/list`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompts list:", error);
+    throw error;
+  }
+};
+
+export const getPromptInfo = async (accessToken: String, promptId: string): Promise<PromptInfoResponse> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get prompt info:", error);
+    throw error;
+  }
+};
+
+export const createPromptCall = async (
+  accessToken: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts` : `/prompts`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create prompt:", error);
+    throw error;
+  }
+};
+
+export const updatePromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update prompt:", error);
+    throw error;
+  }
+};
+
+export const deletePromptCall = async (
+  accessToken: string,
+  promptId: string
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to delete prompt:", error);
+    throw error;
+  }
+};
+
+export const convertPromptFileToJson = async (
+  accessToken: string,
+  file: File
+): Promise<{ prompt_id: string; json_data: any }> => {
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    const url = proxyBaseUrl 
+      ? `${proxyBaseUrl}/utils/dotprompt_json_converter` 
+      : `/utils/dotprompt_json_converter`;
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to convert prompt file:", error);
+    throw error;
+  }
+};
+
+export const patchPromptCall = async (
+  accessToken: string,
+  promptId: string,
+  promptData: any
+) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}` : `/prompts/${promptId}`;
+
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(promptData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to patch prompt:", error);
     throw error;
   }
 };
@@ -4662,10 +5521,12 @@ export const uiSpendLogDetailsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched log details:", data);
@@ -4694,10 +5555,12 @@ export const getInternalUserSettings = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched SSO settings:", data);
@@ -4732,7 +5595,7 @@ export const updateInternalUserSettings = async (
     if (!response.ok) {
       const errorData = await response.text();
       handleError(errorData);
-      throw new Error("Network response was not ok");
+      throw new Error(errorData);
     }
 
     const data = await response.json();
@@ -4763,16 +5626,52 @@ export const fetchMCPServers = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched MCP servers:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP servers:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPAccessGroups = async (accessToken: string) => {
+  try {
+    // Construct base URL
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/v1/mcp/access_groups`
+      : `/v1/mcp/access_groups`;
+
+    console.log("Fetching MCP access groups from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    console.log("Fetched MCP access groups:", data);
+    return data.access_groups || [];
+  } catch (error) {
+    console.error("Failed to fetch MCP access groups:", error);
     throw error;
   }
 };
@@ -4800,10 +5699,10 @@ export const createMCPServer = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      console.error("Error response from the server:", errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
 
     const data = await response.json();
@@ -4834,10 +5733,12 @@ export const updateMCPServer = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
     return await response.json();
   } catch (error) {
     console.error("Failed to update MCP server:", error);
@@ -4862,17 +5763,19 @@ export const deleteMCPServer = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
   } catch (error) {
     console.error("Failed to delete key:", error);
     throw error;
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string) => {
+export const listMCPTools = async (accessToken: string, serverId: string, authValue?: string, serverAlias?: string) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl
@@ -4881,26 +5784,46 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
 
     console.log("Fetching MCP tools from:", url);
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
 
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias && authValue) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else if (authValue) {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
     }
 
+    const response = await fetch(url, {
+      method: "GET",
+      headers,
+    });
+
     const data = await response.json();
-    console.log("Fetched MCP tools:", data);
+    console.log("Fetched MCP tools response:", data);
+
+    if (!response.ok) {
+      // If the server returned an error response, use it
+      if (data.error && data.message) {
+        throw new Error(data.message);
+      }
+      // Otherwise use a generic error
+      throw new Error("Failed to fetch MCP tools");
+    }
+
+    // Return the full response object which includes tools, error, and message
     return data;
   } catch (error) {
     console.error("Failed to fetch MCP tools:", error);
-    throw error;
+    // Return an error response in the same format as the API
+    return {
+      tools: [],
+      error: "network_error",
+      message: error instanceof Error ? error.message : "Failed to fetch MCP tools"
+    };
   }
 };
 
@@ -4910,6 +5833,7 @@ export const callMCPTool = async (
   toolName: string,
   toolArguments: Record<string, any>,
   authValue: string,
+  serverAlias?: string,
 ) => {
   try {
     // Construct base URL
@@ -4924,13 +5848,23 @@ export const callMCPTool = async (
       toolArguments
     );
 
+    const headers: Record<string, string> = {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    };
+
+    // Use new server-specific auth header format if serverAlias is provided
+    if (serverAlias) {
+      headers[`x-mcp-${serverAlias}-authorization`] = authValue;
+    } else {
+      // Fall back to deprecated x-mcp-auth header for backward compatibility
+      headers[MCP_AUTH_HEADER] = authValue;
+    }
+
+
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        [MCP_AUTH_HEADER]: authValue,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         name: toolName,
         arguments: toolArguments,
@@ -4938,9 +5872,43 @@ export const callMCPTool = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      let errorMessage = "Network response was not ok";
+      let errorDetails = null;
+      
+      // First, try to get the response as text to see what we're dealing with
+      const responseText = await response.text();
+      
+      try {
+        // Try to parse as JSON
+        const errorData = JSON.parse(responseText);
+        
+        if (errorData.detail) {
+          if (typeof errorData.detail === 'string') {
+            errorMessage = errorData.detail;
+          } else if (typeof errorData.detail === 'object') {
+            errorMessage = errorData.detail.message || errorData.detail.error || "An error occurred";
+            errorDetails = errorData.detail;
+          }
+        } else {
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        }
+        
+      } catch (parseError) {
+        console.error("Failed to parse JSON error response:", parseError);
+        // If JSON parsing fails, use the raw text
+        if (responseText) {
+          errorMessage = responseText;
+        }
+      }
+      
+      // Create a more informative error object
+      const enhancedError = new Error(errorMessage);
+      (enhancedError as any).status = response.status;
+      (enhancedError as any).statusText = response.statusText;
+      (enhancedError as any).details = errorDetails;
+      
+      handleError(errorMessage);
+      throw enhancedError;
     }
 
     const data = await response.json();
@@ -4948,6 +5916,11 @@ export const callMCPTool = async (
     return data;
   } catch (error) {
     console.error("Failed to call MCP tool:", error);
+    console.error("Error type:", typeof error);
+    if (error instanceof Error) {
+      console.error("Error message:", error.message);
+      console.error("Error stack:", error.stack);
+    }
     throw error;
   }
 };
@@ -5114,10 +6087,12 @@ export const getDefaultTeamSettings = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched default team settings:", data);
@@ -5150,10 +6125,12 @@ export const updateDefaultTeamSettings = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Updated default team settings:", data);
@@ -5183,10 +6160,12 @@ export const getTeamPermissionsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Team permissions response:", data);
@@ -5220,10 +6199,12 @@ export const teamPermissionsUpdateCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Team permissions response:", data);
@@ -5255,10 +6236,12 @@ export const sessionSpendLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -5384,6 +6367,36 @@ export const vectorStoreInfoCall = async (
     return await response.json();
   } catch (error) {
     console.error("Error getting vector store info:", error);
+    throw error;
+  }
+};
+
+export const vectorStoreUpdateCall = async (
+  accessToken: string,
+  formValues: Record<string, any>
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/vector_store/update`
+      : `/vector_store/update`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(formValues),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || "Failed to update vector store");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error updating vector store:", error);
     throw error;
   }
 };
@@ -5667,10 +6680,12 @@ export const getSSOSettings = async (accessToken: string) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Fetched SSO configuration:", data);
@@ -5703,10 +6718,12 @@ export const updateSSOSettings = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     console.log("Updated SSO configuration:", data);
@@ -5750,10 +6767,12 @@ export const uiAuditLogsCall = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -5823,10 +6842,12 @@ export const updatePassThroughEndpoint = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     message.success("Pass through endpoint updated successfully");
@@ -5855,10 +6876,12 @@ export const getPassThroughEndpointInfo = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     const endpoints = data["endpoints"];
@@ -5898,10 +6921,12 @@ export const deleteCallback = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Network response was not ok");
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
     }
+
 
     const data = await response.json();
     return data;
@@ -5909,4 +6934,592 @@ export const deleteCallback = async (
     console.error("Failed to delete specific callback:", error);
     throw error;
   }
+};
+
+export const mcpToolsCall = async (accessToken: string) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const response = await fetch(`${proxyBaseUrl}/v1/mcp/tools`, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  return await response.json();
+};
+
+export const testMCPConnectionRequest = async (
+  accessToken: string,
+  mcpServerConfig: Record<string, any>
+) => {
+  try {
+    console.log(
+      "Testing MCP connection with config:",
+      JSON.stringify(mcpServerConfig)
+    );
+
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/mcp-rest/test/connection`
+      : `/mcp-rest/test/connection`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mcpServerConfig),
+    });
+
+    // Check for non-JSON responses first
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Received non-JSON response:", text);
+      throw new Error(
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+      );
+    }
+
+    const data = await response.json();
+
+    if (!response.ok || data.status === "error") {
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.status === "error") {
+        return data; // Return the full error response
+      } else {
+        return {
+          status: "error",
+          message:
+            data.error?.message ||
+            `MCP connection test failed: ${response.status} ${response.statusText}`,
+        };
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error("MCP connection test error:", error);
+    // For network errors or other exceptions, still throw
+    throw error;
+  }
+};
+
+export const testMCPToolsListRequest = async (
+  accessToken: string,
+  mcpServerConfig: Record<string, any>
+) => {
+  try {
+    console.log(
+      "Testing MCP tools list with config:",
+      JSON.stringify(mcpServerConfig)
+    );
+
+    // Construct the URL for POST request
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/mcp-rest/test/tools/list`
+      : `/mcp-rest/test/tools/list`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mcpServerConfig),
+    });
+
+    // Check for non-JSON responses first
+    const contentType = response.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await response.text();
+      console.error("Received non-JSON response:", text);
+      throw new Error(
+        `Received non-JSON response (${response.status}: ${response.statusText}). Check network tab for details.`
+      );
+    }
+
+    const data = await response.json();
+
+    if (!response.ok || data.error) {
+      // Return the error response instead of throwing an error
+      // This allows the caller to handle the error format properly
+      if (data.error) {
+        return data; // Return the full error response
+      } else {
+        return {
+          tools: [],
+          error: "request_failed",
+          message:
+            data.message ||
+            `MCP tools list failed: ${response.status} ${response.statusText}`,
+        };
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error("MCP tools list test error:", error);
+    // For network errors or other exceptions, still throw
+    throw error;
+  }
+};
+
+export const vectorStoreSearchCall = async (
+  accessToken: string,
+  vectorStoreId: string,
+  query: string
+): Promise<any> => {
+  try {
+    const url = `${getProxyBaseUrl()}/v1/vector_stores/${vectorStoreId}/search`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: query
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      await handleError(errorData);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error testing vector store search:", error);
+    throw error;
+  }
+};
+
+export const userAgentAnalyticsCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  pageSize: number = 50,
+  userAgentFilter?: string
+) => {
+  /**
+   * Get user agent analytics data including DAU, WAU, MAU, successful requests, and completed tokens
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/user-agent/analytics`
+      : `/tag/user-agent/analytics`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", pageSize.toString());
+    
+    if (userAgentFilter) {
+      queryParams.append("user_agent_filter", userAgentFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user agent analytics:", error);
+    throw error;
+  }
+};
+
+// New endpoint functions for DAU, WAU, MAU
+export const tagDauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get Daily Active Users (DAU) for last 7 days ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/dau`
+      : `/tag/dau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch DAU:", error);
+    throw error;
+  }
+};
+
+export const tagWauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/wau`
+      : `/tag/wau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch WAU:", error);
+    throw error;
+  }
+};
+
+export const tagMauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get Monthly Active Users (MAU) for last 7 months ending on endDate
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/mau`
+      : `/tag/mau`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format date as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("end_date", formatDate(endDate));
+    
+    // Handle multiple tag filters (takes precedence over single tag filter)
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    } else if (tagFilter) {
+      queryParams.append("tag_filter", tagFilter);
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MAU:", error);
+    throw error;
+  }
+};
+
+export const tagDistinctCall = async (
+  accessToken: string
+) => {
+  /**
+   * Get all distinct user agent tags (up to 250)
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/distinct`
+      : `/tag/distinct`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch distinct tags:", error);
+    throw error;
+  }
+};
+
+export const userAgentSummaryCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get user agent summary statistics
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/summary`
+      : `/tag/summary`;
+    
+    const queryParams = new URLSearchParams();
+    
+    // Format dates as YYYY-MM-DD for the API
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    
+    queryParams.append("start_date", formatDate(startTime));
+    queryParams.append("end_date", formatDate(endTime));
+    
+    // Handle multiple tag filters
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user agent summary:", error);
+    throw error;
+  }
+};
+
+export const perUserAnalyticsCall = async (
+  accessToken: string,
+  page: number = 1,
+  pageSize: number = 50,
+  tagFilters?: string[]
+) => {
+  /**
+   * Get per-user analytics data for the last 30 days
+   */
+  try {
+    let url = proxyBaseUrl
+      ? `${proxyBaseUrl}/tag/user-agent/per-user-analytics`
+      : `/tag/user-agent/per-user-analytics`;
+    
+    const queryParams = new URLSearchParams();
+    
+    queryParams.append("page", page.toString());
+    queryParams.append("page_size", pageSize.toString());
+    
+    // Handle multiple tag filters
+    if (tagFilters && tagFilters.length > 0) {
+      tagFilters.forEach(tag => {
+        queryParams.append("tag_filters", tag);
+      });
+    }
+    
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch per-user analytics:", error);
+    throw error;
+  }
+};
+
+const deriveErrorMessage = (errorData: any): string => {
+  return (errorData?.error && (errorData.error.message || errorData.error)) ||
+    errorData?.message ||
+    errorData?.detail ||
+    errorData?.error ||
+    JSON.stringify(errorData);
 };

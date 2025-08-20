@@ -296,6 +296,12 @@ class OllamaChatConfig(BaseConfig):
                 cast(dict, m)["tool_calls"] = new_tools
             new_messages.append(m)
 
+        # Load Config
+        config = self.get_config()
+        for k, v in config.items():
+            if k not in optional_params:
+                optional_params[k] = v
+
         data = {
             "model": model,
             "messages": new_messages,

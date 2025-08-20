@@ -37,15 +37,21 @@ from openai.types.responses.response import (
     IncompleteDetails,
     Response,
     ResponseOutputItem,
-    ResponseTextConfig,
     Tool,
     ToolChoice,
 )
+
+# Handle OpenAI SDK version compatibility for Text type
+try:
+    from openai.types.responses.response_create_params import Text as ResponseText
+except (ImportError, AttributeError):
+    # Fall back to the concrete config type available in all SDK versions
+    from openai.types.responses.response_text_config_param import ResponseTextConfigParam as ResponseText
+
 from openai.types.responses.response_create_params import (
     Reasoning,
     ResponseIncludable,
     ResponseInputParam,
-    ResponseTextConfigParam,
     ToolChoice,
     ToolParam,
 )
@@ -705,6 +711,7 @@ ValidUserMessageContentTypes = [
     "text",
     "image_url",
     "input_audio",
+    "audio_url",
     "document",
     "video_url",
     "file",
@@ -902,6 +909,7 @@ OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "us
 
 OpenAIImageGenerationOptionalParams = Literal[
     "background",
+    "input_fidelity",
     "moderation",
     "n",
     "output_compression",
@@ -957,12 +965,14 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     background: Optional[bool]
     stream: Optional[bool]
     temperature: Optional[float]
-    text: Optional[ResponseTextConfigParam]
+    text: Optional["ResponseText"]
     tool_choice: Optional[ToolChoice]
     tools: Optional[List[ALL_RESPONSES_API_TOOL_PARAMS]]
     top_p: Optional[float]
     truncation: Optional[Literal["auto", "disabled"]]
     user: Optional[str]
+    service_tier: Optional[str]
+    safety_identifier: Optional[str]
     prompt: Optional[PromptObject]
 
 
@@ -1010,7 +1020,7 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
-    created_at: float
+    created_at: int
     error: Optional[dict]
     incomplete_details: Optional[IncompleteDetails]
     instructions: Optional[str]
@@ -1030,10 +1040,11 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     previous_response_id: Optional[str]
     reasoning: Optional[Reasoning]
     status: Optional[str]
-    text: Optional[ResponseTextConfig]
+    text: Optional[Union["ResponseText", Dict[str, Any]]]
     truncation: Optional[Literal["auto", "disabled"]]
     usage: Optional[ResponseAPIUsage]
     user: Optional[str]
+    store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
@@ -1134,7 +1145,7 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
-    item: dict
+    item: Optional[dict]
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1297,7 +1308,7 @@ ResponsesAPIStreamingResponse = Annotated[
 ]
 
 
-REASONING_EFFORT = Literal["low", "medium", "high"]
+REASONING_EFFORT = Literal["minimal", "low", "medium", "high"]
 
 
 class OpenAIRealtimeStreamSession(TypedDict, total=False):

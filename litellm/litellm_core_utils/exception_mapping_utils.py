@@ -28,23 +28,31 @@ class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
     """
-    
+
     @staticmethod
     def is_error_str_rate_limit(error_str: str) -> bool:
         """
         Check if an error string indicates a rate limit error.
-        
+
         Args:
             error_str: The error string to check
-            
+
         Returns:
             True if the error indicates a rate limit, False otherwise
         """
         if not isinstance(error_str, str):
             return False
-            
-        return "429" in error_str or "rate limit" in error_str.lower()
-    
+        
+        if "429" in error_str or "rate limit" in error_str.lower():
+            return True
+        
+        #######################################
+        # Mistral API returns this error string
+        #########################################
+        if "service tier capacity exceeded" in error_str.lower():
+            return True
+        
+        return False
 
     @staticmethod
     def is_error_str_context_window_exceeded(error_str: str) -> bool:
@@ -289,6 +297,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 or custom_llm_provider == "text-completion-openai"
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
+                or custom_llm_provider == "mistral"
             ):
                 # custom_llm_provider is openai, make it OpenAI
                 message = get_error_message(error_obj=original_exception)
@@ -1448,6 +1457,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="cohere",
                         response=getattr(original_exception, "response", None),
                     )
+                elif "internal server error" in error_str.lower():
+                    exception_mapping_worked = True
+                    raise InternalServerError(
+                        message=f"CohereException - {error_str}",
+                        model=model,
+                        llm_provider="cohere",
+                        response=getattr(original_exception, "response", None),
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if (
                         original_exception.status_code == 400
@@ -1469,7 +1486,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
-                        raise ServiceUnavailableError(
+                        raise InternalServerError(
                             message=f"CohereException - {original_exception.message}",
                             llm_provider="cohere",
                             model=model,
@@ -1495,7 +1512,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif "Unexpected server error" in error_str:
                     exception_mapping_worked = True
-                    raise ServiceUnavailableError(
+                    raise InternalServerError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
                         model=model,

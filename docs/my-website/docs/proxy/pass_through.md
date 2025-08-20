@@ -154,35 +154,6 @@ general_settings:
 
 ---
 
-## ✨ Enterprise Features
-
-### Authentication & Rate Limiting
-
-Enable LiteLLM authentication and rate limiting on pass through endpoints:
-
-```yaml
-general_settings:
-  master_key: sk-1234
-  pass_through_endpoints:
-    - path: "/v1/rerank"
-      target: "https://api.cohere.com/v1/rerank"
-      auth: true                                          # Enable LiteLLM auth
-      headers:
-        Authorization: "bearer os.environ/COHERE_API_KEY"
-        content-type: application/json
-```
-
-**Test with LiteLLM key:**
-```shell
-curl --request POST \
-  --url http://localhost:4000/v1/rerank \
-  --header 'Authorization: Bearer sk-1234' \
-  --header 'content-type: application/json' \
-  --data '{"model": "rerank-english-v3.0", "query": "test"}'
-```
-
----
-
 ## Configuration Reference
 
 ### Complete Specification

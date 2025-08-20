@@ -123,7 +123,7 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 lakera_moderations_object = lakeraAI_Moderation(**init_params)
                 imported_list.append(lakera_moderations_object)
             elif isinstance(callback, str) and callback == "aporia_prompt_injection":
-                from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
+                from litellm.proxy.guardrails.guardrail_hooks.aporia_ai.aporia_ai import (
                     AporiaGuardrail,
                 )
 
@@ -268,9 +268,13 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
             litellm.callbacks = imported_list  # type: ignore
 
         if "prometheus" in value:
-            from litellm.integrations.prometheus import PrometheusLogger
+            try:
+                from litellm_enterprise.integrations.prometheus import PrometheusLogger
+            except Exception:
+                PrometheusLogger = None
 
-            PrometheusLogger._mount_metrics_endpoint(premium_user)
+            if PrometheusLogger:
+                PrometheusLogger._mount_metrics_endpoint(premium_user)
     else:
         litellm.callbacks = [
             get_instance_fn(

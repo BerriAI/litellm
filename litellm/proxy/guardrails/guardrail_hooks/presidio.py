@@ -336,6 +336,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     presidio_config=presidio_config,
                     request_data=request_data,
                 )
+
                 verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
                 ####################################################
@@ -402,10 +403,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if call_type in [
                 LitellmCallTypes.completion.value,
                 LitellmCallTypes.acompletion.value,
-            ]:
+            ] or call_type == "mcp_call":
                 messages = data["messages"]
                 tasks = []
-
                 for m in messages:
                     content = m.get("content", None)
                     if content is None:

@@ -4,6 +4,7 @@ import ssl
 import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Union
 
+import certifi
 import httpx
 from aiohttp import ClientSession, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
@@ -37,6 +38,72 @@ headers = {
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+
+
+def get_ssl_configuration(ssl_verify: Optional[VerifyTypes] = None) -> Union[bool, str, ssl.SSLContext]:
+    """
+    Unified SSL configuration function that handles ssl_context and ssl_verify logic.
+
+    SSL Configuration Priority:
+    1. If ssl_verify is provided -> is a SSL context use the custom SSL context
+    2. If ssl_verify is False -> disable SSL verification (ssl=False)
+    3. If ssl_verify is a string -> use it as a path to CA bundle file
+    4. If SSL_CERT_FILE environment variable is set and exists -> use it as CA bundle file
+    5. Else will use default SSL context with certifi CA bundle
+
+    If ssl_security_level is set, it will apply the security level to the SSL context.
+
+    Args:
+        ssl_verify: SSL verification setting. Can be:
+            - None: Use default from environment/litellm settings
+            - False: Disable SSL verification
+            - True: Enable SSL verification
+            - str: Path to CA bundle file
+    
+    Returns:
+        Union[bool, str, ssl.SSLContext]: Appropriate SSL configuration
+    """
+    from litellm.secret_managers.main import str_to_bool
+
+    if isinstance(ssl_verify, ssl.SSLContext):
+        # If ssl_verify is already an SSLContext, return it directly
+        return ssl_verify
+
+    # Get ssl_verify from environment or litellm settings if not provided
+    if ssl_verify is None:
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        ssl_verify_bool = str_to_bool(ssl_verify) if isinstance(ssl_verify, str) else ssl_verify
+        if ssl_verify_bool is not None:
+            ssl_verify = ssl_verify_bool
+
+    ssl_security_level = os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)
+
+    cafile = None
+    if isinstance(ssl_verify, str) and os.path.exists(ssl_verify):
+        cafile = ssl_verify
+    if not cafile:
+        ssl_cert_file = os.getenv("SSL_CERT_FILE")
+        if ssl_cert_file and os.path.exists(ssl_cert_file):
+            cafile = ssl_cert_file
+        else:
+            cafile = certifi.where()
+
+    if ssl_verify is not False:
+        custom_ssl_context = ssl.create_default_context(
+            cafile=cafile
+        )
+        # If security level is set, apply it to the SSL context
+        if (
+            ssl_security_level
+            and isinstance(ssl_security_level, str)
+        ):
+            # Create a custom SSL context with reduced security level
+            custom_ssl_context.set_ciphers(ssl_security_level)
+
+        # Use our custom SSL context instead of the original ssl_verify value
+        return custom_ssl_context
+
+    return ssl_verify
 
 
 def mask_sensitive_info(error_message):
@@ -119,29 +186,8 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
     ) -> httpx.AsyncClient:
-        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
-        # /path/to/certificate.pem
-        if ssl_verify is None:
-            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
-
-        ssl_security_level = os.getenv("SSL_SECURITY_LEVEL")
-
-        # If ssl_verify is not False and we need a lower security level
-        if (
-            not ssl_verify
-            and ssl_security_level
-            and isinstance(ssl_security_level, str)
-        ):
-            # Create a custom SSL context with reduced security level
-            custom_ssl_context = ssl.create_default_context()
-            custom_ssl_context.set_ciphers(ssl_security_level)
-
-            # If ssl_verify is a path to a CA bundle, load it into our custom context
-            if isinstance(ssl_verify, str) and os.path.exists(ssl_verify):
-                custom_ssl_context.load_verify_locations(cafile=ssl_verify)
-
-            # Use our custom SSL context instead of the original ssl_verify value
-            ssl_verify = custom_ssl_context
+        # Get unified SSL configuration
+        ssl_config = get_ssl_configuration(ssl_verify)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
@@ -152,8 +198,8 @@ class AsyncHTTPHandler:
         # Create a client with a connection pool
 
         transport = AsyncHTTPHandler._create_async_transport(
-            ssl_context=ssl_verify if isinstance(ssl_verify, ssl.SSLContext) else None,
-            ssl_verify=ssl_verify if isinstance(ssl_verify, bool) else None,
+            ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
+            ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
         )
 
         return httpx.AsyncClient(
@@ -164,7 +210,7 @@ class AsyncHTTPHandler:
                 max_connections=concurrent_limit,
                 max_keepalive_connections=concurrent_limit,
             ),
-            verify=ssl_verify,
+            verify=ssl_config,
             cert=cert,
             headers=headers,
         )
@@ -544,7 +590,6 @@ class AsyncHTTPHandler:
         SSL Configuration Priority:
         1. If ssl_context is provided -> use the custom SSL context
         2. If ssl_verify is False -> disable SSL verification (ssl=False)
-        3. If ssl_verify is True/None -> use default SSL context with certifi CA bundle
 
         Returns:
             Dict with appropriate SSL configuration for TCPConnector
@@ -559,10 +604,6 @@ class AsyncHTTPHandler:
         elif ssl_verify is False:
             # Priority 2: Explicitly disable SSL verification
             connector_kwargs["verify_ssl"] = False
-        else:
-            # Priority 3: Use our default SSL context with certifi CA bundle
-            # This covers ssl_verify=True and ssl_verify=None cases
-            connector_kwargs["ssl"] = AsyncHTTPHandler._get_ssl_context()
         
         return connector_kwargs
 
@@ -577,7 +618,6 @@ class AsyncHTTPHandler:
         Note: aiohttp TCPConnector ssl parameter accepts:
         - SSLContext: custom SSL context
         - False: disable SSL verification
-        - True: use default SSL verification (equivalent to ssl.create_default_context())
         """
         from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
         from litellm.secret_managers.main import str_to_bool
@@ -599,17 +639,6 @@ class AsyncHTTPHandler:
                 connector=TCPConnector(**connector_kwargs),
                 trust_env=trust_env,
             ),
-        )
-    
-
-    @staticmethod
-    def _get_ssl_context() -> ssl.SSLContext:
-        """
-        Get the SSL context for the AiohttpTransport
-        """
-        import certifi
-        return ssl.create_default_context(
-            cafile=certifi.where()
         )
 
     @staticmethod
@@ -637,11 +666,8 @@ class HTTPHandler:
         if timeout is None:
             timeout = _DEFAULT_TIMEOUT
 
-        # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
-        # /path/to/certificate.pem
-
-        if ssl_verify is None:
-            ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        # Get unified SSL configuration
+        ssl_config = get_ssl_configuration(ssl_verify)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
@@ -658,7 +684,7 @@ class HTTPHandler:
                     max_connections=concurrent_limit,
                     max_keepalive_connections=concurrent_limit,
                 ),
-                verify=ssl_verify,
+                verify=ssl_config,
                 cert=cert,
                 headers=headers,
             )

@@ -10,6 +10,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Union,
     cast,
     get_args,
 )
@@ -21,7 +22,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL, BEDROCK_MAX_POLICY_SIZE
 from litellm.litellm_core_utils.dd_tracing import tracer
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -177,7 +178,10 @@ class BaseAWSLLM:
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
             )
-        elif aws_role_name is not None and aws_session_name is not None:
+        elif aws_role_name is not None:
+            # If aws_session_name is not provided, generate a default one
+            if aws_session_name is None:
+                aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
             credentials, _cache_ttl = self._auth_with_aws_role(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
@@ -670,25 +674,43 @@ class BaseAWSLLM:
         aws_region_name: str,
         extra_headers: Optional[dict],
         endpoint_url: str,
-        data: str,
+        data: Union[str, bytes],
         headers: dict,
+        api_key: Optional[str] = None,
     ) -> AWSPreparedRequest:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        if api_key is not None:
+            aws_bearer_token: Optional[str] = api_key
+        else:
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-
-        request = AWSRequest(
-            method="POST", url=endpoint_url, data=data, headers=headers
-        )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
+        if aws_bearer_token:
+            try:
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
+            headers["Authorization"] = f"Bearer {aws_bearer_token}"
+            request = AWSRequest(
+                method="POST", url=endpoint_url, data=data, headers=headers
+            )
+        else:
+            try:
+                from botocore.auth import SigV4Auth
+                from botocore.awsrequest import AWSRequest
+            except ImportError:
+                raise ImportError(
+                    "Missing boto3 to call bedrock. Run 'pip install boto3'."
+                )
+            sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
+            request = AWSRequest(
+                method="POST", url=endpoint_url, data=data, headers=headers
+            )
+            sigv4.add_auth(request)
+            if (
+                extra_headers is not None and "Authorization" in extra_headers
+            ):  # prevent sigv4 from overwriting the auth header
+                request.headers["Authorization"] = extra_headers["Authorization"]
         prepped = request.prepare()
 
         return prepped
@@ -703,6 +725,7 @@ class BaseAWSLLM:
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
+        api_key: Optional[str] = None,
     ) -> Tuple[dict, Optional[bytes]]:
         """
         Sign a request for Bedrock or Sagemaker
@@ -710,7 +733,19 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
+        if api_key is not None:
+            aws_bearer_token: Optional[str] = api_key
+        else:
+            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
 
+        # If aws bearer token is set, use it directly in the header
+        if aws_bearer_token:
+            headers = headers or {}
+            headers["Content-Type"] = "application/json"
+            headers["Authorization"] = f"Bearer {aws_bearer_token}"
+            return headers, json.dumps(request_data).encode()
+
+        # If no bearer token is set, proceed with the existing SigV4 authentication
         try:
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest

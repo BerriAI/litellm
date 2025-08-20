@@ -20,8 +20,33 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers,
-            litellm_params=litellm_params
+            headers=headers, litellm_params=litellm_params
+        )
+
+    def get_stripped_model_name(self, model: str) -> str:
+        # if "responses/" is in the model name, remove it
+        if "responses/" in model:
+            model = model.replace("responses/", "")
+        if "o_series" in model:
+            model = model.replace("o_series/", "")
+        return model
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """No transform applied since inputs are in OpenAI spec already"""
+        stripped_model_name = self.get_stripped_model_name(model)
+        return dict(
+            ResponsesAPIRequestParams(
+                model=stripped_model_name,
+                input=input,
+                **response_api_optional_request_params,
+            )
         )
 
     def get_complete_url(
@@ -45,12 +70,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - A complete URL string, e.g.,
         "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
         """
+        from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+
         return BaseAzureLLM._get_base_azure_url(
             api_base=api_base,
             litellm_params=litellm_params,
-            route="/openai/responses"
+            route="/openai/responses",
+            default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
-    
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############

@@ -45,6 +45,8 @@ import SSOModals from "./SSOModals";
 import { ssoProviderConfigs } from './SSOModals';
 import SCIMConfig from "./SCIM";
 import UIAccessControlForm from "./UIAccessControlForm";
+import UsefulLinksManagement from "./useful_links_management";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface AdminPanelProps {
   searchParams: any;
@@ -54,6 +56,7 @@ interface AdminPanelProps {
   showSSOBanner: boolean;
   premiumUser: boolean;
   proxySettings?: any;
+  userRole?: string | null;
 }
 import { useBaseUrl } from "./constants";
 
@@ -78,6 +81,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   showSSOBanner,
   premiumUser,
   proxySettings,
+  userRole,
 }) => {
   const [form] = Form.useForm();
   const [memberForm] = Form.useForm();
@@ -147,7 +151,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleShowAllowedIPs = async () => {
     try {
       if (premiumUser !== true) {
-        message.error(
+        NotificationManager.fromBackend(
           "This feature is only available for premium users. Please upgrade your account."
         )
         return
@@ -160,7 +164,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     } catch (error) {
       console.error("Error fetching allowed IPs:", error);
-      message.error(`Failed to fetch allowed IPs ${error}`);
+      NotificationManager.fromBackend(`Failed to fetch allowed IPs ${error}`);
       setAllowedIPs([all_ip_address_allowed]);
     } finally {
       if (premiumUser === true) {
@@ -180,7 +184,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     } catch (error) {
       console.error("Error adding IP:", error);
-      message.error(`Failed to add IP address ${error}`);
+      NotificationManager.fromBackend(`Failed to add IP address ${error}`);
     } finally {
       setIsAddIPModalVisible(false);
     }
@@ -201,7 +205,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         message.success('IP address deleted successfully');
       } catch (error) {
         console.error("Error deleting IP:", error);
-        message.error(`Failed to delete IP address ${error}`);
+        NotificationManager.fromBackend(`Failed to delete IP address ${error}`);
       } finally {
         setIsDeleteIPModalVisible(false);
         setIPToDelete(null);
@@ -551,6 +555,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
         <TabList>
           <Tab>Security Settings</Tab>
           <Tab>SCIM</Tab>
+          <Tab>Useful Links</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -560,7 +565,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div>
                   <Button 
                     style={{ width: '150px' }}
-                    onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : message.error("Only premium users can add SSO")}
+                    onClick={() => premiumUser === true ? setIsAddSSOModalVisible(true) : NotificationManager.fromBackend("Only premium users can add SSO")}
                   >
                     {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
                   </Button>
@@ -576,7 +581,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div>
                   <Button 
                     style={{ width: '150px' }}
-                    onClick={() => premiumUser === true ? setIsUIAccessControlModalVisible(true) : message.error("Only premium users can configure UI access control")}
+                    onClick={() => premiumUser === true ? setIsUIAccessControlModalVisible(true) : NotificationManager.fromBackend("Only premium users can configure UI access control")}
                   >
                     UI Access Control
                   </Button>
@@ -703,6 +708,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
               accessToken={accessToken} 
               userID={userID}
               proxySettings={proxySettings}
+            />
+          </TabPanel>
+          <TabPanel>
+            <UsefulLinksManagement 
+              accessToken={accessToken}
+              userRole={userRole || null}
             />
           </TabPanel>
         </TabPanels>

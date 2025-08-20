@@ -16,6 +16,7 @@ class AnthropicInputSchema(TypedDict, total=False):
     type: Optional[str]
     properties: Optional[dict]
     additionalProperties: Optional[bool]
+    required: Optional[List[str]]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -172,6 +173,7 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
 class AnthropicMessagesToolResultContent(TypedDict):
     type: Literal["text"]
     text: str
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 class AnthropicMessagesToolResultParam(TypedDict, total=False):
@@ -294,15 +296,23 @@ class TextBlock(TypedDict):
     type: Literal["text"]
 
 
-class ContentBlockStart(TypedDict):
-    """
-    event: content_block_start
-    data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
-    """
+class ContentBlockStartToolUse(TypedDict):
+    type: Literal["content_block_start"]
+    id: str
+    name: str
+    input: dict
+    content_block: ToolUseBlock
 
-    type: str
+
+class ContentBlockStartText(TypedDict):
+    type: Literal["content_block_start"]
     index: int
-    content_block: Union[ToolUseBlock, TextBlock]
+    content_block: TextBlock
+
+
+ContentBlockContentBlockDict = Union[ToolUseBlock, TextBlock]
+
+ContentBlockStart = Union[ContentBlockStartToolUse, ContentBlockStartText]
 
 
 class MessageDelta(TypedDict, total=False):

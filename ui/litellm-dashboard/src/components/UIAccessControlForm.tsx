@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Form, Button as Button2, Select, message } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface UIAccessControlFormProps {
   accessToken: string | null;
@@ -52,7 +53,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
 
   const handleUIAccessSubmit = async (formValues: Record<string, any>) => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationManager.fromBackend("No access token available");
       return;
     }
 
@@ -71,7 +72,7 @@ const UIAccessControlForm: React.FC<UIAccessControlFormProps> = ({ accessToken, 
       onSuccess();
     } catch (error) {
       console.error("Failed to save UI access settings:", error);
-      message.error("Failed to save UI access settings");
+      NotificationManager.fromBackend("Failed to save UI access settings");
     } finally {
       setLoading(false);
     }

@@ -3,6 +3,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 
 import pytest
 
@@ -16,19 +17,70 @@ from litellm.proxy.utils import ProxyLogging
 
 
 # Mock classes for testing
+class MockLiteLLMTeamMembership:
+    async def update_many(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        # Mock the update_many method for litellm_teammembership
+        return {"count": 1}
+
+
+class MockDB:
+    def __init__(self):
+        self.litellm_teammembership = MockLiteLLMTeamMembership()
+
+
 class MockPrismaClient:
     def __init__(self):
-        self.data = {"key": [], "user": [], "team": [], "budget": [], "enduser": []}
-        self.updated_data = {
+        self.data: Dict[str, List[Any]] = {
             "key": [],
             "user": [],
             "team": [],
             "budget": [],
             "enduser": [],
         }
+        self.updated_data: Dict[str, List[Any]] = {
+            "key": [],
+            "user": [],
+            "team": [],
+            "budget": [],
+            "enduser": [],
+        }
+        self.db = MockDB()
 
     async def get_data(self, table_name, query_type, **kwargs):
-        return self.data.get(table_name, [])
+        data = self.data.get(table_name, [])
+
+        # Handle specific filtering for budget table queries
+        if table_name == "budget" and query_type == "find_all" and "reset_at" in kwargs:
+            # Return budgets that need to be reset (simulate expired budgets)
+            return [item for item in data if hasattr(item, "budget_reset_at")]
+
+        # Handle specific filtering for enduser table queries
+        if (
+            table_name == "enduser"
+            and query_type == "find_all"
+            and "budget_id_list" in kwargs
+        ):
+            budget_id_list = kwargs["budget_id_list"]
+            # Return endusers that match the budget IDs
+            return [
+                item
+                for item in data
+                if hasattr(item, "litellm_budget_table")
+                and hasattr(item.litellm_budget_table, "budget_id")
+                and item.litellm_budget_table.budget_id in budget_id_list
+            ]
+
+        # Handle key queries with expires and reset_at
+        if (
+            table_name == "key"
+            and query_type == "find_all"
+            and ("expires" in kwargs or "reset_at" in kwargs)
+        ):
+            return [item for item in data if hasattr(item, "budget_reset_at")]
+
+        return data
 
     async def update_data(self, query_type, data_list, table_name):
         self.updated_data[table_name] = data_list
@@ -177,7 +229,7 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
     mock_prisma_client.data["enduser"] = [test_enduser]
 
     # Run the test
-    asyncio.run(reset_budget_job.reset_budget_for_litellm_endusers())
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     # Verify results
     assert len(mock_prisma_client.updated_data["enduser"]) == 1

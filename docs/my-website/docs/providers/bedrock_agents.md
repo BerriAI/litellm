@@ -196,7 +196,51 @@ for chunk in stream:
 </TabItem>
 </Tabs>
 
+## Provider-specific Parameters
+
+Any non-openai parameters will be passed to the agent as custom parameters.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers title="Using custom parameters"
+from litellm import completion
+
+response = litellm.completion(
+    model="bedrock/agent/L1RT58GYRW/MFPSBCXYTW",
+    messages=[
+        {
+            "role": "user",
+            "content": "Hi who is ishaan cto of litellm, tell me 10 things about him",
+        }
+    ],
+    invocationId="my-test-invocation-id", # PROVIDER-SPECIFIC VALUE
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+```yaml showLineNumbers title="LiteLLM Proxy Configuration"
+model_list:
+  - model_name: bedrock-agent-1
+    litellm_params:
+      model: bedrock/agent/L1RT58GYRW/MFPSBCXYTW
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: us-west-2
+      invocationId: my-test-invocation-id
+```
+
+</TabItem>
+</Tabs>
+
+
+
+
+
 ## Further Reading
 
 - [AWS Bedrock Agents Documentation](https://aws.amazon.com/bedrock/agents/)
 - [LiteLLM Authentication to Bedrock](https://docs.litellm.ai/docs/providers/bedrock#boto3---authentication)
+

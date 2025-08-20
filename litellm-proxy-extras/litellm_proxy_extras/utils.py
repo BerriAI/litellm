@@ -243,7 +243,6 @@ class ProxyExtrasDBManager:
             bool: True if setup was successful, False otherwise
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
-        use_migrate = str_to_bool(os.getenv("USE_PRISMA_MIGRATE")) or use_migrate
         for attempt in range(4):
             original_dir = os.getcwd()
             migrations_dir = ProxyExtrasDBManager._get_prisma_dir()

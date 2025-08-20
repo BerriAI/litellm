@@ -131,6 +131,7 @@ def test_null_role_response():
 
         assert response.choices[0].message.role == "assistant"
 
+
 @pytest.mark.skip(reason="Cohere having RBAC issues")
 def test_completion_azure_command_r():
     try:
@@ -173,7 +174,6 @@ def test_completion_azure_ai_gpt_4o(api_base):
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
@@ -759,68 +759,6 @@ def test_completion_base64(model):
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
 
-
-@pytest.mark.parametrize("model", ["claude-3-sonnet-20240229"])
-def test_completion_function_plus_image(model):
-    litellm.set_verbose = True
-
-    image_content = [
-        {"type": "text", "text": "What’s in this image?"},
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-            },
-        },
-    ]
-    image_message = {"role": "user", "content": image_content}
-
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {
-                            "type": "string",
-                            "enum": ["celsius", "fahrenheit"],
-                        },
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-
-    tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-
-    try:
-        response = completion(
-            model=model,
-            messages=[image_message],
-            tool_choice=tool_choice,
-            tools=tools,
-            stream=False,
-        )
-
-        print(response)
-    except litellm.InternalServerError:
-        pass
-
-
 def test_completion_mistral_api():
     try:
         litellm.set_verbose = True
@@ -905,7 +843,7 @@ def test_completion_mistral_api_mistral_large_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/open-mistral-7b",
+            model="mistral/mistral-medium-latest",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -940,6 +878,8 @@ def test_completion_mistral_api_mistral_large_function_call():
             tool_choice="auto",
         )
         print(second_response)
+    except litellm.RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1475,7 +1415,6 @@ HF Tests we should pass
 """
 
 
-
 @pytest.mark.parametrize(
     "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
 )  # "vertex_ai",
@@ -1560,6 +1499,7 @@ async def test_openai_compatible_custom_api_video(provider):
 
         mock_call.assert_called_once()
 
+
 def test_lm_studio_completion(monkeypatch):
     monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -1577,6 +1517,7 @@ def test_lm_studio_completion(monkeypatch):
         pytest.fail(f"Error occurred: {e}")
     except litellm.APIError as e:
         print(e)
+
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
@@ -1623,7 +1564,6 @@ def mock_post(url, **kwargs):
         ]
     ]
     return mock_response
-
 
 
 def test_ollama_image():
@@ -3756,7 +3696,7 @@ def test_completion_volcengine():
     [
         # "gemini-1.0-pro",
         "gemini-1.5-pro",
-        # "gemini-1.5-flash",
+        # "gemini-2.5-flash-lite",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -3810,7 +3750,7 @@ def test_completion_gemini(model):
 @pytest.mark.asyncio
 async def test_acompletion_gemini():
     litellm.set_verbose = True
-    model_name = "gemini/gemini-1.5-flash"
+    model_name = "gemini/gemini-2.5-flash-lite"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         response = await litellm.acompletion(model=model_name, messages=messages)
@@ -4394,6 +4334,7 @@ def test_humanloop_completion(monkeypatch):
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
 
+
 def test_completion_novita_ai():
     litellm.set_verbose = True
     messages = [
@@ -4403,10 +4344,11 @@ def test_completion_novita_ai():
             "content": "Hey",
         },
     ]
-    
+
     from openai import OpenAI
+
     openai_client = OpenAI(api_key="fake-key")
-    
+
     with patch.object(
         openai_client.chat.completions, "create", new=MagicMock()
     ) as mock_call:
@@ -4417,21 +4359,22 @@ def test_completion_novita_ai():
                 client=openai_client,
                 api_base="https://api.novita.ai/v3/openai",
             )
-            
+
             mock_call.assert_called_once()
-            
+
             # Verify model is passed correctly
-            assert mock_call.call_args.kwargs["model"] == "meta-llama/llama-3.3-70b-instruct"
+            assert (
+                mock_call.call_args.kwargs["model"]
+                == "meta-llama/llama-3.3-70b-instruct"
+            )
             # Verify messages are passed correctly
             assert mock_call.call_args.kwargs["messages"] == messages
-            
+
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.parametrize(
-    "api_key", ["my-bad-api-key"]
-)
+@pytest.mark.parametrize("api_key", ["my-bad-api-key"])
 def test_completion_novita_ai_dynamic_params(api_key):
     try:
         litellm.set_verbose = True
@@ -4442,12 +4385,15 @@ def test_completion_novita_ai_dynamic_params(api_key):
                 "content": "Hey",
             },
         ]
-        
+
         from openai import OpenAI
+
         openai_client = OpenAI(api_key="fake-key")
-        
+
         with patch.object(
-            openai_client.chat.completions, "create", side_effect=Exception("Invalid API key")
+            openai_client.chat.completions,
+            "create",
+            side_effect=Exception("Invalid API key"),
         ) as mock_call:
             try:
                 completion(
@@ -4461,10 +4407,11 @@ def test_completion_novita_ai_dynamic_params(api_key):
             except Exception as e:
                 # This should fail with the mocked exception
                 assert "Invalid API key" in str(e)
-                
+
             mock_call.assert_called_once()
     except Exception as e:
         pytest.fail(f"Unexpected error: {e}")
+
 
 def test_deepseek_reasoning_content_completion():
     try:

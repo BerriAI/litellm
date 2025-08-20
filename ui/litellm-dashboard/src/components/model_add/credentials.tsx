@@ -23,6 +23,7 @@ import { UploadProps } from "antd/es/upload";
 import { PlusIcon } from "@heroicons/react/solid";
 import { credentialListCall, credentialCreateCall, credentialDeleteCall, credentialUpdateCall, CredentialItem, CredentialsResponse } from "@/components/networking"; // Assume this is your networking function
 import AddCredentialsTab from "./add_credentials_tab";
+import CredentialDeleteModal from "./CredentialDeleteModal";
 import { Form, message } from "antd";
 interface CredentialsPanelProps {
   accessToken: string | null;
@@ -37,6 +38,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
+  const [credentialToDelete, setCredentialToDelete] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const restrictedFields = ['credential_name', 'custom_llm_provider'];
@@ -119,22 +121,23 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
     }
     const response = await credentialDeleteCall(accessToken, credentialName);
     message.success('Credential deleted successfully');
+    setCredentialToDelete(null);
     fetchCredentials(accessToken);
+  };
+
+  const openDeleteModal = (credentialName: string) => {
+    setCredentialToDelete(credentialName);
+  };
+
+  const closeDeleteModal = () => {
+    setCredentialToDelete(null);
   };
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex justify-between items-center mb-4">
         <Text>
-          Configured credentials for different AI providers. Add and manage your API credentials.{" "}
-          <a 
-            href="https://docs.litellm.ai/docs/credentials" 
-            target="_blank" 
-            rel="noopener noreferrer" 
-            className="text-blue-500 hover:text-blue-700 underline"
-          >
-            Docs
-          </a>
+          Configured credentials for different AI providers. Add and manage your API credentials.
         </Text>
       </div>
 
@@ -176,7 +179,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
                       icon={TrashIcon}
                       variant="light"
                       size="sm"
-                      onClick={() => handleDeleteCredential(credential.credential_name)}
+                      onClick={() => openDeleteModal(credential.credential_name)}
                     />
                   </TableCell>
                 </TableRow>
@@ -214,6 +217,15 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ accessToken, upload
           uploadProps={uploadProps}
           onCancel={() => setIsUpdateModalOpen(false)}
           addOrEdit="edit"
+        />
+      )}
+      
+      {credentialToDelete && (
+        <CredentialDeleteModal
+          isVisible={true}
+          onCancel={closeDeleteModal}
+          onConfirm={() => handleDeleteCredential(credentialToDelete)}
+          credentialName={credentialToDelete}
         />
       )}
     </div>

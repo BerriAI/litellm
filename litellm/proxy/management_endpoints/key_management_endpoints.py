@@ -46,6 +46,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
+    attach_object_permission_to_dict,
     handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -57,6 +58,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     _hash_token_if_needed,
     handle_exception_on_proxy,
+    is_valid_api_key,
     jsonify_object,
 )
 from litellm.router import Router
@@ -330,6 +332,212 @@ def common_key_access_checks(
 router = APIRouter()
 
 
+def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
+    """
+    Handle the key type.
+    """
+    key_type = data.key_type
+    data_json.pop("key_type", None)
+    if key_type == LiteLLMKeyType.LLM_API:
+        data_json["allowed_routes"] = ["llm_api_routes"]
+    elif key_type == LiteLLMKeyType.MANAGEMENT:
+        data_json["allowed_routes"] = ["management_routes"]
+    elif key_type == LiteLLMKeyType.READ_ONLY:
+        data_json["allowed_routes"] = ["info_routes"]
+    return data_json
+
+
+async def _common_key_generation_helper(  # noqa: PLR0915
+    data: GenerateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str],
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> GenerateKeyResponse:
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        premium_user,
+        prisma_client,
+    )
+
+    common_key_access_checks(
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        llm_router=llm_router,
+        premium_user=premium_user,
+    )
+
+    # check if user set default key/generate params on config.yaml
+    if litellm.default_key_generate_params is not None:
+        for elem in data:
+            key, value = elem
+            if value is None and key in [
+                "max_budget",
+                "user_id",
+                "team_id",
+                "max_parallel_requests",
+                "tpm_limit",
+                "rpm_limit",
+                "budget_duration",
+            ]:
+                setattr(data, key, litellm.default_key_generate_params.get(key, None))
+            elif key == "models" and value == []:
+                setattr(data, key, litellm.default_key_generate_params.get(key, []))
+            elif key == "metadata" and value == {}:
+                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+
+    # check if user set default key/generate params on config.yaml
+    if litellm.upperbound_key_generate_params is not None:
+        for elem in data:
+            key, value = elem
+            upperbound_value = getattr(
+                litellm.upperbound_key_generate_params, key, None
+            )
+            if upperbound_value is not None:
+                if value is None:
+                    # Use the upperbound value if user didn't provide a value
+                    setattr(data, key, upperbound_value)
+                else:
+                    # Compare with upperbound for numeric fields
+                    if key in [
+                        "max_budget",
+                        "max_parallel_requests",
+                        "tpm_limit",
+                        "rpm_limit",
+                    ]:
+                        if value > upperbound_value:
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                                },
+                            )
+                    # Compare durations
+                    elif key in ["budget_duration", "duration"]:
+                        upperbound_duration = duration_in_seconds(
+                            duration=upperbound_value
+                        )
+                        user_duration = duration_in_seconds(duration=value)
+                        if user_duration > upperbound_duration:
+                            raise HTTPException(
+                                status_code=400,
+                                detail={
+                                    "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
+                                },
+                            )
+
+    # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
+    try:
+        from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
+            apply_enterprise_key_management_params,
+        )
+
+        data = apply_enterprise_key_management_params(data, team_table)
+    except Exception as e:
+        verbose_proxy_logger.info(
+            "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
+                str(e)
+            )
+        )
+
+    # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
+    _budget_id = data.budget_id
+    if prisma_client is not None and data.soft_budget is not None:
+        # create the Budget Row for the LiteLLM Verification Token
+        budget_row = LiteLLM_BudgetTable(
+            soft_budget=data.soft_budget,
+            model_max_budget=data.model_max_budget or {},
+        )
+        new_budget = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
+
+        _budget = await prisma_client.db.litellm_budgettable.create(
+            data={
+                **new_budget,  # type: ignore
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }
+        )
+        _budget_id = getattr(_budget, "budget_id", None)
+
+    # ADD METADATA FIELDS
+    # Set Management Endpoint Metadata Fields
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
+
+    data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
+
+    data_json = handle_key_type(data, data_json)
+    # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
+    if "max_budget" in data_json:
+        data_json["key_max_budget"] = data_json.pop("max_budget", None)
+    if _budget_id is not None:
+        data_json["budget_id"] = _budget_id
+
+    if "budget_duration" in data_json:
+        data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
+
+    if user_api_key_dict.user_id is not None:
+        data_json["created_by"] = user_api_key_dict.user_id
+        data_json["updated_by"] = user_api_key_dict.user_id
+
+    # Set tags on the new key
+    if "tags" in data_json:
+        from litellm.proxy.proxy_server import premium_user
+
+        if premium_user is not True and data_json["tags"] is not None:
+            raise ValueError(
+                f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
+            )
+
+        _metadata = data_json.get("metadata")
+        if not _metadata:
+            data_json["metadata"] = {"tags": data_json["tags"]}
+        else:
+            data_json["metadata"]["tags"] = data_json["tags"]
+
+        data_json.pop("tags")
+
+    data_json = await _set_object_permission(
+        data_json=data_json,
+        prisma_client=prisma_client,
+    )
+
+    await _enforce_unique_key_alias(
+        key_alias=data_json.get("key_alias", None),
+        prisma_client=prisma_client,
+    )
+
+    response = await generate_key_helper_fn(
+        request_type="key", **data_json, table_name="key"
+    )
+
+    response["soft_budget"] = (
+        data.soft_budget
+    )  # include the user-input soft budget in the response
+
+    response = GenerateKeyResponse(**response)
+
+    response.token = (
+        response.token_id
+    )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
+
+    asyncio.create_task(
+        KeyManagementEventHooks.async_key_generated_hook(
+            data=data,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+    )
+
+    return response
+
+
 @router.post(
     "/key/generate",
     tags=["key management"],
@@ -337,7 +545,7 @@ router = APIRouter()
     response_model=GenerateKeyResponse,
 )
 @management_endpoint_wrapper
-async def generate_key_fn(  # noqa: PLR0915
+async def generate_key_fn(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     litellm_changed_by: Optional[str] = Header(
@@ -377,9 +585,13 @@ async def generate_key_fn(  # noqa: PLR0915
     - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
     - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
     - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
+    - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     Examples:
 
     1. Allow users to turn on/off pii masking
@@ -400,9 +612,6 @@ async def generate_key_fn(  # noqa: PLR0915
     """
     try:
         from litellm.proxy.proxy_server import (
-            litellm_proxy_admin_name,
-            llm_router,
-            premium_user,
             prisma_client,
             user_api_key_cache,
             user_custom_key_generate,
@@ -444,185 +653,12 @@ async def generate_key_fn(  # noqa: PLR0915
             route=KeyManagementRoutes.KEY_GENERATE,
         )
 
-        common_key_access_checks(
-            user_api_key_dict=user_api_key_dict,
+        return await _common_key_generation_helper(
             data=data,
-            llm_router=llm_router,
-            premium_user=premium_user,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+            team_table=team_table,
         )
-
-        # check if user set default key/generate params on config.yaml
-        if litellm.default_key_generate_params is not None:
-            for elem in data:
-                key, value = elem
-                if value is None and key in [
-                    "max_budget",
-                    "user_id",
-                    "team_id",
-                    "max_parallel_requests",
-                    "tpm_limit",
-                    "rpm_limit",
-                    "budget_duration",
-                ]:
-                    setattr(
-                        data, key, litellm.default_key_generate_params.get(key, None)
-                    )
-                elif key == "models" and value == []:
-                    setattr(data, key, litellm.default_key_generate_params.get(key, []))
-                elif key == "metadata" and value == {}:
-                    setattr(data, key, litellm.default_key_generate_params.get(key, {}))
-
-        # check if user set default key/generate params on config.yaml
-        if litellm.upperbound_key_generate_params is not None:
-            for elem in data:
-                key, value = elem
-                upperbound_value = getattr(
-                    litellm.upperbound_key_generate_params, key, None
-                )
-                if upperbound_value is not None:
-                    if value is None:
-                        # Use the upperbound value if user didn't provide a value
-                        setattr(data, key, upperbound_value)
-                    else:
-                        # Compare with upperbound for numeric fields
-                        if key in [
-                            "max_budget",
-                            "max_parallel_requests",
-                            "tpm_limit",
-                            "rpm_limit",
-                        ]:
-                            if value > upperbound_value:
-                                raise HTTPException(
-                                    status_code=400,
-                                    detail={
-                                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                                    },
-                                )
-                        # Compare durations
-                        elif key in ["budget_duration", "duration"]:
-                            upperbound_duration = duration_in_seconds(
-                                duration=upperbound_value
-                            )
-                            user_duration = duration_in_seconds(duration=value)
-                            if user_duration > upperbound_duration:
-                                raise HTTPException(
-                                    status_code=400,
-                                    detail={
-                                        "error": f"{key} is over max limit set in config - user_value={value}; max_value={upperbound_value}"
-                                    },
-                                )
-
-        # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
-        try:
-            from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
-                apply_enterprise_key_management_params,
-            )
-
-            data = apply_enterprise_key_management_params(data, team_table)
-        except Exception as e:
-            verbose_proxy_logger.info(
-                "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
-                    str(e)
-                )
-            )
-
-        # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
-        _budget_id = data.budget_id
-        if prisma_client is not None and data.soft_budget is not None:
-            # create the Budget Row for the LiteLLM Verification Token
-            budget_row = LiteLLM_BudgetTable(
-                soft_budget=data.soft_budget,
-                model_max_budget=data.model_max_budget or {},
-            )
-            new_budget = prisma_client.jsonify_object(
-                budget_row.json(exclude_none=True)
-            )
-
-            _budget = await prisma_client.db.litellm_budgettable.create(
-                data={
-                    **new_budget,  # type: ignore
-                    "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                }
-            )
-            _budget_id = getattr(_budget, "budget_id", None)
-
-        # ADD METADATA FIELDS
-        # Set Management Endpoint Metadata Fields
-        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field, None) is not None:
-                _set_object_metadata_field(
-                    object_data=data,
-                    field_name=field,
-                    value=getattr(data, field),
-                )
-
-        data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
-
-        # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
-        if "max_budget" in data_json:
-            data_json["key_max_budget"] = data_json.pop("max_budget", None)
-        if _budget_id is not None:
-            data_json["budget_id"] = _budget_id
-
-        if "budget_duration" in data_json:
-            data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
-
-        if user_api_key_dict.user_id is not None:
-            data_json["created_by"] = user_api_key_dict.user_id
-            data_json["updated_by"] = user_api_key_dict.user_id
-
-        # Set tags on the new key
-        if "tags" in data_json:
-            from litellm.proxy.proxy_server import premium_user
-
-            if premium_user is not True and data_json["tags"] is not None:
-                raise ValueError(
-                    f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
-                )
-
-            _metadata = data_json.get("metadata")
-            if not _metadata:
-                data_json["metadata"] = {"tags": data_json["tags"]}
-            else:
-                data_json["metadata"]["tags"] = data_json["tags"]
-
-            data_json.pop("tags")
-
-        data_json = await _set_object_permission(
-            data_json=data_json,
-            prisma_client=prisma_client,
-        )
-
-        await _enforce_unique_key_alias(
-            key_alias=data_json.get("key_alias", None),
-            prisma_client=prisma_client,
-        )
-
-        response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key"
-        )
-
-        response["soft_budget"] = (
-            data.soft_budget
-        )  # include the user-input soft budget in the response
-
-        response = GenerateKeyResponse(**response)
-
-        response.token = (
-            response.token_id
-        )  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
-
-        asyncio.create_task(
-            KeyManagementEventHooks.async_key_generated_hook(
-                data=data,
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-            )
-        )
-
-        return response
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
@@ -630,6 +666,128 @@ async def generate_key_fn(  # noqa: PLR0915
             )
         )
         raise handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/key/service-account/generate",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@management_endpoint_wrapper
+async def generate_service_account_key_fn(
+    data: GenerateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Generate a Service Account API key based on the provided data. This key does not belong to any user. It belongs to the team.
+
+    Why use a service account key?
+    - Prevent key from being deleted when user is deleted.
+    - Apply team limits, not team member limits to key.
+
+    Docs: https://docs.litellm.ai/docs/proxy/virtual_keys
+
+    Parameters:
+    - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - key_alias: Optional[str] - User defined key alias
+    - key: Optional[str] - User defined key value. If not set, a 16-digit unique sk-key is created for you.
+    - team_id: Optional[str] - The team id of the key
+    - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
+    - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+    - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+    - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
+    - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
+    - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+    - send_invite_email: Optional[bool] - Whether to send an invite email to the user_id, with the generate key
+    - max_budget: Optional[float] - Specify max budget for a given key.
+    - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+    - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
+    - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
+    - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
+    - blocked: Optional[bool] - Whether the key is blocked.
+    - rpm_limit: Optional[int] - Specify rpm limit for a given key (Requests per minute)
+    - tpm_limit: Optional[int] - Specify tpm limit for a given key (Tokens per minute)
+    - soft_budget: Optional[float] - Specify soft budget for a given key. Will trigger a slack alert when this soft budget is reached.
+    - tags: Optional[List[str]] - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
+    - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
+    - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    Examples:
+
+    1. Allow users to turn on/off pii masking
+
+    ```bash
+    curl --location 'http://0.0.0.0:4000/key/generate' \
+        --header 'Authorization: Bearer sk-1234' \
+        --header 'Content-Type: application/json' \
+        --data '{
+            "permissions": {"allow_pii_controls": true}
+    }'
+    ```
+
+    Returns:
+    - key: (str) The generated api key
+    - expires: (datetime) Datetime object for when key expires.
+    - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
+
+    """
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        user_api_key_cache,
+        user_custom_key_generate,
+    )
+
+    verbose_proxy_logger.debug("entered /key/generate")
+
+    if user_custom_key_generate is not None:
+        if asyncio.iscoroutinefunction(user_custom_key_generate):
+            result = await user_custom_key_generate(data)  # type: ignore
+        else:
+            raise ValueError("user_custom_key_generate must be a coroutine")
+        decision = result.get("decision", True)
+        message = result.get("message", "Authentication Failed - Custom Auth Rule")
+        if not decision:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
+    team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+    if data.team_id is not None:
+        try:
+            team_table = await get_team_object(
+                team_id=data.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                check_db_only=True,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Error getting team object in `/key/generate`: {e}"
+            )
+            team_table = None
+
+    key_generation_check(
+        team_table=team_table,
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        route=KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
+    )
+
+    data.user_id = None  # do not allow user_id to be set for service account keys
+
+    return await _common_key_generation_helper(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+        team_table=team_table,
+    )
 
 
 def prepare_metadata_fields(
@@ -652,6 +810,11 @@ def prepare_metadata_fields(
                     casted_metadata[k] = v.isoformat()
                 else:
                     casted_metadata[k] = v
+            if k in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+                from litellm.proxy.utils import _premium_user_check
+
+                _premium_user_check()
+                casted_metadata[k] = v
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -684,7 +847,6 @@ async def _set_object_permission(
         data_json["object_permission_id"] = (
             created_object_permission.object_permission_id
         )
-
         # delete the object_permission from the data_json
         data_json.pop("object_permission")
     return data_json
@@ -694,12 +856,16 @@ async def prepare_key_update_data(
     data: Union[UpdateKeyRequest, RegenerateKeyRequest],
     existing_key_row: LiteLLM_VerificationToken,
 ):
+
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     non_default_values = {}
     for k, v in data_json.items():
-        if k in LiteLLM_ManagementEndpoint_MetadataFields:
+        if (
+            k in LiteLLM_ManagementEndpoint_MetadataFields
+            or k in LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        ):
             continue
         non_default_values[k] = v
 
@@ -802,6 +968,7 @@ async def update_key_fn(
     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
     - models: Optional[list] - Model_name's a user is allowed to call
     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
+    - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - enforced_params: Optional[List[str]] - List of enforced params for the key (Enterprise only). [Docs](https://docs.litellm.ai/docs/proxy/enterprise#enforce-required-params-for-llm-requests)
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
@@ -819,12 +986,14 @@ async def update_key_fn(
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
     - config: Optional[dict] - [DEPRECATED PARAM] Key-specific config.
     - temp_budget_increase: Optional[float] - Temporary budget increase for the key (Enterprise only).
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
+    - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Example:
     ```bash
@@ -1348,6 +1517,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
+    prompts: Optional[list] = None,
     teams: Optional[list] = None,
     organization_id: Optional[str] = None,
     table_name: Optional[Literal["key", "user"]] = None,
@@ -1361,11 +1531,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     ] = None,  # object_permission_id <-> LiteLLM_ObjectPermissionTable
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None,
 ):
-    from litellm.proxy.proxy_server import (
-        litellm_proxy_budget_name,
-        premium_user,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if prisma_client is None:
         raise Exception(
@@ -1409,6 +1575,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if guardrails is not None:
         metadata = metadata or {}
         metadata["guardrails"] = guardrails
+    if prompts is not None:
+        metadata = metadata or {}
+        metadata["prompts"] = prompts
 
     metadata_json = json.dumps(metadata)
     validate_model_max_budget(model_max_budget)
@@ -1524,10 +1693,8 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                         table_name="user",
                         update_key_values=update_key_values,
                     )
-            if user_id == litellm_proxy_budget_name or (
-                table_name is not None and table_name == "user"
-            ):
-                # do not create a key for litellm_proxy_budget_name or if table name is set to just 'user'
+            if table_name is not None and table_name == "user":
+                # do not create a key if table name is set to just 'user'
                 # we only need to ensure this exists in the user table
                 # the LiteLLM_VerificationToken table will increase in size if we don't do this check
                 return user_data
@@ -2463,11 +2630,14 @@ async def _list_key_helper(
     # Prepare response
     key_list: List[Union[str, UserAPIKeyAuth]] = []
     for key in keys:
+        key_dict = key.dict()
+        # Attach object_permission if object_permission_id is set
+        key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
         if return_full_object is True:
-            key_list.append(UserAPIKeyAuth(**key.dict()))  # Return full key object
+            key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
-            _token = key.dict().get("token")
-            key_list.append(_token)  # Return only the token
+            _token = key_dict.get("token")
+            key_list.append(cast(str, _token))  # Return only the token
 
     return KeyListResponseObject(
         keys=key_list,
@@ -2534,6 +2704,13 @@ async def block_key(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
+    if not is_valid_api_key(data.key):
+        raise ProxyException(
+            message="Invalid key format.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
     if data.key.startswith("sk-"):
         hashed_token = hash_token(token=data.key)
     else:
@@ -2641,10 +2818,14 @@ async def unblock_key(
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
 
-    if data.key.startswith("sk-"):
-        hashed_token = hash_token(token=data.key)
-    else:
-        hashed_token = data.key
+    if not is_valid_api_key(data.key):
+        raise ProxyException(
+            message="Invalid key format.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    hashed_token = hash_token(token=data.key)
 
     if litellm.store_audit_logs is True:
         # make an audit log for key update

@@ -4,7 +4,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy.guardrails.guardrail_hooks.pangea import (
+from litellm.proxy.guardrails.guardrail_hooks.pangea.pangea import (
     PangeaGuardrailMissingSecrets,
     PangeaHandler,
 )

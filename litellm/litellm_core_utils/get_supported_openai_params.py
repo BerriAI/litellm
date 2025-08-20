@@ -121,6 +121,10 @@ def get_supported_openai_params(  # noqa: PLR0915
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(
                 model=model
             )
+        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            return litellm.AzureOpenAIGPT5Config().get_supported_openai_params(
+                model=model
+            )
         else:
             return litellm.AzureOpenAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "openrouter":
@@ -136,7 +140,10 @@ def get_supported_openai_params(  # noqa: PLR0915
             model=model
         )
     elif custom_llm_provider == "sambanova":
-        return litellm.SambanovaConfig().get_supported_openai_params(model=model)
+        if request_type == "embeddings":
+            litellm.SambaNovaEmbeddingConfig().get_supported_openai_params(model=model)
+        else:
+            return litellm.SambanovaConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "nebius":
         if request_type == "chat_completion":
             return litellm.NebiusConfig().get_supported_openai_params(model=model)
@@ -146,7 +153,9 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.HuggingFaceChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "jina_ai":
         if request_type == "embeddings":
-            return litellm.JinaAIEmbeddingConfig().get_supported_openai_params()
+            return litellm.JinaAIEmbeddingConfig().get_supported_openai_params(
+                model=model
+            )
     elif custom_llm_provider == "together_ai":
         return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "databricks":

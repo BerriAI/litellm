@@ -13,12 +13,18 @@ sys.path.insert(
 
 from typing import cast
 
+from fastapi import FastAPI
+
 import litellm
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.proxy.management_endpoints.callback_management_endpoints import router
 from litellm.proxy.proxy_server import app
 
+
+@pytest.fixture(autouse=True, scope="session")
+def clear_existing_callbacks():
+    litellm.logging_callback_manager._reset_all_callbacks()
 
 class TestCallbackManagementEndpoints:
     """Test suite for callback management endpoints"""
@@ -42,7 +48,7 @@ class TestCallbackManagementEndpoints:
         litellm._async_failure_callback = []
         litellm.callbacks = []
 
-    def test_list_callbacks_no_active_callbacks(self):
+    def test_alist_callbacks_no_active_callbacks(self):
         """Test /callbacks/list endpoint with no active callbacks"""
         # Setup test client
         client = TestClient(app)
@@ -71,7 +77,7 @@ class TestCallbackManagementEndpoints:
         "LANGFUSE_SECRET_KEY": "test_secret_key",
         "LANGFUSE_HOST": "https://test.langfuse.com"
     })
-    def test_list_callbacks_with_langfuse_logger(self):
+    def test_alist_callbacks_with_langfuse_logger(self):
         """Test /callbacks/list endpoint with real Langfuse logger initialized"""
         # Setup test client
         client = TestClient(app)
@@ -108,7 +114,7 @@ class TestCallbackManagementEndpoints:
             assert isinstance(response_data["failure"], list)
             assert isinstance(response_data["success_and_failure"], list)
 
-    def test_list_callbacks_with_datadog_logger(self):
+    def test_alist_callbacks_with_datadog_logger(self):
         """Test /callbacks/list endpoint with DataDog logger configuration"""
         # Setup test client
         client = TestClient(app)
@@ -144,7 +150,7 @@ class TestCallbackManagementEndpoints:
         assert isinstance(response_data["failure"], list)
         assert isinstance(response_data["success_and_failure"], list)
 
-    def test_list_callbacks_mixed_callback_types(self):
+    def test_alist_callbacks_mixed_callback_types(self):
         """Test /callbacks/list endpoint with mixed callback types (string and logger instances)"""
         # Setup test client  
         client = TestClient(app)
@@ -165,6 +171,15 @@ class TestCallbackManagementEndpoints:
         
         response_data = response.json()
         
+        # Filter out any proxy-specific callbacks that might be present from parallel test runs
+        # These are internal callbacks that can persist when tests run in parallel
+        proxy_internal_callbacks = ["_PROXY_VirtualKeyModelMaxBudgetLimiter"]
+        
+        response_data["success_and_failure"] = [
+            cb for cb in response_data["success_and_failure"] 
+            if cb not in proxy_internal_callbacks
+        ]
+        
         # Verify callbacks are properly categorized
         assert "prometheus" in response_data["success_and_failure"]  # callbacks list items go to success_and_failure
         assert "langfuse" in response_data["success"]
@@ -179,7 +194,7 @@ class TestCallbackManagementEndpoints:
         assert len(set(all_callbacks)) == len(all_callbacks)
 
 
-    def test_list_callbacks_empty_response_structure(self):
+    def test_alist_callbacks_empty_response_structure(self):
         """Test that response always has correct structure even with no callbacks"""
         # Setup test client
         client = TestClient(app)

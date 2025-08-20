@@ -11,6 +11,7 @@ sys.path.insert(
 
 import time
 
+from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
 
@@ -309,3 +310,184 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
 
     assert response_cost is not None
     assert response_cost > 100
+
+
+def test_sentry_event_scrubber_initialization(monkeypatch):
+    # Step 1: Create a fake sentry_sdk.scrubber module
+    mock_event_scrubber_instance = MagicMock()
+    mock_event_scrubber_cls = MagicMock(return_value=mock_event_scrubber_instance)
+
+    mock_scrubber_module = MagicMock()
+    mock_scrubber_module.EventScrubber = mock_event_scrubber_cls
+
+    # Step 2: Create a fake sentry_sdk module and insert into sys.modules
+    mock_sentry_sdk = MagicMock()
+    mock_sentry_sdk.scrubber = mock_scrubber_module
+    mock_init = MagicMock()
+    mock_sentry_sdk.init = mock_init
+
+    # Step 3: Inject both into sys.modules BEFORE import occurs
+    sys.modules["sentry_sdk"] = mock_sentry_sdk
+    sys.modules["sentry_sdk.scrubber"] = mock_scrubber_module
+
+    # Step 4: Run the actual sentry setup code
+    set_callbacks(["sentry"])
+
+    # Step 5: Assert the EventScrubber was constructed correctly
+    mock_event_scrubber_cls.assert_called_once_with(
+        denylist=SENTRY_DENYLIST,
+        pii_denylist=SENTRY_PII_DENYLIST,
+    )
+
+    # Step 6: Assert the event_scrubber and PII args were passed
+    mock_init.assert_called_once()
+    call_args = mock_init.call_args[1]
+    assert call_args["event_scrubber"] == mock_event_scrubber_instance
+    assert call_args["send_default_pii"] is False
+
+
+def test_get_masked_values():
+    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+
+    sensitive_object = {
+        "mode": "pre_call",
+        "api_key": "sensitive_api_key",
+        "payload": True,
+        "api_base": "sensitive_api_base",
+        "dev_info": True,
+        "metadata": None,
+        "breakdown": True,
+        "guardrail": "azure/text_moderations",
+        "default_on": False,
+        "guard_name": None,
+        "project_id": None,
+        "aws_role_name": None,
+        "lasso_user_id": None,
+        "aws_region_name": None,
+        "aws_profile_name": None,
+        "aws_session_name": None,
+        "aws_sts_endpoint": None,
+        "guardrailVersion": None,
+        "output_parse_pii": None,
+        "aws_access_key_id": None,
+        "aws_session_token": None,
+        "presidio_language": "en",
+        "mock_redacted_text": None,
+        "severity_threshold": "5",
+        "category_thresholds": None,
+        "guardrailIdentifier": None,
+        "pangea_input_recipe": None,
+        "pii_entities_config": {},
+        "mask_request_content": None,
+        "pangea_output_recipe": None,
+        "aws_secret_access_key": None,
+        "detect_secrets_config": None,
+        "lasso_conversation_id": None,
+        "mask_response_content": None,
+        "aws_web_identity_token": None,
+        "presidio_analyzer_api_base": None,
+        "presidio_ad_hoc_recognizers": None,
+        "aws_bedrock_runtime_endpoint": None,
+        "presidio_anonymizer_api_base": None,
+    }
+    masked_values = _get_masked_values(
+        sensitive_object, unmasked_length=4, number_of_asterisks=4
+    )
+    assert masked_values["presidio_anonymizer_api_base"] is None
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_successful():
+    """
+    Test end-to-end generation of cold storage object key when cold storage is properly configured.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-12345"
+    team_alias = "test-team"
+    
+    with patch("litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger", return_value="s3"), \
+         patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key:
+        
+        # Mock the S3 object key generation to return a predictable result
+        mock_get_s3_key.return_value = "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id,
+            team_alias=team_alias
+        )
+        
+        # Verify the S3 function was called with correct parameters
+        mock_get_s3_key.assert_called_once_with(
+            s3_path="",  # Empty path as default
+            team_alias_prefix="",  # No team alias prefix for cold storage
+            start_time=start_time,
+            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345"
+        )
+        
+        # Verify the result
+        assert result == "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+        assert result is not None
+        assert isinstance(result, str)
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_not_configured():
+    """
+    Test end-to-end generation of cold storage object key when cold storage is not configured.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create test data
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-67890"
+    team_alias = "another-team"
+    
+    with patch("litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger", return_value=None):
+        
+        # Call the function
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id,
+            team_alias=team_alias
+        )
+        
+        # Verify the result is None when cold storage is not configured
+        assert result is None
+
+
+@pytest.mark.asyncio
+async def test_e2e_generate_cold_storage_object_key_runtime_error_handled():
+    """Ensure runtime errors while loading cold storage logger are ignored."""
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
+    response_id = "chatcmpl-test-runtime"
+    team_alias = "team"
+
+    with patch(
+        "litellm.proxy.spend_tracking.cold_storage_handler.ColdStorageHandler._get_configured_cold_storage_custom_logger",
+        side_effect=RuntimeError("can't register atexit after shutdown"),
+    ):
+        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+            start_time=start_time,
+            response_id=response_id,
+            team_alias=team_alias,
+        )
+
+    # When an exception occurs retrieving the cold storage logger, the
+    # function should return None instead of raising.
+    assert result is None

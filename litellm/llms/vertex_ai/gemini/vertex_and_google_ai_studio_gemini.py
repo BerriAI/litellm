@@ -35,6 +35,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.anthropic import AnthropicThinkingParam
@@ -834,16 +835,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _transform_parts(
         parts: List[HttpxPartType],
+        cumulative_tool_call_idx: int,
         is_function_call: Optional[bool],
     ) -> Tuple[
         Optional[ChatCompletionToolCallFunctionChunk],
         Optional[List[ChatCompletionToolCallChunk]],
+        int,
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
-        # in a single chunk, each tool call appears as a separate part
-        # they need to be separate indexes as they are separate tool calls
-        funcCallIndex = 0
         for part in parts:
             if "functionCall" in part:
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
@@ -854,18 +854,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     function = _function_chunk
                 else:
                     _tool_response_chunk = ChatCompletionToolCallChunk(
-                        id=f"call_{str(uuid.uuid4())}",
+                        id=f"call_{uuid.uuid4().hex[:28]}",
                         type="function",
                         function=_function_chunk,
-                        index=funcCallIndex,
+                        index=cumulative_tool_call_idx,
                     )
                     _tools.append(_tool_response_chunk)
-                funcCallIndex += 1
+                cumulative_tool_call_idx += 1
         if len(_tools) == 0:
             tools: Optional[List[ChatCompletionToolCallChunk]] = None
         else:
             tools = _tools
-        return function, tools
+        return function, tools, cumulative_tool_call_idx
 
     @staticmethod
     def _transform_logprobs(
@@ -1000,6 +1000,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GenerateContentResponseBody, BidiGenerateContentServerMessage
         ],
     ) -> Usage:
+
         if (
             completion_response is not None
             and "usageMetadata" not in completion_response
@@ -1038,6 +1039,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     text_tokens = detail.get("tokenCount", 0)
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
+
+        ## adjust 'text_tokens' to subtract cached tokens
+        if (
+            (audio_tokens is None or audio_tokens == 0)
+            and text_tokens is not None
+            and text_tokens > 0
+            and cached_tokens is not None
+        ):
+            text_tokens = text_tokens - cached_tokens
+
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
             audio_tokens=audio_tokens,
@@ -1126,6 +1137,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         chat_completion_logprobs: Optional[ChoiceLogprobs] = None
         tools: Optional[List[ChatCompletionToolCallChunk]] = []
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
+        cumulative_tool_call_index: int = 0
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
@@ -1172,8 +1184,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
 
-                functions, tools = VertexGeminiConfig._transform_parts(
+                (
+                    functions,
+                    tools,
+                    cumulative_tool_call_index,
+                ) = VertexGeminiConfig._transform_parts(
                     parts=candidate["content"]["parts"],
+                    cumulative_tool_call_idx=cumulative_tool_call_index,
                     is_function_call=is_function_call(standard_optional_params),
                 )
 
@@ -1261,7 +1278,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=422,
                 headers=raw_response.headers,
             )
-        
 
         return self._transform_google_generate_content_to_openai_model_response(
             completion_response=completion_response,
@@ -1270,7 +1286,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             logging_obj=logging_obj,
             raw_response=raw_response,
         )
-    
 
     def _transform_google_generate_content_to_openai_model_response(
         self,
@@ -1878,7 +1893,7 @@ class VertexLLM(VertexBase):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = HTTPHandler(**_params)  # type: ignore
+            client = _get_httpx_client(params=_params)
         else:
             client = client
 
@@ -1951,6 +1966,7 @@ class ModelResponseIterator:
                 ) = VertexGeminiConfig._process_candidates(
                     _candidates, model_response, self.logging_obj.optional_params
                 )
+
                 setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
                 setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore

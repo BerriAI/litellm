@@ -3,8 +3,8 @@ import { Text } from "@tremor/react";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 
 interface PremiumMCPSelectorProps {
-  onChange: (values: string[]) => void;
-  value: string[];
+  onChange: (value: { servers: string[]; accessGroups: string[] }) => void;
+  value: { servers: string[]; accessGroups: string[] };
   accessToken: string;
   placeholder?: string;
   premiumUser?: boolean;

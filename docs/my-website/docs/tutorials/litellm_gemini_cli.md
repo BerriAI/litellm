@@ -1,4 +1,4 @@
-# Use LiteLLM with Gemini CLI
+# Gemini CLI
 
 This tutorial shows you how to integrate the Gemini CLI with LiteLLM Proxy, allowing you to route requests through LiteLLM's unified interface.
 

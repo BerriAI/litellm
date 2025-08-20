@@ -32,6 +32,26 @@ class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
 
+    @staticmethod
+    def is_vertex_partner_model(model: str):
+        """
+        Check if the model string is a Vertex AI Partner Model
+        Only use this once you have confirmed that custom_llm_provider is vertex_ai
+
+        Returns:
+            bool: True if the model string is a Vertex AI Partner Model, False otherwise
+        """
+        if (
+            model.startswith("meta/")
+            or model.startswith("deepseek-ai")
+            or model.startswith("mistral")
+            or model.startswith("codestral")
+            or model.startswith("jamba")
+            or model.startswith("claude")
+        ):
+            return True
+        return False
+
     def completion(
         self,
         model: str,
@@ -95,7 +115,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model:
+            if "llama" in model or "deepseek-ai" in model:
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai

@@ -10,12 +10,14 @@ if TYPE_CHECKING:
         GenerateContentConfigDict,
         GenerateContentContentListUnionDict,
         GenerateContentResponse,
+        ToolConfigDict,
     )
 else:
     GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
     LiteLLMLoggingObj = Any
+    ToolConfigDict = Any
     
 from litellm.types.router import GenericLiteLLMParams
 
@@ -145,6 +147,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         model: str,
         contents: GenerateContentContentListUnionDict,
+        tools: Optional[ToolConfigDict],
         generate_content_config_dict: Dict,
     ) -> dict:
         """
@@ -153,6 +156,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Args:
             model: The model name
             contents: Input contents
+            tools: Tools
             generate_content_request_params: Request parameters
             litellm_params: LiteLLM parameters
             headers: Request headers

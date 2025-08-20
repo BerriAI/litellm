@@ -24,6 +24,8 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     ProviderField,
+    StreamingChoices,
+    Delta,
 )
 
 from ..common_utils import OllamaError, _convert_image
@@ -423,7 +425,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
             if "error" in chunk:
                 raise Exception(f"Ollama Error - {chunk}")
@@ -458,6 +460,17 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     is_finished=is_finished,
                     finish_reason="stop",
                     usage=None,
+                )
+            elif "thinking" in chunk and not chunk["response"]:
+                # Return reasoning content as ModelResponseStream so UIs can render it
+                thinking_content = chunk.get("thinking") or ""
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(reasoning_content=thinking_content),
+                        )
+                    ]
                 )
             else:
                 raise Exception(f"Unable to parse ollama chunk - {chunk}")

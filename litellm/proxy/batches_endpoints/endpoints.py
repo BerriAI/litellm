@@ -354,6 +354,7 @@ async def list_batches(
     limit: Optional[int] = None,
     after: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    target_model_names: Optional[str] = None,
 ):
     """
     Lists 
@@ -380,7 +381,7 @@ async def list_batches(
 
         ## check for target model names
         data = await _read_request_body(request=request)
-        target_model_names = data.get("target_model_names", None)
+        target_model_names = target_model_names or data.get("target_model_names", None)
         if target_model_names:
             model = target_model_names.split(",")[0]
             response = await llm_router.alist_batches(

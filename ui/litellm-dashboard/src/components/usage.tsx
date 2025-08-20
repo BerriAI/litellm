@@ -41,6 +41,7 @@ import {
 } from "./networking";
 import { start } from "repl";
 import TopKeyView from "./top_key_view";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 
 interface UsagePageProps {
@@ -91,7 +92,7 @@ const customTooltip = (props: CustomTooltipTypeBar) => {
               {":"}
               <span className="text-xs text-tremor-content-emphasis">
                 {" "}
-                {value ? `$${value.toFixed(2)}` : ""}
+                {value ? `$${formatNumberWithCommas(value, 2)}` : ""}
               </span>
             </p>
           </div>
@@ -267,7 +268,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
   console.log(`End date is ${endTime}`);
 
   const valueFormatter = (number: number) =>
-    `$ ${number.toFixed(2)}`;
+    `$ ${formatNumberWithCommas(number, 2)}`;
 
   const fetchAndSetData = async (
     fetchFunction: () => Promise<any>,
@@ -402,7 +403,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         const top_models = await adminTopModelsCall(accessToken);
         return top_models.map((k: any) => ({
           key: k["model"],
-          spend: Number(k["total_spend"].toFixed(2)),
+          spend: formatNumberWithCommas(k["total_spend"], 2),
         }));
       },
       setTopModels,
@@ -434,7 +435,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
         setUniqueTeamIds(teamSpend.teams);
         return teamSpend.total_spend_per_team.map((tspt: any) => ({
           name: tspt["team_id"] || "",
-          value: Number(tspt["total_spend"] || 0).toFixed(2),
+          value: formatNumberWithCommas(tspt["total_spend"] || 0, 2),
         }));
       },
       setTotalSpendPerTeam,
@@ -666,7 +667,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     layout="vertical"
                     showXAxis={false}
                     showLegend={false}
-                    valueFormatter={(value) => `$${value.toFixed(2)}`}
+                    valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                   />
                 </Card>
               </Col>
@@ -686,7 +687,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                       index="provider"
                       category="spend"
                       colors={["cyan"]}
-                      valueFormatter={(value) => `$${value.toFixed(2)}`}
+                      valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
                     />
                   </Col>
                   <Col numColSpan={1}>
@@ -704,7 +705,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                             <TableCell>
                               {parseFloat(provider.spend.toFixed(2)) < 0.00001
                                 ? "less than 0.00"
-                                : provider.spend.toFixed(2)}
+                                : formatNumberWithCommas(provider.spend, 2)}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -889,7 +890,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
                     {topUsers?.map((user: any, index: number) => (
                       <TableRow key={index}>
                         <TableCell>{user.end_user}</TableCell>
-                        <TableCell>{user.total_spend?.toFixed(4)}</TableCell>
+                        <TableCell>{formatNumberWithCommas(user.total_spend, 2)}</TableCell>
                         <TableCell>{user.total_count}</TableCell>
                       </TableRow>
                     ))}
@@ -993,7 +994,7 @@ const UsagePage: React.FC<UsagePageProps> = ({
 
               <Card>
               <Title>Spend Per Tag</Title>
-              <Text>Get Started Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">here</a></Text>
+              <Text>Get Started by Tracking cost per tag <a className="text-blue-500" href="https://docs.litellm.ai/docs/proxy/cost_tracking" target="_blank">here</a></Text>
              <BarChart
               className="h-72"
               data={topTagsData}

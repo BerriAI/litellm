@@ -6,6 +6,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ReasoningSummaryTextDeltaEvent,
@@ -34,6 +35,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         litellm_custom_stream_wrapper: litellm.CustomStreamWrapper,
         request_input: Union[str, ResponseInputParam],
         responses_api_request: ResponsesAPIOptionalRequestParams,
+        custom_llm_provider: Optional[str] = None,
+        litellm_metadata: Optional[dict] = None,
     ):
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = (
             litellm_custom_stream_wrapper
@@ -42,6 +45,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.responses_api_request: ResponsesAPIOptionalRequestParams = (
             responses_api_request
         )
+        self.custom_llm_provider: Optional[str] = custom_llm_provider
+        self.litellm_metadata: Optional[dict] = litellm_metadata or {}
         self.collected_chat_completion_chunks: List[ModelResponseStream] = []
         self.finished: bool = False
 
@@ -164,14 +169,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             Union[ModelResponse, TextCompletionResponse]
         ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks)
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
+            # Transform the response
+            responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input=self.request_input,
+                chat_completion_response=litellm_model_response,
+                responses_api_request=self.responses_api_request,
+            )
+            
+            # Encode the response ID to match non-streaming behavior
+            encoded_response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=responses_api_response,
+                custom_llm_provider=self.custom_llm_provider,
+                litellm_metadata=self.litellm_metadata,
+            )
 
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                response=LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
-                    request_input=self.request_input,
-                    chat_completion_response=litellm_model_response,
-                    responses_api_request=self.responses_api_request,
-                ),
+                response=encoded_response,
             )
         else:
             return None

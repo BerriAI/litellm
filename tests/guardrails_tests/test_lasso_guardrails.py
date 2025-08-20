@@ -8,9 +8,15 @@ import pytest
 
 from litellm import DualCache
 from litellm.proxy.proxy_server import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_hooks.lasso import LassoGuardrailMissingSecrets, LassoGuardrail, LassoGuardrailAPIError
+from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import (
+    LassoGuardrailMissingSecrets,
+    LassoGuardrail,
+    LassoGuardrailAPIError,
+)
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -35,7 +41,7 @@ def test_lasso_guard_config():
         ],
         config_file_path="",
     )
-    
+
     # Clean up
     del os.environ["LASSO_API_KEY"]
 
@@ -43,12 +49,14 @@ def test_lasso_guard_config():
 def test_lasso_guard_config_no_api_key():
     litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
-    
+
     # Ensure LASSO_API_KEY is not in environment
     if "LASSO_API_KEY" in os.environ:
         del os.environ["LASSO_API_KEY"]
-        
-    with pytest.raises(LassoGuardrailMissingSecrets, match="Couldn't get Lasso api key"):
+
+    with pytest.raises(
+        LassoGuardrailMissingSecrets, match="Couldn't get Lasso api key"
+    ):
         init_guardrails_v2(
             all_guardrails=[
                 {
@@ -69,7 +77,7 @@ async def test_callback():
     # Set environment variable for testing
     os.environ["LASSO_API_KEY"] = "test-key"
     os.environ["LASSO_USER_ID"] = "test-user"
-    os.environ["LASSO_CONVERSATION_ID"] = "test-conversation"    
+    os.environ["LASSO_CONVERSATION_ID"] = "test-conversation"
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -82,7 +90,9 @@ async def test_callback():
             }
         ],
     )
-    lasso_guardrails = litellm.logging_callback_manager.get_custom_loggers_for_type(LassoGuardrail)
+    lasso_guardrails = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        LassoGuardrail
+    )
     print("found lasso guardrails", lasso_guardrails)
     lasso_guardrail = lasso_guardrails[0]
 
@@ -98,73 +108,83 @@ async def test_callback():
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=Response(
                 json={
-                        "deputies": {
-                                "jailbreak": True,
-                                "custom-policies": False,
-                                "sexual": False,
-                                "hate": False,
-                                "illegality": False,
-                                "violence": False,
-                                "pattern-detection": False
-                        },
-                        "deputies_predictions": {
-                            "jailbreak": 0.923,
-                            "custom-policies": 0.234,
-                            "sexual": 0.145,
-                            "hate": 0.156,
-                            "illegality": 0.167,
-                            "violence": 0.178,
-                            "pattern-detection": 0.189
-                        },
-                        "violations_detected": True
-                    },
-                status_code=200,
-                request=Request(method="POST", url="https://server.lasso.security/gateway/v1/chat"),
-            ),
-        ):
-            await lasso_guardrail.async_pre_call_hook(
-                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
-            )
-    
-    # Check for the correct error message
-    assert "Violated Lasso guardrail policy" in str(excinfo.value.detail)
-    assert "jailbreak" in str(excinfo.value.detail)
-    
-    # Test no violation
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=Response(
-            json={
                     "deputies": {
-                        "jailbreak": False,
+                        "jailbreak": True,
                         "custom-policies": False,
                         "sexual": False,
                         "hate": False,
                         "illegality": False,
                         "violence": False,
-                        "pattern-detection": False
+                        "pattern-detection": False,
                     },
                     "deputies_predictions": {
-                        "jailbreak": 0.123,
+                        "jailbreak": 0.923,
                         "custom-policies": 0.234,
                         "sexual": 0.145,
                         "hate": 0.156,
                         "illegality": 0.167,
                         "violence": 0.178,
-                        "pattern-detection": 0.189
+                        "pattern-detection": 0.189,
                     },
-                    "violations_detected": False
+                    "violations_detected": True,
                 },
+                status_code=200,
+                request=Request(
+                    method="POST", url="https://server.lasso.security/gateway/v1/chat"
+                ),
+            ),
+        ):
+            await lasso_guardrail.async_pre_call_hook(
+                data=data,
+                cache=DualCache(),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+
+    # Check for the correct error message
+    assert "Violated Lasso guardrail policy" in str(excinfo.value.detail)
+    assert "jailbreak" in str(excinfo.value.detail)
+
+    # Test no violation
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=Response(
+            json={
+                "deputies": {
+                    "jailbreak": False,
+                    "custom-policies": False,
+                    "sexual": False,
+                    "hate": False,
+                    "illegality": False,
+                    "violence": False,
+                    "pattern-detection": False,
+                },
+                "deputies_predictions": {
+                    "jailbreak": 0.123,
+                    "custom-policies": 0.234,
+                    "sexual": 0.145,
+                    "hate": 0.156,
+                    "illegality": 0.167,
+                    "violence": 0.178,
+                    "pattern-detection": 0.189,
+                },
+                "violations_detected": False,
+            },
             status_code=200,
-            request=Request(method="POST", url="https://server.lasso.security/gateway/v1/chat"),
+            request=Request(
+                method="POST", url="https://server.lasso.security/gateway/v1/chat"
+            ),
         ),
     ):
         result = await lasso_guardrail.async_pre_call_hook(
-            data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+            data=data,
+            cache=DualCache(),
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="completion",
         )
-    
+
     assert result == data  # Should return the original data unchanged
-    
+
     # Clean up
     del os.environ["LASSO_API_KEY"]
     del os.environ["LASSO_USER_ID"]
@@ -175,21 +195,22 @@ async def test_callback():
 async def test_empty_messages():
     """Test handling of empty messages"""
     os.environ["LASSO_API_KEY"] = "test-key"
-    
+
     lasso_guardrail = LassoGuardrail(
-        guardrail_name="test-guard",
-        event_hook="pre_call",
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
-    
+
     data = {"messages": []}
-    
+
     result = await lasso_guardrail.async_pre_call_hook(
-        data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+        data=data,
+        cache=DualCache(),
+        user_api_key_dict=UserAPIKeyAuth(),
+        call_type="completion",
     )
-    
+
     assert result == data
-    
+
     # Clean up
     del os.environ["LASSO_API_KEY"]
 
@@ -198,48 +219,52 @@ async def test_empty_messages():
 async def test_api_error_handling():
     """Test handling of API errors"""
     os.environ["LASSO_API_KEY"] = "test-key"
-    
+
     lasso_guardrail = LassoGuardrail(
-        guardrail_name="test-guard",
-        event_hook="pre_call",
-        default_on=True
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
     )
-    
+
     data = {
         "messages": [
             {"role": "user", "content": "Hello, how are you?"},
         ]
     }
-    
+
     # Test handling of connection error
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=Exception("Connection error")
+        side_effect=Exception("Connection error"),
     ):
         # Expect the guardrail to raise a LassoGuardrailAPIError
         with pytest.raises(LassoGuardrailAPIError) as excinfo:
             await lasso_guardrail.async_pre_call_hook(
-                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+                data=data,
+                cache=DualCache(),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
             )
-    
+
     # Verify the error message
     assert "Failed to verify request safety with Lasso API" in str(excinfo.value)
     assert "Connection error" in str(excinfo.value)
-    
+
     # Test with a different error message
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=Exception("API timeout")
+        side_effect=Exception("API timeout"),
     ):
         # Expect the guardrail to raise a LassoGuardrailAPIError
         with pytest.raises(LassoGuardrailAPIError) as excinfo:
             await lasso_guardrail.async_pre_call_hook(
-                data=data, cache=DualCache(), user_api_key_dict=UserAPIKeyAuth(), call_type="completion"
+                data=data,
+                cache=DualCache(),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
             )
-    
+
     # Verify the error message for the second test
     assert "Failed to verify request safety with Lasso API" in str(excinfo.value)
     assert "API timeout" in str(excinfo.value)
-    
+
     # Clean up
     del os.environ["LASSO_API_KEY"]

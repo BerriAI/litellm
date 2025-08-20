@@ -617,3 +617,51 @@ async def test_init_responses_api_endpoints():
     assert second_call_kwargs["model"] == "claude-3-sonnet"
     assert second_call_kwargs["response_id"] == "resp_claude_123"
 
+
+@pytest.mark.asyncio
+async def test_init_vector_store_api_endpoints():
+    """
+    Test that _init_vector_store_api_endpoints correctly passes custom_llm_provider to kwargs
+    """
+    # Create a router with a basic model
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+    
+    # Mock the original function
+    mock_original_function = AsyncMock(return_value={"status": "success"})
+    
+    # Call without custom_llm_provider
+    result = await router._init_vector_store_api_endpoints(
+        original_function=mock_original_function,
+        vector_store_id="test-store"
+    )
+    
+    # Verify original function was called with correct kwargs
+    mock_original_function.assert_called_once_with(vector_store_id="test-store")
+    assert result == {"status": "success"}
+    
+    # Reset the mock
+    mock_original_function.reset_mock()
+    
+    # Call with custom_llm_provider
+    await router._init_vector_store_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        vector_store_id="test-store"
+    )
+    
+    # Verify custom_llm_provider was added to kwargs
+    mock_original_function.assert_called_once_with(
+        vector_store_id="test-store",
+        custom_llm_provider="openai"
+    )
+

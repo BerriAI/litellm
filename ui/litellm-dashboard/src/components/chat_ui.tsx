@@ -31,6 +31,8 @@ import { makeOpenAIImageEditsRequest } from "./chat_ui/llm_calls/image_edits";
 import { makeOpenAIResponsesRequest } from "./chat_ui/llm_calls/responses_api";
 import { makeAnthropicMessagesRequest } from "./chat_ui/llm_calls/anthropic_messages";
 import { fetchAvailableModels, ModelGroup  } from "./chat_ui/llm_calls/fetch_models";
+import { fetchAvailableMCPTools } from "./chat_ui/llm_calls/fetch_mcp_tools";
+import type { MCPTool } from "./chat_ui/llm_calls/fetch_mcp_tools";
 import { litellmModeMapping, ModelMode, EndpointType, getEndpointType } from "./chat_ui/mode_endpoint_mapping";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -43,6 +45,13 @@ import { generateCodeSnippet } from "./chat_ui/CodeSnippets";
 import { MessageType } from "./chat_ui/types";
 import ReasoningContent from "./chat_ui/ReasoningContent";
 import ResponseMetrics, { TokenUsage } from "./chat_ui/ResponseMetrics";
+import ResponsesImageUpload from "./chat_ui/ResponsesImageUpload";
+import ResponsesImageRenderer from "./chat_ui/ResponsesImageRenderer";
+import { convertImageToBase64, createMultimodalMessage, createDisplayMessage } from "./chat_ui/ResponsesImageUtils";
+import ChatImageUpload from "./chat_ui/ChatImageUpload";
+import ChatImageRenderer from "./chat_ui/ChatImageRenderer";
+import { createChatMultimodalMessage, createChatDisplayMessage } from "./chat_ui/ChatImageUtils";
+import SessionManagement from "./chat_ui/SessionManagement";
 import { 
   SendOutlined, 
   ApiOutlined, 
@@ -58,8 +67,12 @@ import {
   SafetyOutlined,
   UploadOutlined,
   PictureOutlined,
-  CodeOutlined
+  CodeOutlined,
+  ToolOutlined,
+  FilePdfOutlined,
+  ArrowUpOutlined
 } from "@ant-design/icons";
+import NotificationManager from "./molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -79,32 +92,117 @@ const ChatUI: React.FC<ChatUIProps> = ({
   userID,
   disabledPersonalKeyCreation,
 }) => {
-  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>(
-    disabledPersonalKeyCreation ? 'custom' : 'session'
-  );
-  const [apiKey, setApiKey] = useState("");
+  const [isMCPToolsModalVisible, setIsMCPToolsModalVisible] = useState(false);
+  const [mcpTools, setMCPTools] = useState<MCPTool[]>([]);
+  const [selectedMCPTools, setSelectedMCPTools] = useState<string>(() => {
+    const saved = sessionStorage.getItem('selectedMCPTools');
+    try {
+      const parsed = saved ? JSON.parse(saved) : [];
+      // Convert from array to single string if needed
+      return Array.isArray(parsed) ? (parsed[0] || '') : parsed;
+    } catch (error) {
+      console.error("Error parsing selectedMCPTools from sessionStorage", error);
+      return '';
+    }
+  });
+  const [isLoadingMCPTools, setIsLoadingMCPTools] = useState(false);
+  const [apiKeySource, setApiKeySource] = useState<'session' | 'custom'>(() => {
+    const saved = sessionStorage.getItem('apiKeySource');
+    if (saved) {
+      try {
+        return JSON.parse(saved) as 'session' | 'custom';
+      } catch (error) {
+        console.error("Error parsing apiKeySource from sessionStorage", error);
+      }
+    }
+    return disabledPersonalKeyCreation ? 'custom' : 'session';
+  });
+  const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem('apiKey') || "");
   const [inputMessage, setInputMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<MessageType[]>([]);
+  const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('chatHistory');
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing chatHistory from sessionStorage", error);
+      return [];
+    }
+  });
   const [selectedModel, setSelectedModel] = useState<string | undefined>(
-    undefined
+    () => sessionStorage.getItem('selectedModel') || undefined
   );
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
-  const [endpointType, setEndpointType] = useState<string>(EndpointType.CHAT);
+  const [endpointType, setEndpointType] = useState<string>(() => sessionStorage.getItem('endpointType') || EndpointType.CHAT);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>([]);
-  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>([]);
-  const [messageTraceId, setMessageTraceId] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem('selectedTags');
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing selectedTags from sessionStorage", error);
+      return [];
+    }
+  });
+  const [selectedVectorStores, setSelectedVectorStores] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem('selectedVectorStores');
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing selectedVectorStores from sessionStorage", error);
+      return [];
+    }
+  });
+  const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>(() => {
+    const saved = sessionStorage.getItem('selectedGuardrails');
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (error) {
+      console.error("Error parsing selectedGuardrails from sessionStorage", error);
+      return [];
+    }
+  });
+  const [messageTraceId, setMessageTraceId] = useState<string | null>(() => sessionStorage.getItem('messageTraceId') || null);
+  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(() => sessionStorage.getItem('responsesSessionId') || null);
+  const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {
+    const saved = sessionStorage.getItem('useApiSessionManagement');
+    return saved ? JSON.parse(saved) : true; // Default to API session management
+  });
   const [uploadedImage, setUploadedImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [responsesUploadedImage, setResponsesUploadedImage] = useState<File | null>(null);
+  const [responsesImagePreviewUrl, setResponsesImagePreviewUrl] = useState<string | null>(null);
+  const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
+  const [chatImagePreviewUrl, setChatImagePreviewUrl] = useState<string | null>(null);
   const [isGetCodeModalVisible, setIsGetCodeModalVisible] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [selectedSdk, setSelectedSdk] = useState<'openai' | 'azure'>('openai');
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Fetch MCP tools
+  const loadMCPTools = async () => {
+    const userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
+    if (!userApiKey) return;
+    
+    setIsLoadingMCPTools(true);
+    try {
+      const tools = await fetchAvailableMCPTools(userApiKey);
+      setMCPTools(tools);
+    } catch (error) {
+      console.error('Error fetching MCP tools:', error);
+    } finally {
+      setIsLoadingMCPTools(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isMCPToolsModalVisible) {
+      loadMCPTools();
+    }
+  }, [isMCPToolsModalVisible, accessToken, apiKey, apiKeySource]);
 
   useEffect(() => {
     if (isGetCodeModalVisible) {
@@ -124,6 +222,43 @@ const ChatUI: React.FC<ChatUIProps> = ({
       setGeneratedCode(code);
     }
   }, [isGetCodeModalVisible, selectedSdk, apiKeySource, accessToken, apiKey, inputMessage, chatHistory, selectedTags, selectedVectorStores, selectedGuardrails, endpointType, selectedModel]);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      sessionStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+    }, 500); // Debounce by 500ms
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [chatHistory]);
+
+  useEffect(() => {
+    sessionStorage.setItem('apiKeySource', JSON.stringify(apiKeySource));
+    sessionStorage.setItem('apiKey', apiKey);
+    sessionStorage.setItem('endpointType', endpointType);
+    sessionStorage.setItem('selectedTags', JSON.stringify(selectedTags));
+    sessionStorage.setItem('selectedVectorStores', JSON.stringify(selectedVectorStores));
+    sessionStorage.setItem('selectedGuardrails', JSON.stringify(selectedGuardrails));
+    sessionStorage.setItem('selectedMCPTools', JSON.stringify(selectedMCPTools));
+
+    if (selectedModel) {
+      sessionStorage.setItem('selectedModel', selectedModel);
+    } else {
+      sessionStorage.removeItem('selectedModel');
+    }
+    if (messageTraceId) {
+      sessionStorage.setItem('messageTraceId', messageTraceId);
+    } else {
+      sessionStorage.removeItem('messageTraceId');
+    }
+    if (responsesSessionId) {
+      sessionStorage.setItem('responsesSessionId', responsesSessionId);
+    } else {
+      sessionStorage.removeItem('responsesSessionId');
+    }
+    sessionStorage.setItem('useApiSessionManagement', JSON.stringify(useApiSessionManagement));
+  }, [apiKeySource, apiKey, selectedModel, endpointType, selectedTags, selectedVectorStores, selectedGuardrails, messageTraceId, responsesSessionId, useApiSessionManagement, selectedMCPTools]);
 
   useEffect(() => {
     let userApiKey = apiKeySource === 'session' ? accessToken : apiKey;
@@ -147,8 +282,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
   
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
-          setSelectedModel(uniqueModels[0].model_group);
-        
+          if (!selectedModel) {
+            setSelectedModel(uniqueModels[0].model_group);
+          }
         }
       } catch (error) {
         console.error("Error fetching model info:", error);
@@ -156,7 +292,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     };
   
     loadModels();
-  }, [accessToken, userID, userRole, apiKeySource, apiKey]);
+    loadMCPTools();
+  }, [accessToken, userID, userRole, apiKeySource, apiKey, token]);
   
 
   useEffect(() => {
@@ -267,7 +404,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     });
   };
 
-  const updateUsageData = (usage: TokenUsage) => {
+  const updateUsageData = (usage: TokenUsage, toolName?: string) => {
     console.log("Received usage data:", usage);
     setChatHistory((prevHistory) => {
       const lastMessage = prevHistory[prevHistory.length - 1];
@@ -276,7 +413,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
         console.log("Updating message with usage data:", usage);
         const updatedMessage = { 
           ...lastMessage,
-          usage
+          usage,
+          toolName
         };
         console.log("Updated message:", updatedMessage);
         
@@ -288,6 +426,21 @@ const ChatUI: React.FC<ChatUIProps> = ({
       
       return prevHistory;
     });
+  };
+
+  const handleResponseId = (responseId: string) => {
+    console.log("Received response ID for session management:", responseId);
+    if (useApiSessionManagement) {
+      setResponsesSessionId(responseId);
+    }
+  };
+
+  const handleToggleSessionManagement = (useApi: boolean) => {
+    setUseApiSessionManagement(useApi);
+    if (!useApi) {
+      // Clear API session when switching to UI mode
+      setResponsesSessionId(null);
+    }
   };
 
   const updateImageUI = (imageUrl: string, model: string) => {
@@ -329,12 +482,42 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setImagePreviewUrl(null);
   };
 
+  const handleResponsesImageUpload = (file: File): false => {
+    setResponsesUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setResponsesImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveResponsesImage = () => {
+    if (responsesImagePreviewUrl) {
+      URL.revokeObjectURL(responsesImagePreviewUrl);
+    }
+    setResponsesUploadedImage(null);
+    setResponsesImagePreviewUrl(null);
+  };
+
+  const handleChatImageUpload = (file: File): false => {
+    setChatUploadedImage(file);
+    const previewUrl = URL.createObjectURL(file);
+    setChatImagePreviewUrl(previewUrl);
+    return false; // Prevent default upload behavior
+  };
+
+  const handleRemoveChatImage = () => {
+    if (chatImagePreviewUrl) {
+      URL.revokeObjectURL(chatImagePreviewUrl);
+    }
+    setChatUploadedImage(null);
+    setChatImagePreviewUrl(null);
+  };
+
   const handleSendMessage = async () => {
     if (inputMessage.trim() === "") return;
 
     // For image edits, require both image and prompt
     if (endpointType === EndpointType.IMAGE_EDITS && !uploadedImage) {
-      message.error("Please upload an image for editing");
+      NotificationManager.fromBackend("Please upload an image for editing");
       return;
     }
 
@@ -345,7 +528,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      message.error("Please provide an API key or select Current UI Session");
+      NotificationManager.fromBackend("Please provide an API key or select Current UI Session");
       return;
     }
 
@@ -354,7 +537,28 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const signal = abortControllerRef.current.signal;
 
     // Create message object without model field for API call
-    const newUserMessage = { role: "user", content: inputMessage };
+    let newUserMessage: { role: string; content: string | any[] };
+    
+    // Handle image for responses API
+    if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+      try {
+        newUserMessage = await createMultimodalMessage(inputMessage, responsesUploadedImage);
+      } catch (error) {
+        NotificationManager.fromBackend("Failed to process image. Please try again.");
+        return;
+      }
+    } 
+    // Handle image for chat completions API
+    else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+      try {
+        newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
+      } catch (error) {
+        NotificationManager.fromBackend("Failed to process image. Please try again.");
+        return;
+      }
+    } else {
+      newUserMessage = { role: "user", content: inputMessage };
+    }
     
     // Generate new trace ID for a new conversation or use existing one
     const traceId = messageTraceId || uuidv4();
@@ -362,15 +566,29 @@ const ChatUI: React.FC<ChatUIProps> = ({
       setMessageTraceId(traceId);
     }
     
-    // Update UI with full message object
-    setChatHistory([...chatHistory, newUserMessage]);
+    // Update UI with full message object (always display as text for UI)
+    let displayMessage: MessageType;
+    if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+      displayMessage = createDisplayMessage(inputMessage, true, responsesImagePreviewUrl || undefined, responsesUploadedImage.name);
+    } else if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+      displayMessage = createChatDisplayMessage(inputMessage, true, chatImagePreviewUrl || undefined, chatUploadedImage.name);
+    } else {
+      displayMessage = createDisplayMessage(inputMessage, false);
+    }
+    
+    setChatHistory([...chatHistory, displayMessage]);
     setIsLoading(true);
 
     try {
       if (selectedModel) {
+        
         if (endpointType === EndpointType.CHAT) {
           // Create chat history for API call - strip out model field and isImage field
-          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          // For chat completions, we preserve the multimodal content structure
+          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ 
+            role, 
+            content: typeof content === 'string' ? content : '' 
+          })), newUserMessage];
           
           await makeOpenAIChatCompletionRequest(
             apiChatHistory,
@@ -384,7 +602,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateUsageData,
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            selectedMCPTools // Pass the selected tool directly
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -411,7 +630,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
           }
         } else if (endpointType === EndpointType.RESPONSES) {
           // Create chat history for API call - strip out model field and isImage field
-          const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          let apiChatHistory;
+          
+          if (useApiSessionManagement && responsesSessionId) {
+            // When using API session management with existing session, only send the new message
+            apiChatHistory = [newUserMessage];
+          } else {
+            // When using UI session management or starting new API session, send full history
+            apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
+          }
           
           await makeOpenAIResponsesRequest(
             apiChatHistory,
@@ -425,7 +652,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateUsageData,
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            selectedMCPTools, // Pass the selected tool directly
+            useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
+            handleResponseId // Pass callback to capture new response ID
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -442,7 +672,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             updateUsageData,
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
-            selectedGuardrails.length > 0 ? selectedGuardrails : undefined
+            selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+            selectedMCPTools // Pass the selected tool directly
           );
         }
       }
@@ -460,6 +691,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
       if (endpointType === EndpointType.IMAGE_EDITS) {
         handleRemoveImage();
       }
+      // Clear image after successful request for responses API
+      if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
+        handleRemoveResponsesImage();
+      }
+      // Clear image after successful request for chat completions API
+      if (endpointType === EndpointType.CHAT && chatUploadedImage) {
+        handleRemoveChatImage();
+      }
     }
 
     setInputMessage("");
@@ -468,7 +707,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const clearChatHistory = () => {
     setChatHistory([]);
     setMessageTraceId(null);
-    handleRemoveImage(); // Clear any uploaded images
+    setResponsesSessionId(null); // Clear responses session ID
+    handleRemoveImage(); // Clear any uploaded images for image edits
+    handleRemoveResponsesImage(); // Clear any uploaded images for responses
+    handleRemoveChatImage(); // Clear any uploaded images for chat completions
+    sessionStorage.removeItem('chatHistory');
+    sessionStorage.removeItem('messageTraceId');
+    sessionStorage.removeItem('responsesSessionId');
     message.success("Chat history cleared.");
   };
 
@@ -498,18 +743,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
     <Card className="w-full rounded-xl shadow-md overflow-hidden">
       <div className="flex h-[80vh] w-full gap-4">
         {/* Left Sidebar with Controls */}
-        <div className="w-1/4 p-4 bg-gray-50">
+        <div className="w-1/4 p-4 bg-gray-50 overflow-y-auto">
           <Title className="text-xl font-semibold mb-6 mt-2">Configurations</Title>
-            <div className="space-y-6">
+            <div className="space-y-4">
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                   <KeyOutlined className="mr-2" /> API Key Source
                 </Text>
                 <Select
                   disabled={disabledPersonalKeyCreation}
-                  defaultValue="session"
+                  value={apiKeySource}
                   style={{ width: "100%" }}
-                  onChange={(value) => setApiKeySource(value as "session" | "custom")}
+                  onChange={(value) => {
+                    setApiKeySource(value as "session" | "custom");
+                    // Clear MCP tool selection when switching API key source
+                    setSelectedMCPTools('');
+                  }}
                   options={[
                     { value: 'session', label: 'Current UI Session' },
                     { value: 'custom', label: 'Virtual Key' },
@@ -533,6 +782,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   <RobotOutlined className="mr-2" /> Select Model
                 </Text>
                 <Select
+                  value={selectedModel}
                   placeholder="Select a Model"
                   onChange={onModelChange}
                   options={[
@@ -572,9 +822,23 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 </Text>
                 <EndpointSelector 
                   endpointType={endpointType}
-                  onEndpointChange={setEndpointType}
+                  onEndpointChange={(value) => {
+                    setEndpointType(value);
+                    // Clear MCP tools if switching away from responses endpoint
+                    if (value !== EndpointType.RESPONSES) {
+                      setSelectedMCPTools('');
+                    }
+                  }}
                   className="mb-4"
-                />  
+                />
+                
+                {/* Session Management Component */}
+                <SessionManagement
+                  endpointType={endpointType}
+                  responsesSessionId={responsesSessionId}
+                  useApiSessionManagement={useApiSessionManagement}
+                  onToggleSessionManagement={handleToggleSessionManagement}
+                />
               </div>
 
               <div>
@@ -587,6 +851,44 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   className="mb-4"
                   accessToken={accessToken || ""}
                 />
+              </div>
+
+              {/* MCP Tool Selection */}
+              <div>
+                <Text className="font-medium block mb-2 text-gray-700 flex items-center">
+                  <ToolOutlined className="mr-2" /> MCP Tool
+                  <Tooltip 
+                    className="ml-1"
+                    title="Select an MCP tool to use in your conversation, only available for virtual keys and /v1/responses endpoint">
+                    <InfoCircleOutlined />
+                  </Tooltip>
+                </Text>
+                <Select
+                  style={{ width: '100%' }}
+                  placeholder="Select MCP tool"
+                  value={selectedMCPTools}
+                  onChange={(value) => setSelectedMCPTools(value)}
+                  loading={isLoadingMCPTools}
+                  className="mb-4"
+                  allowClear
+                  optionLabelProp="label"
+                  disabled={!(apiKeySource === 'custom' && endpointType === EndpointType.RESPONSES)}
+                >
+                  {Array.isArray(mcpTools) && mcpTools.map((tool) => (
+                    <Select.Option 
+                      key={tool.name} 
+                      value={tool.name}
+                      label={
+                        <div className="font-medium">{tool.name}</div>
+                      }
+                    >
+                      <div className="flex flex-col py-1">
+                        <span className="font-medium">{tool.name}</span>
+                        <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
+                      </div>
+                    </Select.Option>
+                  ))}
+                </Select>
               </div>
 
               <div>
@@ -630,16 +932,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   accessToken={accessToken || ""}
                 />
               </div>
-              
-              <div className="space-y-2 mt-6">
-                <TremorButton
-                  onClick={clearChatHistory}
-                  className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-                  icon={ClearOutlined}
-                >
-                  Clear Chat
-                </TremorButton>
-              </div>
             </div>
         </div>
         
@@ -647,13 +939,22 @@ const ChatUI: React.FC<ChatUIProps> = ({
         <div className="w-3/4 flex flex-col bg-white">
           <div className="p-4 border-b border-gray-200 flex justify-between items-center">
             <Title className="text-xl font-semibold mb-0">Test Key</Title>
-            <TremorButton
-              onClick={() => setIsGetCodeModalVisible(true)}
-              className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-              icon={CodeOutlined}
-            >
-              Get Code
-            </TremorButton>
+            <div className="flex gap-2">
+              <TremorButton
+                onClick={clearChatHistory}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                icon={ClearOutlined}
+              >
+                Clear Chat
+              </TremorButton>
+              <TremorButton
+                onClick={() => setIsGetCodeModalVisible(true)}
+                className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
+                icon={CodeOutlined}
+              >
+                Get Code
+              </TremorButton>
+            </div>
           </div>
           <div className="flex-1 overflow-auto p-4 pb-0">
             {chatHistory.length === 0 && (
@@ -701,50 +1002,61 @@ const ChatUI: React.FC<ChatUIProps> = ({
                        }}>
                     {message.isImage ? (
                       <img 
-                        src={message.content} 
+                        src={typeof message.content === "string" ? message.content : ""} 
                         alt="Generated image" 
                         className="max-w-full rounded-md border border-gray-200 shadow-sm" 
                         style={{ maxHeight: '500px' }} 
                       />
                     ) : (
-                      <ReactMarkdown
-                        components={{
-                          code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
-                            inline?: boolean;
-                            node?: any;
-                          }) {
-                            const match = /language-(\w+)/.exec(className || '');
-                            return !inline && match ? (
-                              <SyntaxHighlighter
-                                style={coy as any}
-                                language={match[1]}
-                                PreTag="div"
-                                className="rounded-md my-2"
-                                wrapLines={true}
-                                wrapLongLines={true}
-                                {...props}
-                              >
-                                {String(children).replace(/\n$/, '')}
-                              </SyntaxHighlighter>
-                            ) : (
-                              <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
-                                {children}
-                              </code>
-                            );
-                          },
-                          pre: ({ node, ...props }) => (
-                            <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
-                          )
-                        }}
-                      >
-                        {message.content}
-                      </ReactMarkdown>
+                      <>
+                        {/* Show attached image for user messages based on current endpoint */}
+                        {endpointType === EndpointType.RESPONSES && (
+                          <ResponsesImageRenderer message={message} />
+                        )}
+                        {endpointType === EndpointType.CHAT && (
+                          <ChatImageRenderer message={message} />
+                        )}
+                        
+                        <ReactMarkdown
+                          components={{
+                            code({node, inline, className, children, ...props}: React.ComponentPropsWithoutRef<'code'> & {
+                              inline?: boolean;
+                              node?: any;
+                            }) {
+                              const match = /language-(\w+)/.exec(className || '');
+                              return !inline && match ? (
+                                <SyntaxHighlighter
+                                  style={coy as any}
+                                  language={match[1]}
+                                  PreTag="div"
+                                  className="rounded-md my-2"
+                                  wrapLines={true}
+                                  wrapLongLines={true}
+                                  {...props}
+                                >
+                                  {String(children).replace(/\n$/, '')}
+                                </SyntaxHighlighter>
+                              ) : (
+                                <code className={`${className} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} style={{ wordBreak: 'break-word' }} {...props}>
+                                  {children}
+                                </code>
+                              );
+                            },
+                            pre: ({ node, ...props }) => (
+                              <pre style={{ overflowX: 'auto', maxWidth: '100%' }} {...props} />
+                            )
+                          }}
+                        >
+                          {typeof message.content === "string" ? message.content : ""}
+                        </ReactMarkdown>
+                      </>
                     )}
                                         
                     {message.role === "assistant" && (message.timeToFirstToken || message.usage) && (
                       <ResponseMetrics 
                         timeToFirstToken={message.timeToFirstToken}
                         usage={message.usage}
+                        toolName={message.toolName}
                       />
                     )}
                   </div>
@@ -795,53 +1107,142 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 )}
               </div>
             )}
+            {/* Show file previews above input when files are uploaded */}
+            {(endpointType === EndpointType.RESPONSES && responsesUploadedImage) && (
+              <div className="mb-2">
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="relative inline-block">
+                    {responsesUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
+                      <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '16px', color: 'white' }} />
+                      </div>
+                    ) : (
+                      <img 
+                        src={responsesImagePreviewUrl || ''} 
+                        alt="Upload preview" 
+                        className="w-10 h-10 rounded-md border border-gray-200 object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {responsesUploadedImage.name}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {responsesUploadedImage.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image'}
+                    </div>
+                  </div>
+                  <button
+                    className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                    onClick={handleRemoveResponsesImage}
+                  >
+                    <DeleteOutlined style={{ fontSize: '12px' }} />
+                  </button>
+                </div>
+              </div>
+            )}
             
-            <div className="flex items-center">
-              <TextArea
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  endpointType === EndpointType.CHAT ||
-                  endpointType === EndpointType.RESPONSES ||
-                  endpointType === EndpointType.ANTHROPIC_MESSAGES
-                    ? "Type your message... (Shift+Enter for new line)"
-                    : endpointType === EndpointType.IMAGE_EDITS
-                    ? "Describe how you want to edit the image..."
-                    : "Describe the image you want to generate..."
-                }
-                disabled={isLoading}
-                className="flex-1"
-                autoSize={{ minRows: 1, maxRows: 6 }}
-                style={{ resize: 'none', paddingRight: '10px', paddingLeft: '10px' }}
-              />
-              {isLoading ? (
-                <TremorButton
-                  onClick={handleCancelRequest}
-                  className="ml-2 bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
-                  icon={DeleteOutlined}
-                >
-                  Cancel
-                </TremorButton>
-              ) : (
-                <TremorButton
-                  onClick={handleSendMessage}
-                  className="ml-2 text-white"
-                  icon={
+            {(endpointType === EndpointType.CHAT && chatUploadedImage) && (
+              <div className="mb-2">
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="relative inline-block">
+                    {chatUploadedImage.name.toLowerCase().endsWith('.pdf') ? (
+                      <div className="w-10 h-10 rounded-md bg-red-500 flex items-center justify-center">
+                        <FilePdfOutlined style={{ fontSize: '16px', color: 'white' }} />
+                      </div>
+                    ) : (
+                      <img 
+                        src={chatImagePreviewUrl || ''} 
+                        alt="Upload preview" 
+                        className="w-10 h-10 rounded-md border border-gray-200 object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {chatUploadedImage.name}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {chatUploadedImage.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'Image'}
+                    </div>
+                  </div>
+                  <button
+                    className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"
+                    onClick={handleRemoveChatImage}
+                  >
+                    <DeleteOutlined style={{ fontSize: '12px' }} />
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex items-center gap-2">
+              <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
+                {/* Left: paperclip icon */}
+                <div className="flex-shrink-0 mr-2">
+                  {endpointType === EndpointType.RESPONSES && !responsesUploadedImage && (
+                    <ResponsesImageUpload
+                      responsesUploadedImage={responsesUploadedImage}
+                      responsesImagePreviewUrl={responsesImagePreviewUrl}
+                      onImageUpload={handleResponsesImageUpload}
+                      onRemoveImage={handleRemoveResponsesImage}
+                    />
+                  )}
+                  {endpointType === EndpointType.CHAT && !chatUploadedImage && (
+                    <ChatImageUpload
+                      chatUploadedImage={chatUploadedImage}
+                      chatImagePreviewUrl={chatImagePreviewUrl}
+                      onImageUpload={handleChatImageUpload}
+                      onRemoveImage={handleRemoveChatImage}
+                    />
+                  )}
+                </div>
+
+                {/* Middle: input field */}
+                <TextArea
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
                     endpointType === EndpointType.CHAT ||
                     endpointType === EndpointType.RESPONSES ||
                     endpointType === EndpointType.ANTHROPIC_MESSAGES
-                      ? SendOutlined
-                      : RobotOutlined
+                      ? "Type your message... (Shift+Enter for new line)"
+                      : endpointType === EndpointType.IMAGE_EDITS
+                      ? "Describe how you want to edit the image..."
+                      : "Describe the image you want to generate..."
                   }
+                  disabled={isLoading}
+                  className="flex-1"
+                  autoSize={{ minRows: 1, maxRows: 4 }}
+                  style={{ 
+                    resize: 'none', 
+                    border: 'none', 
+                    boxShadow: 'none',
+                    background: 'transparent',
+                    padding: '4px 0',
+                    fontSize: '14px',
+                    lineHeight: '20px'
+                  }}
+                />
+
+                {/* Right: send button - matching blue theme */}
+                <TremorButton
+                  onClick={handleSendMessage}
+                  disabled={isLoading || !inputMessage.trim()}
+                  className="flex-shrink-0 ml-2 !w-8 !h-8 !min-w-8 !p-0 !rounded-full !bg-blue-600 hover:!bg-blue-700 disabled:!bg-gray-300 !border-none !text-white disabled:!text-gray-500 !flex !items-center !justify-center"
                 >
-                  {endpointType === EndpointType.CHAT ||
-                  endpointType === EndpointType.RESPONSES ||
-                  endpointType === EndpointType.ANTHROPIC_MESSAGES
-                    ? "Send"
-                    : endpointType === EndpointType.IMAGE_EDITS
-                    ? "Edit"
-                    : "Generate"}
+                  <ArrowUpOutlined style={{ fontSize: '14px' }} />
+                </TremorButton>
+              </div>
+
+              {isLoading && (
+                <TremorButton
+                  onClick={handleCancelRequest}
+                  className="bg-red-50 hover:bg-red-100 text-red-600 border-red-200"
+                  icon={DeleteOutlined}
+                >
+                  Cancel
                 </TremorButton>
               )}
             </div>
@@ -892,6 +1293,53 @@ const ChatUI: React.FC<ChatUIProps> = ({
         {generatedCode}
       </SyntaxHighlighter>
     </Modal>
+    {apiKeySource === 'custom' && (
+      <Modal
+        title="Select MCP Tool"
+        visible={isMCPToolsModalVisible}
+        onCancel={() => setIsMCPToolsModalVisible(false)}
+        onOk={() => {
+          setIsMCPToolsModalVisible(false);
+          message.success('MCP tool selection updated');
+        }}
+        width={800}
+      >
+        {isLoadingMCPTools ? (
+          <div className="flex justify-center items-center py-8">
+            <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <Text className="text-gray-600 block mb-4">
+              Select the MCP tool you want to use in your conversation.
+            </Text>
+            <Select
+              style={{ width: '100%' }}
+              placeholder="Select MCP tool"
+              value={selectedMCPTools}
+              onChange={(value) => setSelectedMCPTools(value)}
+              optionLabelProp="label"
+              allowClear
+            >
+              {mcpTools.map((tool) => (
+                <Select.Option 
+                  key={tool.name} 
+                  value={tool.name}
+                  label={
+                    <div className="font-medium">{tool.name}</div>
+                  }
+                >
+                  <div className="flex flex-col py-1">
+                    <span className="font-medium">{tool.name}</span>
+                    <span className="text-xs text-gray-500 mt-1">{tool.description}</span>
+                  </div>
+                </Select.Option>
+              ))}
+            </Select>
+          </div>
+        )}
+      </Modal>
+    )}
     </div>
   );
 };

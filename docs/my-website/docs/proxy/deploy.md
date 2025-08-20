@@ -127,6 +127,8 @@ CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 
 Follow these instructions to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
 
+**Note:** You'll need to copy the `schema.prisma` file from the [litellm repository](https://github.com/BerriAI/litellm/blob/main/schema.prisma) to your build directory alongside the Dockerfile and requirements.txt.
+
 Dockerfile 
 
 ```shell
@@ -148,6 +150,12 @@ RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
     ${HOME}/venv/bin/pip install -r requirements.txt
+
+# Copy Prisma schema file
+COPY schema.prisma .
+
+# Generate prisma client
+RUN prisma generate
 
 EXPOSE 4000/tcp
 
@@ -237,6 +245,9 @@ spec:
       containers:
       - name: litellm
         image: ghcr.io/berriai/litellm:main-stable # it is recommended to fix a version generally
+        args:
+          - "--config"
+          - "/app/proxy_server_config.yaml"
         ports:
         - containerPort: 4000
         volumeMounts:
@@ -386,7 +397,8 @@ spec:
             - "/app/proxy_config.yaml"  # Update the path to mount the config file
           volumeMounts:                 # Define volume mount for proxy_config.yaml
             - name: config-volume
-              mountPath: /app
+              mountPath: /app/proxy_config.yaml
+              subPath: config.yaml      # Specify the field under data of the ConfigMap litellm-config
               readOnly: true
           livenessProbe:
             httpGet:
