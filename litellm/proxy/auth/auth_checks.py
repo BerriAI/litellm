@@ -513,19 +513,19 @@ async def get_team_membership(
 ) -> Optional["LiteLLM_TeamMembership"]:
     """
     Returns team membership object if user is member of team.
-    
+
     Do a isolated check for team membership vs. doing a combined key + team + user + team-membership check, as key might come in frequently for different users/teams. Larger call will slowdown query time. This way we get to cache the constant (key/team/user info) and only update based on the changing value (team membership).
     """
     from litellm.proxy._types import LiteLLM_TeamMembership
-    
+
     if prisma_client is None:
         raise Exception("No db connected")
 
     if user_id is None or team_id is None:
         return None
-    
+
     _key = "team_membership:{}:{}".format(user_id, team_id)
-    
+
     # check if in cache
     cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_membership_obj is not None:
@@ -533,7 +533,7 @@ async def get_team_membership(
             return LiteLLM_TeamMembership(**cached_membership_obj)
         elif isinstance(cached_membership_obj, LiteLLM_TeamMembership):
             return cached_membership_obj
-    
+
     # else, check db
     try:
         response = await prisma_client.db.litellm_teammembership.find_unique(
@@ -545,15 +545,17 @@ async def get_team_membership(
             return None
 
         # save the team membership object to cache
-        await user_api_key_cache.async_set_cache(
-            key=_key, value=response
-        )
+        await user_api_key_cache.async_set_cache(key=_key, value=response)
 
         _response = LiteLLM_TeamMembership(**response.dict())
 
         return _response
     except Exception:
-        verbose_proxy_logger.exception("Error getting team membership for user_id: %s, team_id: %s", user_id, team_id)
+        verbose_proxy_logger.exception(
+            "Error getting team membership for user_id: %s, team_id: %s",
+            user_id,
+            team_id,
+        )
         return None
 
 
@@ -1203,57 +1205,14 @@ async def get_org_object(
         )
 
 
-def _can_object_call_model(
-    model: Union[str, List[str]],
+def _check_model_access_helper(
+    model: str,
     llm_router: Optional[Router],
     models: List[str],
     team_model_aliases: Optional[Dict[str, str]] = None,
     team_id: Optional[str] = None,
     object_type: Literal["user", "team", "key", "org"] = "user",
-    fallback_depth: int = 0,
 ) -> Literal[True]:
-    """
-    Checks if token can call a given model
-
-    Args:
-        - model: str
-        - llm_router: Optional[Router]
-        - models: List[str]
-        - team_model_aliases: Optional[Dict[str, str]]
-        - object_type: Literal["user", "team", "key", "org"]. We use the object type to raise the correct exception type
-
-    Returns:
-        - True: if token allowed to call model
-
-    Raises:
-        - Exception: If token not allowed to call model
-    """
-    if fallback_depth >= DEFAULT_MAX_RECURSE_DEPTH:
-        raise Exception(
-            "Unable to parse model, max fallback depth exceeded - received model: {}".format(
-                model
-            )
-        )
-    if isinstance(model, list):
-        for m in model:
-            _can_object_call_model(
-                model=m,
-                llm_router=llm_router,
-                models=models,
-                team_model_aliases=team_model_aliases,
-                team_id=team_id,
-                object_type=object_type,
-                fallback_depth=fallback_depth + 1,
-            )
-        return True
-
-    if model in litellm.model_alias_map:
-        model = litellm.model_alias_map[model]
-    elif llm_router and model in llm_router.model_group_alias:
-        _model = llm_router._get_model_from_alias(model)
-        if _model:
-            model = _model
-
     ## check if model in allowed model names
     from collections import defaultdict
 
@@ -1301,11 +1260,81 @@ def _can_object_call_model(
             param="model",
             code=status.HTTP_401_UNAUTHORIZED,
         )
-
-    verbose_proxy_logger.debug(
-        f"filtered allowed_models: {filtered_models}; models: {models}"
-    )
     return True
+
+
+def _can_object_call_model(
+    model: Union[str, List[str]],
+    llm_router: Optional[Router],
+    models: List[str],
+    team_model_aliases: Optional[Dict[str, str]] = None,
+    team_id: Optional[str] = None,
+    object_type: Literal["user", "team", "key", "org"] = "user",
+    fallback_depth: int = 0,
+) -> Literal[True]:
+    """
+    Checks if token can call a given model
+
+    Args:
+        - model: str
+        - llm_router: Optional[Router]
+        - models: List[str]
+        - team_model_aliases: Optional[Dict[str, str]]
+        - object_type: Literal["user", "team", "key", "org"]. We use the object type to raise the correct exception type
+
+    Returns:
+        - True: if token allowed to call model
+
+    Raises:
+        - Exception: If token not allowed to call model
+    """
+    if fallback_depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        raise Exception(
+            "Unable to parse model, max fallback depth exceeded - received model: {}".format(
+                model
+            )
+        )
+    if isinstance(model, list):
+        for m in model:
+            _can_object_call_model(
+                model=m,
+                llm_router=llm_router,
+                models=models,
+                team_model_aliases=team_model_aliases,
+                team_id=team_id,
+                object_type=object_type,
+                fallback_depth=fallback_depth + 1,
+            )
+        return True
+
+    potential_models = [model]
+    if model in litellm.model_alias_map:
+        potential_models.append(litellm.model_alias_map[model])
+    elif llm_router and model in llm_router.model_group_alias:
+        _model = llm_router._get_model_from_alias(model)
+        if _model:
+            potential_models.append(_model)
+
+    ## check model access for alias + underlying model - allow if either is in allowed models
+    for m in potential_models:
+        if _check_model_access_helper(
+            model=m,
+            llm_router=llm_router,
+            models=models,
+            team_model_aliases=team_model_aliases,
+            team_id=team_id,
+            object_type=object_type,
+        ):
+            return True
+
+    raise ProxyException(
+        message=f"{object_type} not allowed to access model. This {object_type} can only access models={models}. Tried to access {model}",
+        type=ProxyErrorTypes.get_model_access_error_type_for_object(
+            object_type=object_type
+        ),
+        param="model",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
 
 
 def _model_in_team_aliases(
