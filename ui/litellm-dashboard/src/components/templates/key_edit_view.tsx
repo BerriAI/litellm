@@ -130,6 +130,7 @@ export function KeyEditView({
   // Set initial form values
   const initialValues = {
     ...keyData,
+    token: keyData.token || keyData.token_id,
     budget_duration: getBudgetDuration(keyData.budget_duration),
     metadata: formatMetadataForDisplay(keyData.metadata),
     guardrails: keyData.metadata?.guardrails || [],
@@ -144,6 +145,26 @@ export function KeyEditView({
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
   }
+
+  useEffect(() => {
+    form.setFieldsValue({
+      ...keyData,
+      token: keyData.token || keyData.token_id,
+      budget_duration: getBudgetDuration(keyData.budget_duration),
+      metadata: formatMetadataForDisplay(keyData.metadata),
+      guardrails: keyData.metadata?.guardrails || [],
+      prompts: keyData.metadata?.prompts || [],
+      vector_stores: keyData.object_permission?.vector_stores || [],
+      mcp_servers_and_groups: {
+        servers: keyData.object_permission?.mcp_servers || [],
+        accessGroups: keyData.object_permission?.mcp_access_groups || [],
+      },
+      logging_settings: extractLoggingSettings(keyData.metadata),
+      disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
+        ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
+        : [],
+    })
+  }, [keyData, form])
 
   console.log("premiumUser:", premiumUser)
 
