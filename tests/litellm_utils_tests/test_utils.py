@@ -411,6 +411,13 @@ def test_validate_environment_api_key():
     ), f"Missing keys={response_obj['missing_keys']}"
 
 
+def test_validate_environment_api_version():
+    response_obj = validate_environment(model="azure/openai-deployment", api_key="sk-my-test-key", api_base="https://fake.openai.azure.com/", api_version="2024-02-15")
+    assert (
+        response_obj["keys_in_environment"] is True
+    ), f"Missing keys={response_obj['missing_keys']}"
+
+
 def test_validate_environment_api_base_dynamic():
     for provider in ["ollama", "ollama_chat"]:
         kv = validate_environment(provider + "/mistral", api_base="https://example.com")
