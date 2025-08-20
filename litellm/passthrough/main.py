@@ -26,7 +26,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.utils import client
 from litellm.proxy.pass_through_endpoints.common_utils import encode_bedrock_runtime_modelid_arn
-import httpx
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
