@@ -13,7 +13,7 @@ import litellm
 
 @pytest.mark.asyncio
 async def test_mlflow_logging_functionality():
-    """Test that request_tags and prediction parameters are properly logged in MLflow traces."""
+    """Test that inputs, outputs and tags are properly logged in MLflow traces."""
 
     # Mock MLflow client and dependencies
     mock_client = MagicMock()
