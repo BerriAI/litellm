@@ -3,19 +3,15 @@ Tests for DeepInfra rerank transformation functionality.
 Based on the test patterns from other rerank providers and the current DeepInfra implementation.
 """
 import json
-import uuid
 from unittest.mock import MagicMock
-import pytest
+
 import httpx
+import pytest
 
 from litellm.llms.deepinfra.rerank.transformation import DeepinfraRerankConfig
 from litellm.types.rerank import (
     OptionalRerankParams,
     RerankResponse,
-    RerankResponseResult,
-    RerankResponseMeta,
-    RerankBilledUnits,
-    RerankTokens,
 )
 
 
@@ -63,10 +59,14 @@ class TestDeepinfraRerankTransform:
             headers=custom_headers, model="test", api_key="test_key"
         )
         assert headers["custom"] == "header"
-        assert headers["Authorization"] == "Bearer custom_key"  # Custom auth should override
+        assert (
+            headers["Authorization"] == "Bearer custom_key"
+        )  # Custom auth should override
 
         # Test without API key should use environment variable (DEEPINFRA_API_KEY from .env)
-        headers = self.config.validate_environment(headers={}, model="test", api_key=None)
+        headers = self.config.validate_environment(
+            headers={}, model="test", api_key=None
+        )
         assert "Authorization" in headers
         assert headers["Authorization"].startswith("Bearer ")
         assert headers["accept"] == "application/json"
@@ -81,7 +81,10 @@ class TestDeepinfraRerankTransform:
             query="test query",
             documents=["doc1", "doc2"],
         )
-        assert params["queries"] == ["test query", "test query"]  # DeepInfra requires queries to match documents length
+        assert params["queries"] == [
+            "test query",
+            "test query",
+        ]  # DeepInfra requires queries to match documents length
         assert params["documents"] == ["doc1", "doc2"]
 
     def test_map_cohere_rerank_params_with_non_default(self):
@@ -93,7 +96,7 @@ class TestDeepinfraRerankTransform:
             "instruction": "custom instruction",
             "webhook": "https://webhook.example.com",
         }
-        
+
         params = self.config.map_cohere_rerank_params(
             non_default_params=non_default_params,
             model=self.model,
@@ -101,7 +104,7 @@ class TestDeepinfraRerankTransform:
             query="test query",
             documents=["doc1", "doc2"],
         )
-        
+
         # queries should override the query parameter (custom queries take precedence)
         assert params["queries"] == ["custom query"]
         assert params["documents"] == ["doc1", "doc2", "doc3"]
@@ -116,11 +119,11 @@ class TestDeepinfraRerankTransform:
             documents=["doc1", "doc2"],
             service_tier="default",
         )
-        
+
         request_body = self.config.transform_rerank_request(
             model=self.model, optional_rerank_params=optional_params, headers={}
         )
-        
+
         assert request_body["queries"] == ["test query"]
         assert request_body["documents"] == ["doc1", "doc2"]
         assert request_body["service_tier"] == "default"
@@ -128,7 +131,7 @@ class TestDeepinfraRerankTransform:
     def test_transform_rerank_request_missing_documents(self):
         """Test that transform_rerank_request handles missing documents gracefully."""
         optional_params = OptionalRerankParams(queries=["test query"])
-        
+
         # The current implementation doesn't validate documents, it just returns the params
         result = self.config.transform_rerank_request(
             model=self.model, optional_rerank_params=optional_params, headers={}
@@ -262,7 +265,7 @@ class TestDeepinfraRerankTransform:
             (["doc1", "doc2"], ["query1", "query1"]),
             (["doc1", "doc2", "doc3"], ["query1", "query1", "query1"]),
         ]
-        
+
         for documents, expected_queries in test_cases:
             params = self.config.map_cohere_rerank_params(
                 non_default_params={},
@@ -271,8 +274,12 @@ class TestDeepinfraRerankTransform:
                 query="query1",
                 documents=documents,
             )
-            assert params["queries"] == expected_queries, f"Failed for {len(documents)} documents"
-            assert len(params["queries"]) == len(documents), "Queries length must match documents length"
+            assert (
+                params["queries"] == expected_queries
+            ), f"Failed for {len(documents)} documents"
+            assert len(params["queries"]) == len(
+                documents
+            ), "Queries length must match documents length"
 
     def test_get_error_class_basic(self):
         """Test error class generation for basic error."""
