@@ -44,16 +44,11 @@ os.environ["LMNR_PROJECT_API_KEY"] = "<YOUR_PROJECT_API_KEY>"
 
 ```python
 import litellm
-from lmnr import Instruments, Laminar, LaminarLiteLLMCallback
+from lmnr import Laminar, LaminarLiteLLMCallback
 
-Laminar.initialize(disabled_instruments=set([Instruments.OPENAI])
+Laminar.initialize()
 litellm.callbacks=[LaminarLiteLLMCallback()]
 ```
-
-Laminar wraps every LiteLLM completion/acompletion call and
-automatically instruments major provider SDKs. Since LiteLLM
-uses OpenAI SDK for some of the LLM calls, we disable Laminar's
-automatic instrumentations of OpenAI SDK to avoid double tracing.
 
 ### Run your application
 
