@@ -2675,12 +2675,30 @@ class ProxyConfig:
             db_router_settings = await prisma_client.db.litellm_config.find_first(
                 where={"param_name": "router_settings"}
             )
-            if (
-                db_router_settings is not None
-                and db_router_settings.param_value is not None
+
+            config_router_settings = config_data.get("router_settings", {})
+
+            combined_router_settings = {}
+            if config_router_settings is not None and isinstance(
+                config_router_settings, dict
+            ) and db_router_settings is not None and isinstance(
+                db_router_settings.param_value, dict
             ):
-                _router_settings = db_router_settings.param_value
-                llm_router.update_settings(**_router_settings)
+                from litellm.utils import _update_dictionary
+                combined_router_settings = _update_dictionary(
+                    config_router_settings, db_router_settings.param_value
+                )
+            elif config_router_settings is not None and isinstance(
+                config_router_settings, dict
+            ):
+                combined_router_settings = config_router_settings
+            elif db_router_settings is not None and isinstance(
+                db_router_settings.param_value, dict
+            ):
+                combined_router_settings = db_router_settings.param_value
+
+            if combined_router_settings is not None:
+                llm_router.update_settings(**combined_router_settings)
 
     def _add_general_settings_from_db_config(
         self, config_data: dict, general_settings: dict, proxy_logging_obj: ProxyLogging
