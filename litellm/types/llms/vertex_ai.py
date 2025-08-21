@@ -360,9 +360,6 @@ class UrlContextMetadata(TypedDict, total=False):
     urlMetadata: List[UrlMetadata]
 
 
-Signature = Dict[str, Any]
-
-
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
@@ -383,7 +380,6 @@ class Candidates(TypedDict, total=False):
     finishMessage: str
     logprobsResult: LogprobsResult
     urlContextMetadata: UrlContextMetadata
-    signature: Signature
 
 
 class PromptFeedback(TypedDict):

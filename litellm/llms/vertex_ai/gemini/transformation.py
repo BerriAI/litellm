@@ -118,7 +118,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     contents: List[ContentType] = []
 
     last_message_with_tool_calls = None
-    last_signatures: Optional[list] = None
+    # Map tool_call_id to its signature
+    signatures_map: Dict[str, bytes] = {}
 
     msg_i = 0
     tool_call_responses = []
@@ -260,23 +261,16 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
-                if (
-                    assistant_msg.get("tool_calls", []) is not None
-                    or assistant_msg.get("function_call") is not None
-                ):  # support assistant tool invoke conversion
+                tool_calls = assistant_msg.get("tool_calls")
+                if tool_calls is not None:
                     assistant_content.extend(
                         convert_to_gemini_tool_call_invoke(assistant_msg)
                     )
                     last_message_with_tool_calls = assistant_msg
-                    tool_calls = assistant_msg.get("tool_calls", [])
-                    if tool_calls:
-                        signatures = [
-                            tc["thought_signature"]
-                            for tc in tool_calls
-                            if "thought_signature" in tc
-                        ]
-                        if signatures:
-                            last_signatures = signatures
+                    # Store signatures from this message's tool calls
+                    for tc in tool_calls:
+                        if "thought_signature" in tc:
+                            signatures_map[tc["id"]] = tc["thought_signature"]
 
                 msg_i += 1
 
@@ -289,13 +283,15 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 msg_i < len(messages)
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
+                tool_msg = messages[msg_i]
                 _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                    tool_msg, last_message_with_tool_calls  # type: ignore
                 )
-                if last_signatures is not None and len(last_signatures) > 0:
-                    _part["thought_signature"] = last_signatures.pop(0)
-                    if not last_signatures:
-                        last_signatures = None
+                # Look up and attach the corresponding signature
+                tool_call_id = tool_msg.get("tool_call_id")
+                if tool_call_id and tool_call_id in signatures_map:
+                    _part["thought_signature"] = signatures_map[tool_call_id]
+
                 msg_i += 1
                 tool_call_responses.append(_part)
             if msg_i < len(messages) and (

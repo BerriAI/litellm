@@ -1164,10 +1164,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # Add URL context metadata to grounding metadata
                 url_context_metadata.append(cast(dict, candidate["urlContextMetadata"]))
 
-            if "signature" in candidate:
-                signatures.append(candidate["signature"])
-
             if "parts" in candidate["content"]:
+                for part in candidate["content"]["parts"]:
+                    if "thoughtSignature" in part:
+                        signatures.append(part["thoughtSignature"])
                 (
                     content,
                     reasoning_content,
