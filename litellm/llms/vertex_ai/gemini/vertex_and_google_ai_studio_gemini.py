@@ -1192,9 +1192,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
 
-                if signatures:
-                    chat_completion_message["vertex_ai_thought_signatures"] = signatures
-
                 (
                     functions,
                     tools,
