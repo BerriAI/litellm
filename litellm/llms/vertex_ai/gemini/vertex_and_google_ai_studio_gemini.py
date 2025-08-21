@@ -862,10 +862,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         function=_function_chunk,
                         index=cumulative_tool_call_idx,
                     )
-                    if "thought_signature" in part:
-                        _tool_response_chunk["thought_signature"] = part[
-                            "thought_signature"
-                        ]
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
         if len(_tools) == 0:
