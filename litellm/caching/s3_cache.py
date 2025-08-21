@@ -106,7 +106,7 @@ class S3Cache(BaseCache):
         Compatible with Python 3.8+.
         """
         try:
-            verbose_logger.debug(f"LiteLLM ASYNC SET Cache - S3. Key={key}. Value={value}")
+            verbose_logger.debug(f"Set ASYNC S3 Cache: Key={key}. Value={value}")
             loop = asyncio.get_event_loop()
             func = partial(self.set_cache, key, value, **kwargs)
             await loop.run_in_executor(None, func)
