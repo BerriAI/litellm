@@ -1,0 +1,111 @@
+
+==================================== ERRORS ====================================
+_ ERROR collecting cookbook/litellm_router_load_test/test_loadtest_openai_client.py _
+ImportError while importing test module '/workspaces/litellm/cookbook/litellm_router_load_test/test_loadtest_openai_client.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+cookbook/litellm_router_load_test/test_loadtest_openai_client.py:10: in <module>
+    from litellm import Timeout
+E   ModuleNotFoundError: No module named 'litellm'
+__ ERROR collecting cookbook/litellm_router_load_test/test_loadtest_router.py __
+ImportError while importing test module '/workspaces/litellm/cookbook/litellm_router_load_test/test_loadtest_router.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+cookbook/litellm_router_load_test/test_loadtest_router.py:10: in <module>
+    from litellm import Router, Timeout
+E   ModuleNotFoundError: No module named 'litellm'
+_ ERROR collecting cookbook/litellm_router_load_test/test_loadtest_router_withs3_cache.py _
+ImportError while importing test module '/workspaces/litellm/cookbook/litellm_router_load_test/test_loadtest_router_withs3_cache.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/local/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+cookbook/litellm_router_load_test/test_loadtest_router_withs3_cache.py:10: in <module>
+    from litellm import Router, Timeout
+E   ModuleNotFoundError: No module named 'litellm'
+_____________ ERROR collecting cookbook/misc/test_responses_api.py _____________
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_transports/default.py:101: in map_httpcore_exceptions
+    yield
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_transports/default.py:250: in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/vscode/.local/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+/home/vscode/.local/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+/home/vscode/.local/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+/home/vscode/.local/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^
+/home/vscode/.local/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/vscode/.local/lib/python3.11/site-packages/httpcore/_backends/sync.py:207: in connect_tcp
+    with map_exceptions(exc_map):
+/usr/local/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+/home/vscode/.local/lib/python3.11/site-packages/httpcore/_exceptions.py:14: in map_exceptions
+    raise to_exc(exc) from exc
+E   httpcore.ConnectError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+/home/vscode/.local/lib/python3.11/site-packages/openai/_base_client.py:982: in request
+    response = self._client.send(
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_transports/default.py:249: in handle_request
+    with map_httpcore_exceptions():
+/usr/local/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+/home/vscode/.local/lib/python3.11/site-packages/httpx/_transports/default.py:118: in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+E   httpx.ConnectError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+cookbook/misc/test_responses_api.py:22: in <module>
+    response = client.responses.create(
+/home/vscode/.local/lib/python3.11/site-packages/openai/resources/responses/responses.py:792: in create
+    return self._post(
+/home/vscode/.local/lib/python3.11/site-packages/openai/_base_client.py:1259: in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/vscode/.local/lib/python3.11/site-packages/openai/_base_client.py:1014: in request
+    raise APIConnectionError(request=request) from err
+E   openai.APIConnectionError: Connection error.
+______ ERROR collecting tests/documentation_tests/test_exception_types.py ______
+tests/documentation_tests/test_exception_types.py:41: in <module>
+    with open(docs_path, "r", encoding="utf-8") as docs_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '../..//docs/my-website/docs/exception_mapping.md'
+
+During handling of the above exception, another exception occurred:
+tests/documentation_tests/test_exception_types.py:65: in <module>
+    raise Exception(
+E   Exception: Error reading documentation: [Errno 2] No such file or directory: '../..//docs/my-website/docs/exception_mapping.md', 
+E    repo base - ['srv', 'bin', 'run', 'usr', 'lib', 'media', 'sbin', 'boot', 'tmp', 'proc', 'opt', 'var', 'dev', 'mnt', 'root', 'lib64', 'sys', 'home', 'etc', 'workspaces', 'vscode', '.codespaces', '.dockerenv']
+------------------------------- Captured stdout --------------------------------
+['srv', 'bin', 'run', 'usr', 'lib', 'media', 'sbin', 'boot', 'tmp', 'proc', 'opt', 'var', 'dev', 'mnt', 'root', 'lib64', 'sys', 'home', 'etc', 'workspaces', 'vscode', '.codespaces', '.dockerenv']
+=========================== short test summary info ============================
+ERROR cookbook/litellm_router_load_test/test_loadtest_openai_client.py
+ERROR cookbook/litellm_router_load_test/test_loadtest_router.py
+ERROR cookbook/litellm_router_load_test/test_loadtest_router_withs3_cache.py
+ERROR cookbook/misc/test_responses_api.py - openai.APIConnectionError: Connec...
+ERROR tests/documentation_tests/test_exception_types.py - Exception: Error re...
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 5 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+3 warnings, 5 errors in 5.05s
