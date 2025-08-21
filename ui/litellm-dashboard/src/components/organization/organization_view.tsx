@@ -41,7 +41,7 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector"
 import { copyToClipboard as utilCopyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils"
 import { CheckIcon, CopyIcon } from "lucide-react"
-import NotificationManager from "../molecules/notifications_manager"
+import NotificationsManager from "../molecules/notifications_manager"
 
 interface OrganizationInfoProps {
   organizationId: string
@@ -79,7 +79,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       const response = await organizationInfoCall(accessToken, organizationId)
       setOrgData(response)
     } catch (error) {
-      NotificationManager.fromBackend("Failed to load organization information")
+      NotificationsManager.fromBackend("Failed to load organization information")
       console.error("Error fetching organization info:", error)
     } finally {
       setLoading(false)
@@ -103,12 +103,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       }
       const response = await organizationMemberAddCall(accessToken, organizationId, member)
 
-      message.success("Organization member added successfully")
+      NotificationsManager.success("Organization member added successfully")
       setIsAddMemberModalVisible(false)
       form.resetFields()
       fetchOrgInfo()
     } catch (error) {
-      NotificationManager.fromBackend("Failed to add organization member")
+      NotificationsManager.fromBackend("Failed to add organization member")
       console.error("Error adding organization member:", error)
     }
   }
@@ -124,12 +124,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       }
 
       const response = await organizationMemberUpdateCall(accessToken, organizationId, member)
-      message.success("Organization member updated successfully")
+      NotificationsManager.success("Organization member updated successfully")
       setIsEditMemberModalVisible(false)
       form.resetFields()
       fetchOrgInfo()
     } catch (error) {
-      NotificationManager.fromBackend("Failed to update organization member")
+      NotificationsManager.fromBackend("Failed to update organization member")
       console.error("Error updating organization member:", error)
     }
   }
@@ -139,12 +139,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       if (!accessToken) return
 
       await organizationMemberDeleteCall(accessToken, organizationId, values.user_id)
-      message.success("Organization member deleted successfully")
+      NotificationsManager.success("Organization member deleted successfully")
       setIsEditMemberModalVisible(false)
       form.resetFields()
       fetchOrgInfo()
     } catch (error) {
-      NotificationManager.fromBackend("Failed to delete organization member")
+      NotificationsManager.fromBackend("Failed to delete organization member")
       console.error("Error deleting organization member:", error)
     }
   }
@@ -189,11 +189,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
       const response = await organizationUpdateCall(accessToken, updateData)
 
-      message.success("Organization settings updated successfully")
+      NotificationsManager.success("Organization settings updated successfully")
       setIsEditing(false)
       fetchOrgInfo()
     } catch (error) {
-      NotificationManager.fromBackend("Failed to update organization settings")
+      NotificationsManager.fromBackend("Failed to update organization settings")
       console.error("Error updating organization:", error)
     }
   }
