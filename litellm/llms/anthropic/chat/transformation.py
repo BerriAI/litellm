@@ -184,6 +184,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _tool_choice
 
+    def _get_max_tokens_fallback(self, optional_params: dict, config: dict) -> int:
+        """
+        Helper to determine max_tokens fallback value for Anthropic.
+        Priority: request params > config > environment variable
+        """
+        if optional_params.get("max_tokens") is not None:
+            return optional_params["max_tokens"]
+        if "max_tokens" in config:
+            return config["max_tokens"]
+        if "max_output_tokens" in config:
+            return config["max_output_tokens"]
+        return DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
     def _map_tool_helper(
         self, tool: ChatCompletionToolParam
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
@@ -505,22 +518,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Fallback to config/default if no max_tokens set
         if not max_tokens_set or optional_params.get("max_tokens") is None:
-            if "max_tokens" in config:
-                optional_params["max_tokens"] = config["max_tokens"]
-            elif "max_output_tokens" in config:
-                optional_params["max_tokens"] = config["max_output_tokens"]
-            else:
-                optional_params["max_tokens"] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
-            if param == "tools":
-                # check if optional params already has tools
-                anthropic_tools, mcp_servers = self._map_tools(value)
-            if not max_tokens_set or optional_params.get("max_tokens") is None:
-                if "max_tokens" in config:
-                    optional_params["max_tokens"] = config["max_tokens"]
-                elif "max_output_tokens" in config:
-                    optional_params["max_tokens"] = config["max_output_tokens"]
-                else:
-                    optional_params["max_tokens"] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+            optional_params["max_tokens"] = self._get_max_tokens_fallback(optional_params, config)
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
