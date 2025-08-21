@@ -44,7 +44,7 @@ def test_s3_cache_set_cache_with_ttl(mock_s3_dependencies):
     """Test set_cache with TTL functionality"""
     cache = S3Cache("test-bucket")
     test_value = {"key": "value"}
-    ttl = datetime.timedelta(seconds=3600)  # 1 hour
+    ttl = 3600  # 1 hour in seconds
 
     cache.set_cache("test_key", test_value, ttl=ttl)
 
@@ -53,7 +53,7 @@ def test_s3_cache_set_cache_with_ttl(mock_s3_dependencies):
 
     assert "Expires" in call_args[1]
     assert "CacheControl" in call_args[1]
-    assert "max-age=1:00:00" in call_args[1]["CacheControl"]
+    assert "max-age=3600" in call_args[1]["CacheControl"]
 
 
 def test_s3_cache_get_cache(mock_s3_dependencies):
