@@ -98,7 +98,6 @@ class S3Cache(BaseCache):
                     ContentDisposition=f'inline; filename="{key}.json"',
                 )
         except Exception as e:
-            # NON blocking - notify users S3 is throwing an exception
             print_verbose(f"S3 Caching: set_cache() - Got exception from S3: {e}")
 
     async def async_set_cache(self, key, value, **kwargs):
@@ -112,7 +111,6 @@ class S3Cache(BaseCache):
             func = partial(self.set_cache, key, value, **kwargs)
             await loop.run_in_executor(None, func)
         except Exception as e:
-            # NON blocking - notify users S3 is throwing an exception
             verbose_logger.error(f"S3 Caching: async_set_cache() - Got exception from S3: {e}")
 
     def get_cache(self, key, **kwargs):
