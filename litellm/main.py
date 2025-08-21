@@ -1593,6 +1593,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
             # set API KEY
             api_key = AzureFoundryModelInfo.get_api_key(api_key)
@@ -1977,7 +1978,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
             )
             try:
+
                 if use_base_llm_http_handler:
+                    optional_params.pop("max_retries", None)
                     response = base_llm_http_handler.completion(
                         model=model,
                         messages=messages,
