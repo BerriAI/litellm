@@ -15253,6 +15253,36 @@
         "mode": "chat",
         "supports_tool_choice": true
     },
+    "deepinfra/Qwen/Qwen3-Reranker-8B": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 5e-8,
+        "output_cost_per_token": 5e-8,
+        "litellm_provider": "deepinfra",
+        "mode": "rerank",
+        "supports_tool_choice": true
+    },
+    "deepinfra/Qwen/Qwen3-Reranker-4B": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 2.5e-8,
+        "output_cost_per_token": 2.5e-8,
+        "litellm_provider": "deepinfra",
+        "mode": "rerank",
+        "supports_tool_choice": true
+    },
+    "deepinfra/Qwen/Qwen3-Reranker-0.6B": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 1e-8,
+        "output_cost_per_token": 1e-8,
+        "litellm_provider": "deepinfra",
+        "mode": "rerank",
+        "supports_tool_choice": true
+    },
     "perplexity/codellama-34b-instruct": {
         "max_tokens": 16384,
         "max_input_tokens": 16384,
