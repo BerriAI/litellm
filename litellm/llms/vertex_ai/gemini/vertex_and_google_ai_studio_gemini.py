@@ -601,11 +601,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(value)
                 )
             elif param == "thinking":
-                optional_params["thinkingConfig"] = (
-                    VertexGeminiConfig._map_thinking_param(
-                        cast(AnthropicThinkingParam, value)
+                if isinstance(value, bool) and value is True:
+                    optional_params["thinkingConfig"] = {"includeThoughts": True}
+                elif isinstance(value, dict):
+                    optional_params["thinkingConfig"] = (
+                        VertexGeminiConfig._map_thinking_param(
+                            cast(AnthropicThinkingParam, value)
+                        )
                     )
-                )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
                 optional_params["responseModalities"] = response_modalities
