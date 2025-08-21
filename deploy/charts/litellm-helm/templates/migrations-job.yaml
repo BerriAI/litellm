@@ -54,7 +54,7 @@ spec:
               value: {{ .Values.db.database }}
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
-            {{- else if .Values.db.deployStandalone }}}}
+            {{- else if .Values.db.deployStandalone }}
             - name: DATABASE_URL
               value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
             {{- end }}
