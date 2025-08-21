@@ -9,6 +9,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 
 import asyncio
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, cast
 
@@ -502,7 +503,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 end_user_object = result["end_user_object"]
                 org_id = result["org_id"]
                 token = result["token"]
-                team_membership: Optional[LiteLLM_TeamMembership] = result.get("team_membership", None)
+                team_membership: Optional[LiteLLM_TeamMembership] = result.get(
+                    "team_membership", None
+                )
 
                 global_proxy_spend = await get_global_proxy_spend(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -537,10 +540,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     org_id=org_id,
                     parent_otel_span=parent_otel_span,
                     end_user_id=end_user_id,
-                    user_tpm_limit=user_object.tpm_limit if user_object is not None else None,
-                    user_rpm_limit=user_object.rpm_limit if user_object is not None else None,
-                    team_member_rpm_limit=team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None,
-                    team_member_tpm_limit=team_membership.safe_get_team_member_tpm_limit() if team_membership is not None else None,
+                    user_tpm_limit=(
+                        user_object.tpm_limit if user_object is not None else None
+                    ),
+                    user_rpm_limit=(
+                        user_object.rpm_limit if user_object is not None else None
+                    ),
+                    team_member_rpm_limit=(
+                        team_membership.safe_get_team_member_rpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
+                    team_member_tpm_limit=(
+                        team_membership.safe_get_team_member_tpm_limit()
+                        if team_membership is not None
+                        else None
+                    ),
                 )
                 # run through common checks
                 _ = await common_checks(
@@ -1154,6 +1169,7 @@ async def user_api_key_auth(
     route: str = get_request_route(request=request)
 
     ## CHECK IF ROUTE IS ALLOWED
+    start_time = time.time()
 
     user_api_key_auth_obj = await _user_api_key_auth_builder(
         request=request,
@@ -1177,6 +1193,18 @@ async def user_api_key_auth(
 
     user_api_key_auth_obj.request_route = route
 
+    end_time = time.time()
+    asyncio.create_task(
+        user_api_key_service_logger_obj.async_service_success_hook(
+            service=ServiceTypes.AUTH,
+            duration=end_time - start_time,
+            call_type="user_api_key_auth",
+            start_time=start_time,
+            end_time=end_time,
+            parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+        )
+    )
+
     return user_api_key_auth_obj
 
 
@@ -1189,18 +1217,6 @@ async def _return_user_api_key_auth_obj(
     start_time: datetime,
     user_role: Optional[LitellmUserRoles] = None,
 ) -> UserAPIKeyAuth:
-    end_time = datetime.now()
-
-    asyncio.create_task(
-        user_api_key_service_logger_obj.async_service_success_hook(
-            service=ServiceTypes.AUTH,
-            call_type=route,
-            start_time=start_time,
-            end_time=end_time,
-            duration=end_time.timestamp() - start_time.timestamp(),
-            parent_otel_span=parent_otel_span,
-        )
-    )
 
     retrieved_user_role = (
         user_role or _get_user_role(user_obj=user_obj) or LitellmUserRoles.INTERNAL_USER
