@@ -10108,6 +10108,12 @@
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "vertex_ai/imagen-4.0-fast-generate-001": {
+        "output_cost_per_image": 0.02,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "vertex_ai/imagen-4.0-fast-generate-preview-06-06": {
         "output_cost_per_image": 0.02,
         "litellm_provider": "vertex_ai-image-models",
