@@ -442,40 +442,40 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             non_default_params=non_default_params
         )
 
+        config = self.get_config() if hasattr(self, "get_config") else {}
+        # Single param loop for all params, including max_tokens logic
+        max_tokens_set = False
         for param, value in non_default_params.items():
-            if param == "max_tokens":
+            if param in ["max_tokens", "max_completion_tokens", "max_output_tokens"]:
                 optional_params["max_tokens"] = value
-            if param == "max_completion_tokens":
-                optional_params["max_tokens"] = value
-            if param == "tools":
-                # check if optional params already has tools
+                max_tokens_set = True
+            elif param == "tools":
                 anthropic_tools, mcp_servers = self._map_tools(value)
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
-            if param == "tool_choice" or param == "parallel_tool_calls":
+            elif param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: Optional[AnthropicMessagesToolChoice] = (
                     self._map_tool_choice(
                         tool_choice=non_default_params.get("tool_choice"),
                         parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                     )
                 )
-
                 if _tool_choice is not None:
                     optional_params["tool_choice"] = _tool_choice
-            if param == "stream" and value is True:
+            elif param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "stop" and (isinstance(value, str) or isinstance(value, list)):
+            elif param == "stop" and (isinstance(value, str) or isinstance(value, list)):
                 _value = self._map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
-            if param == "temperature":
+            elif param == "temperature":
                 optional_params["temperature"] = value
-            if param == "top_p":
+            elif param == "top_p":
                 optional_params["top_p"] = value
-            if param == "response_format" and isinstance(value, dict):
+            elif param == "response_format" and isinstance(value, dict):
                 _tool = self.map_response_format_to_anthropic_tool(
                     value, optional_params, is_thinking_enabled
                 )
@@ -488,34 +488,39 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=[_tool]
                 )
-            if (
+            elif (
                 param == "user"
                 and value is not None
                 and isinstance(value, str)
-                and _valid_user_id(value)  # anthropic fails on emails
+                and _valid_user_id(value)
             ):
                 optional_params["metadata"] = {"user_id": value}
-            if param == "thinking":
+            elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    value
-                )
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(value)
             elif param == "web_search_options" and isinstance(value, dict):
-                hosted_web_search_tool = self.map_web_search_tool(
-                    cast(OpenAIWebSearchOptions, value)
-                )
-                self._add_tools_to_optional_params(
-                    optional_params=optional_params, tools=[hosted_web_search_tool]
-                )
+                hosted_web_search_tool = self.map_web_search_tool(cast(OpenAIWebSearchOptions, value))
+                self._add_tools_to_optional_params(optional_params=optional_params, tools=[hosted_web_search_tool])
 
-        ## handle thinking tokens
-        self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=optional_params
-        )
-
-        return optional_params
-
+        # Fallback to config/default if no max_tokens set
+        if not max_tokens_set or optional_params.get("max_tokens") is None:
+            if "max_tokens" in config:
+                optional_params["max_tokens"] = config["max_tokens"]
+            elif "max_output_tokens" in config:
+                optional_params["max_tokens"] = config["max_output_tokens"]
+            else:
+                optional_params["max_tokens"] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+            if param == "tools":
+                # check if optional params already has tools
+                anthropic_tools, mcp_servers = self._map_tools(value)
+            if not max_tokens_set or optional_params.get("max_tokens") is None:
+                if "max_tokens" in config:
+                    optional_params["max_tokens"] = config["max_tokens"]
+                elif "max_output_tokens" in config:
+                    optional_params["max_tokens"] = config["max_output_tokens"]
+                else:
+                    optional_params["max_tokens"] = DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
