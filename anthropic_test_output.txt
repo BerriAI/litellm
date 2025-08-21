@@ -1,0 +1,29 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.13, pytest-8.4.1, pluggy-1.6.0 -- /usr/local/py-utils/venvs/pytest/bin/python
+cachedir: .pytest_cache
+rootdir: /workspaces/litellm
+configfile: pyproject.toml
+plugins: asyncio-1.1.0, anyio-4.10.0, cov-6.2.1
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 18 items
+
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_add_code_execution_tool PASSED [  5%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_calculate_usage PASSED [ 11%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_calculate_usage_nulls[usage_object0-expected_usage0] PASSED [ 16%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_calculate_usage_nulls[usage_object1-expected_usage1] PASSED [ 22%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_calculate_usage_nulls[usage_object2-expected_usage2] PASSED [ 27%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_calculate_usage_server_tool_null[usage_object0] PASSED [ 33%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_calculate_usage_server_tool_null[usage_object1] PASSED [ 38%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_extract_response_content_with_citations PASSED [ 44%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_get_supported_params_thinking PASSED [ 50%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_map_tool_choice PASSED [ 55%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_map_tool_helper PASSED [ 61%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_response_format_transformation_unit_test PASSED [ 66%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_server_tool_use_usage PASSED [ 72%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_transform_response_with_prefix_prompt PASSED [ 77%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_web_search_tool_transformation PASSED [ 83%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_web_search_tool_transformation_with_search_context_size[high-10] PASSED [ 88%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_web_search_tool_transformation_with_search_context_size[low-1] PASSED [ 94%]
+tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py::test_web_search_tool_transformation_with_search_context_size[medium-5] PASSED [100%]
+
+============================== 18 passed in 2.63s ==============================

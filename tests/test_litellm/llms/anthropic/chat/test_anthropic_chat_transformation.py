@@ -346,3 +346,86 @@ def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
     assert "thinking" in params
+
+
+def test_get_max_tokens_fallback_request(monkeypatch):
+    """
+    Directly test _get_max_tokens_fallback: request param should override config and env
+    """
+    monkeypatch.setenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", "9999")
+    config = AnthropicConfig()
+    config_dict = {"max_tokens": 5555}
+    optional_params = {"max_tokens": 1234}
+    result = config._get_max_tokens_fallback(optional_params, config_dict)
+    assert result == 1234
+
+def test_get_max_tokens_fallback_config(monkeypatch):
+    """
+    Directly test _get_max_tokens_fallback: config should override env if request not set
+    """
+    monkeypatch.setenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", "9999")
+    config = AnthropicConfig()
+    config_dict = {"max_tokens": 5555}
+    optional_params = {}
+    result = config._get_max_tokens_fallback(optional_params, config_dict)
+    assert result == 5555
+
+def test_get_max_tokens_fallback_env(monkeypatch):
+    """
+    Directly test _get_max_tokens_fallback: env variable used if neither request nor config is set
+    """
+    from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+    config = AnthropicConfig()
+    config_dict = {}
+    optional_params = {}
+    # Should fallback to DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS constant
+    result = config._get_max_tokens_fallback(optional_params, config_dict)
+    assert result == DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
+    def test_max_tokens_fallback_request_overrides(monkeypatch):
+        """
+        Request max_tokens should override config and env
+        """
+        monkeypatch.setenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", "9999")
+        class DummyConfig:
+            @classmethod
+            def get_config(cls):
+                return {"max_tokens": 5555}
+        config = AnthropicConfig()
+        config.get_config = DummyConfig.get_config
+        non_default_params = {"max_tokens": 1234}
+        optional_params = {}
+        result = config.map_openai_params(non_default_params, optional_params, "model", False)
+        assert result["max_tokens"] == 1234
+
+    def test_max_tokens_fallback_config_overrides_env(monkeypatch):
+        """
+        Config max_tokens should override env if request not set
+        """
+        monkeypatch.setenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", "9999")
+        class DummyConfig:
+            @classmethod
+            def get_config(cls):
+                return {"max_tokens": 5555}
+        config = AnthropicConfig()
+        config.get_config = DummyConfig.get_config
+        non_default_params = {}
+        optional_params = {}
+        result = config.map_openai_params(non_default_params, optional_params, "model", False)
+        assert result["max_tokens"] == 5555
+
+    def test_max_tokens_fallback_env(monkeypatch):
+        """
+        Env variable is used if neither request nor config is set
+        """
+        monkeypatch.setenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", "8888")
+        class DummyConfig:
+            @classmethod
+            def get_config(cls):
+                return {}
+        config = AnthropicConfig()
+        config.get_config = DummyConfig.get_config
+        non_default_params = {}
+        optional_params = {}
+        result = config.map_openai_params(non_default_params, optional_params, "model", False)
+        assert result["max_tokens"] == 8888
