@@ -519,6 +519,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Fallback to config/default if no max_tokens set
         if not max_tokens_set or optional_params.get("max_tokens") is None:
             optional_params["max_tokens"] = self._get_max_tokens_fallback(optional_params, config)
+        return optional_params
     def _create_json_tool_call_for_response_format(
         self,
         json_schema: Optional[dict] = None,
