@@ -3809,8 +3809,18 @@ def function_call_prompt(messages: list, functions: list):
     function_added_to_prompt = False
     for message in messages:
         if "system" in message["role"]:
-            message["content"] += f""" {function_prompt}"""
-            function_added_to_prompt = True
+            if isinstance(message["content"], str):
+                message["content"] += f""" {function_prompt}"""
+                function_added_to_prompt = True
+            elif isinstance(message["content"], list) and message["content"] and "text" in message["content"][0]:
+                message["content"].append({
+                    "type": "text",
+                    "text": function_prompt
+                })
+                function_added_to_prompt = True
+
+        if function_added_to_prompt:
+            break
 
     if function_added_to_prompt is False:
         messages.append({"role": "system", "content": f"""{function_prompt}"""})
