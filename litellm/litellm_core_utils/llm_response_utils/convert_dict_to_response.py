@@ -9,10 +9,15 @@ from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.types.llms.openai import ChatCompletionThinkingBlock
+from litellm.types.llms.databricks import DatabricksTool
+from litellm.types.llms.openai import (
+    ChatCompletionThinkingBlock,
+    OpenAIModerationResponse,
+)
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
+    ChatCompletionRedactedThinkingBlock,
     Choices,
     Delta,
     EmbeddingResponse,
@@ -33,6 +38,53 @@ from litellm.types.utils import (
 )
 
 from .get_headers import get_response_headers
+
+
+def _safe_convert_created_field(created_value) -> int:
+    """
+    Safely convert a 'created' field value to an integer.
+    
+    Some providers (like SambaNova) return the 'created' field as a float 
+    (Unix timestamp with fractional seconds), but LiteLLM expects an integer.
+    
+    Args:
+        created_value: The value from response_object["created"]
+        
+    Returns:
+        int: Unix timestamp as integer
+    """
+    if created_value is None:
+        return int(time.time())
+    elif isinstance(created_value, int):
+        return created_value
+    elif isinstance(created_value, float):
+        return int(created_value)
+    else:
+        # for strings, etc
+        try:
+            return int(float(created_value))
+        except (ValueError, TypeError):
+            # Fallback to current time if conversion fails
+            return int(time.time())
+
+
+def convert_tool_call_to_json_mode(
+    tool_calls: List[ChatCompletionMessageToolCall],
+    convert_tool_call_to_json_mode: bool,
+) -> Tuple[Optional[Message], Optional[str]]:
+    if _should_convert_tool_call_to_json_mode(
+        tool_calls=tool_calls,
+        convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
+    ):
+        # to support 'json_schema' logic on older models
+        json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
+            "arguments"
+        )
+        if json_mode_content_str is not None:
+            message = litellm.Message(content=json_mode_content_str)
+            finish_reason = "stop"
+            return message, finish_reason
+    return None, None
 
 
 async def convert_to_streaming_response_async(response_object: Optional[dict] = None):
@@ -109,7 +161,7 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = response_object["created"]
+        model_response_object.created = _safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -157,7 +209,7 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = response_object["created"]
+        model_response_object.created = _safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -231,7 +283,9 @@ def _parse_content_for_reasoning(
     if not message_text:
         return None, message_text
 
-    reasoning_match = re.match(r"<think>(.*?)</think>(.*)", message_text, re.DOTALL)
+    reasoning_match = re.match(
+        r"<(?:think|thinking)>(.*?)</(?:think|thinking)>(.*)", message_text, re.DOTALL
+    )
 
     if reasoning_match:
         return reasoning_match.group(1), reasoning_match.group(2)
@@ -249,24 +303,40 @@ def _extract_reasoning_content(message: dict) -> Tuple[Optional[str], Optional[s
     Returns:
         tuple[Optional[str], Optional[str]]: A tuple of (reasoning_content, content)
     """
+    message_content = message.get("content")
     if "reasoning_content" in message:
         return message["reasoning_content"], message["content"]
     elif "reasoning" in message:
         return message["reasoning"], message["content"]
-    else:
-        return _parse_content_for_reasoning(message.get("content"))
+    elif isinstance(message_content, str):
+        return _parse_content_for_reasoning(message_content)
+    return None, message_content
 
 
 class LiteLLMResponseObjectHandler:
-
     @staticmethod
     def convert_to_image_response(
         response_object: dict,
         model_response_object: Optional[ImageResponse] = None,
         hidden_params: Optional[dict] = None,
     ) -> ImageResponse:
-
         response_object.update({"hidden_params": hidden_params})
+
+        # Handle gpt-image-1 usage field with None values
+        if "usage" in response_object and response_object["usage"] is not None:
+            usage = response_object["usage"]
+            # Check if usage fields are None and provide defaults
+            if usage.get("input_tokens") is None:
+                usage["input_tokens"] = 0
+            if usage.get("output_tokens") is None:
+                usage["output_tokens"] = 0
+            if usage.get("total_tokens") is None:
+                usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+            if usage.get("input_tokens_details") is None:
+                usage["input_tokens_details"] = {
+                    "image_tokens": 0,
+                    "text_tokens": 0,
+                }
 
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)
@@ -277,6 +347,12 @@ class LiteLLMResponseObjectHandler:
             model_response_dict.update(response_object)
             model_response_object = ImageResponse(**model_response_dict)
             return model_response_object
+
+    @staticmethod
+    def convert_to_moderation_response(
+        response_object: dict,
+    ) -> OpenAIModerationResponse:
+        return OpenAIModerationResponse(**response_object)
 
     @staticmethod
     def convert_chat_to_text_completion(
@@ -337,21 +413,14 @@ class LiteLLMResponseObjectHandler:
         Only supported for HF TGI models
         """
         transformed_logprobs: Optional[TextCompletionLogprobs] = None
-        if custom_llm_provider == "huggingface":
-            # only supported for TGI models
-            try:
-                raw_response = response._hidden_params.get("original_response", None)
-                transformed_logprobs = litellm.huggingface._transform_logprobs(
-                    hf_response=raw_response
-                )
-            except Exception as e:
-                verbose_logger.exception(f"LiteLLM non blocking exception: {e}")
 
         return transformed_logprobs
 
 
 def _should_convert_tool_call_to_json_mode(
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None,
+    tool_calls: Optional[
+        Union[List[ChatCompletionMessageToolCall], List[DatabricksTool]]
+    ] = None,
     convert_tool_call_to_json_mode: Optional[bool] = None,
 ) -> bool:
     """
@@ -475,15 +544,22 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     )
 
                     # Handle thinking models that display `thinking_blocks` within `content`
-                    thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
+                    thinking_blocks: Optional[
+                        List[
+                            Union[
+                                ChatCompletionThinkingBlock,
+                                ChatCompletionRedactedThinkingBlock,
+                            ]
+                        ]
+                    ] = None
                     if "thinking_blocks" in choice["message"]:
                         thinking_blocks = choice["message"]["thinking_blocks"]
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields[
+                            "reasoning_content"
+                        ] = reasoning_content
 
                     message = Message(
                         content=content,
@@ -500,6 +576,19 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
+                if (
+                    finish_reason == "stop"
+                    and message.tool_calls
+                    and len(message.tool_calls) > 0
+                ):
+                    finish_reason = "tool_calls"
+
+                ## PROVIDER SPECIFIC FIELDS ##
+                provider_specific_fields = {}
+                for field in choice.keys():
+                    if field not in Choices.model_fields.keys():
+                        provider_specific_fields[field] = choice[field]
+
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)
                 choice = Choices(
@@ -508,6 +597,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     message=message,
                     logprobs=logprobs,
                     enhancements=enhancements,
+                    provider_specific_fields=provider_specific_fields,
                 )
                 choice_list.append(choice)
             model_response_object.choices = choice_list
@@ -516,9 +606,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 usage_object = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
-                model_response_object.created = response_object["created"] or int(
-                    time.time()
-                )
+                model_response_object.created = _safe_convert_created_field(response_object["created"])
 
             if "id" in response_object:
                 model_response_object.id = response_object["id"] or str(uuid.uuid4())

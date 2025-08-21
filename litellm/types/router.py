@@ -5,6 +5,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
@@ -18,6 +19,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from ..exceptions import RateLimitError
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.openai import OpenAIFileObject
 from .llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from .utils import ModelResponse, ProviderSpecificModelInfo
 
@@ -87,6 +89,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
+    model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -163,7 +166,17 @@ class CredentialLiteLLMParams(BaseModel):
     watsonx_region_name: Optional[str] = None
 
 
-class GenericLiteLLMParams(CredentialLiteLLMParams):
+class CustomPricingLiteLLMParams(BaseModel):
+    ## CUSTOM PRICING ##
+    input_cost_per_token: Optional[float] = None
+    output_cost_per_token: Optional[float] = None
+    input_cost_per_second: Optional[float] = None
+    output_cost_per_second: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
+    output_cost_per_pixel: Optional[float] = None
+
+
+class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
@@ -180,15 +193,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    litellm_credential_name: Optional[str] = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: Optional[str] = None
-
-    ## CUSTOM PRICING ##
-    input_cost_per_token: Optional[float] = None
-    output_cost_per_token: Optional[float] = None
-    input_cost_per_second: Optional[float] = None
-    output_cost_per_second: Optional[float] = None
 
     max_file_size_mb: Optional[float] = None
 
@@ -196,9 +204,17 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
+    use_litellm_proxy: Optional[bool] = False
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
+    mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
+
+    # auto-router params
+    auto_router_config_path: Optional[str] = None
+    auto_router_config: Optional[str] = None
+    auto_router_default_model: Optional[str] = None
+    auto_router_embedding_model: Optional[str] = None
 
     def __init__(
         self,
@@ -238,9 +254,17 @@ class GenericLiteLLMParams(CredentialLiteLLMParams):
         budget_duration: Optional[str] = None,
         # Pass through params
         use_in_pass_through: Optional[bool] = False,
+        # Dynamic param to force using litellm proxy
+        use_litellm_proxy: Optional[bool] = False,
         # This will merge the reasoning content in the choices
         merge_reasoning_content_in_choices: Optional[bool] = False,
         model_info: Optional[Dict] = None,
+        mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None,
+        # auto-router params
+        auto_router_config_path: Optional[str] = None,
+        auto_router_config: Optional[str] = None,
+        auto_router_default_model: Optional[str] = None,
+        auto_router_embedding_model: Optional[str] = None,
         **params,
     ):
         args = locals()
@@ -308,6 +332,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         max_file_size_mb: Optional[float] = None,
         # will use deployment on pass-through endpoints if True
         use_in_pass_through: Optional[bool] = False,
+        use_litellm_proxy: Optional[bool] = False,
         **params,
     ):
         args = locals()
@@ -317,7 +342,8 @@ class LiteLLM_Params(GenericLiteLLMParams):
         args.pop("__class__", None)
         if max_retries is not None and isinstance(max_retries, str):
             max_retries = int(max_retries)  # cast to int
-        super().__init__(max_retries=max_retries, **args, **params)
+        args["max_retries"] = max_retries
+        super().__init__(**{**args, **params})
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -541,6 +567,7 @@ class ModelGroupInfo(BaseModel):
     max_output_tokens: Optional[float] = None
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
+    input_cost_per_pixel: Optional[float] = None
     mode: Optional[
         Union[
             str,
@@ -560,6 +587,8 @@ class ModelGroupInfo(BaseModel):
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
+    supports_url_context: bool = Field(default=False)
+    supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supported_openai_params: Optional[List[str]] = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -577,7 +606,6 @@ class AssistantsTypedDict(TypedDict):
 
 
 class FineTuningConfig(BaseModel):
-
     custom_llm_provider: Literal["azure", "openai"]
 
 
@@ -705,4 +733,62 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = List[Literal["prompt_caching", "router_budget_limiting"]]
+OptionalPreCallChecks = List[
+    Literal[
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "forward_client_headers_by_model_group",
+    ]
+]
+
+
+class LiteLLM_RouterFileObject(TypedDict, total=False):
+    """
+    Tracking the litellm params hash, used for mapping the file id to the right model
+    """
+
+    litellm_params_sensitive_credential_hash: str
+    file_object: OpenAIFileObject
+
+
+@dataclass
+class MockRouterTestingParams:
+    mock_testing_fallbacks: Optional[bool] = None
+    mock_testing_context_fallbacks: Optional[bool] = None
+    mock_testing_content_policy_fallbacks: Optional[bool] = None
+
+    @classmethod
+    def from_kwargs(cls, kwargs: dict) -> "MockRouterTestingParams":
+        from litellm.secret_managers.main import str_to_bool
+
+        def extract_bool_param(name: str) -> Optional[bool]:
+            value = kwargs.pop(name, None)
+            return str_to_bool(value) if isinstance(value, str) else value
+
+        return cls(
+            mock_testing_fallbacks=extract_bool_param("mock_testing_fallbacks"),
+            mock_testing_context_fallbacks=extract_bool_param(
+                "mock_testing_context_fallbacks"
+            ),
+            mock_testing_content_policy_fallbacks=extract_bool_param(
+                "mock_testing_content_policy_fallbacks"
+            ),
+        )
+
+
+class ModelGroupSettings(BaseModel):
+    forward_client_headers_to_llm_api: Optional[List[str]] = None
+
+
+class PreRoutingHookResponse(BaseModel):
+    """
+    Response object from the pre-routing hook.
+
+    Allows the Pre-Routing Hook to return a modified model and messages.
+
+    Add fields that you expect to be modified by the pre-routing hook.
+    """
+
+    model: str
+    messages: Optional[List[Dict[str, str]]]

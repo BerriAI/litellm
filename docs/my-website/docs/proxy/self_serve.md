@@ -161,6 +161,60 @@ Here's the available UI roles for a LiteLLM Internal User:
   - `internal_user`: can login, view/create/delete their own keys, view their spend. **Cannot** add new users.
   - `internal_user_viewer`: can login, view their own keys, view their own spend. **Cannot** create/delete keys, add new users.
 
+**Team Roles:**
+  - `admin`: can add new members to the team, can control Team Permissions, can add team-only models (useful for onboarding a team's finetuned models).
+  - `user`: can login, view their own keys, view their own spend. **Cannot** create/delete keys (controllable via Team Permissions), add new users.
+
+
+## Auto-add SSO users to teams
+
+This walks through setting up sso auto-add for **Okta, Google SSO**
+
+### Okta, Google SSO 
+
+1. Specify the JWT field that contains the team ids, that the user belongs to. 
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  litellm_jwtauth:
+    team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
+```
+
+This is assuming your SSO token looks like this. **If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions [here](#debugging-sso-jwt-fields)**
+
+```
+{
+  ...,
+  "groups": ["team_id_1", "team_id_2"]
+}
+```
+
+2. Create the teams on LiteLLM 
+
+```bash
+curl -X POST '<PROXY_BASE_URL>/team/new' \
+-H 'Authorization: Bearer <PROXY_MASTER_KEY>' \
+-H 'Content-Type: application/json' \
+-D '{
+    "team_alias": "team_1",
+    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+}'
+```
+
+3. Test the SSO flow
+
+Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+
+### Microsoft Entra ID SSO group assignment
+
+Follow this [tutorial for auto-adding sso users to teams with Microsoft Entra ID](https://docs.litellm.ai/docs/tutorials/msft_sso)
+
+### Debugging SSO JWT fields 
+
+[**Go Here**](./admin_ui_sso.md#debugging-sso-jwt-fields)
+
+
 ## Advanced
 ### Setting custom logout URLs
 
@@ -196,26 +250,50 @@ This budget does not apply to keys created under non-default teams.
 
 [**Go Here**](./team_budgets.md)
 
-### Auto-add SSO users to teams
+### Default Team
 
-1. Specify the JWT field that contains the team ids, that the user belongs to. 
+<Tabs>
+<TabItem value="ui" label="UI">
+
+Go to `Internal Users` -> `Default User Settings` and set the default team to the team you just created. 
+
+Let's also set the default models to `no-default-models`. This means a user can only create keys within a team.
+
+<Image img={require('../../img/default_user_settings_with_default_team.png')}  style={{ width: '1000px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="yaml" label="YAML">
+
+:::info
+Team must be created before setting it as the default team. 
+:::
 
 ```yaml
-general_settings:
-  master_key: sk-1234
-  litellm_jwtauth:
-    team_ids_jwt_field: "groups" # 👈 CAN BE ANY FIELD
+litellm_settings:
+  default_internal_user_params:    # Default Params used when a new user signs in Via SSO
+      user_role: "internal_user"     # one of "internal_user", "internal_user_viewer", 
+      models: ["no-default-models"] # Optional[List[str]], optional): models to be used by the user
+      teams: # Optional[List[NewUserRequestTeam]], optional): teams to be used by the user
+        - team_id: "team_id_1" # Required[str]: team_id to be used by the user
+          user_role: "user" # Optional[str], optional): Default role in the team. Values: "user" or "admin". Defaults to "user"
 ```
 
-This is assuming your SSO token looks like this:
-```
-{
-  ...,
-  "groups": ["team_id_1", "team_id_2"]
-}
-```
+</TabItem>
+</Tabs>
 
-2. Create the teams on LiteLLM 
+### Team Member Budgets
+
+Set a max budget for a team member. 
+
+You can do this when creating a new team, or by updating an existing team. 
+
+<Tabs>
+<TabItem value="ui" label="UI">
+
+<Image img={require('../../img/create_default_team.png')}  style={{ width: '600px', height: 'auto' }} />
+
+</TabItem>
+<TabItem value="api" label="API">
 
 ```bash
 curl -X POST '<PROXY_BASE_URL>/team/new' \
@@ -223,13 +301,34 @@ curl -X POST '<PROXY_BASE_URL>/team/new' \
 -H 'Content-Type: application/json' \
 -D '{
     "team_alias": "team_1",
-    "team_id": "team_id_1" # 👈 MUST BE THE SAME AS THE SSO GROUP ID
+    "budget_duration": "10d",
+    "team_member_budget": 10
 }'
 ```
 
-3. Test the SSO flow
+</TabItem>
+</Tabs>
 
-Here's a walkthrough of [how it works](https://www.loom.com/share/8959be458edf41fd85937452c29a33f3?sid=7ebd6d37-569a-4023-866e-e0cde67cb23e)
+### Set default params for new teams
+
+When you connect litellm to your SSO provider, litellm can auto-create teams. Use this to set the default `models`, `max_budget`, `budget_duration` for these auto-created teams. 
+
+**How it works**
+
+1. When litellm fetches `groups` from your SSO provider, it will check if the corresponding group_id exists as a `team_id` in litellm. 
+2. If the team_id does not exist, litellm will auto-create a team with the default params you've set. 
+3. If the team_id already exist, litellm will not apply any settings on the team. 
+
+**Usage**
+
+```yaml showLineNumbers title="Default Params for new teams"
+litellm_settings:
+  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
+    max_budget: 100                # Optional[float], optional): $100 budget for the team
+    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
+```
+
 
 ### Restrict Users from creating personal keys 
 
@@ -241,7 +340,7 @@ This will also prevent users from using their session tokens on the test keys ch
 
 ## **All Settings for Self Serve / SSO Flow**
 
-```yaml
+```yaml showLineNumbers title="All Settings for Self Serve / SSO Flow"
 litellm_settings:
   max_internal_user_budget: 10        # max budget for internal users
   internal_user_budget_duration: "1mo" # reset every month
@@ -251,6 +350,15 @@ litellm_settings:
     max_budget: 100                # Optional[float], optional): $100 budget for a new SSO sign in user
     budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for a new SSO sign in user
     models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by a new SSO sign in user
+    teams: # Optional[List[NewUserRequestTeam]], optional): teams to be used by the user
+      - team_id: "team_id_1" # Required[str]: team_id to be used by the user
+        max_budget_in_team: 100 # Optional[float], optional): $100 budget for the team. Defaults to None.
+        user_role: "user" # Optional[str], optional): "user" or "admin". Defaults to "user"
+  
+  default_team_params:             # Default Params to apply when litellm auto creates a team from SSO IDP provider
+    max_budget: 100                # Optional[float], optional): $100 budget for the team
+    budget_duration: 30d           # Optional[str], optional): 30 days budget_duration for the team
+    models: ["gpt-3.5-turbo"]      # Optional[List[str]], optional): models to be used by the team
 
 
   upperbound_key_generate_params:    # Upperbound for /key/generate requests when self-serve flow is on
@@ -267,3 +375,7 @@ litellm_settings:
     personal_key_generation: # maps to 'Default Team' on UI 
       allowed_user_roles: ["proxy_admin"]
 ```
+
+## Further Reading
+
+- [Onboard Users for AI Exploration](../tutorials/default_team_self_serve)

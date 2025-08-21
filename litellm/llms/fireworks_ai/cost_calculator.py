@@ -4,6 +4,12 @@ For calculating cost of fireworks ai serverless inference models.
 
 from typing import Tuple
 
+from litellm.constants import (
+    FIREWORKS_AI_4_B,
+    FIREWORKS_AI_16_B,
+    FIREWORKS_AI_56_B_MOE,
+    FIREWORKS_AI_176_B_MOE,
+)
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
@@ -25,9 +31,9 @@ def get_base_model_for_pricing(model_name: str) -> str:
     moe_match = re.search(r"(\d+)x(\d+)b", model_name)
     if moe_match:
         total_billion = int(moe_match.group(1)) * int(moe_match.group(2))
-        if total_billion <= 56:
+        if total_billion <= FIREWORKS_AI_56_B_MOE:
             return "fireworks-ai-moe-up-to-56b"
-        elif total_billion <= 176:
+        elif total_billion <= FIREWORKS_AI_176_B_MOE:
             return "fireworks-ai-56b-to-176b"
 
     # Check for standard models in the form <number>b
@@ -37,10 +43,12 @@ def get_base_model_for_pricing(model_name: str) -> str:
         params_billion = float(params_match)
 
         # Determine the category based on the number of parameters
-        if params_billion <= 16.0:
-            return "fireworks-ai-up-to-16b"
-        elif params_billion <= 80.0:
-            return "fireworks-ai-16b-80b"
+        if params_billion <= FIREWORKS_AI_4_B:
+            return "fireworks-ai-up-to-4b"
+        elif params_billion <= FIREWORKS_AI_16_B:
+            return "fireworks-ai-4.1b-to-16b"
+        elif params_billion > FIREWORKS_AI_16_B:
+            return "fireworks-ai-above-16b"
 
     # If no matches, return the original model_name
     return "fireworks-ai-default"

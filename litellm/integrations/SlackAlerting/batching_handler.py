@@ -19,7 +19,6 @@ else:
 
 
 def squash_payloads(queue):
-
     squashed = {}
     if len(queue) == 0:
         return squashed

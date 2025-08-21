@@ -36,6 +36,7 @@ def completion(
         model=model,
         messages=messages,
         optional_params=optional_params,
+        litellm_params=litellm_params,
     )
 
     ## Load Config

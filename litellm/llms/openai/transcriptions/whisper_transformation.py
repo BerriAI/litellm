@@ -53,6 +53,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         messages: List[AllMessageValues],
         optional_params: dict,
+        litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -81,9 +82,9 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if "response_format" not in data or (
             data["response_format"] == "text" or data["response_format"] == "json"
         ):
-            data["response_format"] = (
-                "verbose_json"  # ensures 'duration' is received - used for cost calculation
-            )
+            data[
+                "response_format"
+            ] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
 
         return data
 

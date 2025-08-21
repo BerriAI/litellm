@@ -18,10 +18,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_checks import can_user_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
+)
+from litellm.proxy.management_helpers.object_permission_utils import (
+    handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
@@ -67,7 +71,7 @@ async def new_organization(
     - tags: *Optional[List[str]]* - Tags for [tracking spend](https://litellm.vercel.app/docs/proxy/enterprise#tracking-spend-for-custom-tags) and/or doing [tag-based routing](https://litellm.vercel.app/docs/proxy/tag_routing).
     - organization_id: *Optional[str]* - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
-
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     Case 1: Create new org **without** a budget_id
 
     ```bash
@@ -103,10 +107,17 @@ async def new_organization(
     ```
     """
 
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        prisma_client,
+    )
 
     if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
 
     if (
         user_api_key_dict.user_role is None
@@ -118,6 +129,22 @@ async def new_organization(
                 "error": f"Only admins can create orgs. Your role is = {user_api_key_dict.user_role}"
             },
         )
+
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+        )
+
+    user_object_correct_type: Optional[LiteLLM_UserTable] = None
+
+    if user_api_key_dict.user_id is not None:
+        try:
+            user_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+            user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+        except Exception:
+            pass
 
     if data.budget_id is None:
         """
@@ -144,6 +171,12 @@ async def new_organization(
 
         data.budget_id = _budget.budget_id
 
+    ## Handle Object Permission - MCP, Vector Stores etc.
+    object_permission_id = await _set_object_permission(
+        data=data,
+        prisma_client=prisma_client,
+    )
+
     """
     Ensure only models that user has access to, are given to org
     """
@@ -157,17 +190,15 @@ async def new_organization(
                     "error": "User not allowed to give access to all models. Select models you want org to have access to."
                 },
             )
+
         for m in data.models:
-            if m not in user_api_key_dict.models:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"User not allowed to give access to model={m}. Models you have access to = {user_api_key_dict.models}"
-                    },
-                )
+            await can_user_call_model(
+                m, llm_router=llm_router, user_object=user_object_correct_type
+            )
 
     organization_row = LiteLLM_OrganizationTable(
         **data.json(exclude_none=True),
+        object_permission_id=object_permission_id,
         created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
         updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
     )
@@ -184,6 +215,30 @@ async def new_organization(
     )
 
     return response
+
+
+async def _set_object_permission(
+    data: NewOrganizationRequest,
+    prisma_client: Optional[PrismaClient],
+) -> Optional[str]:
+    """
+    Creates the LiteLLM_ObjectPermissionTable record for the organization.
+    - Handles permissions for vector stores and mcp servers.
+
+    Returns the object_permission_id if created, otherwise None.
+    """
+    if prisma_client is None:
+        return None
+
+    if data.object_permission is not None:
+        created_object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.create(
+                data=data.object_permission.model_dump(exclude_none=True),
+            )
+        )
+        del data.object_permission
+        return created_object_permission.object_permission_id
+    return None
 
 
 @router.patch(
@@ -221,6 +276,22 @@ async def update_organization(
     updated_organization_row = prisma_client.jsonify_object(
         data.model_dump(exclude_none=True)
     )
+    existing_organization_row = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": data.organization_id},
+        )
+    )
+
+    if existing_organization_row is None:
+        raise ValueError(
+            f"Organization not found for organization_id={data.organization_id}"
+        )
+
+    if data.object_permission is not None:
+        updated_organization_row = await handle_update_object_permission(
+            data_json=updated_organization_row,
+            existing_organization_row=existing_organization_row,
+        )
 
     response = await prisma_client.db.litellm_organizationtable.update(
         where={"organization_id": data.organization_id},
@@ -229,6 +300,33 @@ async def update_organization(
     )
 
     return response
+
+
+async def handle_update_object_permission(
+    data_json: dict,
+    existing_organization_row: LiteLLM_OrganizationTable,
+) -> dict:
+    """
+    Handle the update of object permission for an organization.
+
+    - Upserts the new object permission into the LiteLLM_ObjectPermissionTable
+    - Adds object_permission_id to data_json (this gets added in the DB)
+    - Pops the object_permission from data_json
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    # Use the common helper to handle the object permission update
+    object_permission_id = await handle_update_object_permission_common(
+        data_json=data_json,
+        existing_object_permission_id=existing_organization_row.object_permission_id,
+        prisma_client=prisma_client,
+    )
+
+    # Add the object_permission_id to data_json if one was created/updated
+    if object_permission_id is not None:
+        data_json["object_permission_id"] = object_permission_id
+
+    return data_json
 
 
 @router.delete(
@@ -320,7 +418,7 @@ async def list_organization(
     # if proxy admin - get all orgs
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         response = await prisma_client.db.litellm_organizationtable.find_many(
-            include={"members": True, "teams": True}
+            include={"litellm_budget_table": True, "members": True, "teams": True}
         )
     # if internal user - get orgs they are a member of
     else:
@@ -335,7 +433,7 @@ async def list_organization(
                     "in": [membership.organization_id for membership in org_memberships]
                 }
             },
-            include={"members": True, "teams": True},
+            include={"litellm_budget_table": True, "members": True, "teams": True},
         )
 
         response = org_objects
@@ -358,11 +456,16 @@ async def info_organization(organization_id: str):
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
-        await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": organization_id},
-            include={"litellm_budget_table": True, "members": True, "teams": True},
-        )
+    response: Optional[
+        LiteLLM_OrganizationTableWithMembers
+    ] = await prisma_client.db.litellm_organizationtable.find_unique(
+        where={"organization_id": organization_id},
+        include={
+            "litellm_budget_table": True,
+            "members": True,
+            "teams": True,
+            "object_permission": True,
+        },
     )
 
     if response is None:
@@ -486,12 +589,13 @@ async def organization_member_add(
         updated_organization_memberships: List[LiteLLM_OrganizationMembershipTable] = []
 
         for member in members:
-            updated_user, updated_organization_membership = (
-                await add_member_to_organization(
-                    member=member,
-                    organization_id=data.organization_id,
-                    prisma_client=prisma_client,
-                )
+            (
+                updated_user,
+                updated_organization_membership,
+            ) = await add_member_to_organization(
+                member=member,
+                organization_id=data.organization_id,
+                prisma_client=prisma_client,
             )
 
             updated_users.append(updated_user)
@@ -657,16 +761,16 @@ async def organization_member_update(
                 },
                 data={"budget_id": budget_id},
             )
-        final_organization_membership: Optional[BaseModel] = (
-            await prisma_client.db.litellm_organizationmembership.find_unique(
-                where={
-                    "user_id_organization_id": {
-                        "user_id": data.user_id,
-                        "organization_id": data.organization_id,
-                    }
-                },
-                include={"litellm_budget_table": True},
-            )
+        final_organization_membership: Optional[
+            BaseModel
+        ] = await prisma_client.db.litellm_organizationmembership.find_unique(
+            where={
+                "user_id_organization_id": {
+                    "user_id": data.user_id,
+                    "organization_id": data.organization_id,
+                }
+            },
+            include={"litellm_budget_table": True},
         )
 
         if final_organization_membership is None:
@@ -815,9 +919,6 @@ async def add_member_to_organization(
         return user_object, organization_membership
 
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
         raise ValueError(
             f"Error adding member={member} to organization={organization_id}: {e}"
         )

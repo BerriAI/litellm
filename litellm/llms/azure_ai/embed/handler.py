@@ -17,7 +17,6 @@ from .cohere_transformation import AzureAICohereConfig
 
 
 class AzureAIEmbedding(OpenAIChatCompletion):
-
     def _process_response(
         self,
         image_embedding_responses: Optional[List],
@@ -145,7 +144,6 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         api_base: Optional[str] = None,
         client=None,
     ) -> EmbeddingResponse:
-
         (
             image_embeddings_request,
             v1_embeddings_request,

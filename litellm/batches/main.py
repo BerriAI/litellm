@@ -51,7 +51,7 @@ async def acreate_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Batch:
+) -> LiteLLMBatch:
     """
     Async: Creates and executes a batch from an uploaded file of request
 
@@ -153,11 +153,11 @@ def create_batch(
         )
         api_base: Optional[str] = None
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -358,11 +358,11 @@ def retrieve_batch(
         _is_async = kwargs.pop("aretrieve_batch", False) is True
         api_base: Optional[str] = None
         if custom_llm_provider == "openai":
-
             # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -469,6 +469,7 @@ def retrieve_batch(
         raise e
 
 
+@client
 async def alist_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
@@ -481,6 +482,7 @@ async def alist_batches(
     """
     Async: List your organization's batches.
     """
+
     try:
         loop = asyncio.get_event_loop()
         kwargs["alist_batches"] = True
@@ -510,6 +512,7 @@ async def alist_batches(
         raise e
 
 
+@client
 def list_batches(
     after: Optional[str] = None,
     limit: Optional[int] = None,
@@ -558,6 +561,7 @@ def list_batches(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
@@ -715,6 +719,7 @@ def cancel_batch(
             api_base = (
                 optional_params.api_base
                 or litellm.api_base
+                or os.getenv("OPENAI_BASE_URL")
                 or os.getenv("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )

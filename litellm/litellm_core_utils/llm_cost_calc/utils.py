@@ -1,11 +1,17 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from typing import Optional, Tuple, cast
+from typing import Any, Literal, Optional, Tuple, cast
 
 import litellm
-from litellm import verbose_logger
-from litellm.types.utils import ModelInfo, Usage
+from litellm._logging import verbose_logger
+from litellm.types.utils import (
+    CallTypes,
+    ImageResponse,
+    ModelInfo,
+    PassthroughCallTypes,
+    Usage,
+)
 from litellm.utils import get_model_info
 
 
@@ -13,6 +19,23 @@ def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
         return True
     return False
+
+
+def select_cost_metric_for_model(
+    model_info: ModelInfo,
+) -> Literal["cost_per_character", "cost_per_token"]:
+    """
+    Select 'cost_per_character' if model_info has 'input_cost_per_character'
+    Select 'cost_per_token' if model_info has 'input_cost_per_token'
+    """
+    if model_info.get("input_cost_per_character"):
+        return "cost_per_character"
+    elif model_info.get("input_cost_per_token"):
+        return "cost_per_token"
+    else:
+        raise ValueError(
+            f"Model {model_info['key']} does not have 'input_cost_per_character' or 'input_cost_per_token'"
+        )
 
 
 def _generic_cost_per_character(
@@ -90,35 +113,104 @@ def _generic_cost_per_character(
     return prompt_cost, completion_cost
 
 
-def _get_prompt_token_base_cost(model_info: ModelInfo, usage: Usage) -> float:
+def _get_token_base_cost(model_info: ModelInfo, usage: Usage) -> Tuple[float, float, float, float]:
     """
-    Return prompt cost for a given model and usage.
+    Return prompt cost, completion cost, and cache costs for a given model and usage.
 
-    If input_tokens > 128k and `input_cost_per_token_above_128k_tokens` is set, then we use the `input_cost_per_token_above_128k_tokens` field.
+    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
+    then we use the corresponding threshold cost for all token types.
+    
+    Returns:
+        Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
     """
-    input_cost_per_token_above_128k_tokens = model_info.get(
-        "input_cost_per_token_above_128k_tokens"
-    )
-    if _is_above_128k(usage.prompt_tokens) and input_cost_per_token_above_128k_tokens:
-        return input_cost_per_token_above_128k_tokens
-    return model_info["input_cost_per_token"]
+    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, "input_cost_per_token"))
+    completion_base_cost = cast(float, _get_cost_per_unit(model_info, "output_cost_per_token"))
+    cache_creation_cost = cast(float, _get_cost_per_unit(model_info, "cache_creation_input_token_cost"))
+    cache_read_cost = cast(float, _get_cost_per_unit(model_info, "cache_read_input_token_cost"))
+
+    ## CHECK IF ABOVE THRESHOLD
+    threshold: Optional[float] = None
+    for key, value in sorted(model_info.items(), reverse=True):
+        if key.startswith("input_cost_per_token_above_") and value is not None:
+            try:
+                # Handle both formats: _above_128k_tokens and _above_128_tokens
+                threshold_str = key.split("_above_")[1].split("_tokens")[0]
+                threshold = float(threshold_str.replace("k", "")) * (
+                    1000 if "k" in threshold_str else 1
+                )
+                if usage.prompt_tokens > threshold:
+
+                    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, key, prompt_base_cost))
+                    completion_base_cost = cast(float, _get_cost_per_unit(
+                        model_info,
+                        f"output_cost_per_token_above_{threshold_str}_tokens",
+                        completion_base_cost,
+                    ))
+                    
+                    # Apply tiered pricing to cache costs
+                    cache_creation_tiered_key = f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
+                    cache_read_tiered_key = f"cache_read_input_token_cost_above_{threshold_str}_tokens"
+                    
+                    if cache_creation_tiered_key in model_info:
+                        cache_creation_cost = cast(float, _get_cost_per_unit(
+                            model_info, cache_creation_tiered_key, cache_creation_cost
+                        ))
+                    
+                    if cache_read_tiered_key in model_info:
+                        cache_read_cost = cast(float, _get_cost_per_unit(
+                            model_info, cache_read_tiered_key, cache_read_cost
+                        ))
+                    
+                    break
+            except (IndexError, ValueError):
+                continue
+            except Exception:
+                continue
+
+    return prompt_base_cost, completion_base_cost, cache_creation_cost, cache_read_cost
 
 
-def _get_completion_token_base_cost(model_info: ModelInfo, usage: Usage) -> float:
+def calculate_cost_component(
+    model_info: ModelInfo, cost_key: str, usage_value: Optional[float]
+) -> float:
     """
-    Return prompt cost for a given model and usage.
+    Generic cost calculator for any usage component
 
-    If input_tokens > 128k and `input_cost_per_token_above_128k_tokens` is set, then we use the `input_cost_per_token_above_128k_tokens` field.
+    Args:
+        model_info: Dictionary containing cost information
+        cost_key: The key for the cost multiplier in model_info (e.g., 'input_cost_per_audio_token')
+        usage_value: The actual usage value (e.g., number of tokens, characters, seconds)
+
+    Returns:
+        float: The calculated cost
     """
-    output_cost_per_token_above_128k_tokens = model_info.get(
-        "output_cost_per_token_above_128k_tokens"
-    )
+    cost_per_unit = _get_cost_per_unit(model_info, cost_key)
     if (
-        _is_above_128k(usage.completion_tokens)
-        and output_cost_per_token_above_128k_tokens
+        cost_per_unit is not None
+        and isinstance(cost_per_unit, float)
+        and usage_value is not None
+        and usage_value > 0
     ):
-        return output_cost_per_token_above_128k_tokens
-    return model_info["output_cost_per_token"]
+        return float(usage_value) * cost_per_unit
+    return 0.0
+
+
+def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: Optional[float] = 0.0) -> Optional[float]:
+    # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
+    cost_per_unit = model_info.get(cost_key)
+    if isinstance(cost_per_unit, float):
+        return cost_per_unit
+    if isinstance(cost_per_unit, int):
+        return float(cost_per_unit)
+    if isinstance(cost_per_unit, str):
+        try:
+            return float(cost_per_unit)
+        except ValueError:
+            verbose_logger.exception(
+                f"litellm.litellm_core_utils.llm_cost_calc.utils.py::calculate_cost_per_component(): Exception occured - {cost_per_unit}\nDefaulting to 0.0"
+            )
+    return default_value
+    
 
 
 def generic_cost_per_token(
@@ -136,6 +228,7 @@ def generic_cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
+
     ## GET MODEL INFO
     model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
@@ -146,6 +239,9 @@ def generic_cost_per_token(
     text_tokens = usage.prompt_tokens
     cache_hit_tokens = 0
     audio_tokens = 0
+    character_count = 0
+    image_count = 0
+    video_length_seconds = 0
     if usage.prompt_tokens_details:
         cache_hit_tokens = (
             cast(
@@ -163,44 +259,67 @@ def generic_cost_per_token(
             cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0))
             or 0
         )
+        character_count = (
+            cast(
+                Optional[int],
+                getattr(usage.prompt_tokens_details, "character_count", 0),
+            )
+            or 0
+        )
+        image_count = (
+            cast(Optional[int], getattr(usage.prompt_tokens_details, "image_count", 0))
+            or 0
+        )
+        video_length_seconds = (
+            cast(
+                Optional[int],
+                getattr(usage.prompt_tokens_details, "video_length_seconds", 0),
+            )
+            or 0
+        )
 
     ## EDGE CASE - text tokens not set inside PromptTokensDetails
     if text_tokens == 0:
         text_tokens = usage.prompt_tokens - cache_hit_tokens - audio_tokens
 
-    prompt_base_cost = _get_prompt_token_base_cost(model_info=model_info, usage=usage)
+    prompt_base_cost, completion_base_cost, cache_creation_cost, cache_read_cost = _get_token_base_cost(
+        model_info=model_info, usage=usage
+    )
 
     prompt_cost = float(text_tokens) * prompt_base_cost
 
-    _cache_read_input_token_cost = model_info.get("cache_read_input_token_cost")
-
-    ### CACHE READ COST
-    if (
-        _cache_read_input_token_cost is not None
-        and cache_hit_tokens is not None
-        and cache_hit_tokens > 0
-    ):
-        prompt_cost += float(cache_hit_tokens) * _cache_read_input_token_cost
+    ### CACHE READ COST - Now uses tiered pricing
+    prompt_cost += float(cache_hit_tokens) * cache_read_cost
 
     ### AUDIO COST
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_audio_token", audio_tokens
+    )
 
-    audio_token_cost = model_info.get("input_cost_per_audio_token")
-    if audio_token_cost is not None and audio_tokens is not None and audio_tokens > 0:
-        prompt_cost += float(audio_tokens) * audio_token_cost
+    ### CACHE WRITING COST - Now uses tiered pricing
+    prompt_cost += float(usage._cache_creation_input_tokens or 0) * cache_creation_cost
 
-    ### CACHE WRITING COST
-    _cache_creation_input_token_cost = model_info.get("cache_creation_input_token_cost")
-    if _cache_creation_input_token_cost is not None:
-        prompt_cost += (
-            float(usage._cache_creation_input_tokens) * _cache_creation_input_token_cost
-        )
+    ### CHARACTER COST
+
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_character", character_count
+    )
+
+    ### IMAGE COUNT COST
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_image", image_count
+    )
+
+    ### VIDEO LENGTH COST
+    prompt_cost += calculate_cost_component(
+        model_info, "input_cost_per_video_per_second", video_length_seconds
+    )
 
     ## CALCULATE OUTPUT COST
-    completion_base_cost = _get_completion_token_base_cost(
-        model_info=model_info, usage=usage
-    )
-    text_tokens = usage.completion_tokens
+    text_tokens = 0
     audio_tokens = 0
+    reasoning_tokens = 0
+    is_text_tokens_total = False
     if usage.completion_tokens_details is not None:
         audio_tokens = (
             cast(
@@ -214,22 +333,148 @@ def generic_cost_per_token(
                 Optional[int],
                 getattr(usage.completion_tokens_details, "text_tokens", None),
             )
-            or usage.completion_tokens  # default to completion tokens, if this field is not set
+            or 0  # default to completion tokens, if this field is not set
+        )
+        reasoning_tokens = (
+            cast(
+                Optional[int],
+                getattr(usage.completion_tokens_details, "reasoning_tokens", 0),
+            )
+            or 0
         )
 
+    if text_tokens == 0:
+        text_tokens = usage.completion_tokens
+    if text_tokens == usage.completion_tokens:
+        is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
-    _output_cost_per_audio_token: Optional[float] = model_info.get(
-        "output_cost_per_audio_token"
-    )
+    _output_cost_per_audio_token = _get_cost_per_unit(model_info, "output_cost_per_audio_token", None)
+    _output_cost_per_reasoning_token = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
 
     ## AUDIO COST
-    if (
-        _output_cost_per_audio_token is not None
-        and audio_tokens is not None
-        and audio_tokens > 0
-    ):
+    if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
+        _output_cost_per_audio_token = (
+            _output_cost_per_audio_token
+            if _output_cost_per_audio_token is not None
+            else completion_base_cost
+        )
         completion_cost += float(audio_tokens) * _output_cost_per_audio_token
 
+    ## REASONING COST
+    if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
+        _output_cost_per_reasoning_token = (
+            _output_cost_per_reasoning_token
+            if _output_cost_per_reasoning_token is not None
+            else completion_base_cost
+        )
+        completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
+
     return prompt_cost, completion_cost
+
+
+class CostCalculatorUtils:
+    @staticmethod
+    def _call_type_has_image_response(call_type: str) -> bool:
+        """
+        Returns True if the call type has an image response
+
+        eg calls that have image response:
+        - Image Generation
+        - Image Edit
+        - Passthrough Image Generation
+        """
+        if call_type in [
+            # image generation
+            CallTypes.image_generation.value,
+            CallTypes.aimage_generation.value,
+            # passthrough image generation
+            PassthroughCallTypes.passthrough_image_generation.value,
+            # image edit
+            CallTypes.image_edit.value,
+            CallTypes.aimage_edit.value,
+        ]:
+            return True
+        return False
+    
+    @staticmethod
+    def route_image_generation_cost_calculator(
+        model: str,
+        completion_response: Any,
+        custom_llm_provider: Optional[str] = None,
+        quality: Optional[str] = None,
+        n: Optional[int] = None,
+        size: Optional[str] = None,
+        optional_params: Optional[dict] = None,
+    ) -> float:
+        """
+        Route the image generation cost calculator based on the custom_llm_provider
+        """
+        from litellm.cost_calculator import default_image_cost_calculator
+        from litellm.llms.azure_ai.image_generation.cost_calculator import (
+            cost_calculator as azure_ai_image_cost_calculator,
+        )
+        from litellm.llms.bedrock.image.cost_calculator import (
+            cost_calculator as bedrock_image_cost_calculator,
+        )
+        from litellm.llms.gemini.image_generation.cost_calculator import (
+            cost_calculator as gemini_image_cost_calculator,
+        )
+        from litellm.llms.recraft.cost_calculator import (
+            cost_calculator as recraft_image_cost_calculator,
+        )
+        from litellm.llms.vertex_ai.image_generation.cost_calculator import (
+            cost_calculator as vertex_ai_image_cost_calculator,
+        )
+
+        if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
+            if isinstance(completion_response, ImageResponse):
+                return vertex_ai_image_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                )
+        elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
+            if isinstance(completion_response, ImageResponse):
+                return bedrock_image_cost_calculator(
+                    model=model,
+                    size=size,
+                    image_response=completion_response,
+                    optional_params=optional_params,
+                )
+            raise TypeError(
+                "completion_response must be of type ImageResponse for bedrock image cost calculation"
+            )
+        elif custom_llm_provider == litellm.LlmProviders.RECRAFT.value:
+            from litellm.llms.recraft.cost_calculator import (
+                cost_calculator as recraft_image_cost_calculator,
+            )
+
+            return recraft_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
+            from litellm.llms.gemini.image_generation.cost_calculator import (
+                cost_calculator as gemini_image_cost_calculator,
+            )
+
+            return gemini_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.AZURE_AI.value:
+            return azure_ai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        else:
+            return default_image_cost_calculator(
+                model=model,
+                quality=quality,
+                custom_llm_provider=custom_llm_provider,
+                n=n,
+                size=size,
+                optional_params=optional_params,
+            )
+        return 0.0

@@ -205,6 +205,7 @@ class ContextCachingEndpoints(VertexBase):
     def check_and_create_cache(
         self,
         messages: List[AllMessageValues],  # receives openai format messages
+        optional_params: dict,  # cache the tools if present, in case cache content exists in messages
         api_key: str,
         api_base: Optional[str],
         model: str,
@@ -213,7 +214,7 @@ class ContextCachingEndpoints(VertexBase):
         logging_obj: Logging,
         extra_headers: Optional[dict] = None,
         cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[str]]:
+    ) -> Tuple[List[AllMessageValues], dict, Optional[str]]:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -225,7 +226,16 @@ class ContextCachingEndpoints(VertexBase):
         Follows - https://ai.google.dev/api/caching#request-body
         """
         if cached_content is not None:
-            return messages, cached_content
+            return messages, optional_params, cached_content
+
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages
+        )
+
+        if len(cached_messages) == 0:
+            return messages, optional_params, None
+
+        tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -252,15 +262,10 @@ class ContextCachingEndpoints(VertexBase):
         else:
             client = client
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
-
-        if len(cached_messages) == 0:
-            return messages, None
-
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
+        generated_cache_key = local_cache_obj.get_cache_key(
+            messages=cached_messages, tools=tools
+        )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -270,7 +275,7 @@ class ContextCachingEndpoints(VertexBase):
             logging_obj=logging_obj,
         )
         if google_cache_name:
-            return non_cached_messages, google_cache_name
+            return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
         cached_content_request_body = (
@@ -278,6 +283,8 @@ class ContextCachingEndpoints(VertexBase):
                 model=model, messages=cached_messages, cache_key=generated_cache_key
             )
         )
+
+        cached_content_request_body["tools"] = tools
 
         ## LOGGING
         logging_obj.pre_call(
@@ -305,11 +312,16 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_response_obj = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
-        return (non_cached_messages, cached_content_response_obj["name"])
+        return (
+            non_cached_messages,
+            optional_params,
+            cached_content_response_obj["name"],
+        )
 
     async def async_check_and_create_cache(
         self,
         messages: List[AllMessageValues],  # receives openai format messages
+        optional_params: dict,  # cache the tools if present, in case cache content exists in messages
         api_key: str,
         api_base: Optional[str],
         model: str,
@@ -318,7 +330,7 @@ class ContextCachingEndpoints(VertexBase):
         logging_obj: Logging,
         extra_headers: Optional[dict] = None,
         cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[str]]:
+    ) -> Tuple[List[AllMessageValues], dict, Optional[str]]:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -330,14 +342,16 @@ class ContextCachingEndpoints(VertexBase):
         Follows - https://ai.google.dev/api/caching#request-body
         """
         if cached_content is not None:
-            return messages, cached_content
+            return messages, optional_params, cached_content
 
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages
         )
 
         if len(cached_messages) == 0:
-            return messages, None
+            return messages, optional_params, None
+
+        tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -362,7 +376,9 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
+        generated_cache_key = local_cache_obj.get_cache_key(
+            messages=cached_messages, tools=tools
+        )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -371,8 +387,9 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             logging_obj=logging_obj,
         )
+
         if google_cache_name:
-            return non_cached_messages, google_cache_name
+            return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
         cached_content_request_body = (
@@ -380,6 +397,8 @@ class ContextCachingEndpoints(VertexBase):
                 model=model, messages=cached_messages, cache_key=generated_cache_key
             )
         )
+
+        cached_content_request_body["tools"] = tools
 
         ## LOGGING
         logging_obj.pre_call(
@@ -407,7 +426,11 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_response_obj = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
-        return (non_cached_messages, cached_content_response_obj["name"])
+        return (
+            non_cached_messages,
+            optional_params,
+            cached_content_response_obj["name"],
+        )
 
     def get_cache(self):
         pass

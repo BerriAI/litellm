@@ -55,13 +55,17 @@ class S3Cache(BaseCache):
             **kwargs,
         )
 
+    def _to_s3_key(self, key: str) -> str:
+        """Convert cache key to S3 key"""
+        return self.key_prefix + key.replace(":", "/")
+
     def set_cache(self, key, value, **kwargs):
         try:
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
             serialized_value = json.dumps(value)
-            key = self.key_prefix + key
+            key = self._to_s3_key(key)
 
             if ttl is not None:
                 cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
@@ -104,7 +108,7 @@ class S3Cache(BaseCache):
         import botocore
 
         try:
-            key = self.key_prefix + key
+            key = self._to_s3_key(key)
 
             print_verbose(f"Get S3 Cache: key: {key}")
             # Download the data from S3
@@ -123,7 +127,7 @@ class S3Cache(BaseCache):
                     )  # Convert string to dictionary
                 except Exception:
                     cached_response = ast.literal_eval(cached_response)
-            if type(cached_response) is not dict:
+            if not isinstance(cached_response, dict):
                 cached_response = dict(cached_response)
             verbose_logger.debug(
                 f"Got S3 Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"

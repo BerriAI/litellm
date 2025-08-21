@@ -70,12 +70,13 @@ class GcsPubSubLogger(CustomBatchLogger):
         """Construct authorization headers using Vertex AI auth"""
         from litellm import vertex_chat_completion
 
-        _auth_header, vertex_project = (
-            await vertex_chat_completion._ensure_access_token_async(
-                credentials=self.path_service_account_json,
-                project_id=None,
-                custom_llm_provider="vertex_ai",
-            )
+        (
+            _auth_header,
+            vertex_project,
+        ) = await vertex_chat_completion._ensure_access_token_async(
+            credentials=self.path_service_account_json,
+            project_id=self.project_id,
+            custom_llm_provider="vertex_ai",
         )
 
         auth_header, _ = vertex_chat_completion._get_token_and_url(

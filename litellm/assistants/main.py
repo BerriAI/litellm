@@ -110,6 +110,7 @@ def get_assistants(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -304,11 +305,17 @@ def create_assistants(
         "response_format": response_format,
     }
 
+    # only send params that are not None
+    create_assistant_data = {
+        k: v for k, v in create_assistant_data.items() if v is not None
+    }
+
     response: Optional[Union[Coroutine[Any, Any, Assistant], Assistant]] = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -485,6 +492,7 @@ def delete_assistant(
         api_base = (
             optional_params.api_base
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -673,6 +681,7 @@ def create_thread(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -828,6 +837,7 @@ def get_thread(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -1016,6 +1026,7 @@ def add_message(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -1177,6 +1188,7 @@ def get_messages(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
@@ -1375,6 +1387,7 @@ def run_thread(
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
+            or os.getenv("OPENAI_BASE_URL")
             or os.getenv("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )

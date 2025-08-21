@@ -68,7 +68,9 @@ def test_bedrock_completion_with_region_name():
         )
         assert (
             mock_post.call_args.kwargs["data"]
-            == '{"message": "Hello, world!", "chat_history": []}'
+            == json.dumps({"message": "Hello, world!", "chat_history": []}).encode(
+                "utf-8"
+            )
         )
 
         # Print the URL and body of the HTTP request.

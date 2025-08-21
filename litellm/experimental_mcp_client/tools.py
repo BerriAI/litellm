@@ -1,11 +1,12 @@
 import json
-from typing import List, Literal, Union
+from typing import Dict, List, Literal, Union
 
 from mcp import ClientSession
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
 from openai.types.chat import ChatCompletionToolParam
+from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
 from litellm.types.utils import ChatCompletionMessageToolCall
@@ -26,6 +27,16 @@ def transform_mcp_tool_to_openai_tool(mcp_tool: MCPTool) -> ChatCompletionToolPa
         ),
     )
 
+
+def transform_mcp_tool_to_openai_responses_api_tool(mcp_tool: MCPTool) -> FunctionToolParam:
+    """Convert an MCP tool to an OpenAI Responses API tool."""
+    return FunctionToolParam(
+        name=mcp_tool.name,
+        parameters=mcp_tool.inputSchema,
+        strict=False,
+        type="function",
+        description=mcp_tool.description or "",
+    )
 
 async def load_mcp_tools(
     session: ClientSession, format: Literal["mcp", "openai"] = "mcp"
@@ -76,8 +87,8 @@ def _get_function_arguments(function: FunctionDefinition) -> dict:
     return arguments if isinstance(arguments, dict) else {}
 
 
-def _transform_openai_tool_call_to_mcp_tool_call_request(
-    openai_tool: ChatCompletionMessageToolCall,
+def transform_openai_tool_call_request_to_mcp_tool_call_request(
+    openai_tool: Union[ChatCompletionMessageToolCall, Dict],
 ) -> MCPCallToolRequestParams:
     """Convert an OpenAI ChatCompletionMessageToolCall to an MCP CallToolRequestParams."""
     function = openai_tool["function"]
@@ -100,8 +111,10 @@ async def call_openai_tool(
     Returns:
         The result of the MCP tool call.
     """
-    mcp_tool_call_request_params = _transform_openai_tool_call_to_mcp_tool_call_request(
-        openai_tool=openai_tool,
+    mcp_tool_call_request_params = (
+        transform_openai_tool_call_request_to_mcp_tool_call_request(
+            openai_tool=openai_tool,
+        )
     )
     return await call_mcp_tool(
         session=session,

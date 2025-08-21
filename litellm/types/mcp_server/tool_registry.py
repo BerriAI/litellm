@@ -1,16 +1,15 @@
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, ClassVar, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class MCPTool(BaseModel):
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True)
     name: str
     description: str
     input_schema: Dict[str, Any]
     handler: Callable
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class ToolSchema(BaseModel):

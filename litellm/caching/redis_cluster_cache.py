@@ -5,7 +5,7 @@ Key differences:
 - RedisClient NEEDs to be re-used across requests, adds 3000ms latency if it's re-created
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from litellm.caching.redis_cache import RedisCache
 
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     pipeline = Pipeline
     async_redis_client = Redis
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     pipeline = Any
     async_redis_client = Any

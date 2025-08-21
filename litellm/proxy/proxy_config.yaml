@@ -1,9 +1,17 @@
 model_list:
-  - model_name: fake-openai-endpoint
+  - model_name: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
     litellm_params:
-      model: openai/fake
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
+  - model_name: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
+litellm_settings:
+  callbacks: ["datadog_llm_observability"]
 
-general_settings:
-  allow_requests_on_db_unavailable: True
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
+      mode: "during_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
