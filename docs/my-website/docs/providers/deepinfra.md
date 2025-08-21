@@ -147,8 +147,7 @@ curl -L -X POST 'http://0.0.0.0:4000/rerank' \
 | ------------------ | ----------- | ----------------------------------------------- |
 | `query`            | `str`       | The query to rerank the documents against       |
 | `documents`        | `list[str]` | The documents to rerank                         |
-| `top_n`            | `int`       | The number of documents to return               |
-| `return_documents` | `bool`      | Whether to return the documents in the response |
+
 
 ### Provider-specific parameters
 Pass any deepinfra specific parameters as a keyword argument to the rerank function, e.g.
