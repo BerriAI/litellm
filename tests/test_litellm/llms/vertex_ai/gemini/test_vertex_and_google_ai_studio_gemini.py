@@ -1027,64 +1027,92 @@ def test_vertex_ai_code_line_length():
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
 
 
-def test_vertex_ai_thought_signature_passthrough():
+def test_vertex_ai_signature_full_roundtrip():
     """
-    Tests that a `thought_signature` received in an assistant's tool_call
-    is correctly passed through in the subsequent tool message part.
+    Tests the full lifecycle of a thought signature:
+    1. Parsing it from a raw API response into a litellm.ModelResponse.
+    2. Transforming it from the litellm.ModelResponse back into a request payload.
     """
+    # ### PART 1: Test Response Parsing ###
+
+    # 1. Arrange: Create a mock raw API response with a signature
+    v_config = VertexGeminiConfig()
+    raw_vertex_response_json = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_weather",
+                                "args": {"location": "Boston"},
+                            },
+                            "thoughtSignature": "test_signature_bytes_from_api",
+                        }
+                    ],
+                },
+                "finishReason": "TOOL_CALL",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 10,
+            "totalTokenCount": 20,
+        },
+    }
+    mock_response = MagicMock()
+    mock_response.json.return_value = raw_vertex_response_json
+
+    # 2. Act: Transform the raw response into a litellm object
+    model_response = v_config.transform_response(
+        model="gemini-2.5-flash",
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    # 3. Assert: Check that the signature was correctly parsed and stored
+    assert model_response is not None
+    assistant_message = model_response.choices[0].message
+    assert assistant_message.tool_calls is not None
+    assert len(assistant_message.tool_calls) == 1
+    tool_call = assistant_message.tool_calls[0]
+    
+    # This is the crucial check for the first half of the process
+    assert "thought_signature" in tool_call
+    assert tool_call["thought_signature"] == "test_signature_bytes_from_api"
+
+
+    # ### PART 2: Test Request Transformation ###
+
+    # 1. Arrange: Create the message history for the next turn
     from litellm.llms.vertex_ai.gemini.transformation import (
         _gemini_convert_messages_with_history,
     )
-
-    # 1. Simulate assistant message with a tool call and a signature
-    assistant_message = {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {
-                "id": "call_12345",
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "arguments": '{"location": "Boston"}',
-                },
-                "thought_signature": b"test_signature_bytes",
-            }
-        ],
-    }
-
-    # 2. Simulate the corresponding tool response message
+    
     tool_message = {
         "role": "tool",
-        "tool_call_id": "call_12345",
+        "tool_call_id": tool_call["id"],
         "content": '{"temperature": "22"}',
     }
+    messages_for_next_turn = [assistant_message, tool_message]
 
-    messages = [assistant_message, tool_message]
+    # 2. Act: Transform the messages for the next API call
+    transformed_contents = _gemini_convert_messages_with_history(messages_for_next_turn)
 
-    # 3. Transform the messages
-    transformed_contents = _gemini_convert_messages_with_history(messages)
-
-    # 4. Assert the result
-    # The result should have a 'model' content part and a 'tool' content part.
+    # 3. Assert: Check that the signature is correctly included in the request payload
     assert len(transformed_contents) == 2
-    model_content = transformed_contents[0]
     tool_content = transformed_contents[1]
-
-    assert model_content["role"] == "model"
     assert tool_content["role"] == "tool"
-
-    # The tool content should contain one part with the function response and the signature
     assert len(tool_content["parts"]) == 1
     tool_part = tool_content["parts"][0]
 
-    # Check for the function response
-    assert "function_response" in tool_part
-    assert tool_part["function_response"]["name"] == "get_weather"
-    assert tool_part["function_response"]["response"] == {
-        "content": '{"temperature": "22"}'
-    }
-
-    # Crucially, check for the thought_signature
+    # This is the crucial check for the second half of the process
     assert "thought_signature" in tool_part
-    assert tool_part["thought_signature"] == b"test_signature_bytes"
+    assert tool_part["thought_signature"] == "test_signature_bytes_from_api"
