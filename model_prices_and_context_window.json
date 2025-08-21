@@ -9723,6 +9723,30 @@
         "supports_tool_choice": true,
         "supports_prompt_caching": true
     },
+    "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": {
+        "max_tokens": 32768,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "vertex_ai-qwen_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas": {
+        "max_tokens": 16384,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 0.25e-06,
+        "output_cost_per_token": 1e-06,
+        "litellm_provider": "vertex_ai-qwen_models",
+        "mode": "chat",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
     "vertex_ai/meta/llama3-405b-instruct-maas": {
         "max_tokens": 32000,
         "max_input_tokens": 32000,
@@ -15648,6 +15672,18 @@
         "mode": "chat",
         "supports_response_schema": true,
         "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": false
+    },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v3-0324": {
+        "max_tokens": 163840,
+        "max_input_tokens": 163840,
+        "max_output_tokens": 163840,
+        "input_cost_per_token": 9e-07,
+        "output_cost_per_token": 9e-07,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/models/fireworks/deepseek-v3-0324",
         "supports_tool_choice": false
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-r1": {
