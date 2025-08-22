@@ -5361,6 +5361,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("CEREBRAS_API_KEY")
+        elif custom_llm_provider == "baseten":
+            if "BASETEN_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BASETEN_API_KEY")
         elif custom_llm_provider == "xai":
             if "XAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6916,6 +6921,8 @@ class ProviderConfigManager:
             return litellm.NvidiaNimConfig()
         elif litellm.LlmProviders.CEREBRAS == provider:
             return litellm.CerebrasConfig()
+        elif litellm.LlmProviders.BASETEN == provider:
+            return litellm.BasetenConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
