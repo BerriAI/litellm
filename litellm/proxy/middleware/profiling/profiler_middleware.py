@@ -120,7 +120,7 @@ class ProfilerMiddleware(BaseHTTPMiddleware):
     def _should_profile(self) -> bool:
         """Check if profiling should be enabled based on configuration"""
         from litellm.secret_managers.main import get_secret_bool
-        return get_secret_bool("LITELLM_PROFILING") is True
+        return False
 
     def _should_open_in_browser(self) -> bool:
         """Check if profiler results should be opened in browser"""

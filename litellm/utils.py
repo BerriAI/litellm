@@ -1671,6 +1671,7 @@ def update_response_metadata(
         - response._hidden_params["litellm_overhead_time_ms"]
         - response.response_time_ms
     """
+    return
     if result is None:
         return
 
@@ -4661,6 +4662,7 @@ def _get_model_info_helper(  # noqa: PLR0915
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
+    return None
     try:
         azure_llms = {**litellm.azure_llms, **litellm.azure_embedding_models}
         if model in azure_llms:
