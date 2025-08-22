@@ -3,7 +3,7 @@ import { Typography, Space, Button, Divider, message } from 'antd';
 import { WarningOutlined, InfoCircleOutlined, CopyOutlined } from '@ant-design/icons';
 import { testConnectionRequest } from "../networking";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
-
+import NotificationsManager from '../molecules/notifications_manager';
 const { Text } = Typography;
 
 interface ModelConnectionTestProps {
@@ -59,7 +59,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
 
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj?.mode);
       if (response.status === "success") {
-        message.success("Connection test successful!");
+        NotificationsManager.success("Connection test successful!");
         setError(null);
         setIsSuccess(true);
       } else {
@@ -231,7 +231,7 @@ ${formattedBody}
                 icon={<CopyOutlined />} 
                 onClick={() => {
                   navigator.clipboard.writeText(curlCommand || '');
-                  message.success('Copied to clipboard');
+                  NotificationsManager.success('Copied to clipboard');
                 }}
               >
                 Copy to Clipboard

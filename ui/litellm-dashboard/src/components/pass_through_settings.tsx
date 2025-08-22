@@ -45,7 +45,7 @@ import PassThroughInfoView from "./pass_through_info";
 import { DataTable } from "./view_logs/table";
 import { ColumnDef } from "@tanstack/react-table";
 import { Eye, EyeOff } from "lucide-react";
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -151,10 +151,10 @@ const PassThroughSettings: React.FC<GeneralSettingsPageProps> = ({
       const updatedSettings = generalSettings.filter((setting) => setting.id !== endpointToDelete);
       setGeneralSettings(updatedSettings);
 
-      message.success("Endpoint deleted successfully.");
+      NotificationsManager.success("Endpoint deleted successfully.");
     } catch (error) {
       console.error("Error deleting the endpoint:", error);
-      NotificationManager.fromBackend("Error deleting the endpoint: " + error);
+      NotificationsManager.fromBackend("Error deleting the endpoint: " + error);
     }
 
     // Close the confirmation modal and reset the endpointToDelete

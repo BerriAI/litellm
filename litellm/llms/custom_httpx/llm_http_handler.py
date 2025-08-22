@@ -111,6 +111,7 @@ class BaseLLMHTTPHandler:
         response: Optional[httpx.Response] = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
             try:
+
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -2753,7 +2754,8 @@ class BaseLLMHTTPHandler:
 
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2804,15 +2806,17 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
 
         return model_response
@@ -2845,10 +2849,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-
         headers = image_generation_provider_config.validate_environment(
             api_key=litellm_params.get("api_key", None),
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=image_generation_optional_request_params.get("extra_headers", {})
+            or {},
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -2899,17 +2903,19 @@ class BaseLLMHTTPHandler:
                 provider_config=image_generation_provider_config,
             )
 
-        model_response: ImageResponse = image_generation_provider_config.transform_image_generation_response(
-            model=model,
-            raw_response=response,
-            model_response=litellm.ImageResponse(),
-            logging_obj=logging_obj,
-            request_data=data,
-            optional_params=image_generation_optional_request_params,
-            litellm_params=dict(litellm_params),
-            encoding=None,
+        model_response: ImageResponse = (
+            image_generation_provider_config.transform_image_generation_response(
+                model=model,
+                raw_response=response,
+                model_response=litellm.ImageResponse(),
+                logging_obj=logging_obj,
+                request_data=data,
+                optional_params=image_generation_optional_request_params,
+                litellm_params=dict(litellm_params),
+                encoding=None,
+            )
         )
-        
+
         return model_response
 
     ###### VECTOR STORE HANDLER ######
@@ -2977,7 +2983,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = await async_httpx_client.post(
@@ -3076,7 +3084,9 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        request_data = json.dumps(request_body) if signed_json_body is None else signed_json_body
+        request_data = (
+            json.dumps(request_body) if signed_json_body is None else signed_json_body
+        )
 
         try:
             response = sync_httpx_client.post(
