@@ -316,18 +316,7 @@ class LangFuseLogger:
             output = response_obj.get("text", None)
         elif response_obj is not None and isinstance(response_obj, litellm.RerankResponse):
             input = prompt
-            # Format rerank results with document scores for better visibility in Langfuse
-            if response_obj.results:
-                output = [
-                    {
-                        "index": result.get("index"),
-                        "relevance_score": result.get("relevance_score"),
-                        "document": result.get("document", {}).get("text") if result.get("document") else None,
-                    }
-                    for result in response_obj.results
-                ]
-            else:
-                output = None
+            output = response_obj.results
         elif (
             kwargs.get("call_type") is not None
             and kwargs.get("call_type") == "_arealtime"
@@ -923,13 +912,13 @@ def strip_null_values(data: Any) -> Any:
 def log_requester_metadata(clean_metadata: dict):
     returned_metadata = {}
     requester_metadata = clean_metadata.get("requester_metadata") or {}
-
+    
     # Copy langfuse_* keys from requester_metadata to root level
     if isinstance(requester_metadata, dict):
         for key, value in requester_metadata.items():
             if key.startswith("langfuse_"):
                 returned_metadata[key] = value
-
+    
     for k, v in clean_metadata.items():
         if k not in requester_metadata:
             returned_metadata[k] = v
