@@ -486,7 +486,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         if api_base is None:
             api_base = litellm.BasetenConfig.get_api_base_for_model(model)
         else:
-            api_base = api_base or get_secret("BASETEN_API_BASE") or "https://inference.baseten.co/v1"
+            api_base = api_base or get_secret_str("BASETEN_API_BASE") or "https://inference.baseten.co/v1"
         dynamic_api_key = api_key or get_secret_str("BASETEN_API_KEY")
     elif custom_llm_provider == "sambanova":
         api_base = (
@@ -740,6 +740,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.HyperbolicChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "aiml":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.AIMLChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
 
