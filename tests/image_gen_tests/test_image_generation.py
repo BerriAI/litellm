@@ -169,6 +169,10 @@ class TestRecraftImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "recraft/recraftv3"}
 
+class TestAimlImageGeneration(BaseImageGenTest):
+    def get_base_image_generation_call_args(self) -> dict:
+        return {"model": "aiml/flux-pro/v1.1"}
+
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-preview-06-06"}
