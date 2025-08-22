@@ -10096,6 +10096,12 @@
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "vertex_ai/imagen-4.0-generate-001": {
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "vertex_ai/imagen-4.0-generate-preview-06-06": {
         "output_cost_per_image": 0.04,
         "litellm_provider": "vertex_ai-image-models",
@@ -10104,6 +10110,18 @@
     },
     "vertex_ai/imagen-4.0-ultra-generate-preview-06-06": {
         "output_cost_per_image": 0.06,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "vertex_ai/imagen-4.0-ultra-generate-001": {
+        "output_cost_per_image": 0.06,
+        "litellm_provider": "vertex_ai-image-models",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "vertex_ai/imagen-4.0-fast-generate-001": {
+        "output_cost_per_image": 0.02,
         "litellm_provider": "vertex_ai-image-models",
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
@@ -10814,14 +10832,32 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models",
         "supports_tool_choice": true
     },
+    "gemini/imagen-4.0-generate-001": {
+        "output_cost_per_image": 0.04,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "gemini/imagen-4.0-generate-preview-06-06": {
         "output_cost_per_image": 0.04,
         "litellm_provider": "gemini",
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "gemini/imagen-4.0-ultra-generate-001": {
+        "output_cost_per_image": 0.06,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
     "gemini/imagen-4.0-ultra-generate-preview-06-06": {
         "output_cost_per_image": 0.06,
+        "litellm_provider": "gemini",
+        "mode": "image_generation",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "gemini/imagen-4.0-fast-generate-001": {
+        "output_cost_per_image": 0.02,
         "litellm_provider": "gemini",
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
@@ -15251,36 +15287,6 @@
         "output_cost_per_token": 1.3e-07,
         "litellm_provider": "deepinfra",
         "mode": "chat",
-        "supports_tool_choice": true
-    },
-    "deepinfra/Qwen/Qwen3-Reranker-8B": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 5e-8,
-        "output_cost_per_token": 5e-8,
-        "litellm_provider": "deepinfra",
-        "mode": "rerank",
-        "supports_tool_choice": true
-    },
-    "deepinfra/Qwen/Qwen3-Reranker-4B": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 2.5e-8,
-        "output_cost_per_token": 2.5e-8,
-        "litellm_provider": "deepinfra",
-        "mode": "rerank",
-        "supports_tool_choice": true
-    },
-    "deepinfra/Qwen/Qwen3-Reranker-0.6B": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "input_cost_per_token": 1e-8,
-        "output_cost_per_token": 1e-8,
-        "litellm_provider": "deepinfra",
-        "mode": "rerank",
         "supports_tool_choice": true
     },
     "perplexity/codellama-34b-instruct": {
