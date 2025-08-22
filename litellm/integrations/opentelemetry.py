@@ -49,40 +49,6 @@ LITELLM_LOGGER_NAME = os.getenv("LITELLM_LOGGER_NAME", "litellm")
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
-_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS = [
-    0.01,
-    0.02,
-    0.04,
-    0.08,
-    0.16,
-    0.32,
-    0.64,
-    1.28,
-    2.56,
-    5.12,
-    10.24,
-    20.48,
-    40.96,
-    81.92,
-]
-
-_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS = [
-    1,
-    4,
-    16,
-    64,
-    256,
-    1024,
-    4096,
-    16384,
-    65536,
-    262144,
-    1048576,
-    4194304,
-    16777216,
-    67108864,
-]
-
 
 def _get_litellm_resource():
     """
@@ -285,13 +251,11 @@ class OpenTelemetry(CustomLogger):
             name="gen_ai.client.operation.duration", # Replace with semconv constant post incubating status
             description="GenAI operation duration",
             unit="s",
-            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_OPERATION_DURATION_BUCKETS,
         )
         self._token_usage_histogram = meter.create_histogram(
             name="gen_ai.client.token.usage", # Replace with semconv constant post incubating status
             description="GenAI token usage",
             unit="{token}",
-            explicit_bucket_boundaries_advisory=_GEN_AI_CLIENT_TOKEN_USAGE_BUCKETS,
         )
         self._cost_histogram = meter.create_histogram(
             name="gen_ai.client.token.cost",
