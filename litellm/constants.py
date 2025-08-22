@@ -285,6 +285,7 @@ LITELLM_CHAT_PROVIDERS = [
     "dashscope",
     "moonshot",
     "v0",
+    "heroku",
     "oci",
     "morph",
     "lambda_ai",
