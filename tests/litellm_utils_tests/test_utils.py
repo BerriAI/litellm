@@ -338,9 +338,7 @@ def test_aget_valid_models():
     print(valid_models)
 
     # list of openai supported llms on litellm
-    expected_models = (
-        litellm.open_ai_chat_completion_models + litellm.open_ai_text_completion_models
-    )
+    expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
 
     assert valid_models == expected_models
 
