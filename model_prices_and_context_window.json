@@ -17611,6 +17611,14 @@
         "litellm_provider": "voyage",
         "mode": "embedding"
     },
+    "voyage/voyage-context-3": {
+        "max_tokens": 120000,
+        "max_input_tokens": 120000,
+        "input_cost_per_token": 1.8e-07,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
     "voyage/rerank-2": {
         "max_tokens": 16000,
         "max_input_tokens": 16000,
