@@ -338,11 +338,9 @@ def test_aget_valid_models():
     print(valid_models)
 
     # list of openai supported llms on litellm
-    expected_models = (
-        litellm.open_ai_chat_completion_models + litellm.open_ai_text_completion_models
-    )
+    expected_models = litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
 
-    assert valid_models == expected_models
+    assert set(valid_models) == set(expected_models)
 
     # reset replicate env key
     os.environ = old_environ
@@ -355,7 +353,7 @@ def test_aget_valid_models():
     valid_models = get_valid_models()
 
     print(valid_models)
-    assert valid_models == expected_models
+    assert set(valid_models) == set(expected_models)
 
     # reset replicate env key
     os.environ = old_environ
@@ -376,7 +374,7 @@ def test_get_valid_models_with_custom_llm_provider(custom_llm_provider):
     )
     print(valid_models)
     assert len(valid_models) > 0
-    assert provider_config.get_models() == valid_models
+    assert set(provider_config.get_models()) == set(valid_models)
 
 
 # test_get_valid_models()
