@@ -78,6 +78,10 @@ try:
     import orjson
     import yaml  # type: ignore
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.middleware.profiling.profiler_middleware import (
+        ProfilerMiddleware,
+    )
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -291,6 +295,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.middleware.profiling.profiler_middleware import ProfilerMiddleware
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -519,6 +524,17 @@ def cleanup_router_config_variables():
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    
+    # Cleanup profiling before other shutdown activities
+    try:
+        print("cleanup_all_profilers")
+        from litellm.proxy.middleware.profiling.profiler_middleware import (
+            cleanup_all_profilers,
+        )
+        cleanup_all_profilers()
+    except Exception as e:
+        verbose_proxy_logger.warning(f"Error during profiler cleanup: {e}")
+    
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -893,7 +909,7 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
-
+app.add_middleware(ProfilerMiddleware)
 
 def mount_swagger_ui():
     swagger_directory = os.path.join(current_dir, "swagger")
@@ -3995,6 +4011,58 @@ async def model_info(
         fallback_type=None,
         llm_router=llm_router,
     )
+
+import aiohttp
+
+http_client: aiohttp.ClientSession = None
+# for completion
+@router.post("/aio/chat/completions")
+@router.post("/aio/v1/chat/completions")
+async def proxy_completion(request: Request):
+    global http_client
+    # Get the raw request body
+    body = await request.json()
+    
+    # Get the authorization header
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
+    if http_client is None:
+        http_client = aiohttp.ClientSession()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': auth_header
+    }
+
+    async with http_client.post(
+        'https://exampleopenaiendpoint-production-0ee2.up.railway.app/chat/completions',
+        headers=headers,
+        json=body
+    ) as response:
+        return await response.json()
+
+
+@router.post("/lite_sdk/chat/completions")
+@router.post("/lite_sdk/v1/chat/completions")
+async def lite_sdk_completion(request: Request):
+    # Get the raw request body
+    body = await request.json()
+    body.pop("model", None)
+    
+    # Get the authorization header
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    response = await litellm.acompletion(
+        model="openai/fake-openai-endpoint",
+        api_base="https://exampleopenaiendpoint-production-0ee2.up.railway.app/",
+        api_key="my-key",
+        mock_response="Hello this is a mock response",
+        **body,
+    )
+    return response
 
 
 @router.post(
