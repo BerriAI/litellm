@@ -827,16 +827,16 @@ async def _client_async_logging_helper(
     end_time,
     is_completion_with_fallbacks: bool,
 ):
-    if (
-        is_completion_with_fallbacks is False
-    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477
-        print_verbose(
-            f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
-        )
-        # check if user does not want this to be logged
-        asyncio.create_task(
-            logging_obj.async_success_handler(result, start_time, end_time)
-        )
+    from litellm.litellm_core_utils.logging_worker import (
+        ensure_log_worker,
+        try_enqueue_log,
+    )
+
+    if not is_completion_with_fallbacks:
+        print_verbose("Async Wrapper: Completed Call, enqueueing log")
+        ensure_log_worker(logging_obj)
+        try_enqueue_log(result, start_time, end_time)
+
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=result,
             start_time=start_time,
