@@ -19,6 +19,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
+    from opentelemetry._logs import LogRecord
     from opentelemetry.trace import Context as _Context
     from opentelemetry.trace import Span as _Span
     from opentelemetry.trace import Tracer as _Tracer
@@ -138,7 +139,6 @@ class OpenTelemetry(CustomLogger):
         # injection points for testing
         tracer_provider: Optional[Any] = None,
         logger_provider: Optional[Any] = None,
-        event_logger_provider: Optional[Any] = None,
         meter_provider: Optional[Any] = None,
         **kwargs,
     ):
@@ -169,7 +169,7 @@ class OpenTelemetry(CustomLogger):
         # init CustomLogger params
         super().__init__(**kwargs)
         self._init_metrics(meter_provider)
-        self._init_logs_and_events(logger_provider, event_logger_provider)
+        self._init_logs(logger_provider)
         self._init_otel_logger_on_litellm_proxy()
 
     def _init_otel_logger_on_litellm_proxy(self):
@@ -263,20 +263,13 @@ class OpenTelemetry(CustomLogger):
             unit="USD",
         )
 
-    def _init_logs_and_events(self, logger_provider, event_logger_provider):
+    def _init_logs(self, logger_provider):
         # nothing to do if events disabled
         if not self.config.enable_events:
-            self._event_logger = None
             return
 
-        from opentelemetry._events import (
-            get_event_logger,
-            get_event_logger_provider,
-            set_event_logger_provider,
-        )
-        from opentelemetry._logs import set_logger_provider
+        from opentelemetry._logs import set_logger_provider, get_logger
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-        from opentelemetry.sdk._events import EventLoggerProvider as OTEventLoggerProvider
         from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
@@ -293,18 +286,6 @@ class OpenTelemetry(CustomLogger):
                 )
             )
         set_logger_provider(logger_provider)
-
-        # set up event logger
-        if event_logger_provider is None:
-            event_logger_provider = OTEventLoggerProvider(logger_provider)
-        set_event_logger_provider(event_logger_provider)
-        self._event_logger = get_event_logger(
-            name=LITELLM_LOGGER_NAME,
-            version=None,
-            schema_url=None,
-            attributes=_get_litellm_resource().attributes,
-            event_logger_provider=get_event_logger_provider(),
-        )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._handle_success(kwargs, response_obj, start_time, end_time)
@@ -563,9 +544,9 @@ class OpenTelemetry(CustomLogger):
         # 4. Metrics & cost recording
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
-        # 5. Semantic events
-        if self.config.enable_events and self._event_logger:
-            self._emit_semantic_events(kwargs, response_obj, span)
+        # 5. Semantic logs. 
+        if self.config.enable_events:
+            self._emit_semantic_logs(kwargs, response_obj, span)
 
         # 6. End parent span
         if parent_span is not None:
@@ -661,11 +642,12 @@ class OpenTelemetry(CustomLogger):
         if self._cost_histogram and cost:
             self._cost_histogram.record(cost, attributes=common_attrs)
 
-    def _emit_semantic_events(self, kwargs, response_obj, span):
-        if not self._event_logger:
+    def _emit_semantic_logs(self, kwargs, response_obj, span: Span):
+        if not self.config.enable_events:
             return
 
-        from opentelemetry._events import Event
+        from opentelemetry._logs import get_logger, LogRecord
+        otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
@@ -675,26 +657,28 @@ class OpenTelemetry(CustomLogger):
         # per-message events
         for msg in kwargs.get("messages", []):
             role = msg.get("role", "user")
-            name = f"gen_ai.{role}.message"
-            attrs = {"gen_ai.system": provider}
+            name = f"gen_ai.content.prompt"
+            attrs = {"event_name": name, "gen_ai.system": provider}
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
             if self.message_logging and msg.get("content"):
-                attrs["content"] = msg["content"]
-            evt = Event(
-                name=name,
-                attributes=attrs,
-                body=msg.copy(),
-                trace_id=parent_ctx.trace_id,
-                span_id=parent_ctx.span_id,
-                trace_flags=parent_ctx.trace_flags,
+                attrs["gen_ai.prompt"] = msg["content"]
+
+            otel_logger.emit(
+                LogRecord(
+                    attributes=attrs,
+                    body=msg.copy(),
+                    trace_id=parent_ctx.trace_id,
+                    span_id=parent_ctx.span_id,
+                    trace_flags=parent_ctx.trace_flags,
+                )
             )
-            self._event_logger.emit(evt)
 
         # per-choice events
         for idx, choice in enumerate(response_obj.get("choices", [])):
-            name = "gen_ai.choice"
+            name = "gen_ai.content.completion"
             attrs = {
+                "event_name": name,
                 "gen_ai.system": provider,
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
@@ -709,15 +693,17 @@ class OpenTelemetry(CustomLogger):
             }
             if self.message_logging and body_msg.get("content"):
                 body["message"]["content"] = body_msg["content"]
-            evt = Event(
-                name=name,
-                attributes=attrs,
-                body=body,
-                trace_id=parent_ctx.trace_id,
-                span_id=parent_ctx.span_id,
-                trace_flags=parent_ctx.trace_flags,
+
+            otel_logger.emit(
+                LogRecord(
+                    attributes=attrs,
+                    body=body,
+                    trace_id=parent_ctx.trace_id,
+                    span_id=parent_ctx.span_id,
+                    trace_flags=parent_ctx.trace_flags,
+                )
             )
-            self._event_logger.emit(evt)
+
 
     def _create_guardrail_span(
         self, kwargs: Optional[dict], context: Optional[Context]
