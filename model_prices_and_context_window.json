@@ -15080,7 +15080,6 @@
         "litellm_provider": "ollama",
         "mode": "completion"
     },
-    {
     "deepinfra/deepseek-ai/DeepSeek-V3": {
         "max_tokens": 163840,
         "max_input_tokens": 163840,
