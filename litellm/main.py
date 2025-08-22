@@ -130,7 +130,6 @@ from .litellm_core_utils.prompt_templates.factory import (
     stringify_json_tool_call_content,
 )
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
-from .llms import baseten
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
@@ -1923,6 +1922,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "cerebras"
+            or custom_llm_provider == "baseten"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
             or custom_llm_provider == "anyscale"
@@ -3264,42 +3264,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_key=api_key,
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
-        elif (
-            custom_llm_provider == "baseten"
-            or litellm.api_base == "https://app.baseten.co"
-        ):
-            custom_llm_provider = "baseten"
-            baseten_key = (
-                api_key
-                or litellm.baseten_key
-                or os.environ.get("BASETEN_API_KEY")
-                or litellm.api_key
-            )
 
-            model_response = baseten.completion(
-                model=model,
-                messages=messages,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                encoding=encoding,
-                api_key=baseten_key,
-                logging_obj=logging,
-            )
-            if inspect.isgenerator(model_response) or (
-                "stream" in optional_params and optional_params["stream"] is True
-            ):
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    model_response,
-                    model,
-                    custom_llm_provider="baseten",
-                    logging_obj=logging,
-                )
-                return response
-            response = model_response
         elif custom_llm_provider == "petals" or model in litellm.petals_models:
             api_base = api_base or litellm.api_base
 
