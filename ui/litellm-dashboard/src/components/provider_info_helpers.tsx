@@ -3,6 +3,7 @@ import React from "react";
 import NotificationManager from "./molecules/notifications_manager";
 
 export enum Providers {
+  AIML = "AI/ML API",
   Bedrock = "Amazon Bedrock",           
   Anthropic = "Anthropic",              
   AssemblyAI = "AssemblyAI",            
@@ -39,6 +40,7 @@ export enum Providers {
 }
 
 export const provider_map: Record<string, string> = {
+    AIML: "aiml",
     OpenAI: "openai",
     OpenAI_Text: "text-completion-openai",
     Azure: "azure",
@@ -77,6 +79,7 @@ export const provider_map: Record<string, string> = {
 const asset_logos_folder = '/ui/assets/logos/';
 
 export const providerLogoMap: Record<string, string> = {
+    [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
     [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
     [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
     [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
@@ -141,7 +144,9 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string, d
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {
-    if (selectedProvider === Providers.Vertex_AI) {
+    if (selectedProvider === Providers.AIML) {
+      return "aiml/flux-pro/v1.1";
+    } else if (selectedProvider === Providers.Vertex_AI) {
       return "gemini-pro";
     } else if (selectedProvider == Providers.Anthropic) {
       return "claude-3-opus";
