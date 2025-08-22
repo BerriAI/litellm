@@ -17,7 +17,7 @@ from typing import (
     Union,
     cast,
 )
-
+from math import floor
 from fastapi import HTTPException
 
 from litellm import DualCache
@@ -525,12 +525,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # Find which descriptor hit the limit
                 for i, status in enumerate(response["statuses"]):
                     if status["code"] == "OVER_LIMIT":
-                        descriptor = descriptors[i]
+                        descriptor = descriptors[floor(i/2)]
                         raise HTTPException(
                             status_code=429,
                             detail=f"Rate limit exceeded for {descriptor['key']}: {descriptor['value']}. Remaining: {status['limit_remaining']}",
                             headers={
-                                "retry-after": str(self.window_size)
+                                "retry-after": str(self.window_size),
+                                "rate_limit_type": str(status["rate_limit_type"])
                             },  # Retry after 1 minute
                         )
 
