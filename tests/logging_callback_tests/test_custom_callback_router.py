@@ -34,7 +34,7 @@ from litellm.integrations.custom_logger import CustomLogger
 ## 5. Azure OpenAI acompletion + streaming call with fallbacks
 ## 6. Azure OpenAI aembedding call with fallbacks
 
-# Test interfaces
+## Test interfaces
 ## 1. router.completion() + router.embeddings()
 ## 2. proxy.completions + proxy.embeddings
 
@@ -265,8 +265,9 @@ class CompletionCustomHandler(
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            print("CompletionCustomHandler.async_log_success_event, kwargs: ", kwargs)
             self.states.append("async_success")
-            print("in async success, kwargs: ", kwargs)
+            print("############### CompletionCustomHandler async success, kwargs: ", kwargs)
             ## START TIME
             assert isinstance(start_time, datetime)
             ## END TIME
@@ -409,7 +410,8 @@ async def test_async_chat_azure():
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
         )
-        await asyncio.sleep(2)
+        print("got response, sleeping 5 seconds....")
+        await asyncio.sleep(5)
         assert len(customHandler_completion_azure_router.errors) == 0
         assert (
             len(customHandler_completion_azure_router.states) == 3
@@ -427,7 +429,7 @@ async def test_async_chat_azure():
         async for chunk in response:
             print(f"async azure router chunk: {chunk}")
             continue
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
         print(f"customHandler.states: {customHandler_streaming_azure_router.states}")
         assert len(customHandler_streaming_azure_router.errors) == 0
         assert (
@@ -459,7 +461,7 @@ async def test_async_chat_azure():
             print(f"response in router3 acompletion: {response}")
         except Exception:
             pass
-        await asyncio.sleep(1)
+        await asyncio.sleep(5)
         print(f"customHandler.states: {customHandler_failure.states}")
         assert len(customHandler_failure.errors) == 0
         assert len(customHandler_failure.states) == 3  # pre, post, failure
