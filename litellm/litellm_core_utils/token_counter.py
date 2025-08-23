@@ -5,8 +5,6 @@ import io
 import struct
 from typing import Callable, List, Literal, Optional, Tuple, Union, cast
 
-import tiktoken
-
 import litellm
 from litellm import verbose_logger
 from litellm.constants import (
@@ -507,7 +505,7 @@ def _get_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer, print_verbose
+    from litellm.utils import _select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
         tokenizer_json = custom_tokenizer or _select_tokenizer(model)  # type: ignore
