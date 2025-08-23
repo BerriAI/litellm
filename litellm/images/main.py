@@ -335,6 +335,28 @@ def image_generation(  # noqa: PLR0915
                 headers=headers,
                 litellm_params=litellm_params_dict,
             )
+        #########################################################
+        # Providers using llm_http_handler
+        #########################################################
+        elif custom_llm_provider in (
+            litellm.LlmProviders.RECRAFT,
+            litellm.LlmProviders.AIML,
+            litellm.LlmProviders.GEMINI,
+        ):
+            if image_generation_config is None:
+                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
+            
+            return llm_http_handler.image_generation_handler(
+                model=model,
+                prompt=prompt,
+                image_generation_provider_config=image_generation_config,
+                image_generation_optional_request_params=optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                client=client,
+            )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
@@ -437,28 +459,6 @@ def image_generation(  # noqa: PLR0915
                 vertex_credentials=vertex_credentials,
                 aimg_generation=aimg_generation,
                 api_base=api_base,
-                client=client,
-            )
-        #########################################################
-        # Providers using llm_http_handler
-        #########################################################
-        elif custom_llm_provider in (
-            litellm.LlmProviders.RECRAFT,
-            litellm.LlmProviders.AIML,
-            litellm.LlmProviders.GEMINI,
-        ):
-            if image_generation_config is None:
-                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
-            
-            return llm_http_handler.image_generation_handler(
-                model=model,
-                prompt=prompt,
-                image_generation_provider_config=image_generation_config,
-                image_generation_optional_request_params=optional_params,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=litellm_params_dict,
-                logging_obj=litellm_logging_obj,
-                timeout=timeout,
                 client=client,
             )
         elif (
