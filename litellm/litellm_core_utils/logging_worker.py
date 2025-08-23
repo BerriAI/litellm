@@ -9,11 +9,21 @@ class LoggingWorker:
     """
     A simple, async logging worker that processes log coroutines in the background.
     Designed to be best-effort with bounded queues to prevent backpressure.
+
+    This leads to a +200 RPS performance improvement when using LiteLLM Python SDK or Proxy Server.
+    - Use this to queue coroutine tasks that are not critical to the main flow of the application. e.g Success/Error callbacks, logging, etc.
     """
-    MAX_QUEUE_SIZE = 50_000
-    MAX_TIMEOUT = 20.0
+    LOGGING_WORKER_MAX_QUEUE_SIZE = 50_000
+    LOGGING_WORKER_MAX_TIME_PER_COROUTINE = 20.0
+
+    MAX_ITERATIONS_TO_CLEAR_QUEUE = 200
+    MAX_TIME_TO_CLEAR_QUEUE = 5.0
     
-    def __init__(self, timeout: float = MAX_TIMEOUT, max_queue_size: int = MAX_QUEUE_SIZE):
+    def __init__(
+        self, 
+        timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE, 
+        max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
+    ):
         self.timeout = timeout
         self.max_queue_size = max_queue_size
         self._queue: Optional[asyncio.Queue] = None
@@ -61,7 +71,6 @@ class LoggingWorker:
         
         try:
             self._queue.put_nowait(coroutine)
-            print("LoggingWorker current queue size==>", self._queue.qsize())
         except asyncio.QueueFull as e:
             verbose_logger.exception(f"LoggingWorker queue is full: {e}")
             # Drop logs on overload to protect request throughput
@@ -90,10 +99,20 @@ class LoggingWorker:
             await self._queue.join()
     
     async def clear_queue(self):
-        MAX_ITERATIONS = 200
+        """
+        Clear the queue with a maximum time limit.
+        """
         if self._queue is None:
             return
-        for _ in range(MAX_ITERATIONS):
+        
+        start_time = asyncio.get_event_loop().time()
+        
+        for _ in range(self.MAX_ITERATIONS_TO_CLEAR_QUEUE):
+            # Check if we've exceeded the maximum time
+            if asyncio.get_event_loop().time() - start_time >= self.MAX_TIME_TO_CLEAR_QUEUE:
+                verbose_logger.warning(f"clear_queue exceeded max_time of {self.MAX_TIME_TO_CLEAR_QUEUE}s, stopping early")
+                break
+                
             try:
                 coroutine = self._queue.get_nowait()
                 # Await the coroutine to properly execute and avoid "never awaited" warnings
