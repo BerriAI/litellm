@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
-
+import litellm
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -361,6 +361,6 @@ async def test_should_check_cold_storage_for_full_payload():
         assert result4 == True, "Should return True for None proxy request"
     
     # Test case 5: Should return False when cold storage is not configured
-    with patch("litellm.configured_cold_storage_logger", return_value=None):
+    with patch.object(litellm, 'configured_cold_storage_logger', None):
         result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
         assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
