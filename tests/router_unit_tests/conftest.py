@@ -3,7 +3,7 @@
 import importlib
 import os
 import sys
-import asyncio
+
 import pytest
 
 sys.path.insert(
@@ -15,46 +15,56 @@ import asyncio
 
 @pytest.fixture(scope="session")
 def event_loop():
-    print("conftest.py event_loop fixture........")
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
-    print("conftest.py event_loop fixture loop created........")
     yield loop
     loop.close()
 
 
+
+
 @pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown(event_loop):  # Add event_loop as a dependency
-    curr_dir = os.getcwd()
-    sys.path.insert(0, os.path.abspath("../.."))
+def setup_and_teardown():
+    """
+    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
+    """
+    curr_dir = os.getcwd()  # Get the current working directory
+    sys.path.insert(
+        0, os.path.abspath("../..")
+    )  # Adds the project directory to the system path
 
     import litellm
     from litellm import Router
+    import asyncio
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     # flush all logs
-    print("conftest.py clearing queue of logs.....")
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-    print("conftest.py queue cleared........")
+
 
     importlib.reload(litellm)
 
-    # Set the event loop from the fixture
-    asyncio.set_event_loop(event_loop)
+    try:
+        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+            import litellm.proxy.proxy_server
 
+            importlib.reload(litellm.proxy.proxy_server)
+    except Exception as e:
+        print(f"Error reloading litellm.proxy.proxy_server: {e}")
+
+    import asyncio
+
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    asyncio.set_event_loop(loop)
     print(litellm)
+    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
-    # Clean up any pending tasks
-    pending = asyncio.all_tasks(event_loop)
-    for task in pending:
-        task.cancel()
-
-    # Run the event loop until all tasks are cancelled
-    if pending:
-        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    # Teardown code (executes after the yield point)
+    loop.close()  # Close the loop created earlier
+    asyncio.set_event_loop(None)  # Remove the reference to the loop
 
 
 def pytest_collection_modifyitems(config, items):
