@@ -1019,5 +1019,4 @@ A: We explored MySQL but that was hard to maintain and led to bugs for customers
 
 **Q: If there is Postgres downtime, how does LiteLLM react? Does it fail-open or is there API downtime?**
 
-A: You can actually gracefully handle DB unavailability if it's on your VPC. See our production guide for more details: [Gracefully Handle DB Unavailability](https://docs.litellm.ai/docs/proxy/prod#6-if-running-litellm-on-vpc-gracefully-handle-db-unavailability)
-
+A: You can gracefully handle DB unavailability if it's on your VPC. See our production guide for more details: [Gracefully Handle DB Unavailability](https://docs.litellm.ai/docs/proxy/prod#6-if-running-litellm-on-vpc-gracefully-handle-db-unavailability)
