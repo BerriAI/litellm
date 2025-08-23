@@ -283,7 +283,7 @@ def test_encode_token_counter_consistency(model):
     encoded_tokens = encode(model=model, text=sample_text)
     encode_token_count = len(encoded_tokens)
     
-    assert counter_tokens == encode_token_count, f"Got={counter_tokens}, Expected={encode_token_count}, Params={{'model': {model}, 'text': {sample_text[:30]}}}"
+    assert counter_tokens == encode_token_count, f"Got={counter_tokens}, Expected={encode_token_count}, Params={'model': {model}}"
 
 # test_encode_decode_token_counter_consistency()
 
