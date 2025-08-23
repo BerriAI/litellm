@@ -118,7 +118,7 @@ class LoggingWorker:
                 # Await the coroutine to properly execute and avoid "never awaited" warnings
                 try:
                     await asyncio.wait_for(coroutine, timeout=self.timeout)
-                except Exception as e:
+                except Exception:
                     # Suppress errors during cleanup
                     pass
                 self._queue.task_done()  # If you're using join() elsewhere
