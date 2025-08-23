@@ -218,18 +218,20 @@ class MistralConfig(OpenAIGPTConfig):
         - if image passed in, then just return as is (user-intended)
         - if `name` is passed, then drop it for mistral API: https://github.com/BerriAI/litellm/issues/6696
 
-        Motivation: mistral api doesn't support content as a list
+        Motivation: mistral api doesn't support content as a list.
+        The above statement is not valid now. Need to plan to remove all the #1,2,3 
+        Mistral API supports content as a list.
         """
-        ## 1. If 'image_url' in content, then return as is
+        ## 1. If 'image_url' or 'file' in content, then transform with base class and mistral-specific handling
         for m in messages:
             _content_block = m.get("content")
             if _content_block and isinstance(_content_block, list):
-                for c in _content_block:
-                    if c.get("type") == "image_url":
-                        if is_async:
-                            return super()._transform_messages(messages, model, True)
-                        else:
-                            return super()._transform_messages(messages, model, False)
+                if any(c.get("type") in ["image_url", "file"] for c in _content_block):
+                    if is_async:
+                        return self._transform_messages_async(messages, model)
+                    else:
+                        messages = self._transform_messages_sync(messages, model)
+                        return messages
 
         ## 2. If content is list, then convert to string
         messages = handle_messages_with_content_list_to_str_conversion(messages)
@@ -246,6 +248,51 @@ class MistralConfig(OpenAIGPTConfig):
             return super()._transform_messages(new_messages, model, True)
         else:
             return super()._transform_messages(new_messages, model, False)
+
+    async def _transform_messages_async(self,
+        messages: List[AllMessageValues], model: str
+    ) -> List[AllMessageValues]:
+        """
+        Handle modification of messages for Mistral API in an async context.
+        """
+        # Call parent async method to handle basic transformations
+        # and then apply Mistral-specific handling for files
+        messages = await super()._transform_messages(messages, model, True)
+        messages = self._handle_message_with_file(messages)
+        return messages
+
+    def _transform_messages_sync(self,
+        messages: List[AllMessageValues], model: str
+    ) -> List[AllMessageValues]:
+        """ Handle modification of messages for Mistral API in a sync context.
+        """
+        # Call parent sync method to handle basic transformations
+        # and then apply Mistral-specific handling for files
+        # This is the sync version of the async method above
+        messages = super()._transform_messages(messages, model, False)
+        messages = self._handle_message_with_file(messages)
+        return messages
+
+    def _handle_message_with_file(
+        self,
+        messages: List[AllMessageValues]) -> List[AllMessageValues]:
+        """
+        Mistral API supports only 'file_id' in message content with type 'file'.
+        """
+        for m in messages:
+            _content_block = m.get("content")
+            if _content_block and isinstance(_content_block, list):                
+                if any(c.get("type") == "file" for c in _content_block):
+                    # If file content is present, we get file_id from 'file' attribute of content block
+                    # then replace 'file' with 'file_id' and assign the value of 'file_id' attribute to it.
+                    file_contents = [c for c in _content_block if c.get("type") == "file"]
+                    for file_content in file_contents:
+                        file_id = file_content.get("file", {}).get("file_id")
+                        if file_id:
+                            # Replace 'file' with 'file_id'
+                            file_content["file_id"] = file_id # type: ignore
+                            file_content.pop("file", None)
+        return messages
 
     def _add_reasoning_system_prompt_if_needed(
         self, messages: List[AllMessageValues], optional_params: dict
