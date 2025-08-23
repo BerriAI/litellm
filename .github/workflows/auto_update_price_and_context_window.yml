@@ -1,28 +1,37 @@
-name: Updates model_prices_and_context_window.json and Create Pull Request
+name: Updates model_prices_and_context_window.json for OpenRouter
 
 on:
   schedule:
     - cron: "0 0 * * 0"  # Run every Sundays at midnight
     #- cron: "0 0 * * *" # Run daily at midnight
+  workflow_dispatch:  # Allow manual trigger
 
 jobs:
   auto_update_price_and_context_window:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
       - name: Install Dependencies
         run: |
           pip install aiohttp
       - name: Update JSON Data
         run: |
           python ".github/workflows/auto_update_price_and_context_window_file.py"
-      - name: Create Pull Request
+      - name: Check for changes
+        id: check_changes
         run: |
-          git add model_prices_and_context_window.json 
-          git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
-          gh pr create --title "Update model_prices_and_context_window.json file" \
-            --body "Automated update for model_prices_and_context_window.json" \
-            --head auto-update-price-and-context-window-$(date +'%Y-%m-%d') \
-            --base main
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          if git diff --quiet model_prices_and_context_window.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes detected in model_prices_and_context_window.json"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in model_prices_and_context_window.json"
+          fi
+      - name: Commit updated model file
+        if: steps.check_changes.outputs.changed == 'true'
+        uses: IAreKyleW00t/verified-bot-commit@v1.5.1
+        with:
+          message: "chore(models:openrouter): update model_prices_and_context_window.json [skip-ci]"
+          files: model_prices_and_context_window.json
+          ref: refs/heads/main
+          token: ${{ secrets.GITHUB_TOKEN }}
