@@ -1,4 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import { message } from "antd";
 
 export function updateExistingKeys<Source extends Object>(
@@ -33,10 +33,10 @@ export const copyToClipboard = async (
   if (!text) return false;
   try {
     await navigator.clipboard.writeText(text);
-    message.success(messageText);
+    NotificationsManager.success(messageText);
     return true;
   } catch (err) {
-    NotificationManager.fromBackend("Failed to copy to clipboard");
+    NotificationsManager.fromBackend("Failed to copy to clipboard");
     console.error("Failed to copy: ", err);
     return false;
   }

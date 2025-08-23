@@ -4106,18 +4106,9 @@ class StandardLoggingPayloadSetup:
         """
         # Generate object key in same format as S3Logger
         from litellm.integrations.s3 import get_s3_object_key
-        from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
         # Only generate object key if cold storage is configured
-        try:
-            configured_cold_storage_logger = (
-                ColdStorageHandler._get_configured_cold_storage_custom_logger()
-            )
-        except Exception as e:
-            verbose_logger.debug(f"Cold storage custom logger unavailable: {e}")
-            return None
-
-        if configured_cold_storage_logger is None:
+        if litellm.configured_cold_storage_logger is None:
             return None
 
         try:

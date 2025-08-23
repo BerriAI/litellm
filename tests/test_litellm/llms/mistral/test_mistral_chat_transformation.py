@@ -1,8 +1,11 @@
 import os
 import sys
+from typing import List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from litellm.types.llms.openai import AllMessageValues
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -603,3 +606,75 @@ class TestMistralEmptyContentHandling:
         """Test that is_empty_assistant_message returns False for assistant message with content."""
         message = {"role": "assistant", "content": "Hello"}
         assert MistralConfig._is_empty_assistant_message(message) is False
+
+class TestMistralFileHandling:
+    """Test suite for Mistral file handling functionality."""
+    
+    def test_handle_file_message_with_file_id(self):
+        """Test that file messages with file_id are handled correctly."""
+        mistral_config = MistralConfig()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Please review this file."},
+                    {"type": "file", "file": {"file_id": "file-12345"}}
+                ]
+            }
+        ]
+        casted_message = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_message)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        # Check that content is transformed correctly
+        assert isinstance(result[0]["content"], list)
+        assert len(result[0]["content"]) == 2
+        # Check that file type is preserved
+        assert result[0]["content"][1]["type"] == "file"
+        # Check that file_id is modified to match Mistral's expected format
+        assert result[0]["content"][1]["file_id"] == "file-12345" # type: ignore
+
+    def test_handle_file_message_without_file_id(self):
+        """Test that file messages without file_id are ignored."""
+        mistral_config = MistralConfig()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Please review this file."}
+                ]
+            }
+        ]
+        casted_message = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_message)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert isinstance(result[0]["content"], list)
+        assert len(result[0]["content"]) == 1  # Only text part remains
+
+    def test_handle_message_with_file_multiple_files(self):
+        """Test that multiple file messages are handled correctly."""
+        mistral_config = MistralConfig()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Please review these files."},
+                    {"type": "file", "file": {"file_id": "file-12345"}},
+                    {"type": "file", "file": {"file_id": "file-67890"}}
+                ]
+            }
+        ]
+        casted_message = cast(list[AllMessageValues], messages)
+        result = mistral_config._handle_message_with_file(casted_message)
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        # Check that content is transformed correctly
+        assert isinstance(result[0]["content"], list)
+        assert len(result[0]["content"]) == 3  # Text + 2 files
+        # Check that file types are preserved
+        assert result[0]["content"][1]["type"] == "file"
+        assert result[0]["content"][2]["type"] == "file"
+        # Check that file_ids are modified to match Mistral's expected format
+        assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
+        assert result[0]["content"][2]["file_id"] == "file-67890"  # type: ignore

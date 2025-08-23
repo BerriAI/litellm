@@ -1,17 +1,18 @@
+import React from "react"
 import { notification } from "antd"
 import { parseErrorMessage } from "../shared/errorUtils"
 
 type Placement = "top" | "topLeft" | "topRight" | "bottom" | "bottomLeft" | "bottomRight"
 
 type NotificationConfig = {
-  message?: string
-  description?: string
+  message?: string | React.ReactNode
+  description?: string | React.ReactNode
   duration?: number
   placement?: Placement
   key?: string
 }
 
-type NotificationConfigResolved = Omit<NotificationConfig, "message"> & { message: string }
+type NotificationConfigResolved = Omit<NotificationConfig, "message"> & { message: string | React.ReactNode }
 
 function defaultPlacement(): Placement {
   return "topRight"
@@ -273,8 +274,17 @@ const NotificationManager = {
     })
   },
 
-  success(input: string | NotificationConfig) {
-    const cfg = normalize(input, "Success")
+  success(input: string | React.ReactNode | NotificationConfig) {
+    if (React.isValidElement(input)) {
+      notification.success({
+        message: "Success",
+        description: input,
+        placement: defaultPlacement(),
+        duration: 3.5,
+      })
+      return
+    }
+    const cfg = normalize(input as string | NotificationConfig, "Success")
     notification.success({
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),

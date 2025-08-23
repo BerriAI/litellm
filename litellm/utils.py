@@ -541,9 +541,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, CustomLogger]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1287,9 +1287,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -2316,47 +2316,47 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
-                litellm.open_ai_chat_completion_models.append(key)
+                litellm.open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
             if key not in litellm.open_ai_text_completion_models:
-                litellm.open_ai_text_completion_models.append(key)
+                litellm.open_ai_text_completion_models.add(key)
         elif value.get("litellm_provider") == "cohere":
             if key not in litellm.cohere_models:
-                litellm.cohere_models.append(key)
+                litellm.cohere_models.add(key)
         elif value.get("litellm_provider") == "anthropic":
             if key not in litellm.anthropic_models:
-                litellm.anthropic_models.append(key)
+                litellm.anthropic_models.add(key)
         elif value.get("litellm_provider") == "openrouter":
             split_string = key.split("/", 1)
             if key not in litellm.openrouter_models:
-                litellm.openrouter_models.append(split_string[1])
+                litellm.openrouter_models.add(split_string[1])
         elif value.get("litellm_provider") == "vertex_ai-text-models":
             if key not in litellm.vertex_text_models:
-                litellm.vertex_text_models.append(key)
+                litellm.vertex_text_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-code-text-models":
             if key not in litellm.vertex_code_text_models:
-                litellm.vertex_code_text_models.append(key)
+                litellm.vertex_code_text_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-chat-models":
             if key not in litellm.vertex_chat_models:
-                litellm.vertex_chat_models.append(key)
+                litellm.vertex_chat_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
             if key not in litellm.vertex_code_chat_models:
-                litellm.vertex_code_chat_models.append(key)
+                litellm.vertex_code_chat_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if key not in litellm.ai21_models:
-                litellm.ai21_models.append(key)
+                litellm.ai21_models.add(key)
         elif value.get("litellm_provider") == "nlp_cloud":
             if key not in litellm.nlp_cloud_models:
-                litellm.nlp_cloud_models.append(key)
+                litellm.nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             if key not in litellm.aleph_alpha_models:
-                litellm.aleph_alpha_models.append(key)
+                litellm.aleph_alpha_models.add(key)
         elif value.get("litellm_provider") == "bedrock":
             if key not in litellm.bedrock_models:
-                litellm.bedrock_models.append(key)
+                litellm.bedrock_models.add(key)
         elif value.get("litellm_provider") == "novita":
             if key not in litellm.novita_models:
-                litellm.novita_models.append(key)
+                litellm.novita_models.add(key)
     return model_cost
 
 
@@ -2802,12 +2802,22 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             request_type="embeddings",
         )
         _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.VoyageEmbeddingConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params={},
-            model=model,
-            drop_params=drop_params if drop_params is not None else False,
-        )
+        if litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(model):
+            optional_params = (
+                litellm.VoyageContextualEmbeddingConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params={},
+                    model=model,
+                    drop_params=drop_params if drop_params is not None else False,
+                )
+            )
+        else:
+            optional_params = litellm.VoyageEmbeddingConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params={},
+                model=model,
+                drop_params=drop_params if drop_params is not None else False,
+            )
     elif custom_llm_provider == "infinity":
         supported_params = get_supported_openai_params(
             model=model,
@@ -2928,19 +2938,19 @@ def _remove_strict_from_schema(schema):
 def _remove_json_schema_refs(schema, max_depth=10):
     """
     Remove JSON schema reference fields like '$id' and '$schema' that can cause issues with some providers.
-    
+
     These fields are used for schema validation but can cause problems when the schema references
     are not accessible to the provider's validation system.
-    
+
     Args:
         schema: The schema object to clean (dict, list, or other)
         max_depth: Maximum recursion depth to prevent infinite loops (default: 10)
-    
+
     Relevant Issues: Mistral API grammar validation fails when schema contains $id and $schema references
     """
     if max_depth <= 0:
         return schema
-        
+
     if isinstance(schema, dict):
         # Remove JSON schema reference fields
         schema.pop("$id", None)
@@ -3081,10 +3091,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3211,16 +3221,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4314,9 +4324,9 @@ def _count_characters(text: str) -> int:
 
 
 def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream]) -> str:
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     response_str = ""
     for choice in _choices:
@@ -5207,6 +5217,7 @@ def validate_environment(  # noqa: PLR0915
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
 ) -> dict:
     """
     Checks if the environment variables are valid for the given model.
@@ -5361,6 +5372,11 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("CEREBRAS_API_KEY")
+        elif custom_llm_provider == "baseten":
+            if "BASETEN_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BASETEN_API_KEY")
         elif custom_llm_provider == "xai":
             if "XAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -5552,19 +5568,18 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("NEBIUS_API_KEY")
 
+    def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
+        """Filter out keys that contain the exclude_pattern (case insensitive)."""
+        return [key for key in keys if exclude_pattern not in key.lower()]
+
     if api_key is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_key" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_key")
 
     if api_base is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_base" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_base")
+
+    if api_version is not None:
+        missing_keys = filter_missing_keys(missing_keys, "api_version")
 
     if len(missing_keys) == 0:  # no missing keys
         keys_in_environment = True
@@ -6664,7 +6679,8 @@ def validate_and_fix_openai_messages(messages: List):
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
 
-def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]: 
+
+def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
@@ -6677,6 +6693,7 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
         elif isinstance(tool, dict):
             new_tools.append(tool)
     return new_tools
+
 
 def cleanup_none_field_in_message(message: AllMessageValues):
     """
@@ -6914,6 +6931,8 @@ class ProviderConfigManager:
             return litellm.NvidiaNimConfig()
         elif litellm.LlmProviders.CEREBRAS == provider:
             return litellm.CerebrasConfig()
+        elif litellm.LlmProviders.BASETEN == provider:
+            return litellm.BasetenConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineConfig()
         elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
@@ -7011,7 +7030,14 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseEmbeddingConfig]:
-        if litellm.LlmProviders.VOYAGE == provider:
+        if (
+            litellm.LlmProviders.VOYAGE == provider
+            and litellm.VoyageContextualEmbeddingConfig.is_contextualized_embeddings(
+                model
+            )
+        ):
+            return litellm.VoyageContextualEmbeddingConfig()
+        elif litellm.LlmProviders.VOYAGE == provider:
             return litellm.VoyageEmbeddingConfig()
         elif litellm.LlmProviders.TRITON == provider:
             return litellm.TritonEmbeddingConfig()
@@ -7059,6 +7085,8 @@ class ProviderConfigManager:
             return litellm.JinaAIRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
             return litellm.HuggingFaceRerankConfig()
+        elif litellm.LlmProviders.DEEPINFRA == provider:
+            return litellm.DeepinfraRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -7072,6 +7100,7 @@ class ProviderConfigManager:
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model:
@@ -7143,6 +7172,7 @@ class ProviderConfigManager:
             return litellm.GeminiModelInfo()
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.common_utils import VertexAIModelInfo
+
             return VertexAIModelInfo()
         elif LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyChatConfig()
@@ -7305,6 +7335,12 @@ class ProviderConfigManager:
             )
 
             return get_gemini_image_generation_config(model)
+        elif LlmProviders.LITELLM_PROXY == provider:
+            from litellm.llms.litellm_proxy.image_generation.transformation import (
+                LiteLLMProxyImageGenerationConfig,
+            )
+
+            return LiteLLMProxyImageGenerationConfig()
         return None
 
     @staticmethod
@@ -7341,6 +7377,12 @@ class ProviderConfigManager:
             )
 
             return RecraftImageEditConfig()
+        elif LlmProviders.LITELLM_PROXY == provider:
+            from litellm.llms.litellm_proxy.image_edit.transformation import (
+                LiteLLMProxyImageEditConfig,
+            )
+
+            return LiteLLMProxyImageEditConfig()
         return None
 
     @staticmethod

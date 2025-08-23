@@ -400,6 +400,20 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     placeholder: "http://localhost:8000/generate",
     required: false
   }],
+  [Providers.Hosted_Vllm]: [
+    {
+      key: "api_base",
+      label: "API Base",
+      placeholder: "https://...",
+      required: true
+    },
+    {
+      key: "api_key",
+      label: "OpenAI API Key",
+      type: "password",
+      required: true
+    }
+  ],
   [Providers.Voyage]: [{
     key: "api_key",
     label: "API Key",

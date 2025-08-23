@@ -1,6 +1,9 @@
 import os
 from typing import List, Literal
 
+AZURE_DEFAULT_RESPONSES_API_VERSION = str(
+    os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview")
+)
 ROUTER_MAX_FALLBACKS = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 DEFAULT_BATCH_SIZE = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
@@ -248,6 +251,7 @@ LITELLM_CHAT_PROVIDERS = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "baseten",
     "ai21_chat",
     "volcengine",
     "codestral",
@@ -424,6 +428,7 @@ openai_compatible_providers: List = [
     "groq",
     "nvidia_nim",
     "cerebras",
+    "baseten",
     "sambanova",
     "ai21_chat",
     "ai21",
@@ -480,7 +485,7 @@ _openai_like_providers: List = [
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
-replicate_models: List = [
+replicate_models: set = set([
     # llama replicate supported LLMs
     "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
     "a16z-infra/llama-2-13b-chat:2a7f981751ec7fdf87b5b91ad4db53683a98082e9ff7bfd12c8cd5ea85980a52",
@@ -493,9 +498,9 @@ replicate_models: List = [
     # Others
     "replicate/dolly-v2-12b:ef0e1aefc61f8e096ebe4db6b2bacc297daf2ef6899f0f7e001ec445893500e5",
     "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
-]
+])
 
-clarifai_models: List = [
+clarifai_models: set = set([
     "clarifai/meta.Llama-3.Llama-3-8B-Instruct",
     "clarifai/gcp.generate.gemma-1_1-7b-it",
     "clarifai/mistralai.completion.mixtral-8x22B",
@@ -559,10 +564,10 @@ clarifai_models: List = [
     "clarifai/gcp.generate.gemini-1_5-pro",
     "clarifai/gcp.generate.imagen-2",
     "clarifai/salesforce.blip.general-english-image-caption-blip-2",
-]
+])
 
 
-huggingface_models: List = [
+huggingface_models: set = set([
     "meta-llama/Llama-2-7b-hf",
     "meta-llama/Llama-2-7b-chat-hf",
     "meta-llama/Llama-2-13b-hf",
@@ -575,13 +580,13 @@ huggingface_models: List = [
     "meta-llama/Llama-2-13b-chat",
     "meta-llama/Llama-2-70b",
     "meta-llama/Llama-2-70b-chat",
-]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
-empower_models = [
+])  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
+empower_models = set([
     "empower/empower-functions",
     "empower/empower-functions-small",
-]
+])
 
-together_ai_models: List = [
+together_ai_models: set = set([
     # llama llms - chat
     "togethercomputer/llama-2-70b-chat",
     # llama llms - language / instruct
@@ -609,16 +614,17 @@ together_ai_models: List = [
     "Austism/chronos-hermes-13b",
     "upstage/SOLAR-0-70b-16bit",
     "WizardLM/WizardLM-70B-V1.0",
-]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+])
+  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
 
-baseten_models: List = [
+baseten_models: set = set([
     "qvv0xeq",
     "q841o8w",
     "31dxrj3",
-]  # FALCON 7B  # WizardLM  # Mosaic ML
+])  # FALCON 7B  # WizardLM  # Mosaic ML
 
-featherless_ai_models: List = [
+featherless_ai_models: set = set([
     "featherless-ai/Qwerky-72B",
     "featherless-ai/Qwerky-QwQ-32B",
     "Qwen/Qwen2.5-72B-Instruct",
@@ -628,9 +634,9 @@ featherless_ai_models: List = [
     "mistralai/Mistral-Small-24B-Instruct-2501",
     "mistralai/Mistral-Nemo-Instruct-2407",
     "ProdeusUnity/Stellar-Odyssey-12b-v0.0",
-]
+])
 
-nebius_models: List = [
+nebius_models: set = set([
     "Qwen/Qwen3-235B-A22B",
     "Qwen/Qwen3-30B-A3B-fast",
     "Qwen/Qwen3-32B",
@@ -643,9 +649,9 @@ nebius_models: List = [
     "meta-llama/Llama-3.3-70B-Instruct-fast",
     "Qwen/Qwen2.5-32B-Instruct-fast",
     "Qwen/Qwen2.5-Coder-32B-Instruct-fast",
-]
+])
 
-dashscope_models: List = [
+dashscope_models: set = set([
     "qwen-turbo",
     "qwen-plus",
     "qwen-max",
@@ -656,13 +662,13 @@ dashscope_models: List = [
     "qwen3-235b-a22b",
     "qwen3-32b",
     "qwen3-30b-a3b",
-]
+])
 
-nebius_embedding_models: List = [
+nebius_embedding_models: set = set([
     "BAAI/bge-en-icl",
     "BAAI/bge-multilingual-gemma2",
     "intfloat/e5-mistral-7b-instruct",
-]
+])
 
 BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "cohere",
@@ -676,8 +682,8 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "deepseek_r1",
 ]
 
-open_ai_embedding_models: List = ["text-embedding-ada-002"]
-cohere_embedding_models: List = [
+open_ai_embedding_models: set = set(["text-embedding-ada-002"])
+cohere_embedding_models: set = set([
     "embed-v4.0",
     "embed-english-v3.0",
     "embed-english-light-v3.0",
@@ -685,12 +691,12 @@ cohere_embedding_models: List = [
     "embed-english-v2.0",
     "embed-english-light-v2.0",
     "embed-multilingual-v2.0",
-]
-bedrock_embedding_models: List = [
+])
+bedrock_embedding_models: set = set([
     "amazon.titan-embed-text-v1",
     "cohere.embed-english-v3",
     "cohere.embed-multilingual-v3",
-]
+])
 
 known_tokenizer_config = {
     "mistralai/Mistral-7B-Instruct-v0.1": {

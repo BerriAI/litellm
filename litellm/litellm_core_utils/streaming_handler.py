@@ -1747,6 +1747,11 @@ class CustomStreamWrapper:
                         if is_empty:
                             continue
                     print_verbose(f"final returned processed chunk: {processed_chunk}")
+
+                    # add usage as hidden param
+                    if self.sent_last_chunk is True and self.stream_options is None:
+                        usage = calculate_total_usage(chunks=self.chunks)
+                        processed_chunk._hidden_params["usage"] = usage
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -1790,6 +1795,7 @@ class CustomStreamWrapper:
                     messages=self.messages,
                     logging_obj=self.logging_obj,
                 )
+
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
                     setattr(

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Modal, Form, Input, Select, InputNumber, message } from "antd";
 import { Button } from "@tremor/react";
 import { userRequestModelCall } from "./networking";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { Option } = Select;
 
@@ -33,7 +34,7 @@ const RequestAccess: React.FC<RequestAccessProps> = ({ userModels, accessToken, 
 
   const handleRequestAccess = async (formValues: Record<string, any>) => {
     try {
-      message.info("Requesting access");
+      NotificationsManager.info("Requesting access");
       // Extract form values
         const { selectedModel, accessReason } = formValues;
 
