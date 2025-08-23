@@ -2679,12 +2679,14 @@ class ProxyConfig:
             config_router_settings = config_data.get("router_settings", {})
 
             combined_router_settings = {}
-            if config_router_settings is not None and isinstance(
-                config_router_settings, dict
-            ) and db_router_settings is not None and isinstance(
-                db_router_settings.param_value, dict
+            if (
+                config_router_settings is not None
+                and isinstance(config_router_settings, dict)
+                and db_router_settings is not None
+                and isinstance(db_router_settings.param_value, dict)
             ):
                 from litellm.utils import _update_dictionary
+
                 combined_router_settings = _update_dictionary(
                     config_router_settings, db_router_settings.param_value
                 )
@@ -2697,7 +2699,7 @@ class ProxyConfig:
             ):
                 combined_router_settings = db_router_settings.param_value
 
-            if combined_router_settings is not None:
+            if combined_router_settings:
                 llm_router.update_settings(**combined_router_settings)
 
     def _add_general_settings_from_db_config(
