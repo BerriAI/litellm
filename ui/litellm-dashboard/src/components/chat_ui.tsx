@@ -170,8 +170,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const saved = sessionStorage.getItem('useApiSessionManagement');
     return saved ? JSON.parse(saved) : true; // Default to API session management
   });
-  const [uploadedImage, setUploadedImage] = useState<File | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [uploadedImages, setUploadedImages] = useState<File[]>([]);
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
   const [responsesUploadedImage, setResponsesUploadedImage] = useState<File | null>(null);
   const [responsesImagePreviewUrl, setResponsesImagePreviewUrl] = useState<string | null>(null);
   const [chatUploadedImage, setChatUploadedImage] = useState<File | null>(null);
@@ -468,18 +468,26 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleImageUpload = (file: File) => {
-    setUploadedImage(file);
+    setUploadedImages(prev => [...prev, file]);
     const previewUrl = URL.createObjectURL(file);
-    setImagePreviewUrl(previewUrl);
+    setImagePreviewUrls(prev => [...prev, previewUrl]);
     return false; // Prevent default upload behavior
   };
 
-  const handleRemoveImage = () => {
-    if (imagePreviewUrl) {
-      URL.revokeObjectURL(imagePreviewUrl);
+  const handleRemoveImage = (index: number) => {
+    if (imagePreviewUrls[index]) {
+      URL.revokeObjectURL(imagePreviewUrls[index]);
     }
-    setUploadedImage(null);
-    setImagePreviewUrl(null);
+    setUploadedImages(prev => prev.filter((_, i) => i !== index));
+    setImagePreviewUrls(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleRemoveAllImages = () => {
+    imagePreviewUrls.forEach(url => {
+      URL.revokeObjectURL(url);
+    });
+    setUploadedImages([]);
+    setImagePreviewUrls([]);
   };
 
   const handleResponsesImageUpload = (file: File): false => {
@@ -516,8 +524,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
     if (inputMessage.trim() === "") return;
 
     // For image edits, require both image and prompt
-    if (endpointType === EndpointType.IMAGE_EDITS && !uploadedImage) {
-      NotificationsManager.fromBackend("Please upload an image for editing");
+    if (endpointType === EndpointType.IMAGE_EDITS && uploadedImages.length === 0) {
+      NotificationsManager.fromBackend("Please upload at least one image for editing");
       return;
     }
 
@@ -617,9 +625,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
           );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
-          if (uploadedImage) {
+          if (uploadedImages.length > 0) {
             await makeOpenAIImageEditsRequest(
-              uploadedImage,
+              uploadedImages.length === 1 ? uploadedImages[0] : uploadedImages,
               inputMessage,
               (imageUrl, model) => updateImageUI(imageUrl, model),
               selectedModel,
@@ -689,7 +697,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       abortControllerRef.current = null;
       // Clear image after successful request for image edits
       if (endpointType === EndpointType.IMAGE_EDITS) {
-        handleRemoveImage();
+        handleRemoveAllImages();
       }
       // Clear image after successful request for responses API
       if (endpointType === EndpointType.RESPONSES && responsesUploadedImage) {
@@ -708,7 +716,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setChatHistory([]);
     setMessageTraceId(null);
     setResponsesSessionId(null); // Clear responses session ID
-    handleRemoveImage(); // Clear any uploaded images for image edits
+    handleRemoveAllImages(); // Clear any uploaded images for image edits
     handleRemoveResponsesImage(); // Clear any uploaded images for responses
     handleRemoveChatImage(); // Clear any uploaded images for chat completions
     sessionStorage.removeItem('chatHistory');
@@ -1075,7 +1083,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             {/* Image Upload Section for Image Edits */}
             {endpointType === EndpointType.IMAGE_EDITS && (
               <div className="mb-4">
-                {!uploadedImage ? (
+                {uploadedImages.length === 0 ? (
                   <Dragger
                     beforeUpload={handleImageUpload}
                     accept="image/*"
@@ -1085,24 +1093,47 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <p className="ant-upload-drag-icon">
                       <PictureOutlined style={{ fontSize: '24px', color: '#666' }} />
                     </p>
-                    <p className="ant-upload-text text-sm">Click or drag image to upload</p>
+                    <p className="ant-upload-text text-sm">Click or drag images to upload</p>
                     <p className="ant-upload-hint text-xs text-gray-500">
-                      Support for PNG, JPG, JPEG formats
+                      Support for PNG, JPG, JPEG formats. Multiple images supported.
                     </p>
                   </Dragger>
                 ) : (
-                  <div className="relative inline-block">
-                    <img 
-                      src={imagePreviewUrl || ''} 
-                      alt="Upload preview" 
-                      className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
-                    />
-                    <button
-                      className="absolute top-1 right-1 bg-white shadow-sm border border-gray-200 rounded px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
-                      onClick={handleRemoveImage}
-                    >
-                      <DeleteOutlined />
-                    </button>
+                  <div className="flex flex-wrap gap-2">
+                    {uploadedImages.map((file, index) => (
+                      <div key={index} className="relative inline-block">
+                        <img 
+                          src={imagePreviewUrls[index] || ''} 
+                          alt={`Upload preview ${index + 1}`} 
+                          className="max-w-32 max-h-32 rounded-md border border-gray-200 object-cover"
+                        />
+                        <button
+                          className="absolute top-1 right-1 bg-white shadow-sm border border-gray-200 rounded px-1 py-1 text-red-500 hover:bg-red-50 text-xs"
+                          onClick={() => handleRemoveImage(index)}
+                        >
+                          <DeleteOutlined />
+                        </button>
+                      </div>
+                    ))}
+                    {/* Add more images button */}
+                    <div className="flex items-center justify-center w-32 h-32 border-2 border-dashed border-gray-300 rounded-md hover:border-gray-400 cursor-pointer" 
+                         onClick={() => document.getElementById('additional-image-upload')?.click()}>
+                      <div className="text-center">
+                        <PictureOutlined style={{ fontSize: '24px', color: '#666' }} />
+                        <p className="text-xs text-gray-500 mt-1">Add more</p>
+                      </div>
+                      <input
+                        id="additional-image-upload"
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files || []);
+                          files.forEach(file => handleImageUpload(file));
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
               </div>

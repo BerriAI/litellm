@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast, overload
+from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast, overload, List
 
 import httpx
 
@@ -675,7 +675,7 @@ def image_variation(
 
 @client
 def image_edit(
-    image: FileTypes,
+    image: Union[FileTypes, List[FileTypes]],
     prompt: str,
     model: Optional[str] = None,
     mask: Optional[str] = None,
@@ -702,6 +702,9 @@ def image_edit(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("async_call", False) is True
+
+        #add images / or return a single image
+        images = image if isinstance(image, list) else [image]
 
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
@@ -751,7 +754,7 @@ def image_edit(
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,
-            image=image,
+            image=images,
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_request_params=image_edit_request_params,
@@ -777,7 +780,7 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes,
+    image: Union[FileTypes, List[FileTypes]],
     model: str,
     prompt: str,
     mask: Optional[str] = None,
@@ -817,9 +820,11 @@ async def aimage_edit(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
+        images = image if isinstance(image, list) else [image]
+
         func = partial(
             image_edit,
-            image=image,
+            image=images,
             prompt=prompt,
             mask=mask,
             model=model,
