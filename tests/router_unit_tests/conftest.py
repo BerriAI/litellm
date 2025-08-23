@@ -33,7 +33,9 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     # flush all logs
+    print("conftest.py clearing queue of logs.....")
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    print("conftest.py queue cleared........")
 
     importlib.reload(litellm)
 
