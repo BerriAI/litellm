@@ -51,13 +51,6 @@ def setup_and_teardown():
 
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    # empty the global logging worker queue
-    import asyncio
-
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    if GLOBAL_LOGGING_WORKER._queue is not None:
-        GLOBAL_LOGGING_WORKER._queue = asyncio.Queue()
-
     import asyncio
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
