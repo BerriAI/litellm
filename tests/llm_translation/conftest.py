@@ -31,6 +31,10 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
     import litellm
     from litellm import Router
 
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    # flush all logs
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+
     importlib.reload(litellm)
 
     # Set the event loop from the fixture
