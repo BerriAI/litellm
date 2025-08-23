@@ -88,6 +88,17 @@ class LoggingWorker:
             return
         while not self._queue.empty():
             await self._queue.join()
+    
+    async def clear_queue(self):
+        MAX_ITERATIONS = 200
+        if self._queue is None:
+            return
+        for _ in range(MAX_ITERATIONS):
+            try:
+                self._queue.get_nowait()
+                self._queue.task_done()  # If you're using join() elsewhere
+            except asyncio.QueueEmpty:
+                pass
 
 
 # Global instance for backward compatibility

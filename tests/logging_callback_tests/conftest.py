@@ -44,7 +44,7 @@ def setup_and_teardown():
     # from litellm import Router, completion, aembedding, acompletion, embedding
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     # flush all logs
-    asyncio.run(GLOBAL_LOGGING_WORKER.flush())
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
 
     yield
 
