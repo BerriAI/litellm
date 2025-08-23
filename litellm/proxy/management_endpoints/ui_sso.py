@@ -86,7 +86,6 @@ async def google_login(
     Example:
     """
     from litellm.proxy.proxy_server import (
-        _license_check,
         premium_user,
         prisma_client,
         user_custom_ui_sso_sign_in_handler,
