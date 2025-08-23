@@ -95,10 +95,16 @@ class LoggingWorker:
             return
         for _ in range(MAX_ITERATIONS):
             try:
-                self._queue.get_nowait()
+                coroutine = self._queue.get_nowait()
+                # Await the coroutine to properly execute and avoid "never awaited" warnings
+                try:
+                    await asyncio.wait_for(coroutine, timeout=self.timeout)
+                except Exception as e:
+                    # Suppress errors during cleanup
+                    pass
                 self._queue.task_done()  # If you're using join() elsewhere
             except asyncio.QueueEmpty:
-                pass
+                break
 
 
 # Global instance for backward compatibility
