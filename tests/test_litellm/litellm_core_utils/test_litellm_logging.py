@@ -11,6 +11,7 @@ sys.path.insert(
 
 import time
 
+import litellm
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
@@ -453,7 +454,7 @@ async def test_e2e_generate_cold_storage_object_key_not_configured():
     response_id = "chatcmpl-test-67890"
     team_alias = "another-team"
     
-    with patch("litellm.configured_cold_storage_logger", return_value=None):
+    with patch.object(litellm, 'configured_cold_storage_logger', None):
         
         # Call the function
         result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
