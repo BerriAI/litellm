@@ -11,11 +11,14 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
+import asyncio
 
 @pytest.fixture(scope="session")
 def event_loop():
-    """Create an instance of the default event loop for each test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
     yield loop
     loop.close()
 
