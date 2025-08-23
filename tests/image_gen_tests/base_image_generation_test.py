@@ -97,6 +97,7 @@ class BaseImageGenTest(ABC):
                 pytest.fail(f"An exception occurred - {str(e)}")
 
 
+@pytest.mark.skip(reason="Skipping image edit test, image file not in ci/cd")
 def test_openai_gpt_image_1():
     from litellm import image_edit
     from PIL import Image
