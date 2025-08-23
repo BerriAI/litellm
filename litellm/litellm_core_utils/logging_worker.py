@@ -61,6 +61,7 @@ class LoggingWorker:
         
         try:
             self._queue.put_nowait(coroutine)
+            print("LoggingWorker current queue size==>", self._queue.qsize())
         except asyncio.QueueFull as e:
             verbose_logger.exception(f"LoggingWorker queue is full: {e}")
             # Drop logs on overload to protect request throughput
