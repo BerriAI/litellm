@@ -486,6 +486,7 @@ jobs:
           paths:
             - litellm_router_coverage.xml
             - litellm_router_coverage
+  
   litellm_router_unit_testing: # Runs all tests with the "router" keyword
     docker:
       - image: cimg/python:3.11
@@ -509,6 +510,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
