@@ -172,7 +172,10 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
         
-        # AI/ML API returns images in output.choices array with image_base64
+        # AI/ML API can return images in two different formats:
+        # 1. output.choices array with image_base64
+        # 2. images array with url (and optional width, height, content_type)
+        
         if "output" in response_data and "choices" in response_data["output"]:
             for choice in response_data["output"]["choices"]:
                 if "image_base64" in choice:
@@ -180,5 +183,22 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
                         b64_json=choice["image_base64"],
                         url=None,  # AI/ML API returns base64, not URLs
                     ))
-        
+                elif "url" in choice:
+                    model_response.data.append(ImageObject(
+                        b64_json=None,
+                        url=choice["url"],
+                    ))
+        elif "images" in response_data:
+            # Handle alternative format: {"images": [{"url": "...", "width": 1024, "height": 768, "content_type": "image/jpeg"}]}
+            for image in response_data["images"]:
+                if "url" in image:
+                    model_response.data.append(ImageObject(
+                        b64_json=None,
+                        url=image["url"],
+                    ))
+                elif "image_base64" in image:
+                    model_response.data.append(ImageObject(
+                        b64_json=image["image_base64"],
+                        url=None,
+                    ))
         return model_response
