@@ -518,15 +518,7 @@ def _get_count_function(
                 return len(enc.ids)
 
         elif tokenizer_json["type"] == "openai_tokenizer":
-            model_to_use = _fix_model_name(model)  # type: ignore
-            try:
-                if "gpt-4o" in model_to_use:
-                    encoding = tiktoken.get_encoding("o200k_base")
-                else:
-                    encoding = tiktoken.encoding_for_model(model_to_use)
-            except KeyError:
-                print_verbose("Warning: model not found. Using cl100k_base encoding.")
-                encoding = tiktoken.get_encoding("cl100k_base")
+            encoding = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
                 return len(encoding.encode(text))
