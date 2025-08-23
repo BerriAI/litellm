@@ -57,6 +57,7 @@
   },
   "overrides": {
     "prismjs": ">=1.30.0",
-    "webpack-dev-server": ">=5.2.1"
+    "webpack-dev-server": ">=5.2.1",
+    "mermaid": ">=11.10.0"
   }
 }
