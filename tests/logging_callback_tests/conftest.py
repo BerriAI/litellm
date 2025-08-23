@@ -21,7 +21,6 @@ def event_loop():
     yield loop
     loop.close()
 
-
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown():
     """
@@ -34,23 +33,35 @@ def setup_and_teardown():
 
     import litellm
     from litellm import Router
+    import asyncio
+
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    # flush all logs
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+
 
     importlib.reload(litellm)
+
+    try:
+        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+            import litellm.proxy.proxy_server
+
+            importlib.reload(litellm.proxy.proxy_server)
+    except Exception as e:
+        print(f"Error reloading litellm.proxy.proxy_server: {e}")
+
     import asyncio
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     print(litellm)
     # from litellm import Router, completion, aembedding, acompletion, embedding
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    # flush all logs
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-
     yield
 
     # Teardown code (executes after the yield point)
     loop.close()  # Close the loop created earlier
     asyncio.set_event_loop(None)  # Remove the reference to the loop
+
 
 
 def pytest_collection_modifyitems(config, items):
