@@ -42,6 +42,10 @@ def setup_and_teardown():
     asyncio.set_event_loop(loop)
     print(litellm)
     # from litellm import Router, completion, aembedding, acompletion, embedding
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    # flush all logs
+    asyncio.run(GLOBAL_LOGGING_WORKER.flush())
+
     yield
 
     # Teardown code (executes after the yield point)

@@ -81,6 +81,13 @@ class LoggingWorker:
             with contextlib.suppress(Exception):
                 await self._worker_task
             self._worker_task = None
+    
+    async def flush(self) -> None:
+        """Flush the logging queue."""
+        if self._queue is None:
+            return
+        while not self._queue.empty():
+            await self._queue.join()
 
 
 # Global instance for backward compatibility
