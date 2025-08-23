@@ -530,7 +530,7 @@ class LiteLLMRoutes(enum.Enum):
     # Routes accessible by Admin Viewer (read-only admin access)
     admin_viewer_routes = [
         "/user/list",
-        "/user/available_users",
+        "/user/available_users", 
         "/user/available_roles",
         "/user/daily/activity",
         "/team/daily/activity",
@@ -540,10 +540,7 @@ class LiteLLMRoutes(enum.Enum):
 
     # All routes accesible by an Org Admin
     org_admin_allowed_routes = (
-        org_admin_only_routes
-        + management_routes
-        + self_managed_routes
-        + admin_viewer_routes
+        org_admin_only_routes + management_routes + self_managed_routes + admin_viewer_routes
     )
 
 
@@ -588,14 +585,13 @@ class LiteLLMPromptInjectionParams(LiteLLMPydanticObjectBase):
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
     """
-    Pydantic model for chat completion requests that includes both OpenAI standard fields
+    Pydantic model for chat completion requests that includes both OpenAI standard fields 
     and LiteLLM-specific parameters. This replaces the previous TypedDict version.
     """
-
     # Required fields (from ChatCompletionRequest)
     model: str
     messages: List[AllMessageValues]
-
+    
     # Standard OpenAI completion parameters (all optional)
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[str, float]] = None
@@ -618,10 +614,10 @@ class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
     functions: Optional[List[Dict[str, Any]]] = None
     user: Optional[str] = None
     stream: Optional[bool] = None
-
+    
     # LiteLLM-specific metadata param (from original ChatCompletionRequest)
     metadata: Optional[Dict[str, Any]] = None
-
+    
     # Optional LiteLLM params
     guardrails: Optional[List[str]] = None
     caching: Optional[bool] = None
@@ -1877,8 +1873,7 @@ class UserAPIKeyAuth(
             key_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
             team_alias=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
         )
-
-
+    
 class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_id: Optional[str]
     user_info: Optional[Union[dict, BaseModel]]
@@ -2125,6 +2120,7 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     Anthropic token counting endpoint uses /messages
     """
 
+    
     contents: Optional[List[dict]] = None
     """
     Google /countTokens endpoint expects contents to be a list of dicts with the following structure:
@@ -2269,7 +2265,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
 
     braintrust: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="braintrust",
-        litellm_callback_params=["BRAINTRUST_API_KEY", "BRAINTRUST_API_BASE"],
+        litellm_callback_params=["BRAINTRUST_API_KEY","BRAINTRUST_API_BASE"],
         ui_callback_name="Braintrust",
     )
 
@@ -2323,9 +2319,7 @@ class SpendLogsMetadata(TypedDict):
     error_information: Optional[StandardLoggingPayloadErrorInformation]
     usage_object: Optional[dict]
     model_map_information: Optional[StandardLoggingModelInformation]
-    cold_storage_object_key: Optional[
-        str
-    ]  # S3/GCS object key for cold storage retrieval
+    cold_storage_object_key: Optional[str]  # S3/GCS object key for cold storage retrieval
 
 
 class SpendLogsPayload(TypedDict):
@@ -2652,7 +2646,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
         if self.litellm_budget_table is not None:
             return self.litellm_budget_table.rpm_limit
         return None
-
+    
     def safe_get_team_member_tpm_limit(self) -> Optional[int]:
         if self.litellm_budget_table is not None:
             return self.litellm_budget_table.tpm_limit
@@ -2769,11 +2763,14 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     max_budget_in_team: Optional[float] = None
     role: Optional[Literal["admin", "user"]] = None
     tpm_limit: Optional[int] = Field(
-        default=None, description="Tokens per minute limit for this team member"
+        default=None,
+        description="Tokens per minute limit for this team member"
     )
     rpm_limit: Optional[int] = Field(
-        default=None, description="Requests per minute limit for this team member"
+        default=None,
+        description="Requests per minute limit for this team member"
     )
+    
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
