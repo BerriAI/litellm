@@ -70,7 +70,9 @@ RUN mkdir -p /nonexistent /.npm && \
   chown -R nobody:nogroup /app && \
   chown -R nobody:nogroup /nonexistent /.npm && \
   PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
-  chown -R nobody:nogroup $PRISMA_PATH
+  chown -R nobody:nogroup $PRISMA_PATH && \
+  LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
+  [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup $LITELLM_PKG_MIGRATIONS_PATH
 
 # --- OpenShift Compatibility: Apply Red Hat recommended pattern ---
 # Get paths for directories that need write access at runtime
