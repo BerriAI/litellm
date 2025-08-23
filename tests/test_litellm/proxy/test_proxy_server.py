@@ -1722,8 +1722,11 @@ async def test_add_router_settings_from_db_config_merge_logic():
     assert combined_settings["retry_delay"] == 2
 
     # Nested dictionaries should be merged (but this is shallow merge)
-    # The entire nested_config dict gets replaced by DB value
-    expected_nested = {"setting2": "db_value2", "setting3": "db_value3"}
+    expected_nested = {
+        "setting1": "config_value1",
+        "setting2": "db_value2",
+        "setting3": "db_value3",
+    }
     assert combined_settings["nested_config"] == expected_nested
 
 
