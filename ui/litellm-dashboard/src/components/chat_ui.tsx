@@ -72,7 +72,7 @@ import {
   FilePdfOutlined,
   ArrowUpOutlined
 } from "@ant-design/icons";
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -463,7 +463,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsLoading(false);
-      message.info("Request cancelled");
+      NotificationsManager.info("Request cancelled");
     }
   };
 
@@ -517,7 +517,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     // For image edits, require both image and prompt
     if (endpointType === EndpointType.IMAGE_EDITS && !uploadedImage) {
-      NotificationManager.fromBackend("Please upload an image for editing");
+      NotificationsManager.fromBackend("Please upload an image for editing");
       return;
     }
 
@@ -528,7 +528,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const effectiveApiKey = apiKeySource === 'session' ? accessToken : apiKey;
 
     if (!effectiveApiKey) {
-      NotificationManager.fromBackend("Please provide an API key or select Current UI Session");
+      NotificationsManager.fromBackend("Please provide an API key or select Current UI Session");
       return;
     }
 
@@ -544,7 +544,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       try {
         newUserMessage = await createMultimodalMessage(inputMessage, responsesUploadedImage);
       } catch (error) {
-        NotificationManager.fromBackend("Failed to process image. Please try again.");
+        NotificationsManager.fromBackend("Failed to process image. Please try again.");
         return;
       }
     } 
@@ -553,7 +553,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
       try {
         newUserMessage = await createChatMultimodalMessage(inputMessage, chatUploadedImage);
       } catch (error) {
-        NotificationManager.fromBackend("Failed to process image. Please try again.");
+        NotificationsManager.fromBackend("Failed to process image. Please try again.");
         return;
       }
     } else {
@@ -714,7 +714,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     sessionStorage.removeItem('chatHistory');
     sessionStorage.removeItem('messageTraceId');
     sessionStorage.removeItem('responsesSessionId');
-    message.success("Chat history cleared.");
+    NotificationsManager.success("Chat history cleared.");
   };
 
   if (userRole && userRole === "Admin Viewer") {
@@ -1273,7 +1273,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         <Button 
           onClick={() => {
             navigator.clipboard.writeText(generatedCode);
-            message.success("Copied to clipboard!");
+            NotificationsManager.success("Copied to clipboard!");
           }}
         >
           Copy to Clipboard
@@ -1300,7 +1300,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         onCancel={() => setIsMCPToolsModalVisible(false)}
         onOk={() => {
           setIsMCPToolsModalVisible(false);
-          message.success('MCP tool selection updated');
+          NotificationsManager.success('MCP tool selection updated');
         }}
         width={800}
       >

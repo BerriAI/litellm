@@ -3,7 +3,7 @@ import { Modal, Form, Steps, Button, message, Checkbox } from "antd";
 import { Text, Title, Badge } from "@tremor/react";
 import { makeModelGroupPublic } from "./networking";
 import ModelFilters from "./model_filters";
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 const { Step } = Steps;
 
@@ -57,7 +57,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedModels.size === 0) {
-        NotificationManager.fromBackend("Please select at least one model to make public");
+        NotificationsManager.fromBackend("Please select at least one model to make public");
         return;
       }
       setCurrentStep(1);
@@ -110,7 +110,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedModels.size === 0) {
-      NotificationManager.fromBackend("Please select at least one model to make public");
+      NotificationsManager.fromBackend("Please select at least one model to make public");
       return;
     }
 
@@ -119,12 +119,12 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
       const modelGroupsToMakePublic = Array.from(selectedModels);
       await makeModelGroupPublic(accessToken, modelGroupsToMakePublic);
       
-      message.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
+      NotificationsManager.success(`Successfully made ${modelGroupsToMakePublic.length} model group(s) public!`);
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making model groups public:", error);
-      NotificationManager.fromBackend("Failed to make model groups public. Please try again.");
+      NotificationsManager.fromBackend("Failed to make model groups public. Please try again.");
     } finally {
       setLoading(false);
     }
