@@ -139,6 +139,25 @@ Expand your configuration to support multiple providers and models:
 
 ```yaml
 model_list:
+  # OpenAI models
+  - model_name: codex-mini
+    litellm_params:  
+      model: openai/codex-mini
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://api.openai.com/v1
+
+  - model_name: o3-pro
+    litellm_params:
+      model: openai/o3-pro
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://api.openai.com/v1
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://api.openai.com/v1
+
   # Anthropic models
   - model_name: claude-3-5-sonnet-20241022
     litellm_params:
@@ -162,7 +181,7 @@ litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 ```
 
-Use different models based on your needs:
+Switch between models seamlessly:
 
 ```bash
 # Use Claude for complex reasoning
