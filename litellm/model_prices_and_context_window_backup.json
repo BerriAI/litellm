@@ -19633,5 +19633,118 @@
         "supports_function_calling": true,
         "supports_response_schema": false,
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing"
+    },
+    "aiml/flux/kontext-pro/text-to-image":{
+        "output_cost_per_image": 0.042,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "Flux Pro v1.1 - Enhanced version with improved capabilities and 6x faster inference speed"
+        }
+
+    },
+    "aiml/flux/kontext-max/text-to-image": {
+        "output_cost_per_image": 0.084,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "Flux Pro v1.1 - Enhanced version with improved capabilities and 6x faster inference speed"
+        }
+    },
+    "aiml/flux-pro/v1.1-ultra": {
+        "output_cost_per_image": 0.063,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "aiml/flux-pro/v1.1": {
+        "output_cost_per_image": 0.042,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "aiml/flux-realism": {
+        "output_cost_per_image": 0.037,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "Flux Pro - Professional-grade image generation model"
+        }
+    },
+    "aiml/flux/schnell": {
+        "output_cost_per_image": 0.003,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "Flux Schnell - Fast generation model optimized for speed"
+        }
+    },
+    "aiml/flux/dev": {
+        "output_cost_per_image": 0.026,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "Flux Dev - Development version optimized for experimentation"
+        }
+    },
+    "aiml/flux-pro": {
+        "output_cost_per_image": 0.053,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "Flux Dev - Development version optimized for experimentation"
+        }
+    },
+    "aiml/dall-e-3": {
+        "output_cost_per_image": 0.042,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "DALL-E 3 via AI/ML API - High-quality text-to-image generation"
+        }
+    },
+    "aiml/dall-e-2": {
+        "output_cost_per_image": 0.021,
+        "litellm_provider": "aiml",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://docs.aimlapi.com/",
+        "metadata": {
+            "notes": "DALL-E 2 via AI/ML API - Reliable text-to-image generation"
+        }
     }
 }
