@@ -109,6 +109,9 @@ success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
 logging_callback_manager = LoggingCallbackManager()
+suppress_custom_logger_init_error: bool = (
+    False  # don't block startup if custom logger fails to initialize
+)
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -146,7 +149,9 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "vector_store_pre_call_hook",
     "dotprompt",
 ]
-configured_cold_storage_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
+configured_cold_storage_logger: Optional[
+    _custom_logger_compatible_callbacks_literal
+] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
 _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
@@ -467,7 +472,8 @@ BEDROCK_CONVERSE_MODELS = [
 ]
 
 ####### COMPLETION MODELS ###################
-from typing import Set  
+from typing import Set
+
 open_ai_chat_completion_models: Set = set()
 open_ai_text_completion_models: Set = set()
 cohere_models: Set = set()
@@ -854,7 +860,12 @@ models_by_provider: dict = {
     "baseten": baseten_models,
     "openrouter": openrouter_models,
     "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models | vertex_text_models | vertex_anthropic_models | vertex_vision_models | vertex_language_models | vertex_deepseek_models,
+    "vertex_ai": vertex_chat_models
+    | vertex_text_models
+    | vertex_anthropic_models
+    | vertex_vision_models
+    | vertex_language_models
+    | vertex_deepseek_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
@@ -1151,7 +1162,9 @@ from .llms.topaz.image_variations.transformation import TopazImageVariationConfi
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from .llms.groq.chat.transformation import GroqChatConfig
 from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
-from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
+from .llms.voyage.embedding.transformation_contextual import (
+    VoyageContextualEmbeddingConfig,
+)
 from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
 from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig

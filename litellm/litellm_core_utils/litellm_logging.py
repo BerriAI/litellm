@@ -3552,10 +3552,8 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             return dotprompt_logger  # type: ignore
         return None
     except Exception as e:
-        verbose_logger.exception(
-            f"[Non-Blocking Error] Error initializing custom logger: {e}"
-        )
-        return None
+        if not litellm.suppress_custom_logger_init_error:
+            raise e
     return None
 
 
