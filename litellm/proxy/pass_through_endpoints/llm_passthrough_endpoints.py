@@ -492,7 +492,12 @@ async def bedrock_llm_proxy_route(
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        model = endpoint.split("/")[1]
+        endpoint_parts = endpoint.split("/")
+        if "application-inference-profile" in endpoint:
+            # For application-inference-profile, include the profile ID part as well
+            model = "/".join(endpoint_parts[1:3])
+        else:
+            model = endpoint_parts[1]
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -500,12 +505,13 @@ async def bedrock_llm_proxy_route(
                 "error": "Model missing from endpoint. Expected format: /model/<Model>/<endpoint>. Got: "
                 + endpoint,
             },
-        )
+        ) 
 
     data["method"] = request.method
     data["endpoint"] = endpoint
     data["data"] = request_body
-
+    data["custom_llm_provider"] = "bedrock"
+    
     try:
         result = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,

@@ -74,6 +74,9 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   accessToken,
   userRole,
 }) => {
+  // Maximum number of categories to show in charts to prevent color palette overflow
+  const MAX_CATEGORIES = 10;
+
   // Separate state for each endpoint
   const [dauData, setDauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
   const [wauData, setWauData] = useState<ActiveUsersAnalyticsResponse>({ results: [] });
@@ -265,9 +268,9 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
       .map(([tag]) => tag);
   };
 
-  const allDauTags = getAllTagsForData(dauData.results);
-  const allWauTags = getAllTagsForData(wauData.results);
-  const allMauTags = getAllTagsForData(mauData.results);
+  const allDauTags = getAllTagsForData(dauData.results).slice(0, MAX_CATEGORIES);
+  const allWauTags = getAllTagsForData(wauData.results).slice(0, MAX_CATEGORIES);
+  const allMauTags = getAllTagsForData(mauData.results).slice(0, MAX_CATEGORIES);
 
   // Prepare daily chart data (DAU) - always show last 7 days
   const generateDailyChartData = () => {

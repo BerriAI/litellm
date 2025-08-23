@@ -20,6 +20,7 @@ export enum Providers {
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
   Groq = "Groq",                       
+  Hosted_Vllm = "vllm",
   JinaAI = "Jina AI",                 
   MistralAI = "Mistral AI",             
   Ollama = "Ollama",                   
@@ -71,7 +72,8 @@ export const provider_map: Record<string, string> = {
     Voyage: "voyage",
     JinaAI: "jina_ai",
     VolcEngine: "volcengine",
-    DeepInfra: "deepinfra"
+    DeepInfra: "deepinfra",
+    Hosted_Vllm: "hosted_vllm",
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
@@ -90,6 +92,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
     [Providers.Groq]: `${asset_logos_folder}groq.svg`,
     [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
+    [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
     [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
     [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
     [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,

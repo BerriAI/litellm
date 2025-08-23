@@ -367,6 +367,16 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         premium_user=premium_user,
     )
 
+    if (
+        data.metadata is not None
+        and data.metadata.get("service_account_id") is not None
+        and data.team_id is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
+        )
+
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
         for elem in data:
@@ -860,6 +870,15 @@ async def prepare_key_update_data(
     data_json: dict = data.model_dump(exclude_unset=True)
     data_json.pop("key", None)
     data_json.pop("new_key", None)
+    if (
+        data.metadata is not None
+        and data.metadata.get("service_account_id") is not None
+        and (data.team_id or existing_key_row.team_id) is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="team_id is required for service account keys. Please specify `team_id` in the request body.",
+        )
     non_default_values = {}
     for k, v in data_json.items():
         if (
