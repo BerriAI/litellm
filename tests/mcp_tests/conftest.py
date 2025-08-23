@@ -10,7 +10,6 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-
 import asyncio
 
 @pytest.fixture(scope="session")
@@ -37,15 +36,6 @@ def setup_and_teardown():
     from litellm import Router
 
     importlib.reload(litellm)
-
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            import litellm.proxy.proxy_server
-
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
-
     import asyncio
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
