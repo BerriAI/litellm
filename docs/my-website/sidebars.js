@@ -108,6 +108,7 @@ const sidebars = {
           type: "category",
           label: "Setup & Deployment",
           items: [
+            "proxy/quick_start",
             "proxy/deploy",
             "proxy/prod",
             "proxy/cli",
