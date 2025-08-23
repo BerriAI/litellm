@@ -462,6 +462,7 @@ openai_compatible_providers: List = [
     "morph",
     "lambda_ai",
     "hyperbolic",
+    "aiml",
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`

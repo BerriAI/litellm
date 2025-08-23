@@ -530,6 +530,7 @@ llama_models: Set = set()
 nscale_models: Set = set()
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
+aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
@@ -709,6 +710,8 @@ def add_known_models():
             nebius_models.add(key)
         elif value.get("litellm_provider") == "nebius-embedding-models":
             nebius_embedding_models.add(key)
+        elif value.get("litellm_provider") == "aiml":
+            aiml_models.add(key)
         elif value.get("litellm_provider") == "assemblyai":
             assemblyai_models.add(key)
         elif value.get("litellm_provider") == "jina_ai":
@@ -886,6 +889,7 @@ models_by_provider: dict = {
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
+    "aiml": aiml_models,
     "assemblyai": assemblyai_models,
     "jina_ai": jina_ai_models,
     "snowflake": snowflake_models,
@@ -1210,6 +1214,7 @@ from .llms.friendliai.chat.transformation import FriendliaiChatConfig
 from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from .llms.xai.chat.transformation import XAIChatConfig
 from .llms.xai.common_utils import XAIModelInfo
+from .llms.aiml.chat.transformation import AIMLChatConfig
 from .llms.volcengine import VolcEngineConfig
 from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
 from .llms.azure.azure import (
