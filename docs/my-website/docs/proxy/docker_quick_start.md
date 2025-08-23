@@ -2,7 +2,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Getting Started - E2E Tutorial
+# E2E Tutorial
 
 End-to-End tutorial for LiteLLM Proxy to:
 - Add an Azure OpenAI model 
