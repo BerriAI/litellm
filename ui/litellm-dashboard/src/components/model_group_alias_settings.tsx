@@ -13,7 +13,7 @@ import {
   TableRow, 
   TableCell 
 } from "@tremor/react";
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface ModelGroupAliasSettingsProps {
   accessToken: string;
@@ -76,20 +76,20 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
       return true;
     } catch (error) {
       console.error("Failed to save model group alias settings:", error);
-      NotificationManager.fromBackend("Failed to save model group alias settings");
+      NotificationsManager.fromBackend("Failed to save model group alias settings");
       return false;
     }
   };
 
   const handleAddAlias = async () => {
     if (!newAlias.aliasName || !newAlias.targetModelGroup) {
-      NotificationManager.fromBackend("Please provide both alias name and target model group");
+      NotificationsManager.fromBackend("Please provide both alias name and target model group");
       return;
     }
 
     // Check for duplicate alias names
     if (aliases.some(alias => alias.aliasName === newAlias.aliasName)) {
-      NotificationManager.fromBackend("An alias with this name already exists");
+      NotificationsManager.fromBackend("An alias with this name already exists");
       return;
     }
 
@@ -104,7 +104,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
     if (await saveAliasesToBackend(updatedAliases)) {
       setAliases(updatedAliases);
       setNewAlias({ aliasName: "", targetModelGroup: "" });
-      message.success("Alias added successfully");
+      NotificationsManager.success("Alias added successfully");
     }
   };
 
@@ -116,13 +116,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
     if (!editingAlias) return;
 
     if (!editingAlias.aliasName || !editingAlias.targetModelGroup) {
-      NotificationManager.fromBackend("Please provide both alias name and target model group");
+      NotificationsManager.fromBackend("Please provide both alias name and target model group");
       return;
     }
 
     // Check for duplicate alias names (excluding current alias)
     if (aliases.some(alias => alias.id !== editingAlias.id && alias.aliasName === editingAlias.aliasName)) {
-      NotificationManager.fromBackend("An alias with this name already exists");
+      NotificationsManager.fromBackend("An alias with this name already exists");
       return;
     }
 
@@ -133,7 +133,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
     if (await saveAliasesToBackend(updatedAliases)) {
       setAliases(updatedAliases);
       setEditingAlias(null);
-      message.success("Alias updated successfully");
+      NotificationsManager.success("Alias updated successfully");
     }
   };
 
@@ -146,7 +146,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
     
     if (await saveAliasesToBackend(updatedAliases)) {
       setAliases(updatedAliases);
-      message.success("Alias deleted successfully");
+      NotificationsManager.success("Alias deleted successfully");
     }
   };
 
