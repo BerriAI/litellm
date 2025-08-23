@@ -2,6 +2,7 @@ import React from "react";
 import { Switch, Tooltip, message } from "antd";
 import { InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { EndpointType } from "./mode_endpoint_mapping";
+import NotificationsManager from "../molecules/notifications_manager";
 
 interface SessionManagementProps {
   endpointType: string;
@@ -23,7 +24,7 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
   const handleCopySessionId = () => {
     if (responsesSessionId) {
       navigator.clipboard.writeText(responsesSessionId);
-      message.success("Response ID copied to clipboard!");
+      NotificationsManager.success("Response ID copied to clipboard!");
     }
   };
 
