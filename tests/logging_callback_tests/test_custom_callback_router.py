@@ -34,7 +34,7 @@ from litellm.integrations.custom_logger import CustomLogger
 ## 5. Azure OpenAI acompletion + streaming call with fallbacks
 ## 6. Azure OpenAI aembedding call with fallbacks
 
-# Test interfaces
+## Test interfaces
 ## 1. router.completion() + router.embeddings()
 ## 2. proxy.completions + proxy.embeddings
 
