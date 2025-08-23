@@ -304,7 +304,6 @@ default_in_memory_ttl: Optional[float] = None
 default_redis_ttl: Optional[float] = None
 default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
-model_group_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
 budget_duration: Optional[str] = (
@@ -1154,7 +1153,9 @@ from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from .llms.mistral.chat.transformation import MistralConfig
 from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig
+from .llms.azure.responses.o_series_transformation import (
+    AzureOpenAIOSeriesResponsesAPIConfig,
+)
 from .llms.openai.chat.o_series_transformation import (
     OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
     OpenAIOSeriesConfig,
@@ -1162,6 +1163,7 @@ from .llms.openai.chat.o_series_transformation import (
 
 from .llms.snowflake.chat.transformation import SnowflakeConfig
 from .llms.gradient_ai.chat.transformation import GradientAIConfig
+
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 from .llms.openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
