@@ -2,14 +2,16 @@ import asyncio
 import contextlib
 from typing import Coroutine, Optional
 
+from litellm._logging import verbose_logger
+
 
 class LoggingWorker:
     """
     A simple, async logging worker that processes log coroutines in the background.
     Designed to be best-effort with bounded queues to prevent backpressure.
     """
-    MAX_QUEUE_SIZE = 10_000
-    MAX_TIMEOUT = 10.0
+    MAX_QUEUE_SIZE = 50_000
+    MAX_TIMEOUT = 20.0
     
     def __init__(self, timeout: float = MAX_TIMEOUT, max_queue_size: int = MAX_QUEUE_SIZE):
         self.timeout = timeout
@@ -39,13 +41,14 @@ class LoggingWorker:
                 coroutine = await self._queue.get()
                 try:
                     await asyncio.wait_for(coroutine, timeout=self.timeout)
-                except Exception:
-                    # Best-effort logging - swallow all errors and timeouts
+                except Exception as e:
+                    verbose_logger.exception(f"LoggingWorker error: {e}")
                     pass
                 finally:
                     self._queue.task_done()
                     
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as e:
+            verbose_logger.exception(f"LoggingWorker cancelled: {e}")
             pass
     
     def enqueue(self, coroutine: Coroutine) -> None:
@@ -58,7 +61,8 @@ class LoggingWorker:
         
         try:
             self._queue.put_nowait(coroutine)
-        except asyncio.QueueFull:
+        except asyncio.QueueFull as e:
+            verbose_logger.exception(f"LoggingWorker queue is full: {e}")
             # Drop logs on overload to protect request throughput
             pass
     
