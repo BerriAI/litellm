@@ -938,9 +938,11 @@ def test_transform_request_with_function_tool():
     assert request_data["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
 
 
-def test_assistant_message_cache_control():
+@pytest.mark.asyncio
+async def test_assistant_message_cache_control():
     """Test that assistant messages with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
     
     # Test assistant message with string content and cache_control
     messages = [
@@ -957,6 +959,22 @@ def test_assistant_message_cache_control():
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         llm_provider="bedrock_converse"
     )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
     
     # Should have user message and assistant message
     assert len(result) == 2
@@ -971,9 +989,11 @@ def test_assistant_message_cache_control():
     assert assistant_content[1]["cachePoint"]["type"] == "default"
 
 
-def test_assistant_message_list_content_cache_control():
+@pytest.mark.asyncio
+async def test_assistant_message_list_content_cache_control():
     """Test assistant messages with list content and cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
     
     messages = [
         {"role": "user", "content": "Hello"},
@@ -994,6 +1014,14 @@ def test_assistant_message_list_content_cache_control():
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         llm_provider="bedrock_converse"
     )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
     
     # Assistant message should have text content and cachePoint
     assistant_content = result[1]["content"]
@@ -1003,9 +1031,11 @@ def test_assistant_message_list_content_cache_control():
     assert assistant_content[1]["cachePoint"]["type"] == "default"
 
 
-def test_tool_message_cache_control():
+@pytest.mark.asyncio
+async def test_tool_message_cache_control():
     """Test that tool messages with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
     
     messages = [
         {"role": "user", "content": "What's the weather?"},
@@ -1038,6 +1068,14 @@ def test_tool_message_cache_control():
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         llm_provider="bedrock_converse"
     )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
     
     # Should have user, assistant, and user (tool results) messages
     assert len(result) == 3
@@ -1055,9 +1093,11 @@ def test_tool_message_cache_control():
     assert tool_message_content[1]["cachePoint"]["type"] == "default"
 
 
-def test_tool_message_string_content_cache_control():
+@pytest.mark.asyncio
+async def test_tool_message_string_content_cache_control():
     """Test tool messages with string content and message-level cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
     
     messages = [
         {"role": "user", "content": "What's the weather?"},
@@ -1085,6 +1125,14 @@ def test_tool_message_string_content_cache_control():
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         llm_provider="bedrock_converse"
     )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
     
     # Last message should contain tool result and cachePoint
     tool_message_content = result[2]["content"]
@@ -1099,9 +1147,11 @@ def test_tool_message_string_content_cache_control():
     assert tool_message_content[1]["cachePoint"]["type"] == "default"
 
 
-def test_assistant_tool_calls_cache_control():
+@pytest.mark.asyncio
+async def test_assistant_tool_calls_cache_control():
     """Test that assistant tool_calls with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
     
     messages = [
         {"role": "user", "content": "Calculate 2+2"},
@@ -1124,6 +1174,14 @@ def test_assistant_tool_calls_cache_control():
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         llm_provider="bedrock_converse"
     )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
     
     # Assistant message should have tool use and cachePoint
     assistant_content = result[1]["content"]
@@ -1139,9 +1197,11 @@ def test_assistant_tool_calls_cache_control():
     assert assistant_content[1]["cachePoint"]["type"] == "default"
 
 
-def test_multiple_tool_calls_with_mixed_cache_control():
+@pytest.mark.asyncio
+async def test_multiple_tool_calls_with_mixed_cache_control():
     """Test multiple tool calls where only some have cache_control."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
     
     messages = [
         {"role": "user", "content": "Do multiple calculations"},
@@ -1170,6 +1230,14 @@ def test_multiple_tool_calls_with_mixed_cache_control():
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         llm_provider="bedrock_converse"
     )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
     
     # Assistant message should have: toolUse1, cachePoint, toolUse2
     assistant_content = result[1]["content"]
@@ -1188,9 +1256,11 @@ def test_multiple_tool_calls_with_mixed_cache_control():
     assert assistant_content[2]["toolUse"]["toolUseId"] == "call_2"
 
 
-def test_no_cache_control_no_cache_point():
+@pytest.mark.asyncio
+async def test_no_cache_control_no_cache_point():
     """Test that messages without cache_control don't generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import BedrockConverseMessagesProcessor
     
     messages = [
         {"role": "user", "content": "Hello"},
@@ -1207,6 +1277,14 @@ def test_no_cache_control_no_cache_point():
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
         llm_provider="bedrock_converse"
     )
+
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        llm_provider="bedrock_converse"
+    )
+    
+    assert result == async_result
     
     # Assistant message should only have text content, no cachePoint
     assistant_content = result[1]["content"]

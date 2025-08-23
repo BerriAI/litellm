@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { Button, Input, Select } from "antd";
 import { FilterIcon } from "@heroicons/react/outline";
 import debounce from "lodash/debounce";
@@ -43,6 +43,9 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   const [searchInputValueMap, setSearchInputValueMap] = useState<{
     [key: string]: string;
   }>({});
+  const [initialOptionsLoaded, setInitialOptionsLoaded] = useState<{
+    [key: string]: boolean;
+  }>({});
 
   const debouncedSearch = useCallback(
     debounce(async (value: string, option: FilterOption) => {
@@ -62,6 +65,36 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     []
   );
 
+  // Load initial options for searchable filters
+  const loadInitialOptions = useCallback(async (option: FilterOption) => {
+    if (!option.isSearchable || !option.searchFn || initialOptionsLoaded[option.name]) return;
+
+    setSearchLoadingMap((prev) => ({ ...prev, [option.name]: true }));
+    setInitialOptionsLoaded((prev) => ({ ...prev, [option.name]: true }));
+    
+    try {
+      // Load initial options with empty search to get some default results
+      const results = await option.searchFn("");
+      setSearchOptionsMap((prev) => ({ ...prev, [option.name]: results }));
+    } catch (error) {
+      console.error("Error loading initial options:", error);
+      setSearchOptionsMap((prev) => ({ ...prev, [option.name]: [] }));
+    } finally {
+      setSearchLoadingMap((prev) => ({ ...prev, [option.name]: false }));
+    }
+  }, [initialOptionsLoaded]);
+
+  // Load initial options when filters are shown
+  useEffect(() => {
+    if (showFilters) {
+      options.forEach(option => {
+        if (option.isSearchable && !initialOptionsLoaded[option.name]) {
+          loadInitialOptions(option);
+        }
+      });
+    }
+  }, [showFilters, options, loadInitialOptions, initialOptionsLoaded]);
+
   const handleFilterChange = (name: string, value: string) => {
     const newValues = {
       ...tempValues,
@@ -78,6 +111,13 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     });
     setTempValues(emptyValues);
     onResetFilters();
+  };
+
+  // Handle dropdown open to load initial options
+  const handleDropdownVisibleChange = (open: boolean, option: FilterOption) => {
+    if (open && option.isSearchable && !initialOptionsLoaded[option.name]) {
+      loadInitialOptions(option);
+    }
   };
 
   // Define the order of filters
@@ -125,6 +165,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                     placeholder={`Search ${option.label || option.name}...`}
                     value={tempValues[option.name] || undefined}
                     onChange={(value) => handleFilterChange(option.name, value)}
+                    onDropdownVisibleChange={(open) => handleDropdownVisibleChange(open, option)}
                     onSearch={(value) => {
                       setSearchInputValueMap((prev) => ({
                         ...prev,
@@ -138,6 +179,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                     loading={searchLoadingMap[option.name]}
                     options={searchOptionsMap[option.name] || []}
                     allowClear
+                    notFoundContent={searchLoadingMap[option.name] ? "Loading..." : "No results found"}
                   />
                 ) : option.options ? (
                   <Select
