@@ -265,8 +265,9 @@ class CompletionCustomHandler(
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            print("CompletionCustomHandler.async_log_success_event, kwargs: ", kwargs)
             self.states.append("async_success")
-            print("in async success, kwargs: ", kwargs)
+            print("############### CompletionCustomHandler async success, kwargs: ", kwargs)
             ## START TIME
             assert isinstance(start_time, datetime)
             ## END TIME
@@ -409,6 +410,7 @@ async def test_async_chat_azure():
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
         )
+        print("got response, sleeping 5 seconds....")
         await asyncio.sleep(5)
         assert len(customHandler_completion_azure_router.errors) == 0
         assert (
