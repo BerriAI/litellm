@@ -28,11 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.mistral import (
-    MistralTextBlock,
-    MistralThinkingBlock,
-    MistralToolCallMessage,
-)
+from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import convert_to_model_response_object
