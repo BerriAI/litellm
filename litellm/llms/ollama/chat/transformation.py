@@ -229,6 +229,12 @@ class OllamaChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        # Add authorization header if api_key is provided
+        if api_key is not None:
+            if api_base and api_base.startswith("https://ollama.com"):
+                headers["Authorization"] = api_key
+            else:
+                headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def get_complete_url(

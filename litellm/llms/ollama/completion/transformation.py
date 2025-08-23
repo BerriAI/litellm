@@ -393,6 +393,12 @@ class OllamaConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        # Add authorization header if api_key is provided
+        if api_key is not None:
+            if api_base and api_base.startswith("https://ollama.com"):
+                headers["Authorization"] = api_key
+            else:
+                headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def get_complete_url(
@@ -439,7 +445,9 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         return self.chunk_parser(json.loads(str_line))
 
-    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(
+        self, chunk: dict
+    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
         try:
             if "error" in chunk:
                 raise Exception(f"Ollama Error - {chunk}")
