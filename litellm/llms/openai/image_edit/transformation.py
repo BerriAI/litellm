@@ -80,24 +80,33 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         request_dict = cast(Dict, request)
 
         #########################################################
-        # Separate images as `files` and send other parameters as `data`
+        # Separate images and masks as `files` and send other parameters as `data`
         #########################################################
-        _images = request_dict.get("image") or []
-        data_without_images = {k: v for k, v in request_dict.items() if k != "image"}
+        _image = request_dict.get("image")
+        _mask = request_dict.get("mask")
+        data_without_files = {
+            k: v for k, v in request_dict.items() if k not in ["image", "mask"]
+        }
         files_list: List[Tuple[str, Any]] = []
-        for _image in _images:
+
+        # Handle image parameter
+        if _image is not None:
             image_content_type: str = ImageEditRequestUtils.get_image_content_type(
                 _image
             )
             if isinstance(_image, BufferedReader):
-                files_list.append(
-                    ("image[]", (_image.name, _image, image_content_type))
-                )
+                files_list.append(("image", (_image.name, _image, image_content_type)))
             else:
-                files_list.append(
-                    ("image[]", ("image.png", _image, image_content_type))
-                )
-        return data_without_images, files_list
+                files_list.append(("image", ("image.png", _image, image_content_type)))
+
+        # Handle mask parameter if provided
+        if _mask is not None:
+            mask_content_type: str = ImageEditRequestUtils.get_image_content_type(_mask)
+            if isinstance(_mask, BufferedReader):
+                files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
+            else:
+                files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+        return data_without_files, files_list
 
     def transform_image_edit_response(
         self,
