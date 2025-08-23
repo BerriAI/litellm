@@ -7,7 +7,7 @@ import AddGuardrailForm from "./guardrails/add_guardrail_form"
 import GuardrailTable from "./guardrails/guardrail_table"
 import { isAdminRole } from "@/utils/roles"
 import GuardrailInfoView from "./guardrails/guardrail_info"
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface GuardrailsPanelProps {
   accessToken: string | null
@@ -88,11 +88,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setIsDeleting(true)
     try {
       await deleteGuardrailCall(accessToken, guardrailToDelete.id)
-      message.success(`Guardrail "${guardrailToDelete.name}" deleted successfully`)
+      NotificationsManager.success(`Guardrail "${guardrailToDelete.name}" deleted successfully`)
       fetchGuardrails() // Refresh the list
     } catch (error) {
       console.error("Error deleting guardrail:", error)
-      NotificationManager.fromBackend("Failed to delete guardrail")
+      NotificationsManager.fromBackend("Failed to delete guardrail")
     } finally {
       setIsDeleting(false)
       setGuardrailToDelete(null)
