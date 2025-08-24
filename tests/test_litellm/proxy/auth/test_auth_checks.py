@@ -372,3 +372,139 @@ def test_can_object_call_model_with_alias():
     )
 
     print(result)
+
+
+def test_can_object_call_model_access_via_alias_only():
+    """
+    Test that a key can access a model via alias even when it doesn't have access to the underlying model.
+
+    This tests the scenario where:
+    - Router has model alias: "my-fake-gpt" -> "gpt-4"
+    - Key has access to: ["my-fake-gpt"] (alias)
+    - Key does NOT have access to: ["gpt-4"] (underlying model)
+    - The call should succeed because access is granted via the alias
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "my-fake-gpt"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "my-fake-gpt": {
+                "model": "gpt-4",
+                "hidden": False,
+            },
+        },
+    )
+
+    # Key has access to the alias but NOT the underlying model
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["my-fake-gpt"],  # Only has access to alias, not "gpt-4"
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    # Should return True because access is granted via the alias
+    assert result is True
+
+
+def test_can_object_call_model_access_via_underlying_model_only():
+    """
+    Test that a key can access a model via underlying model even when using an alias.
+
+    This tests the scenario where:
+    - Router has model alias: "my-fake-gpt" -> "gpt-4"
+    - Key has access to: ["gpt-4"] (underlying model)
+    - Key does NOT have access to: ["my-fake-gpt"] (alias)
+    - The call should succeed because access is granted via the underlying model
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "my-fake-gpt"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "my-fake-gpt": {
+                "model": "gpt-4",
+                "hidden": False,
+            },
+        },
+    )
+
+    # Key has access to the underlying model but NOT the alias
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["gpt-4"],  # Only has access to underlying model, not "my-fake-gpt"
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    # Should return True because access is granted via the underlying model
+    assert result is True
+
+
+def test_can_object_call_model_no_access_to_alias_or_underlying():
+    """
+    Test that a key cannot access a model when it has no access to either alias or underlying model.
+    """
+    from litellm import Router
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "my-fake-gpt"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+        model_group_alias={
+            "my-fake-gpt": {
+                "model": "gpt-4",
+                "hidden": False,
+            },
+        },
+    )
+
+    # Key has access to neither the alias nor the underlying model
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=["gpt-3.5-turbo"],  # Has access to different model entirely
+            team_model_aliases=None,
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    # Should raise ProxyException with appropriate error type
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert "key not allowed to access model" in str(exc_info.value.message)
+    assert "my-fake-gpt" in str(exc_info.value.message)

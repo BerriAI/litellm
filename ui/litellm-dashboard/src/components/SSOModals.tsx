@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button as Button2, Select, message } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface SSOModalsProps {
   isAddSSOModalVisible: boolean;
@@ -161,7 +162,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
   // Enhanced form submission handler
   const handleFormSubmit = async (formValues: Record<string, any>) => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationsManager.fromBackend("No access token available");
       return;
     }
 
@@ -173,14 +174,14 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       handleShowInstructions(formValues);
     } catch (error) {
       console.error("Failed to save SSO settings:", error);
-      message.error("Failed to save SSO settings");
+      NotificationsManager.fromBackend("Failed to save SSO settings");
     }
   };
 
   // Handle clearing SSO settings
   const handleClearSSO = async () => {
     if (!accessToken) {
-      message.error("No access token available");
+      NotificationsManager.fromBackend("No access token available");
       return;
     }
 
@@ -213,10 +214,10 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       // Close the main SSO modal and trigger refresh
       handleAddSSOOk();
       
-      message.success("SSO settings cleared successfully");
+      NotificationsManager.success("SSO settings cleared successfully");
     } catch (error) {
       console.error("Failed to clear SSO settings:", error);
-      message.error("Failed to clear SSO settings");
+      NotificationsManager.fromBackend("Failed to clear SSO settings");
     }
   };
 

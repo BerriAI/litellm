@@ -11,15 +11,18 @@ from unittest.mock import patch
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
 )
-from litellm.types.llms.anthropic import AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam
+from litellm.types.llms.anthropic import (
+    AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesUserMessageParam,
+)
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    Choices,
     Delta,
     Function,
-    StreamingChoices,
-    Choices,
     Message,
+    StreamingChoices,
 )
 
 
@@ -148,3 +151,44 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0].id == "call_empty_args"
     assert result[0].name == "test_function"
     assert result[0].input == {}, "Empty function arguments should result in empty dict"
+
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
+    """Test that partial tool arguments are correctly handled as input_json_delta."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=1,
+            delta=Delta(
+                provider_specific_fields=None,
+                content='',
+                role='assistant',
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id=None,
+                        function=Function(arguments=': "San ', name=None),
+                        type='function',
+                        index=0
+                    )
+                ],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    print("Type of content:", type_of_content)
+    print("Content block delta:", content_block_delta)
+
+    assert type_of_content == "input_json_delta"
+    assert content_block_delta["type"] == "input_json_delta" 
+    assert content_block_delta["partial_json"] == ': "San '

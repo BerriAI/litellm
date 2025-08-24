@@ -4,6 +4,7 @@ import { TextInput } from "@tremor/react"
 import { UploadOutlined } from "@ant-design/icons"
 import type { UploadFile, UploadProps } from "antd"
 import { convertPromptFileToJson, createPromptCall } from "../networking"
+import NotificationsManager from "../molecules/notifications_manager"
 
 const { Option } = Select
 
@@ -44,12 +45,12 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
       
       console.log("values: ", values)
       if (!accessToken) {
-        message.error("Access token is required")
+        NotificationsManager.fromBackend("Access token is required")
         return
       }
 
       if (promptIntegration === "dotprompt" && fileList.length === 0) {
-        message.error("Please upload a .prompt file")
+        NotificationsManager.fromBackend("Please upload a .prompt file")
         return
       }
 
@@ -79,7 +80,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
           }
         } catch (conversionError) {
           console.error("Error converting prompt file:", conversionError)
-          message.error("Failed to convert prompt file to JSON")
+          NotificationsManager.fromBackend("Failed to convert prompt file to JSON")
           setLoading(false)
           return
         }
@@ -88,12 +89,12 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
       // Create the prompt
       try {
         await createPromptCall(accessToken, promptData)
-        message.success("Prompt created successfully!")
+        NotificationsManager.success("Prompt created successfully!")
         handleCancel()
         onSuccess()
       } catch (createError) {
         console.error("Error creating prompt:", createError)
-        message.error("Failed to create prompt")
+        NotificationsManager.fromBackend("Failed to create prompt")
       }
 
     } catch (error) {
@@ -106,7 +107,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({
   const uploadProps: UploadProps = {
     beforeUpload: (file) => {
       if (!file.name.endsWith('.prompt')) {
-        message.error('Please upload a .prompt file')
+        NotificationsManager.fromBackend('Please upload a .prompt file')
         return false
       }
       return false // Prevent automatic upload

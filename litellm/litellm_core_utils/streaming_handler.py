@@ -13,6 +13,9 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.model_response_utils import (
+    is_model_response_stream_empty,
+)
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import ChatCompletionChunk
@@ -1574,6 +1577,13 @@ class CustomStreamWrapper:
                         response = self.model_response_creator(
                             chunk=obj_dict, hidden_params=response._hidden_params
                         )
+                        ## check if empty
+                        is_empty = is_model_response_stream_empty(
+                            model_response=cast(ModelResponseStream, response)
+                        )
+
+                        if is_empty:
+                            continue
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
@@ -1730,7 +1740,18 @@ class CustomStreamWrapper:
 
                         # Create a new object without the removed attribute
                         processed_chunk = self.model_response_creator(chunk=obj_dict)
+                        is_empty = is_model_response_stream_empty(
+                            model_response=cast(ModelResponseStream, processed_chunk)
+                        )
+
+                        if is_empty:
+                            continue
                     print_verbose(f"final returned processed chunk: {processed_chunk}")
+
+                    # add usage as hidden param
+                    if self.sent_last_chunk is True and self.stream_options is None:
+                        usage = calculate_total_usage(chunks=self.chunks)
+                        processed_chunk._hidden_params["usage"] = usage
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -1774,6 +1795,7 @@ class CustomStreamWrapper:
                     messages=self.messages,
                     logging_obj=self.logging_obj,
                 )
+
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
                     setattr(

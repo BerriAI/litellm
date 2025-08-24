@@ -311,7 +311,7 @@ def image_generation(  # noqa: PLR0915
             ) or get_secret_str("AZURE_AD_TOKEN")
 
             default_headers = {
-                "Content-Type": "application/json;",
+                "Content-Type": "application/json",
                 "api-key": api_key,
             }
             for k, v in default_headers.items():
@@ -335,8 +335,63 @@ def image_generation(  # noqa: PLR0915
                 headers=headers,
                 litellm_params=litellm_params_dict,
             )
+        #########################################################
+        # Providers using llm_http_handler
+        #########################################################
+        elif custom_llm_provider in (
+            litellm.LlmProviders.RECRAFT,
+            litellm.LlmProviders.AIML,
+            litellm.LlmProviders.GEMINI,
+        ):
+            if image_generation_config is None:
+                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
+            
+            return llm_http_handler.image_generation_handler(
+                model=model,
+                prompt=prompt,
+                image_generation_provider_config=image_generation_config,
+                image_generation_optional_request_params=optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                client=client,
+            )
+        elif custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            api_base = AzureFoundryModelInfo.get_api_base(api_base)
+            api_key = AzureFoundryModelInfo.get_api_key(api_key)
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
+
+            default_headers = {
+                "Content-Type": "application/json",
+                "api-key": api_key,
+            }
+            for k, v in default_headers.items():
+                if k not in headers:
+                    headers[k] = v
+
+            model_response = azure_chat_completions.image_generation(
+                model=model,
+                prompt=prompt,
+                timeout=timeout,
+                api_key=api_key,
+                api_base=api_base,
+                azure_ad_token=None,
+                azure_ad_token_provider=azure_ad_token_provider,
+                logging_obj=litellm_logging_obj,
+                optional_params=optional_params,
+                model_response=model_response,
+                api_version=api_version,
+                aimg_generation=aimg_generation,
+                client=client,
+                headers=headers,
+                litellm_params=litellm_params_dict,
+            )
         elif (
             custom_llm_provider == "openai"
+            or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
             model_response = openai_chat_completions.image_generation(
@@ -404,28 +459,6 @@ def image_generation(  # noqa: PLR0915
                 vertex_credentials=vertex_credentials,
                 aimg_generation=aimg_generation,
                 api_base=api_base,
-                client=client,
-            )
-        #########################################################
-        # Providers using llm_http_handler
-        #########################################################
-        elif custom_llm_provider in (
-            litellm.LlmProviders.RECRAFT,
-            litellm.LlmProviders.GEMINI,
-            
-        ):
-            if image_generation_config is None:
-                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
-            
-            return llm_http_handler.image_generation_handler(
-                model=model,
-                prompt=prompt,
-                image_generation_provider_config=image_generation_config,
-                image_generation_optional_request_params=optional_params,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=litellm_params_dict,
-                logging_obj=litellm_logging_obj,
-                timeout=timeout,
                 client=client,
             )
         elif (

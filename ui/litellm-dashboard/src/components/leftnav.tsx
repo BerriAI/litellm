@@ -1,7 +1,8 @@
 import { Layout, Menu } from "antd";
 import Link from "next/link";
 import { List } from "postcss/lib/list";
-import { Text } from "@tremor/react";
+import { Text, Button } from "@tremor/react";
+import { useState } from "react";
 import { 
   KeyOutlined,
   PlayCircleOutlined,
@@ -24,6 +25,8 @@ import {
   ToolOutlined,
   TagsOutlined,
   BgColorsOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles, isAdminRole } from '../utils/roles';
 import UsageIndicator from './usage_indicator';
@@ -55,6 +58,11 @@ const Sidebar: React.FC<SidebarProps> = ({
   userRole,
   defaultSelectedKey,
 }) => {
+  const [collapsed, setCollapsed] = useState(false);
+
+  const toggleCollapse = () => {
+    setCollapsed(!collapsed);
+  };
   // Note: If a menu item does not have a role, it is visible to all roles.
   const menuItems: MenuItem[] = [
     { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
@@ -150,41 +158,116 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider theme="light" width={220}>
+      <Sider 
+        theme="light" 
+        width={220}
+        collapsed={collapsed}
+        collapsedWidth={80}
+        collapsible
+        trigger={null}
+        style={{
+          transition: 'all 0.2s',
+          position: 'relative',
+        }}
+      >
         <Menu
           mode="inline"
           selectedKeys={[selectedMenuKey]}
-          defaultOpenKeys={["llm-tools"]}
+          defaultOpenKeys={collapsed ? [] : ["llm-tools"]}
+          inlineCollapsed={collapsed}
           style={{ 
             borderRight: 0,
             backgroundColor: 'transparent',
             fontSize: '14px',
           }}
-          items={filteredMenuItems.map(item => ({
-            key: item.key,
-            icon: item.icon,
-            label: item.label,
-            children: item.children?.map(child => ({
-              key: child.key,
-              icon: child.icon,
-              label: child.label,
-              onClick: () => {
+          items={[
+            // Expand button row when collapsed, or first menu item when expanded
+            collapsed ? {
+              key: 'expand-toggle',
+              icon: <MenuUnfoldOutlined />,
+              label: '',
+              onClick: toggleCollapse,
+              style: {
+                cursor: 'pointer',
+              },
+              title: "Expand navigation sidebar"
+            } : {
+              key: filteredMenuItems[0]?.key,
+              icon: filteredMenuItems[0]?.icon,
+              label: (
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'space-between',
+                  width: '100%'
+                }}>
+                  <span>{filteredMenuItems[0]?.label}</span>
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCollapse();
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      padding: '8px 12px',
+                      borderRadius: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '12px',
+                      color: '#888',
+                      transition: 'all 0.2s',
+                      marginLeft: '8px',
+                      marginRight: '-8px',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(0, 0, 0, 0.04)';
+                      e.currentTarget.style.color = '#666';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = '#888';
+                    }}
+                    title="Collapse navigation sidebar"
+                  >
+                    <MenuFoldOutlined />
+                  </div>
+                </div>
+              ),
+              onClick: !filteredMenuItems[0]?.children ? () => {
                 const newSearchParams = new URLSearchParams(window.location.search);
-                newSearchParams.set('page', child.page);
+                newSearchParams.set('page', filteredMenuItems[0]?.page || '');
                 window.history.pushState(null, '', `?${newSearchParams.toString()}`);
-                setPage(child.page);
-              }
-            })),
-            onClick: !item.children ? () => {
-              const newSearchParams = new URLSearchParams(window.location.search);
-              newSearchParams.set('page', item.page);
-              window.history.pushState(null, '', `?${newSearchParams.toString()}`);
-              setPage(item.page);
-            } : undefined
-          }))}
+                setPage(filteredMenuItems[0]?.page || '');
+              } : undefined
+            },
+            // Rest of the menu items (or all items when collapsed)
+            ...(collapsed ? filteredMenuItems : filteredMenuItems.slice(1)).map(item => ({
+              key: item.key,
+              icon: item.icon,
+              label: item.label,
+              children: item.children?.map(child => ({
+                key: child.key,
+                icon: child.icon,
+                label: child.label,
+                onClick: () => {
+                  const newSearchParams = new URLSearchParams(window.location.search);
+                  newSearchParams.set('page', child.page);
+                  window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+                  setPage(child.page);
+                }
+              })),
+              onClick: !item.children ? () => {
+                const newSearchParams = new URLSearchParams(window.location.search);
+                newSearchParams.set('page', item.page);
+                window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+                setPage(item.page);
+              } : undefined
+            }))
+          ]}
         />
         {
-          isAdminRole(userRole) && (
+          isAdminRole(userRole) && !collapsed && (
             <UsageIndicator accessToken={accessToken} width={220}/>
           )
         }

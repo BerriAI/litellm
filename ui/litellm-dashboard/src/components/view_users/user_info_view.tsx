@@ -15,6 +15,8 @@ import { UserEditView } from "../user_edit_view"
 import OnboardingModal, { InvitationLink } from "../onboarding_link"
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils"
 import { CopyIcon, CheckIcon } from "lucide-react";
+import NotificationsManager from "../molecules/notifications_manager";
+import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
 
 interface UserInfoViewProps {
   userId: string
@@ -35,6 +37,7 @@ interface UserInfo {
     teams: any[] | null
     models: string[] | null
     max_budget: number | null
+    budget_duration: string | null
     spend: number | null
     metadata: Record<string, any> | null
     created_at: string | null
@@ -83,7 +86,7 @@ export default function UserInfoView({
         setUserModels(availableModels)
       } catch (error) {
         console.error("Error fetching user data:", error)
-        message.error("Failed to fetch user data")
+        NotificationsManager.fromBackend("Failed to fetch user data")
       } finally {
         setIsLoading(false)
       }
@@ -94,16 +97,16 @@ export default function UserInfoView({
 
   const handleResetPassword = async () => {
     if (!accessToken) {
-      message.error("Access token not found")
+      NotificationsManager.fromBackend("Access token not found")
       return
     }
     try {
-      message.success("Generating password reset link...")
+      NotificationsManager.success("Generating password reset link...")
       const data = await invitationCreateCall(accessToken, userId)
       setInvitationLinkData(data)
       setIsInvitationLinkModalVisible(true)
     } catch (error) {
-      message.error("Failed to generate password reset link")
+      NotificationsManager.fromBackend("Failed to generate password reset link")
     }
   }
 
@@ -111,14 +114,14 @@ export default function UserInfoView({
     try {
       if (!accessToken) return
       await userDeleteCall(accessToken, [userId])
-      message.success("User deleted successfully")
+      NotificationsManager.success("User deleted successfully")
       if (onDelete) {
         onDelete()
       }
       onClose()
     } catch (error) {
       console.error("Error deleting user:", error)
-      message.error("Failed to delete user")
+      NotificationsManager.fromBackend("Failed to delete user")
     }
   }
 
@@ -136,15 +139,16 @@ export default function UserInfoView({
           user_email: formValues.user_email,
           models: formValues.models,
           max_budget: formValues.max_budget,
+          budget_duration: formValues.budget_duration,
           metadata: formValues.metadata,
         },
       })
 
-      message.success("User updated successfully")
+      NotificationsManager.success("User updated successfully")
       setIsEditing(false)
     } catch (error) {
       console.error("Error updating user:", error)
-      message.error("Failed to update user")
+      NotificationsManager.fromBackend("Failed to update user")
     }
   }
 
@@ -354,7 +358,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Role</Text>
+                    <Text className="font-medium">Global Proxy Role</Text>
                     <Text>{userData.user_info?.user_role || "Not Set"}</Text>
                   </div>
 
@@ -392,7 +396,7 @@ export default function UserInfoView({
                   </div>
 
                   <div>
-                    <Text className="font-medium">Models</Text>
+                    <Text className="font-medium">Personal Models</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
                       {userData.user_info?.models?.length && userData.user_info?.models?.length > 0 ? (
                         userData.user_info?.models?.map((model, index) => (
@@ -419,6 +423,20 @@ export default function UserInfoView({
                         <Text>No API keys</Text>
                       )}
                     </div>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Max Budget</Text>
+                    <Text>
+                      {userData.user_info?.max_budget !== null && userData.user_info?.max_budget !== undefined
+                        ? `$${formatNumberWithCommas(userData.user_info.max_budget, 4)}`
+                        : "Unlimited"}
+                    </Text>
+                  </div>
+
+                  <div>
+                    <Text className="font-medium">Budget Reset</Text>
+                    <Text>{getBudgetDurationLabel(userData.user_info?.budget_duration ?? null)}</Text>
                   </div>
 
                   <div>
