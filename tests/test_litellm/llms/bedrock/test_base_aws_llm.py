@@ -576,6 +576,7 @@ def test_eks_irsa_ambient_credentials_used():
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
+            aws_session_token=None,
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="test-session"
         )
@@ -630,6 +631,7 @@ def test_explicit_credentials_used_when_provided():
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id="explicit-access-key",
             aws_secret_access_key="explicit-secret-key",
+            aws_session_token="assumed-session-token",
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="test-session"
         )
@@ -639,6 +641,7 @@ def test_explicit_credentials_used_when_provided():
             "sts",
             aws_access_key_id="explicit-access-key",
             aws_secret_access_key="explicit-secret-key",
+            aws_session_token="assumed-session-token",
         )
         
         # Should call assume_role
@@ -687,6 +690,7 @@ def test_partial_credentials_still_use_ambient():
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id="AKIAEXAMPLE",
             aws_secret_access_key=None,
+            aws_session_token=None,
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="test-session"
         )
@@ -695,7 +699,8 @@ def test_partial_credentials_still_use_ambient():
         mock_boto3_client.assert_called_once_with(
             "sts",
             aws_access_key_id="AKIAEXAMPLE",
-            aws_secret_access_key=None
+            aws_secret_access_key=None,
+            aws_session_token=None,
         )
         
         # Should still call assume_role
@@ -737,6 +742,7 @@ def test_cross_account_role_assumption():
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
+            aws_session_token=None,
             aws_role_name="arn:aws:iam::999999999999:role/CrossAccountRole",
             aws_session_name="cross-account-session"
         )
@@ -789,6 +795,7 @@ def test_role_assumption_with_custom_session_name():
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
+            aws_session_token=None,
             aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
             aws_session_name="evals-bedrock-session"
         )
@@ -832,6 +839,7 @@ def test_role_assumption_ttl_calculation():
         credentials, ttl = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
+            aws_session_token=None,
             aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
             aws_session_name="ttl-test-session"
         )
@@ -858,6 +866,7 @@ def test_role_assumption_error_handling():
             base_aws_llm._auth_with_aws_role(
                 aws_access_key_id=None,
                 aws_secret_access_key=None,
+                aws_session_token=None,
                 aws_role_name="arn:aws:iam::1111111111111:role/UnauthorizedRole",
                 aws_session_name="error-test-session"
             )
@@ -911,6 +920,7 @@ def test_multiple_role_assumptions_in_sequence():
         credentials1, ttl1 = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
+            aws_session_token=None,
             aws_role_name="arn:aws:iam::1111111111111:role/LitellmRole",
             aws_session_name="session-1"
         )
@@ -919,6 +929,7 @@ def test_multiple_role_assumptions_in_sequence():
         credentials2, ttl2 = base_aws_llm._auth_with_aws_role(
             aws_access_key_id=None,
             aws_secret_access_key=None,
+            aws_session_token=None,
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
             aws_session_name="session-2"
         )
@@ -980,6 +991,7 @@ def test_auth_with_aws_role_irsa_environment():
                 creds, ttl = base_llm._auth_with_aws_role(
                     aws_access_key_id=None,
                     aws_secret_access_key=None,
+                    aws_session_token=None,
                     aws_role_name='arn:aws:iam::222222222222:role/target-role',
                     aws_session_name='test-session'
                 )
