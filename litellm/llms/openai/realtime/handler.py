@@ -1,5 +1,5 @@
 """
-This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
+This file contains the calling OpenAI's `/v1/realtime` endpoint.
 
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
@@ -15,7 +15,7 @@ from litellm.types.realtime import RealtimeQueryParams
 class OpenAIRealtime(OpenAIChatCompletion):
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
-        Construct the backend websocket URL with all query parameters (excluding 'model' if present).
+        Construct the backend websocket URL with all query parameters (including 'model').
         """
         from httpx import URL
 
@@ -24,10 +24,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
         url = URL(api_base)
         # Set the correct path
         url = url.copy_with(path="/v1/realtime")
-        # Build query dict excluding 'model'
-        query_dict = {k: v for k, v in query_params.items() if k != "model"}
-        if query_dict:
-            url = url.copy_with(params=query_dict)
+        # Include all query parameters including 'model'
+        if query_params:
+            url = url.copy_with(params=query_params)
         return str(url)
 
     async def async_realtime(
@@ -43,11 +42,10 @@ class OpenAIRealtime(OpenAIChatCompletion):
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
-
         if api_base is None:
-            raise ValueError("api_base is required for Azure OpenAI calls")
+            api_base = "https://api.openai.com/"
         if api_key is None:
-            raise ValueError("api_key is required for Azure OpenAI calls")
+            raise ValueError("api_key is required for OpenAI realtime calls")
 
         # Use all query params if provided, else fallback to just model
         if query_params is None:
