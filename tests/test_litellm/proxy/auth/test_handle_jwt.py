@@ -186,7 +186,7 @@ async def test_auth_builder_proxy_admin_user_role():
         JWTAuthManager,
         "get_objects",
         new_callable=AsyncMock,
-        return_value=(user_object, None, None),
+        return_value=(user_object, None, None, None),
     ) as mock_get_objects, patch.object(
         JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
     ) as mock_map_user, patch.object(
@@ -270,7 +270,7 @@ async def test_auth_builder_non_proxy_admin_user_role():
         JWTAuthManager,
         "get_objects",
         new_callable=AsyncMock,
-        return_value=(user_object, None, None),
+        return_value=(user_object, None, None, None),
     ) as mock_get_objects, patch.object(
         JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
     ) as mock_map_user, patch.object(
@@ -459,9 +459,9 @@ async def test_nested_jwt_field_access():
     2. Backward compatibility is maintained for flat field names
     3. Missing nested paths return appropriate defaults
     """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy._types import LiteLLM_JWTAuth
-    
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
     # Create JWT handler
     jwt_handler = JWTHandler()
     
@@ -536,7 +536,7 @@ async def test_nested_jwt_field_access():
     assert jwt_handler.get_org_id(flat_token, None) == "org456"
 
     # Test 5: object_id_jwt_field with nested access (requires role_mappings)
-    from litellm.proxy._types import RoleMapping, LitellmUserRoles
+    from litellm.proxy._types import LitellmUserRoles, RoleMapping
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         object_id_jwt_field="profile.object_id",
         role_mappings=[RoleMapping(role="admin", internal_role=LitellmUserRoles.INTERNAL_USER)]
@@ -588,9 +588,9 @@ async def test_nested_jwt_field_missing_paths():
     2. Partial paths that exist but don't have the final key return defaults
     3. team_id_default fallback works with nested fields
     """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy._types import LiteLLM_JWTAuth
-    
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
     # Create JWT handler
     jwt_handler = JWTHandler()
     
@@ -626,7 +626,7 @@ async def test_nested_jwt_field_missing_paths():
     assert jwt_handler.get_org_id(incomplete_token, "default_org") == "default_org"
 
     # Test 5: Missing profile.object_id should return default (requires role_mappings)
-    from litellm.proxy._types import RoleMapping, LitellmUserRoles
+    from litellm.proxy._types import LitellmUserRoles, RoleMapping
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         object_id_jwt_field="profile.object_id",
         role_mappings=[RoleMapping(role="admin", internal_role=LitellmUserRoles.INTERNAL_USER)]
@@ -663,9 +663,9 @@ async def test_metadata_prefix_handling_in_nested_fields():
     
     The get_nested_value function should remove metadata. prefix before traversing
     """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
     from litellm.proxy._types import LiteLLM_JWTAuth
-    
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
     # Create JWT handler
     jwt_handler = JWTHandler()
     
@@ -685,3 +685,165 @@ async def test_metadata_prefix_handling_in_nested_fields():
     # Test 2: user.sub should work normally without metadata prefix
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(user_id_jwt_field="sub")
     assert jwt_handler.get_user_id(token, None) == "u123"
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_model_group(monkeypatch):
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "gpt-4o-mini"},
+                "model_info": {"access_groups": ["test-group"]},
+            }
+        ]
+    )
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = router
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    team = LiteLLM_TeamTable(team_id="team-1", models=["test-group"])
+
+    async def mock_get_team_object(*args, **kwargs):  # type: ignore
+        return team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-1"},
+        requested_model="gpt-4o-mini",
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert team_id == "team-1"
+    assert team_obj.team_id == "team-1"
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_returns_team_membership_object():
+    """
+    Test that auth_builder returns the team_membership_object when user is a member of a team.
+    """
+    # Setup test data
+    api_key = "test_jwt_token"
+    request_data = {"model": "gpt-4"}
+    general_settings = {"enforce_rbac": False}
+    route = "/chat/completions"
+    _team_id = "test_team_1"
+    _user_id = "test_user_1"
+
+    # Create mock objects
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
+    
+    mock_team_membership = LiteLLM_TeamMembership(
+        user_id=_user_id,
+        team_id=_team_id,
+        budget_id="budget_123",
+        spend=10.5,
+        litellm_budget_table=LiteLLM_BudgetTable(
+            budget_id="budget_123",
+            rpm_limit=100,
+            tpm_limit=5000
+        )
+    )
+    
+    user_object = LiteLLM_UserTable(
+        user_id=_user_id, 
+        user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    
+    team_object = LiteLLM_TeamTable(team_id=_team_id)
+
+    # Create mock JWT handler
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    # Mock all the dependencies and method calls
+    with patch.object(
+        jwt_handler, "auth_jwt", new_callable=AsyncMock
+    ) as mock_auth_jwt, patch.object(
+        JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
+    ) as mock_check_rbac, patch.object(
+        jwt_handler, "get_rbac_role", return_value=None
+    ) as mock_get_rbac, patch.object(
+        jwt_handler, "get_scopes", return_value=[]
+    ) as mock_get_scopes, patch.object(
+        jwt_handler, "get_object_id", return_value=None
+    ) as mock_get_object_id, patch.object(
+        JWTAuthManager,
+        "get_user_info",
+        new_callable=AsyncMock,
+        return_value=(_user_id, "test@example.com", True),
+    ) as mock_get_user_info, patch.object(
+        jwt_handler, "get_org_id", return_value=None
+    ) as mock_get_org_id, patch.object(
+        jwt_handler, "get_end_user_id", return_value=None
+    ) as mock_get_end_user_id, patch.object(
+        JWTAuthManager, "check_admin_access", new_callable=AsyncMock, return_value=None
+    ) as mock_check_admin, patch.object(
+        JWTAuthManager,
+        "find_and_validate_specific_team_id",
+        new_callable=AsyncMock,
+        return_value=(_team_id, team_object),
+    ) as mock_find_team, patch.object(
+        JWTAuthManager, "get_all_team_ids", return_value=set()
+    ) as mock_get_all_team_ids, patch.object(
+        JWTAuthManager,
+        "find_team_with_model_access",
+        new_callable=AsyncMock,
+        return_value=(None, None),
+    ) as mock_find_team_access, patch.object(
+        JWTAuthManager,
+        "get_objects",
+        new_callable=AsyncMock,
+        return_value=(user_object, None, None, mock_team_membership),
+    ) as mock_get_objects, patch.object(
+        JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
+    ) as mock_map_user, patch.object(
+        JWTAuthManager, "validate_object_id", return_value=True
+    ) as mock_validate_object, patch.object(
+        JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
+    ) as mock_sync_user:
+        # Set up the mock return values
+        mock_auth_jwt.return_value = {"sub": _user_id, "scope": ""}
+
+        # Call the auth_builder method
+        result = await JWTAuthManager.auth_builder(
+            api_key=api_key,
+            jwt_handler=jwt_handler,
+            request_data=request_data,
+            general_settings=general_settings,
+            route=route,
+            prisma_client=None,
+            user_api_key_cache=None,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+        # Verify that team_membership_object is returned
+        assert result["team_membership"] is not None, "team_membership should be present"
+        assert result["team_membership"] == mock_team_membership, "team_membership should match the mock object"
+        assert result["team_membership"].user_id == _user_id, "team_membership user_id should match"
+        assert result["team_membership"].team_id == _team_id, "team_membership team_id should match"
+        assert result["team_membership"].budget_id == "budget_123", "team_membership budget_id should match"
+        assert result["team_membership"].spend == 10.5, "team_membership spend should match"

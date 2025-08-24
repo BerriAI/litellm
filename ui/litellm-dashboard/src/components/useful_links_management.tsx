@@ -14,6 +14,7 @@ import {
   TableRow, 
   TableCell 
 } from "@tremor/react";
+import NotificationsManager from "./molecules/notifications_manager";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;
@@ -117,7 +118,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
       return true;
     } catch (error) {
       console.error("Error saving links:", error);
-      message.error(`Failed to save links - ${error}`);
+      NotificationsManager.fromBackend(`Failed to save links - ${error}`);
       return false;
     }
   };
@@ -129,13 +130,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
     try {
       new URL(newLink.url);
     } catch {
-      message.error("Please enter a valid URL");
+      NotificationsManager.fromBackend("Please enter a valid URL");
       return;
     }
 
     // Check for duplicate display names
     if (links.some(link => link.displayName === newLink.displayName)) {
-      message.error("A link with this display name already exists");
+      NotificationsManager.fromBackend("A link with this display name already exists");
       return;
     }
 
@@ -150,7 +151,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
       setNewLink({ url: "", displayName: "" });
-      message.success("Link added successfully");
+      NotificationsManager.success("Link added successfully");
     }
   };
 
@@ -165,13 +166,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
     try {
       new URL(editingLink.url);
     } catch {
-      message.error("Please enter a valid URL");
+      NotificationsManager.fromBackend("Please enter a valid URL");
       return;
     }
 
     // Check for duplicate display names (excluding current link)
     if (links.some(link => link.id !== editingLink.id && link.displayName === editingLink.displayName)) {
-      message.error("A link with this display name already exists");
+      NotificationsManager.fromBackend("A link with this display name already exists");
       return;
     }
 
@@ -182,7 +183,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
       setEditingLink(null);
-      message.success("Link updated successfully");
+      NotificationsManager.success("Link updated successfully");
     }
   };
 
@@ -195,7 +196,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({
     
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
-      message.success("Link deleted successfully");
+      NotificationsManager.success("Link deleted successfully");
     }
   };
 
