@@ -15,14 +15,9 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor, InMemoryLogExporter
-from opentelemetry.sdk._events import EventLoggerProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAIAttributes,
-    event_attributes as EventAttributes,
-)
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -124,17 +119,18 @@ class TestOpenTelemetry(unittest.TestCase):
             time.sleep(self.POLL_INTERVAL)
         return None
 
-    def wait_for_event(self, exporter: InMemoryLogExporter, event_name: str):
-        """Poll until we see at least one event with the given EventAttributes.EVENT_NAME."""
+    def wait_for_log(self, reader: InMemoryLogExporter, name: str):
+        """Poll until we see a log with the given name."""
         deadline = time.time() + self.POLL_TIMEOUT
         while time.time() < deadline:
-            logs = exporter.get_finished_logs()
+            logs = reader.get_finished_logs()
+            if not logs:
+                time.sleep(self.POLL_INTERVAL)
+                continue
             matches = [
-                l
-                for l in logs
-                if l.log_record.attributes
-                and l.log_record.attributes.get(EventAttributes.EVENT_NAME)
-                == event_name
+                log
+                for log in logs
+                # if log.attributes and any(str(k).startswith(prefix) for k in log.attributes)
             ]
             if matches:
                 return matches
@@ -543,7 +539,6 @@ class TestOpenTelemetry(unittest.TestCase):
         log_exporter = InMemoryLogExporter()
         logger_provider = OTLoggerProvider()
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
-        event_logger_provider = EventLoggerProvider(logger_provider)
 
         metric_reader = InMemoryMetricReader()
         meter_provider = MeterProvider(metric_readers=[metric_reader])
@@ -551,8 +546,8 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── instantiate our OpenTelemetry logger with test providers ───────────
         otel = OpenTelemetry(
             tracer_provider=tracer_provider,
-            event_logger_provider=event_logger_provider,
             meter_provider=meter_provider,
+            logger_provider=logger_provider,
         )
 
         # OpenTelemetry attempts to set a global tracer provider, which can be set only once.
@@ -597,29 +592,31 @@ class TestOpenTelemetry(unittest.TestCase):
             and hasattr(duration_metric.data, "data_points")
         ):
             found_dp = any(
-                dp.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == self.MODEL
+                dp.attributes.get("gen_ai.request.model") == self.MODEL
                 for dp in duration_metric.data.data_points
             )
         self.assertTrue(
             found_dp, "expected gen_ai.request.model attribute on a data point"
         )
 
-        # ─── assert events ───────────────────────────────────────────────────────
-        user_events = self.wait_for_event(log_exporter, "gen_ai.user.message")
-        choice_events = self.wait_for_event(log_exporter, "gen_ai.choice")
-        self.assertTrue(user_events, "did not see a gen_ai.user.message event")
-        self.assertTrue(choice_events, "did not see a gen_ai.choice event")
+        # ─── assert logs ───────────────────────────────────────────────────────
+        logs = []
+        logs = self.wait_for_log(log_exporter, "gen_ai.")
+        self.assertTrue(logs, "Expected at least one gen_ai log")
 
-        # check event bodies
-        user_body = user_events[0].log_record.body
-        choice_body = choice_events[0].log_record.body
+        user_logs = [l for l in logs if l.log_record.attributes.get("event_name") == "gen_ai.content.prompt"]
+        self.assertTrue(user_logs, "did not see a gen_ai.content.prompt log")
+        # check log bodies
+        user_prompt = user_logs[0].log_record.attributes.get("gen_ai.prompt")
+        self.assertEqual("What is the capital of France?", user_prompt, "did not see a prompt message")
 
-        # Handle different body types - could be dict, string, or other
-        if isinstance(user_body, dict):
-            self.assertEqual("What is the capital of France?", user_body.get("content"))
+        choice_logs = [l for l in logs if l.log_record.attributes.get("event_name") == "gen_ai.content.completion"]
+        self.assertTrue(choice_logs, "did not see a gen_ai.content.completion event")
 
-        if isinstance(choice_body, dict):
-            self.assertEqual("stop", choice_body.get("finish_reason"))
+        choice_response = choice_logs[0].log_record.body
+        self.assertIsNotNone(choice_response, "did not see a response message")
+        self.assertEqual("stop", choice_response.get("finish_reason"), "did not see expected finish reason")
+
 
     def test_handle_success_spans_only(self):
         # make sure neither events nor metrics is on
@@ -641,8 +638,8 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── instantiate our OpenTelemetry logger with test providers ───────────
         otel = OpenTelemetry(
             tracer_provider=tracer_provider,
-            event_logger_provider=EventLoggerProvider(logger_provider),
             meter_provider=meter_provider,
+            logger_provider=logger_provider,  # pass even if events disabled (safe)
         )
         # bind our tracer to the test tracer provider (global registration is a no-op after the first time)
         otel.tracer = tracer_provider.get_tracer(__name__)
@@ -674,7 +671,7 @@ class TestOpenTelemetry(unittest.TestCase):
         # model attribute should be on that span
         found = any(
             s.attributes
-            and s.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == self.MODEL
+            and s.attributes.get("gen_ai.request.model") == self.MODEL
             for s in spans
         )
         self.assertTrue(found, "expected gen_ai.request.model on span attributes")
@@ -684,11 +681,9 @@ class TestOpenTelemetry(unittest.TestCase):
             self.wait_for_metric(metric_reader, "gen_ai.client.operation.duration"),
             "Did not expect any metrics",
         )
-        # no events emitted
-        self.assertFalse(
-            self.wait_for_event(log_exporter, "gen_ai.user.message"),
-            "Did not expect any events",
-        )
+        # no logs emitted
+        logs = log_exporter.get_finished_logs()
+        self.assertFalse(logs, "Did not expect any logs")
 
     def test_handle_success_spans_and_metrics(self):
         # only metrics on
@@ -709,8 +704,8 @@ class TestOpenTelemetry(unittest.TestCase):
         # ─── instantiate our OpenTelemetry logger with test providers ───────────
         otel = OpenTelemetry(
             tracer_provider=tracer_provider,
-            event_logger_provider=EventLoggerProvider(logger_provider),
             meter_provider=meter_provider,
+            logger_provider=logger_provider,  # needed if events were enabled
         )
         otel.tracer = tracer_provider.get_tracer(__name__)
 
@@ -746,7 +741,7 @@ class TestOpenTelemetry(unittest.TestCase):
             and hasattr(duration_metric.data, "data_points")
         ):
             found_dp = any(
-                dp.attributes.get(GenAIAttributes.GEN_AI_REQUEST_MODEL) == self.MODEL
+                dp.attributes.get("gen_ai.request.model") == self.MODEL
                 for dp in duration_metric.data.data_points
             )
         self.assertTrue(
@@ -754,7 +749,5 @@ class TestOpenTelemetry(unittest.TestCase):
         )
 
         # ─── no events when only metrics enabled ─────────────────────────────────
-        self.assertFalse(
-            self.wait_for_event(log_exporter, "gen_ai.user.message"),
-            "Did not expect any events when only metrics are enabled",
-        )
+        logs = log_exporter.get_finished_logs()
+        self.assertFalse(logs, "Did not expect any logs")

@@ -6,7 +6,6 @@ import threading
 import time
 import traceback
 from contextlib import redirect_stdout, redirect_stderr
-from opentelemetry.sdk._events import EventLoggerProvider
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
@@ -14,10 +13,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAIAttributes,
-    event_attributes as EventAttributes,
-)
+
 
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.proxy.proxy_cli import run_server
@@ -58,7 +54,7 @@ def tracer_provider(span_exporter):
 def event_logger_provider(log_exporter):
     provider = LoggerProvider()
     provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
-    return EventLoggerProvider(provider)
+    return provider
 
 @pytest.fixture(scope="session")
 def meter_provider(metric_reader):
@@ -83,7 +79,7 @@ def start_proxy(tracer_provider, event_logger_provider, meter_provider):
     ### The instance will add itself to the module litellm.service_callback list to register the OTEL callbacks
     otel_instance = OpenTelemetry(
         tracer_provider=tracer_provider,
-        event_logger_provider=event_logger_provider,
+        logger_provider=event_logger_provider,
         meter_provider=meter_provider,
     )
 
@@ -164,29 +160,29 @@ def assert_spans_have_expected(spans):
     assert spans, "Expected at least one gen_ai span"
     
     span = spans[0]
-    assert span.attributes[GenAIAttributes.GEN_AI_SYSTEM] == SYSTEM
-    assert span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == BEDROCK_MODEL_ARN
+    assert span.attributes["gen_ai.system"] == SYSTEM
+    assert span.attributes["gen_ai.request.model"] == BEDROCK_MODEL_ARN
     assert span.attributes["gen_ai.completion.0.finish_reason"] == "stop"
 
 
 def get_event_logs(log_exporter, event_name):
     return [
         log for log in log_exporter.get_finished_logs()
-        if log.log_record.attributes[EventAttributes.EVENT_NAME] == event_name
+        if log.log_record.attributes["event_name"] == event_name
     ]
 
 
 def assert_logs_correct(log_exporter, response):
-    user_logs = get_event_logs(log_exporter, "gen_ai.user.message")
-    choice_logs = get_event_logs(log_exporter, "gen_ai.choice")
+    user_logs = get_event_logs(log_exporter, "gen_ai.content.prompt")
+    choice_logs = get_event_logs(log_exporter, "gen_ai.content.completion")
     
     assert user_logs, "User message log not found"
-    assert user_logs[0].log_record.attributes[GenAIAttributes.GEN_AI_SYSTEM] == SYSTEM
+    assert user_logs[0].log_record.attributes["gen_ai.system"] == SYSTEM
     assert user_logs[0].log_record.body["content"] == "What is the capital of France?"
 
     assert choice_logs, "Choice log not found"
     cl = choice_logs[0]
-    assert cl.log_record.attributes[GenAIAttributes.GEN_AI_SYSTEM] == SYSTEM
+    assert cl.log_record.attributes["gen_ai.system"] == SYSTEM
     assert cl.log_record.body["message"]["content"] == response.choices[0].message.content
     assert cl.log_record.body["finish_reason"] == "stop"
 
@@ -242,9 +238,9 @@ async def test_litellm_proxy_otel_telemetry(span_exporter, log_exporter, metric_
     # 4) metrics (wait up to 10s)
     _, op_metric = wait_for_metric(metric_reader, "gen_ai.client.operation.duration")
     assert op_metric, "Request duration metric not found"
-    assert_metric_has_attr(op_metric, GenAIAttributes.GEN_AI_REQUEST_MODEL, BEDROCK_MODEL_ARN)
+    assert_metric_has_attr(op_metric, "gen_ai.request.model", BEDROCK_MODEL_ARN)
 
     # 5) optionally check token usage
     _, tok_metric = wait_for_metric(metric_reader, "gen_ai.client.token.usage")
     if tok_metric:
-        assert_metric_has_attr(tok_metric, GenAIAttributes.GEN_AI_REQUEST_MODEL, BEDROCK_MODEL_ARN)
+        assert_metric_has_attr(tok_metric, "gen_ai.request.model", BEDROCK_MODEL_ARN)
