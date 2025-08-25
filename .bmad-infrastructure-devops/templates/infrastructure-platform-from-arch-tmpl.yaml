@@ -1,0 +1,630 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: infrastructure-platform-template-v2
+  name: Platform Infrastructure Implementation
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/platform-infrastructure/platform-implementation.md
+    title: "{{project_name}} Platform Infrastructure Implementation"
+
+workflow:
+  mode: interactive
+  elicitation: advanced-elicitation
+  custom_elicitation:
+    title: "Platform Implementation Elicitation Actions"
+    sections:
+      - id: foundation-infrastructure
+        options:
+          - "Platform Layer Security Hardening - Additional security controls and compliance validation"
+          - "Performance Optimization - Network and resource optimization"
+          - "Operational Excellence Enhancement - Automation and monitoring improvements"
+          - "Platform Integration Validation - Verify foundation supports upper layers"
+          - "Developer Experience Analysis - Foundation impact on developer workflows"
+          - "Disaster Recovery Testing - Foundation resilience validation"
+          - "BMAD Workflow Integration - Cross-agent support verification"
+          - "Finalize and Proceed to Container Platform"
+
+sections:
+  - id: initial-setup
+    instruction: |
+      Initial Setup
+
+      1. Replace {{project_name}} with the actual project name throughout the document
+      2. Gather and review required inputs:
+         - **Infrastructure Architecture Document** (Primary input - REQUIRED)
+         - Infrastructure Change Request (if applicable)
+         - Infrastructure Guidelines
+         - Technology Stack Document
+         - Infrastructure Checklist
+         - NOTE: If Infrastructure Architecture Document is missing, HALT and request: "I need the Infrastructure Architecture Document to proceed with platform implementation. This document defines the infrastructure design that we'll be implementing."
+
+      3. Validate that the infrastructure architecture has been reviewed and approved
+      4. <critical_rule>All platform implementation must align with the approved infrastructure architecture. Any deviations require architect approval.</critical_rule>
+
+      Output file location: `docs/platform-infrastructure/platform-implementation.md`
+
+  - id: executive-summary
+    title: Executive Summary
+    instruction: Provide a high-level overview of the platform infrastructure being implemented, referencing the infrastructure architecture document's key decisions and requirements.
+    template: |
+      - Platform implementation scope and objectives
+      - Key architectural decisions being implemented
+      - Expected outcomes and benefits
+      - Timeline and milestones
+
+  - id: joint-planning
+    title: Joint Planning Session with Architect
+    instruction: Document the collaborative planning session between DevOps/Platform Engineer and Architect. This ensures alignment before implementation begins.
+    sections:
+      - id: architecture-alignment
+        title: Architecture Alignment Review
+        template: |
+          - Review of infrastructure architecture document
+          - Confirmation of design decisions
+          - Identification of any ambiguities or gaps
+          - Agreement on implementation approach
+      - id: implementation-strategy
+        title: Implementation Strategy Collaboration
+        template: |
+          - Platform layer sequencing
+          - Technology stack validation
+          - Integration approach between layers
+          - Testing and validation strategy
+      - id: risk-constraint
+        title: Risk & Constraint Discussion
+        template: |
+          - Technical risks and mitigation strategies
+          - Resource constraints and workarounds
+          - Timeline considerations
+          - Compliance and security requirements
+      - id: validation-planning
+        title: Implementation Validation Planning
+        template: |
+          - Success criteria for each platform layer
+          - Testing approach and acceptance criteria
+          - Rollback strategies
+          - Communication plan
+      - id: documentation-planning
+        title: Documentation & Knowledge Transfer Planning
+        template: |
+          - Documentation requirements
+          - Knowledge transfer approach
+          - Training needs identification
+          - Handoff procedures
+
+  - id: foundation-infrastructure
+    title: Foundation Infrastructure Layer
+    instruction: Implement the base infrastructure layer based on the infrastructure architecture. This forms the foundation for all platform services.
+    elicit: true
+    custom_elicitation: foundation-infrastructure
+    sections:
+      - id: cloud-provider-setup
+        title: Cloud Provider Setup
+        template: |
+          - Account/Subscription configuration
+          - Region selection and setup
+          - Resource group/organizational structure
+          - Cost management setup
+      - id: network-foundation
+        title: Network Foundation
+        type: code
+        language: hcl
+        template: |
+          # Example Terraform for VPC setup
+          module "vpc" {
+            source = "./modules/vpc"
+
+            cidr_block = "{{vpc_cidr}}"
+            availability_zones = {{availability_zones}}
+            public_subnets = {{public_subnets}}
+            private_subnets = {{private_subnets}}
+          }
+      - id: security-foundation
+        title: Security Foundation
+        template: |
+          - IAM roles and policies
+          - Security groups and NACLs
+          - Encryption keys (KMS/Key Vault)
+          - Compliance controls
+      - id: core-services
+        title: Core Services
+        template: |
+          - DNS configuration
+          - Certificate management
+          - Logging infrastructure
+          - Monitoring foundation
+
+  - id: container-platform
+    title: Container Platform Implementation
+    instruction: Build the container orchestration platform on top of the foundation infrastructure, following the architecture's container strategy.
+    sections:
+      - id: kubernetes-setup
+        title: Kubernetes Cluster Setup
+        sections:
+          - id: eks-setup
+            condition: Uses EKS
+            type: code
+            language: bash
+            template: |
+              # EKS Cluster Configuration
+              eksctl create cluster \
+                --name {{cluster_name}} \
+                --region {{aws_region}} \
+                --nodegroup-name {{nodegroup_name}} \
+                --node-type {{instance_type}} \
+                --nodes {{node_count}}
+          - id: aks-setup
+            condition: Uses AKS
+            type: code
+            language: bash
+            template: |
+              # AKS Cluster Configuration
+              az aks create \
+                --resource-group {{resource_group}} \
+                --name {{cluster_name}} \
+                --node-count {{node_count}} \
+                --node-vm-size {{vm_size}} \
+                --network-plugin azure
+      - id: node-configuration
+        title: Node Configuration
+        template: |
+          - Node groups/pools setup
+          - Autoscaling configuration
+          - Node security hardening
+          - Resource quotas and limits
+      - id: cluster-services
+        title: Cluster Services
+        template: |
+          - CoreDNS configuration
+          - Ingress controller setup
+          - Certificate management
+          - Storage classes
+      - id: security-rbac
+        title: Security & RBAC
+        template: |
+          - RBAC policies
+          - Pod security policies/standards
+          - Network policies
+          - Secrets management
+
+  - id: gitops-workflow
+    title: GitOps Workflow Implementation
+    instruction: Implement GitOps patterns for declarative infrastructure and application management as defined in the architecture.
+    sections:
+      - id: gitops-tooling
+        title: GitOps Tooling Setup
+        sections:
+          - id: argocd-setup
+            condition: Uses ArgoCD
+            type: code
+            language: yaml
+            template: |
+              apiVersion: argoproj.io/v1alpha1
+              kind: Application
+              metadata:
+                name: argocd
+                namespace: argocd
+              spec:
+                source:
+                  repoURL: {{repo_url}}
+                  targetRevision: {{target_revision}}
+                  path: {{path}}
+          - id: flux-setup
+            condition: Uses Flux
+            type: code
+            language: yaml
+            template: |
+              apiVersion: source.toolkit.fluxcd.io/v1beta2
+              kind: GitRepository
+              metadata:
+                name: flux-system
+                namespace: flux-system
+              spec:
+                interval: 1m
+                ref:
+                  branch: {{branch}}
+                url: {{git_url}}
+      - id: repository-structure
+        title: Repository Structure
+        type: code
+        language: text
+        template: |
+          platform-gitops/
+             clusters/
+                production/
+                staging/
+                development/
+             infrastructure/
+                base/
+                overlays/
+             applications/
+                 base/
+                 overlays/
+      - id: deployment-workflows
+        title: Deployment Workflows
+        template: |
+          - Application deployment patterns
+          - Progressive delivery setup
+          - Rollback procedures
+          - Multi-environment promotion
+      - id: access-control
+        title: Access Control
+        template: |
+          - Git repository permissions
+          - GitOps tool RBAC
+          - Secret management integration
+          - Audit logging
+
+  - id: service-mesh
+    title: Service Mesh Implementation
+    instruction: Deploy service mesh for advanced traffic management, security, and observability as specified in the architecture.
+    sections:
+      - id: istio-mesh
+        title: Istio Service Mesh
+        condition: Uses Istio
+        sections:
+          - id: istio-install
+            type: code
+            language: bash
+            template: |
+              # Istio Installation
+              istioctl install --set profile={{istio_profile}} \
+                --set values.gateways.istio-ingressgateway.type={{ingress_type}}
+          - id: istio-config
+            template: |
+              - Control plane configuration
+              - Data plane injection
+              - Gateway configuration
+              - Observability integration
+      - id: linkerd-mesh
+        title: Linkerd Service Mesh
+        condition: Uses Linkerd
+        sections:
+          - id: linkerd-install
+            type: code
+            language: bash
+            template: |
+              # Linkerd Installation
+              linkerd install --cluster-name={{cluster_name}} | kubectl apply -f -
+              linkerd viz install | kubectl apply -f -
+          - id: linkerd-config
+            template: |
+              - Control plane setup
+              - Proxy injection
+              - Traffic policies
+              - Metrics collection
+      - id: traffic-management
+        title: Traffic Management
+        template: |
+          - Load balancing policies
+          - Circuit breakers
+          - Retry policies
+          - Canary deployments
+      - id: security-policies
+        title: Security Policies
+        template: |
+          - mTLS configuration
+          - Authorization policies
+          - Rate limiting
+          - Network segmentation
+
+  - id: developer-experience
+    title: Developer Experience Platform
+    instruction: Build the developer self-service platform to enable efficient development workflows as outlined in the architecture.
+    sections:
+      - id: developer-portal
+        title: Developer Portal
+        template: |
+          - Service catalog setup
+          - API documentation
+          - Self-service workflows
+          - Resource provisioning
+      - id: cicd-integration
+        title: CI/CD Integration
+        type: code
+        language: yaml
+        template: |
+          apiVersion: tekton.dev/v1beta1
+          kind: Pipeline
+          metadata:
+            name: platform-pipeline
+          spec:
+            tasks:
+              - name: build
+                taskRef:
+                  name: build-task
+              - name: test
+                taskRef:
+                  name: test-task
+              - name: deploy
+                taskRef:
+                  name: gitops-deploy
+      - id: development-tools
+        title: Development Tools
+        template: |
+          - Local development setup
+          - Remote development environments
+          - Testing frameworks
+          - Debugging tools
+      - id: self-service
+        title: Self-Service Capabilities
+        template: |
+          - Environment provisioning
+          - Database creation
+          - Feature flag management
+          - Configuration management
+
+  - id: platform-integration
+    title: Platform Integration & Security Hardening
+    instruction: Implement comprehensive platform-wide integration and security controls across all layers.
+    sections:
+      - id: end-to-end-security
+        title: End-to-End Security
+        template: |
+          - Platform-wide security policies
+          - Cross-layer authentication
+          - Encryption in transit and at rest
+          - Compliance validation
+      - id: integrated-monitoring
+        title: Integrated Monitoring
+        type: code
+        language: yaml
+        template: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: prometheus-config
+          data:
+            prometheus.yaml: |
+              global:
+                scrape_interval: {{scrape_interval}}
+              scrape_configs:
+                - job_name: 'kubernetes-pods'
+                  kubernetes_sd_configs:
+                    - role: pod
+      - id: platform-observability
+        title: Platform Observability
+        template: |
+          - Metrics aggregation
+          - Log collection and analysis
+          - Distributed tracing
+          - Dashboard creation
+      - id: backup-dr
+        title: Backup & Disaster Recovery
+        template: |
+          - Platform backup strategy
+          - Disaster recovery procedures
+          - RTO/RPO validation
+          - Recovery testing
+
+  - id: platform-operations
+    title: Platform Operations & Automation
+    instruction: Establish operational procedures and automation for platform management.
+    sections:
+      - id: monitoring-alerting
+        title: Monitoring & Alerting
+        template: |
+          - SLA/SLO monitoring
+          - Alert routing
+          - Incident response
+          - Performance baselines
+      - id: automation-framework
+        title: Automation Framework
+        type: code
+        language: yaml
+        template: |
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: ClusterServiceVersion
+          metadata:
+            name: platform-operator
+          spec:
+            customresourcedefinitions:
+              owned:
+                - name: platformconfigs.platform.io
+                  version: v1alpha1
+      - id: maintenance-procedures
+        title: Maintenance Procedures
+        template: |
+          - Upgrade procedures
+          - Patch management
+          - Certificate rotation
+          - Capacity management
+      - id: operational-runbooks
+        title: Operational Runbooks
+        template: |
+          - Common operational tasks
+          - Troubleshooting guides
+          - Emergency procedures
+          - Recovery playbooks
+
+  - id: bmad-workflow-integration
+    title: BMAD Workflow Integration
+    instruction: Validate that the platform supports all BMAD agent workflows and cross-functional requirements.
+    sections:
+      - id: development-agent-support
+        title: Development Agent Support
+        template: |
+          - Frontend development workflows
+          - Backend development workflows
+          - Full-stack integration
+          - Local development experience
+      - id: iac-development
+        title: Infrastructure-as-Code Development
+        template: |
+          - IaC development workflows
+          - Testing frameworks
+          - Deployment automation
+          - Version control integration
+      - id: cross-agent-collaboration
+        title: Cross-Agent Collaboration
+        template: |
+          - Shared services access
+          - Communication patterns
+          - Data sharing mechanisms
+          - Security boundaries
+      - id: cicd-integration-workflow
+        title: CI/CD Integration
+        type: code
+        language: yaml
+        template: |
+          stages:
+            - analyze
+            - plan
+            - architect
+            - develop
+            - test
+            - deploy
+
+  - id: platform-validation
+    title: Platform Validation & Testing
+    instruction: Execute comprehensive validation to ensure the platform meets all requirements.
+    sections:
+      - id: functional-testing
+        title: Functional Testing
+        template: |
+          - Component testing
+          - Integration testing
+          - End-to-end testing
+          - Performance testing
+      - id: security-validation
+        title: Security Validation
+        template: |
+          - Penetration testing
+          - Compliance scanning
+          - Vulnerability assessment
+          - Access control validation
+      - id: dr-testing
+        title: Disaster Recovery Testing
+        template: |
+          - Backup restoration
+          - Failover procedures
+          - Recovery time validation
+          - Data integrity checks
+      - id: load-testing
+        title: Load Testing
+        type: code
+        language: typescript
+        template: |
+          // K6 Load Test Example
+          import http from 'k6/http';
+          import { check } from 'k6';
+
+          export let options = {
+            stages: [
+              { duration: '5m', target: {{target_users}} },
+              { duration: '10m', target: {{target_users}} },
+              { duration: '5m', target: 0 },
+            ],
+          };
+
+  - id: knowledge-transfer
+    title: Knowledge Transfer & Documentation
+    instruction: Prepare comprehensive documentation and knowledge transfer materials.
+    sections:
+      - id: platform-documentation
+        title: Platform Documentation
+        template: |
+          - Architecture documentation
+          - Operational procedures
+          - Configuration reference
+          - API documentation
+      - id: training-materials
+        title: Training Materials
+        template: |
+          - Developer guides
+          - Operations training
+          - Security best practices
+          - Troubleshooting guides
+      - id: handoff-procedures
+        title: Handoff Procedures
+        template: |
+          - Team responsibilities
+          - Escalation procedures
+          - Support model
+          - Knowledge base
+
+  - id: implementation-review
+    title: Implementation Review with Architect
+    instruction: Document the post-implementation review session with the Architect to validate alignment and capture learnings.
+    sections:
+      - id: implementation-validation
+        title: Implementation Validation
+        template: |
+          - Architecture alignment verification
+          - Deviation documentation
+          - Performance validation
+          - Security review
+      - id: lessons-learned
+        title: Lessons Learned
+        template: |
+          - What went well
+          - Challenges encountered
+          - Process improvements
+          - Technical insights
+      - id: future-evolution
+        title: Future Evolution
+        template: |
+          - Enhancement opportunities
+          - Technical debt items
+          - Upgrade planning
+          - Capacity planning
+      - id: sign-off
+        title: Sign-off & Acceptance
+        template: |
+          - Architect approval
+          - Stakeholder acceptance
+          - Go-live authorization
+          - Support transition
+
+  - id: platform-metrics
+    title: Platform Metrics & KPIs
+    instruction: Define and implement key performance indicators for platform success measurement.
+    sections:
+      - id: technical-metrics
+        title: Technical Metrics
+        template: |
+          - Platform availability: {{availability_target}}
+          - Response time: {{response_time_target}}
+          - Resource utilization: {{utilization_target}}
+          - Error rates: {{error_rate_target}}
+      - id: business-metrics
+        title: Business Metrics
+        template: |
+          - Developer productivity
+          - Deployment frequency
+          - Lead time for changes
+          - Mean time to recovery
+      - id: operational-metrics
+        title: Operational Metrics
+        template: |
+          - Incident response time
+          - Patch compliance
+          - Cost per workload
+          - Resource efficiency
+
+  - id: appendices
+    title: Appendices
+    sections:
+      - id: config-reference
+        title: A. Configuration Reference
+        instruction: Document all configuration parameters and their values used in the platform implementation.
+      - id: troubleshooting
+        title: B. Troubleshooting Guide
+        instruction: Provide common issues and their resolutions for platform operations.
+      - id: security-controls
+        title: C. Security Controls Matrix
+        instruction: Map implemented security controls to compliance requirements.
+      - id: integration-points
+        title: D. Integration Points
+        instruction: Document all integration points with external systems and services.
+
+  - id: final-review
+    instruction: Final Review - Ensure all platform layers are properly implemented, integrated, and documented. Verify that the implementation fully supports the BMAD methodology and all agent workflows. Confirm successful validation against the infrastructure checklist.
+    content: |
+      ---
+
+      _Platform Version: 1.0_
+      _Implementation Date: {{implementation_date}}_
+      _Next Review: {{review_date}}_
+      _Approved by: {{architect_name}} (Architect), {{devops_name}} (DevOps/Platform Engineer)_

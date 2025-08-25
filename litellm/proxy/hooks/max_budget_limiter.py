@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from litellm import verbose_logger
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.cost_calculator import convert_budget_to_askii_coins
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -37,8 +38,13 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                 return
 
             # CHECK IF REQUEST ALLOWED
-            if curr_spend >= max_budget:
-                raise HTTPException(status_code=429, detail="Max budget limit reached.")
+            # Convert USD budget to Askii Coins for comparison with spend (which is now in Askii Coins)
+            max_budget_askii_coins = convert_budget_to_askii_coins(max_budget)
+            if max_budget_askii_coins is not None and curr_spend >= max_budget_askii_coins:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Max budget limit reached. Current spend: {curr_spend} Askii Coins, Budget: {max_budget_askii_coins} Askii Coins (${max_budget} USD)"
+                )
         except HTTPException as e:
             raise e
         except Exception as e:

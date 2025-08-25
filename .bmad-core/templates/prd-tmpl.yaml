@@ -1,0 +1,203 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: prd-template-v2
+  name: Product Requirements Document
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/prd.md
+    title: "{{project_name}} Product Requirements Document (PRD)"
+
+workflow:
+  mode: interactive
+  elicitation: advanced-elicitation
+
+sections:
+  - id: goals-context
+    title: Goals and Background Context
+    instruction: |
+      Ask if Project Brief document is available. If NO Project Brief exists, STRONGLY recommend creating one first using project-brief-tmpl (it provides essential foundation: problem statement, target users, success metrics, MVP scope, constraints). If user insists on PRD without brief, gather this information during Goals section. If Project Brief exists, review and use it to populate Goals (bullet list of desired outcomes) and Background Context (1-2 paragraphs on what this solves and why) so we can determine what is and is not in scope for PRD mvp. Either way this is critical to determine the requirements. Include Change Log table.
+    sections:
+      - id: goals
+        title: Goals
+        type: bullet-list
+        instruction: Bullet list of 1 line desired outcomes the PRD will deliver if successful - user and project desires
+      - id: background
+        title: Background Context
+        type: paragraphs
+        instruction: 1-2 short paragraphs summarizing the background context, such as what we learned in the brief without being redundant with the goals, what and why this solves a problem, what the current landscape or need is
+      - id: changelog
+        title: Change Log
+        type: table
+        columns: [Date, Version, Description, Author]
+        instruction: Track document versions and changes
+
+  - id: requirements
+    title: Requirements
+    instruction: Draft the list of functional and non functional requirements under the two child sections
+    elicit: true
+    sections:
+      - id: functional
+        title: Functional
+        type: numbered-list
+        prefix: FR
+        instruction: Each Requirement will be a bullet markdown and an identifier sequence starting with FR
+        examples:
+          - "FR6: The Todo List uses AI to detect and warn against potentially duplicate todo items that are worded differently."
+      - id: non-functional
+        title: Non Functional
+        type: numbered-list
+        prefix: NFR
+        instruction: Each Requirement will be a bullet markdown and an identifier sequence starting with NFR
+        examples:
+          - "NFR1: AWS service usage must aim to stay within free-tier limits where feasible."
+
+  - id: ui-goals
+    title: User Interface Design Goals
+    condition: PRD has UX/UI requirements
+    instruction: |
+      Capture high-level UI/UX vision to guide Design Architect and to inform story creation. Steps:
+
+      1. Pre-fill all subsections with educated guesses based on project context
+      2. Present the complete rendered section to user
+      3. Clearly let the user know where assumptions were made
+      4. Ask targeted questions for unclear/missing elements or areas needing more specification
+      5. This is NOT detailed UI spec - focus on product vision and user goals
+    elicit: true
+    choices:
+      accessibility: [None, WCAG AA, WCAG AAA]
+      platforms: [Web Responsive, Mobile Only, Desktop Only, Cross-Platform]
+    sections:
+      - id: ux-vision
+        title: Overall UX Vision
+      - id: interaction-paradigms
+        title: Key Interaction Paradigms
+      - id: core-screens
+        title: Core Screens and Views
+        instruction: From a product perspective, what are the most critical screens or views necessary to deliver the the PRD values and goals? This is meant to be Conceptual High Level to Drive Rough Epic or User Stories
+        examples:
+          - "Login Screen"
+          - "Main Dashboard"
+          - "Item Detail Page"
+          - "Settings Page"
+      - id: accessibility
+        title: "Accessibility: {None|WCAG AA|WCAG AAA|Custom Requirements}"
+      - id: branding
+        title: Branding
+        instruction: Any known branding elements or style guides that must be incorporated?
+        examples:
+          - "Replicate the look and feel of early 1900s black and white cinema, including animated effects replicating film damage or projector glitches during page or state transitions."
+          - "Attached is the full color pallet and tokens for our corporate branding."
+      - id: target-platforms
+        title: "Target Device and Platforms: {Web Responsive|Mobile Only|Desktop Only|Cross-Platform}"
+        examples:
+          - "Web Responsive, and all mobile platforms"
+          - "iPhone Only"
+          - "ASCII Windows Desktop"
+
+  - id: technical-assumptions
+    title: Technical Assumptions
+    instruction: |
+      Gather technical decisions that will guide the Architect. Steps:
+
+      1. Check if .bmad-core/data/technical-preferences.yaml or an attached technical-preferences file exists - use it to pre-populate choices
+      2. Ask user about: languages, frameworks, starter templates, libraries, APIs, deployment targets
+      3. For unknowns, offer guidance based on project goals and MVP scope
+      4. Document ALL technical choices with rationale (why this choice fits the project)
+      5. These become constraints for the Architect - be specific and complete
+    elicit: true
+    choices:
+      repository: [Monorepo, Polyrepo]
+      architecture: [Monolith, Microservices, Serverless]
+      testing: [Unit Only, Unit + Integration, Full Testing Pyramid]
+    sections:
+      - id: repository-structure
+        title: "Repository Structure: {Monorepo|Polyrepo|Multi-repo}"
+      - id: service-architecture
+        title: Service Architecture
+        instruction: "CRITICAL DECISION - Document the high-level service architecture (e.g., Monolith, Microservices, Serverless functions within a Monorepo)."
+      - id: testing-requirements
+        title: Testing Requirements
+        instruction: "CRITICAL DECISION - Document the testing requirements, unit only, integration, e2e, manual, need for manual testing convenience methods)."
+      - id: additional-assumptions
+        title: Additional Technical Assumptions and Requests
+        instruction: Throughout the entire process of drafting this document, if any other technical assumptions are raised or discovered appropriate for the architect, add them here as additional bulleted items
+
+  - id: epic-list
+    title: Epic List
+    instruction: |
+      Present a high-level list of all epics for user approval. Each epic should have a title and a short (1 sentence) goal statement. This allows the user to review the overall structure before diving into details.
+
+      CRITICAL: Epics MUST be logically sequential following agile best practices:
+
+      - Each epic should deliver a significant, end-to-end, fully deployable increment of testable functionality
+      - Epic 1 must establish foundational project infrastructure (app setup, Git, CI/CD, core services) unless we are adding new functionality to an existing app, while also delivering an initial piece of functionality, even as simple as a health-check route or display of a simple canary page - remember this when we produce the stories for the first epic!
+      - Each subsequent epic builds upon previous epics' functionality delivering major blocks of functionality that provide tangible value to users or business when deployed
+      - Not every project needs multiple epics, an epic needs to deliver value. For example, an API completed can deliver value even if a UI is not complete and planned for a separate epic.
+      - Err on the side of less epics, but let the user know your rationale and offer options for splitting them if it seems some are too large or focused on disparate things.
+      - Cross Cutting Concerns should flow through epics and stories and not be final stories. For example, adding a logging framework as a last story of an epic, or at the end of a project as a final epic or story would be terrible as we would not have logging from the beginning.
+    elicit: true
+    examples:
+      - "Epic 1: Foundation & Core Infrastructure: Establish project setup, authentication, and basic user management"
+      - "Epic 2: Core Business Entities: Create and manage primary domain objects with CRUD operations"
+      - "Epic 3: User Workflows & Interactions: Enable key user journeys and business processes"
+      - "Epic 4: Reporting & Analytics: Provide insights and data visualization for users"
+
+  - id: epic-details
+    title: Epic {{epic_number}} {{epic_title}}
+    repeatable: true
+    instruction: |
+      After the epic list is approved, present each epic with all its stories and acceptance criteria as a complete review unit.
+
+      For each epic provide expanded goal (2-3 sentences describing the objective and value all the stories will achieve).
+
+      CRITICAL STORY SEQUENCING REQUIREMENTS:
+
+      - Stories within each epic MUST be logically sequential
+      - Each story should be a "vertical slice" delivering complete functionality aside from early enabler stories for project foundation
+      - No story should depend on work from a later story or epic
+      - Identify and note any direct prerequisite stories
+      - Focus on "what" and "why" not "how" (leave technical implementation to Architect) yet be precise enough to support a logical sequential order of operations from story to story.
+      - Ensure each story delivers clear user or business value, try to avoid enablers and build them into stories that deliver value.
+      - Size stories for AI agent execution: Each story must be completable by a single AI agent in one focused session without context overflow
+      - Think "junior developer working for 2-4 hours" - stories must be small, focused, and self-contained
+      - If a story seems complex, break it down further as long as it can deliver a vertical slice
+    elicit: true
+    template: "{{epic_goal}}"
+    sections:
+      - id: story
+        title: Story {{epic_number}}.{{story_number}} {{story_title}}
+        repeatable: true
+        template: |
+          As a {{user_type}},
+          I want {{action}},
+          so that {{benefit}}.
+        sections:
+          - id: acceptance-criteria
+            title: Acceptance Criteria
+            type: numbered-list
+            item_template: "{{criterion_number}}: {{criteria}}"
+            repeatable: true
+            instruction: |
+              Define clear, comprehensive, and testable acceptance criteria that:
+
+              - Precisely define what "done" means from a functional perspective
+              - Are unambiguous and serve as basis for verification
+              - Include any critical non-functional requirements from the PRD
+              - Consider local testability for backend/data components
+              - Specify UI/UX requirements and framework adherence where applicable
+              - Avoid cross-cutting concerns that should be in other stories or PRD sections
+
+  - id: checklist-results
+    title: Checklist Results Report
+    instruction: Before running the checklist and drafting the prompts, offer to output the full updated PRD. If outputting it, confirm with the user that you will be proceeding to run the checklist and produce the report. Once the user confirms, execute the pm-checklist and populate the results in this section.
+
+  - id: next-steps
+    title: Next Steps
+    sections:
+      - id: ux-expert-prompt
+        title: UX Expert Prompt
+        instruction: This section will contain the prompt for the UX Expert, keep it short and to the point to initiate create architecture mode using this document as input.
+      - id: architect-prompt
+        title: Architect Prompt
+        instruction: This section will contain the prompt for the Architect, keep it short and to the point to initiate create architecture mode using this document as input.

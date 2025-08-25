@@ -1,0 +1,222 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: project-brief-template-v2
+  name: Project Brief
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/brief.md
+    title: "Project Brief: {{project_name}}"
+
+workflow:
+  mode: interactive
+  elicitation: advanced-elicitation
+  custom_elicitation:
+    title: "Project Brief Elicitation Actions"
+    options:
+      - "Expand section with more specific details"
+      - "Validate against similar successful products"
+      - "Stress test assumptions with edge cases"
+      - "Explore alternative solution approaches"
+      - "Analyze resource/constraint trade-offs"
+      - "Generate risk mitigation strategies"
+      - "Challenge scope from MVP minimalist view"
+      - "Brainstorm creative feature possibilities"
+      - "If only we had [resource/capability/time]..."
+      - "Proceed to next section"
+
+sections:
+  - id: introduction
+    instruction: |
+      This template guides creation of a comprehensive Project Brief that serves as the foundational input for product development.
+
+      Start by asking the user which mode they prefer:
+
+      1. **Interactive Mode** - Work through each section collaboratively
+      2. **YOLO Mode** - Generate complete draft for review and refinement
+
+      Before beginning, understand what inputs are available (brainstorming results, market research, competitive analysis, initial ideas) and gather project context.
+
+  - id: executive-summary
+    title: Executive Summary
+    instruction: |
+      Create a concise overview that captures the essence of the project. Include:
+      - Product concept in 1-2 sentences
+      - Primary problem being solved
+      - Target market identification
+      - Key value proposition
+    template: "{{executive_summary_content}}"
+
+  - id: problem-statement
+    title: Problem Statement
+    instruction: |
+      Articulate the problem with clarity and evidence. Address:
+      - Current state and pain points
+      - Impact of the problem (quantify if possible)
+      - Why existing solutions fall short
+      - Urgency and importance of solving this now
+    template: "{{detailed_problem_description}}"
+
+  - id: proposed-solution
+    title: Proposed Solution
+    instruction: |
+      Describe the solution approach at a high level. Include:
+      - Core concept and approach
+      - Key differentiators from existing solutions
+      - Why this solution will succeed where others haven't
+      - High-level vision for the product
+    template: "{{solution_description}}"
+
+  - id: target-users
+    title: Target Users
+    instruction: |
+      Define and characterize the intended users with specificity. For each user segment include:
+      - Demographic/firmographic profile
+      - Current behaviors and workflows
+      - Specific needs and pain points
+      - Goals they're trying to achieve
+    sections:
+      - id: primary-segment
+        title: "Primary User Segment: {{segment_name}}"
+        template: "{{primary_user_description}}"
+      - id: secondary-segment
+        title: "Secondary User Segment: {{segment_name}}"
+        condition: Has secondary user segment
+        template: "{{secondary_user_description}}"
+
+  - id: goals-metrics
+    title: Goals & Success Metrics
+    instruction: Establish clear objectives and how to measure success. Make goals SMART (Specific, Measurable, Achievable, Relevant, Time-bound)
+    sections:
+      - id: business-objectives
+        title: Business Objectives
+        type: bullet-list
+        template: "- {{objective_with_metric}}"
+      - id: user-success-metrics
+        title: User Success Metrics
+        type: bullet-list
+        template: "- {{user_metric}}"
+      - id: kpis
+        title: Key Performance Indicators (KPIs)
+        type: bullet-list
+        template: "- {{kpi}}: {{definition_and_target}}"
+
+  - id: mvp-scope
+    title: MVP Scope
+    instruction: Define the minimum viable product clearly. Be specific about what's in and what's out. Help user distinguish must-haves from nice-to-haves.
+    sections:
+      - id: core-features
+        title: Core Features (Must Have)
+        type: bullet-list
+        template: "- **{{feature}}:** {{description_and_rationale}}"
+      - id: out-of-scope
+        title: Out of Scope for MVP
+        type: bullet-list
+        template: "- {{feature_or_capability}}"
+      - id: mvp-success-criteria
+        title: MVP Success Criteria
+        template: "{{mvp_success_definition}}"
+
+  - id: post-mvp-vision
+    title: Post-MVP Vision
+    instruction: Outline the longer-term product direction without overcommitting to specifics
+    sections:
+      - id: phase-2-features
+        title: Phase 2 Features
+        template: "{{next_priority_features}}"
+      - id: long-term-vision
+        title: Long-term Vision
+        template: "{{one_two_year_vision}}"
+      - id: expansion-opportunities
+        title: Expansion Opportunities
+        template: "{{potential_expansions}}"
+
+  - id: technical-considerations
+    title: Technical Considerations
+    instruction: Document known technical constraints and preferences. Note these are initial thoughts, not final decisions.
+    sections:
+      - id: platform-requirements
+        title: Platform Requirements
+        template: |
+          - **Target Platforms:** {{platforms}}
+          - **Browser/OS Support:** {{specific_requirements}}
+          - **Performance Requirements:** {{performance_specs}}
+      - id: technology-preferences
+        title: Technology Preferences
+        template: |
+          - **Frontend:** {{frontend_preferences}}
+          - **Backend:** {{backend_preferences}}
+          - **Database:** {{database_preferences}}
+          - **Hosting/Infrastructure:** {{infrastructure_preferences}}
+      - id: architecture-considerations
+        title: Architecture Considerations
+        template: |
+          - **Repository Structure:** {{repo_thoughts}}
+          - **Service Architecture:** {{service_thoughts}}
+          - **Integration Requirements:** {{integration_needs}}
+          - **Security/Compliance:** {{security_requirements}}
+
+  - id: constraints-assumptions
+    title: Constraints & Assumptions
+    instruction: Clearly state limitations and assumptions to set realistic expectations
+    sections:
+      - id: constraints
+        title: Constraints
+        template: |
+          - **Budget:** {{budget_info}}
+          - **Timeline:** {{timeline_info}}
+          - **Resources:** {{resource_info}}
+          - **Technical:** {{technical_constraints}}
+      - id: key-assumptions
+        title: Key Assumptions
+        type: bullet-list
+        template: "- {{assumption}}"
+
+  - id: risks-questions
+    title: Risks & Open Questions
+    instruction: Identify unknowns and potential challenges proactively
+    sections:
+      - id: key-risks
+        title: Key Risks
+        type: bullet-list
+        template: "- **{{risk}}:** {{description_and_impact}}"
+      - id: open-questions
+        title: Open Questions
+        type: bullet-list
+        template: "- {{question}}"
+      - id: research-areas
+        title: Areas Needing Further Research
+        type: bullet-list
+        template: "- {{research_topic}}"
+
+  - id: appendices
+    title: Appendices
+    sections:
+      - id: research-summary
+        title: A. Research Summary
+        condition: Has research findings
+        instruction: |
+          If applicable, summarize key findings from:
+          - Market research
+          - Competitive analysis
+          - User interviews
+          - Technical feasibility studies
+      - id: stakeholder-input
+        title: B. Stakeholder Input
+        condition: Has stakeholder feedback
+        template: "{{stakeholder_feedback}}"
+      - id: references
+        title: C. References
+        template: "{{relevant_links_and_docs}}"
+
+  - id: next-steps
+    title: Next Steps
+    sections:
+      - id: immediate-actions
+        title: Immediate Actions
+        type: numbered-list
+        template: "{{action_item}}"
+      - id: pm-handoff
+        title: PM Handoff
+        content: |
+          This Project Brief provides the full context for {{project_name}}. Please start in 'PRD Generation Mode', review the brief thoroughly to work with the user to create the PRD section by section as the template indicates, asking for any necessary clarification or suggesting improvements.

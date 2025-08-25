@@ -1,0 +1,219 @@
+# <!-- Powered by BMAD™ Core -->
+template:
+  id: frontend-architecture-template-v2
+  name: Frontend Architecture Document
+  version: 2.0
+  output:
+    format: markdown
+    filename: docs/ui-architecture.md
+    title: "{{project_name}} Frontend Architecture Document"
+
+workflow:
+  mode: interactive
+  elicitation: advanced-elicitation
+
+sections:
+  - id: template-framework-selection
+    title: Template and Framework Selection
+    instruction: |
+      Review provided documents including PRD, UX-UI Specification, and main Architecture Document. Focus on extracting technical implementation details needed for AI frontend tools and developer agents. Ask the user for any of these documents if you are unable to locate and were not provided.
+
+      Before proceeding with frontend architecture design, check if the project is using a frontend starter template or existing codebase:
+
+      1. Review the PRD, main architecture document, and brainstorming brief for mentions of:
+         - Frontend starter templates (e.g., Create React App, Next.js, Vite, Vue CLI, Angular CLI, etc.)
+         - UI kit or component library starters
+         - Existing frontend projects being used as a foundation
+         - Admin dashboard templates or other specialized starters
+         - Design system implementations
+
+      2. If a frontend starter template or existing project is mentioned:
+         - Ask the user to provide access via one of these methods:
+           - Link to the starter template documentation
+           - Upload/attach the project files (for small projects)
+           - Share a link to the project repository
+         - Analyze the starter/existing project to understand:
+           - Pre-installed dependencies and versions
+           - Folder structure and file organization
+           - Built-in components and utilities
+           - Styling approach (CSS modules, styled-components, Tailwind, etc.)
+           - State management setup (if any)
+           - Routing configuration
+           - Testing setup and patterns
+           - Build and development scripts
+         - Use this analysis to ensure your frontend architecture aligns with the starter's patterns
+
+      3. If no frontend starter is mentioned but this is a new UI, ensure we know what the ui language and framework is:
+         - Based on the framework choice, suggest appropriate starters:
+           - React: Create React App, Next.js, Vite + React
+           - Vue: Vue CLI, Nuxt.js, Vite + Vue
+           - Angular: Angular CLI
+           - Or suggest popular UI templates if applicable
+         - Explain benefits specific to frontend development
+
+      4. If the user confirms no starter template will be used:
+         - Note that all tooling, bundling, and configuration will need manual setup
+         - Proceed with frontend architecture from scratch
+
+      Document the starter template decision and any constraints it imposes before proceeding.
+    sections:
+      - id: changelog
+        title: Change Log
+        type: table
+        columns: [Date, Version, Description, Author]
+        instruction: Track document versions and changes
+
+  - id: frontend-tech-stack
+    title: Frontend Tech Stack
+    instruction: Extract from main architecture's Technology Stack Table. This section MUST remain synchronized with the main architecture document.
+    elicit: true
+    sections:
+      - id: tech-stack-table
+        title: Technology Stack Table
+        type: table
+        columns: [Category, Technology, Version, Purpose, Rationale]
+        instruction: Fill in appropriate technology choices based on the selected framework and project requirements.
+        rows:
+          - ["Framework", "{{framework}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - ["UI Library", "{{ui_library}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - [
+              "State Management",
+              "{{state_management}}",
+              "{{version}}",
+              "{{purpose}}",
+              "{{why_chosen}}",
+            ]
+          - ["Routing", "{{routing_library}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - ["Build Tool", "{{build_tool}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - ["Styling", "{{styling_solution}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - ["Testing", "{{test_framework}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - [
+              "Component Library",
+              "{{component_lib}}",
+              "{{version}}",
+              "{{purpose}}",
+              "{{why_chosen}}",
+            ]
+          - ["Form Handling", "{{form_library}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - ["Animation", "{{animation_lib}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+          - ["Dev Tools", "{{dev_tools}}", "{{version}}", "{{purpose}}", "{{why_chosen}}"]
+
+  - id: project-structure
+    title: Project Structure
+    instruction: Define exact directory structure for AI tools based on the chosen framework. Be specific about where each type of file goes. Generate a structure that follows the framework's best practices and conventions.
+    elicit: true
+    type: code
+    language: plaintext
+
+  - id: component-standards
+    title: Component Standards
+    instruction: Define exact patterns for component creation based on the chosen framework.
+    elicit: true
+    sections:
+      - id: component-template
+        title: Component Template
+        instruction: Generate a minimal but complete component template following the framework's best practices. Include TypeScript types, proper imports, and basic structure.
+        type: code
+        language: typescript
+      - id: naming-conventions
+        title: Naming Conventions
+        instruction: Provide naming conventions specific to the chosen framework for components, files, services, state management, and other architectural elements.
+
+  - id: state-management
+    title: State Management
+    instruction: Define state management patterns based on the chosen framework.
+    elicit: true
+    sections:
+      - id: store-structure
+        title: Store Structure
+        instruction: Generate the state management directory structure appropriate for the chosen framework and selected state management solution.
+        type: code
+        language: plaintext
+      - id: state-template
+        title: State Management Template
+        instruction: Provide a basic state management template/example following the framework's recommended patterns. Include TypeScript types and common operations like setting, updating, and clearing state.
+        type: code
+        language: typescript
+
+  - id: api-integration
+    title: API Integration
+    instruction: Define API service patterns based on the chosen framework.
+    elicit: true
+    sections:
+      - id: service-template
+        title: Service Template
+        instruction: Provide an API service template that follows the framework's conventions. Include proper TypeScript types, error handling, and async patterns.
+        type: code
+        language: typescript
+      - id: api-client-config
+        title: API Client Configuration
+        instruction: Show how to configure the HTTP client for the chosen framework, including authentication interceptors/middleware and error handling.
+        type: code
+        language: typescript
+
+  - id: routing
+    title: Routing
+    instruction: Define routing structure and patterns based on the chosen framework.
+    elicit: true
+    sections:
+      - id: route-configuration
+        title: Route Configuration
+        instruction: Provide routing configuration appropriate for the chosen framework. Include protected route patterns, lazy loading where applicable, and authentication guards/middleware.
+        type: code
+        language: typescript
+
+  - id: styling-guidelines
+    title: Styling Guidelines
+    instruction: Define styling approach based on the chosen framework.
+    elicit: true
+    sections:
+      - id: styling-approach
+        title: Styling Approach
+        instruction: Describe the styling methodology appropriate for the chosen framework (CSS Modules, Styled Components, Tailwind, etc.) and provide basic patterns.
+      - id: global-theme
+        title: Global Theme Variables
+        instruction: Provide a CSS custom properties (CSS variables) theme system that works across all frameworks. Include colors, spacing, typography, shadows, and dark mode support.
+        type: code
+        language: css
+
+  - id: testing-requirements
+    title: Testing Requirements
+    instruction: Define minimal testing requirements based on the chosen framework.
+    elicit: true
+    sections:
+      - id: component-test-template
+        title: Component Test Template
+        instruction: Provide a basic component test template using the framework's recommended testing library. Include examples of rendering tests, user interaction tests, and mocking.
+        type: code
+        language: typescript
+      - id: testing-best-practices
+        title: Testing Best Practices
+        type: numbered-list
+        items:
+          - "**Unit Tests**: Test individual components in isolation"
+          - "**Integration Tests**: Test component interactions"
+          - "**E2E Tests**: Test critical user flows (using Cypress/Playwright)"
+          - "**Coverage Goals**: Aim for 80% code coverage"
+          - "**Test Structure**: Arrange-Act-Assert pattern"
+          - "**Mock External Dependencies**: API calls, routing, state management"
+
+  - id: environment-configuration
+    title: Environment Configuration
+    instruction: List required environment variables based on the chosen framework. Show the appropriate format and naming conventions for the framework.
+    elicit: true
+
+  - id: frontend-developer-standards
+    title: Frontend Developer Standards
+    sections:
+      - id: critical-coding-rules
+        title: Critical Coding Rules
+        instruction: List essential rules that prevent common AI mistakes, including both universal rules and framework-specific ones.
+        elicit: true
+      - id: quick-reference
+        title: Quick Reference
+        instruction: |
+          Create a framework-specific cheat sheet with:
+          - Common commands (dev server, build, test)
+          - Key import patterns
+          - File naming conventions
+          - Project-specific patterns and utilities
