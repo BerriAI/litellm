@@ -13,7 +13,9 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO_ROOT="/Users/teddyamkie/litellm"
+# Dynamically find the repository root (litellm directory)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../" && pwd)"
 TEST_DIR="${REPO_ROOT}/tests/azure_endpoints_tests"
 VENV_PATH="${REPO_ROOT}/.venv"
 ENV_FILE="${REPO_ROOT}/.env.test"
