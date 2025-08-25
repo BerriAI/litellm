@@ -75,6 +75,10 @@ class GithubCopilotConfig(OpenAIConfig):
         initiator = self._determine_initiator(messages)
         validated_headers["X-Initiator"] = initiator
 
+        # Add Copilot-Vision-Request header if request contains images
+        if self._has_vision_content(messages):
+            validated_headers["Copilot-Vision-Request"] = "true"
+
         return validated_headers
 
     def _determine_initiator(self, messages: List[AllMessageValues]) -> str:
@@ -87,3 +91,27 @@ class GithubCopilotConfig(OpenAIConfig):
             if role in ["tool", "assistant"]:
                 return "agent"
         return "user"
+
+    def _has_vision_content(self, messages: List[AllMessageValues]) -> bool:
+        """
+        Check if any message contains vision content (images).
+        Returns True if any message has content with vision-related types, otherwise False.
+        
+        Checks for:
+        - image_url content type (OpenAI format)
+        - Content items with type 'image_url'
+        """
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                # Check if any content item indicates vision content
+                for content_item in content:
+                    if isinstance(content_item, dict):
+                        # Check for image_url field (direct image URL)
+                        if "image_url" in content_item:
+                            return True
+                        # Check for type field indicating image content
+                        content_type = content_item.get("type")
+                        if content_type == "image_url":
+                            return True
+        return False
