@@ -921,7 +921,7 @@ async def test_partner_models_httpx(model, region, sync_mode):
 @pytest.mark.flaky(retries=3, delay=1)
 async def test_partner_models_httpx_streaming(model, region, sync_mode):
     try:
-        #load_vertex_ai_credentials()
+        load_vertex_ai_credentials()
         litellm._turn_on_debug()
 
         messages = [
