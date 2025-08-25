@@ -276,7 +276,7 @@ async def test_anthropic_messages_litellm_router_routing_strategy():
 @pytest.mark.asyncio
 async def test_anthropic_messages_fallbacks():
     """
-    Test the anthropic_messages with routing strategy + non-streaming request
+    E2E test the anthropic_messages fallbacks from Anthropic API to Bedrock
     """
     litellm._turn_on_debug()
     router = Router(
