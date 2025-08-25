@@ -1,13 +1,14 @@
 import json
 import os
 import sys
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from unittest.mock import MagicMock, patch
-import httpx
-    
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -134,3 +135,40 @@ def test_bedrock_non_application_inference_profile_no_encoding():
         assert "application-inference-profile%2F" not in actual_url
         assert "anthropic.claude-3-sonnet-20240229-v1:0" in actual_url
         assert response.status_code == 200
+
+
+def test_update_stream_param_based_on_request_body():
+    """
+    Test _update_stream_param_based_on_request_body handles stream parameter correctly.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
+
+    # Test 1: stream in request body should take precedence
+    parsed_body = {"stream": True, "model": "test-model"}
+    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+        parsed_body=parsed_body, stream=False
+    )
+    assert result is True
+    
+    # Test 2: no stream in request body should return original stream param
+    parsed_body = {"model": "test-model"}
+    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+        parsed_body=parsed_body, stream=False
+    )
+    assert result is False
+    
+    # Test 3: stream=False in request body should return False
+    parsed_body = {"stream": False, "model": "test-model"}
+    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+        parsed_body=parsed_body, stream=True
+    )
+    assert result is False
+    
+    # Test 4: no stream param provided, no stream in body
+    parsed_body = {"model": "test-model"}
+    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+        parsed_body=parsed_body, stream=None
+    )
+    assert result is None
