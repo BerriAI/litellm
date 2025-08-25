@@ -7,12 +7,13 @@ permissions:
 on:
   push:
     paths:
-      - 'schema.prisma'  # Check root schema.prisma
+      - "schema.prisma" # Check root schema.prisma
     branches:
       - main
 
 jobs:
   publish-migrations:
+    if: github.repository == 'BerriAI/litellm' && github.event_name == 'push'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -28,7 +29,7 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      
+
       # Add shadow database service
       postgres_shadow:
         image: postgres:14
@@ -50,7 +51,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
       - name: Install Dependencies
         run: |
@@ -65,7 +66,7 @@ jobs:
         run: |
           mkdir -p deploy/migrations
           echo 'provider = "postgresql"' > deploy/migrations/migration_lock.toml
-          
+
           if [ -z "$(ls -A deploy/migrations/2* 2>/dev/null)" ]; then
             echo "No existing migrations found, creating baseline..."
             VERSION=$(date +%Y%m%d%H%M%S)
@@ -119,19 +120,19 @@ jobs:
         run: |
           # Create temporary migration workspace
           mkdir -p temp_migrations
-          
+
           # Copy existing migrations (will not fail if directory is empty)
           cp -r deploy/migrations/* temp_migrations/ 2>/dev/null || true
-          
+
           VERSION=$(date +%Y%m%d%H%M%S)
-          
+
           # Generate diff against existing migrations or empty state
           prisma migrate diff \
             --from-migrations temp_migrations \
             --to-schema-datamodel schema.prisma \
             --shadow-database-url "${SHADOW_DATABASE_URL}" \
             --script > temp_migrations/migration_${VERSION}.sql
-          
+
           # Check if there are actual changes
           if [ -s temp_migrations/migration_${VERSION}.sql ]; then
             echo "Changes detected, creating new migration"
@@ -152,7 +153,7 @@ jobs:
         run: |
           # Create test database
           psql "${SHADOW_DATABASE_URL}" -c 'CREATE DATABASE migration_test;'
-          
+
           # Apply all migrations in order to verify
           for migration in deploy/migrations/*/migration.sql; do
             echo "Applying migration: $migration"
@@ -166,7 +167,7 @@ jobs:
           curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                -H "Accept: application/vnd.github.v3+json" \
                https://api.github.com/repos/BerriAI/litellm/collaborators
-          
+
           echo "\nChecking if token can create PRs..."
           curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                -H "Accept: application/vnd.github.v3+json" \
@@ -177,7 +178,7 @@ jobs:
         run: |
           echo "Files staged for commit:"
           git diff --name-status --staged
-          
+
           echo "\nAll changed files:"
           git status
 
@@ -190,7 +191,7 @@ jobs:
           title: "Update Prisma Migrations"
           body: |
             Auto-generated migration based on schema.prisma changes.
-            
+
             Generated files:
             - deploy/migrations/${VERSION}_schema_update/migration.sql
             - deploy/migrations/${VERSION}_schema_update/README.md
@@ -203,4 +204,4 @@ jobs:
           # Only add migration files
           git add deploy/migrations/
           git status  # Debug what's being committed
-          git commit -m "chore: update prisma migrations" 
+          git commit -m "chore: update prisma migrations"
