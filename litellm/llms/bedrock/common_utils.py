@@ -292,6 +292,197 @@ def init_bedrock_client(
     return client
 
 
+def init_bedrock_service_client(  # noqa: PLR0915
+    region_name=None,
+    aws_access_key_id: Optional[str] = None,
+    aws_secret_access_key: Optional[str] = None,
+    aws_region_name: Optional[str] = None,
+    aws_bedrock_endpoint: Optional[str] = None,
+    aws_session_name: Optional[str] = None,
+    aws_profile_name: Optional[str] = None,
+    aws_role_name: Optional[str] = None,
+    aws_web_identity_token: Optional[str] = None,
+    extra_headers: Optional[dict] = None,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
+):
+    """
+    Initialize a Bedrock service client (not bedrock-runtime) for batch operations.
+    This client is used for management operations like creating batch jobs.
+    """
+    # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_service_client
+    litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+    standard_aws_region_name = get_secret("AWS_REGION", None)
+    ## CHECK IS  'os.environ/' passed in
+    # Define the list of parameters to check
+    params_to_check = [
+        aws_access_key_id,
+        aws_secret_access_key,
+        aws_region_name,
+        aws_bedrock_endpoint,
+        aws_session_name,
+        aws_profile_name,
+        aws_role_name,
+        aws_web_identity_token,
+    ]
+
+    # Iterate over parameters and update if needed
+    for i, param in enumerate(params_to_check):
+        if param and param.startswith("os.environ/"):
+            params_to_check[i] = get_secret(param)  # type: ignore
+    # Assign updated values back to parameters
+    (
+        aws_access_key_id,
+        aws_secret_access_key,
+        aws_region_name,
+        aws_bedrock_endpoint,
+        aws_session_name,
+        aws_profile_name,
+        aws_role_name,
+        aws_web_identity_token,
+    ) = params_to_check
+
+    ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+
+    ### SET REGION NAME
+    if region_name:
+        pass
+    elif aws_region_name:
+        region_name = aws_region_name
+    elif litellm_aws_region_name:
+        region_name = litellm_aws_region_name
+    elif standard_aws_region_name:
+        region_name = standard_aws_region_name
+    else:
+        raise BedrockError(
+            message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
+            status_code=401,
+        )
+
+    # check for custom AWS_BEDROCK_ENDPOINT and use it if not passed to init_bedrock_service_client
+    env_aws_bedrock_endpoint = get_secret("AWS_BEDROCK_ENDPOINT")
+    if aws_bedrock_endpoint:
+        endpoint_url = aws_bedrock_endpoint
+    elif env_aws_bedrock_endpoint:
+        endpoint_url = env_aws_bedrock_endpoint
+    else:
+        endpoint_url = f"https://bedrock.{region_name}.amazonaws.com"
+
+    import boto3
+
+    if isinstance(timeout, float):
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)  # type: ignore
+    elif isinstance(timeout, httpx.Timeout):
+        config = boto3.session.Config(  # type: ignore
+            connect_timeout=timeout.connect, read_timeout=timeout.read
+        )
+    else:
+        config = boto3.session.Config()  # type: ignore
+
+    ### CHECK STS ###
+    if (
+        aws_web_identity_token is not None
+        and aws_role_name is not None
+        and aws_session_name is not None
+    ):
+        # TODO: Add sts credentials - https://github.com/BerriAI/litellm/issues/1727
+        ...
+
+    # create bedrock service client (for batch operations)
+    if aws_web_identity_token is not None:
+        if aws_role_name is None:
+            raise BedrockError(
+                message="AWS role name is required when using web identity token",
+                status_code=400,
+            )
+
+        # use sts if web identity token passed in
+        sts_client = boto3.client(
+            "sts",
+            region_name=region_name,
+            config=config,
+            verify=ssl_verify,
+        )
+
+        sts_response = sts_client.assume_role_with_web_identity(
+            RoleArn=aws_role_name,
+            RoleSessionName=aws_session_name or "litellm-session",
+            WebIdentityToken=aws_web_identity_token,
+        )
+
+        client = boto3.client(
+            service_name="bedrock",
+            aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
+            aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
+            aws_session_token=sts_response["Credentials"]["SessionToken"],
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+            verify=ssl_verify,
+        )
+    elif aws_role_name is not None and aws_session_name is not None:
+        # use sts if role name passed in
+        sts_client = boto3.client(
+            "sts",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
+
+        sts_response = sts_client.assume_role(
+            RoleArn=aws_role_name, RoleSessionName=aws_session_name
+        )
+
+        client = boto3.client(
+            service_name="bedrock",
+            aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
+            aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
+            aws_session_token=sts_response["Credentials"]["SessionToken"],
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+            verify=ssl_verify,
+        )
+    elif aws_access_key_id is not None:
+        # uses auth params passed to completion
+        # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
+
+        client = boto3.client(
+            service_name="bedrock",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+            verify=ssl_verify,
+        )
+    elif aws_profile_name is not None:
+        # uses auth values from AWS profile usually stored in ~/.aws/credentials
+
+        client = boto3.Session(profile_name=aws_profile_name).client(
+            service_name="bedrock",
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+            verify=ssl_verify,
+        )
+    else:
+        # aws_access_key_id is None, assume user is trying to auth using env variables
+        # boto3 automatically reads env variables
+
+        client = boto3.client(
+            service_name="bedrock",
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+            config=config,
+            verify=ssl_verify,
+        )
+    if extra_headers:
+        client.meta.events.register(
+            "before-sign.bedrock.*", add_custom_header(extra_headers)
+        )
+
+    return client
+
+
 class ModelResponseIterator:
     def __init__(self, model_response):
         self.model_response = model_response
@@ -446,18 +637,20 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
         """
-        route_mappings: Dict[str, Literal["invoke", "converse_like", "converse", "agent"]] = {
+        route_mappings: Dict[
+            str, Literal["invoke", "converse_like", "converse", "agent"]
+        ] = {
             "invoke/": "invoke",
-            "converse_like/": "converse_like", 
+            "converse_like/": "converse_like",
             "converse/": "converse",
-            "agent/": "agent"
+            "agent/": "agent",
         }
-        
+
         # Check explicit routes first
         for prefix, route_type in route_mappings.items():
             if prefix in model:
                 return route_type
-        
+
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
         if (
@@ -466,38 +659,39 @@ class BedrockModelInfo(BaseLLMModelInfo):
         ):
             return "converse"
         return "invoke"
-    
+
     @staticmethod
     def _explicit_converse_route(model: str) -> bool:
         """
         Check if the model is an explicit converse route.
         """
         return "converse/" in model
-    
+
     @staticmethod
     def _explicit_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit invoke route.
         """
         return "invoke/" in model
-    
+
     @staticmethod
     def _explicit_agent_route(model: str) -> bool:
         """
         Check if the model is an explicit agent route.
         """
         return "agent/" in model
-    
+
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
         """
         Check if the model is an explicit converse like route.
         """
         return "converse_like/" in model
-    
 
     @staticmethod
-    def get_bedrock_provider_config_for_messages_api(model: str) -> Optional[BaseAnthropicMessagesConfig]:
+    def get_bedrock_provider_config_for_messages_api(
+        model: str,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
         """
         Get the bedrock provider config for the given model.
 
@@ -510,18 +704,19 @@ class BedrockModelInfo(BaseLLMModelInfo):
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
-        
+
         #########################################################
         # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
         # Since bedrock Invoke supports Native Anthropic Messages API
         #########################################################
         if "claude" in model:
             return litellm.AmazonAnthropicClaudeMessagesConfig()
-        
+
         #########################################################
         # These routes will go through litellm.completion()
         #########################################################
         return None
+
 
 class BedrockEventStreamDecoderBase:
     """
@@ -592,19 +787,36 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     """
     Extract anthropic-beta header values and convert them to a list.
     Supports comma-separated values from user headers.
-    
+
     Used by both converse and invoke transformations for consistent handling
     of anthropic-beta headers that should be passed to AWS Bedrock.
-    
+
     Args:
         headers (dict): Request headers dictionary
-        
+
     Returns:
         List[str]: List of anthropic beta feature strings, empty list if no header
     """
     anthropic_beta_header = headers.get("anthropic-beta")
     if not anthropic_beta_header:
         return []
-    
+
     # Split comma-separated values and strip whitespace
     return [beta.strip() for beta in anthropic_beta_header.split(",")]
+
+
+def convert_bedrock_datetime_to_openai_datetime(bedrock_datetime) -> Optional[int]:
+    """
+    Convert Bedrock datetime objects to OpenAI datetime format (Unix epoch).
+    
+    Args:
+        bedrock_datetime: Bedrock datetime object or None
+        
+    Returns:
+        Optional[int]: Unix epoch timestamp or None if input is None
+    """
+    if bedrock_datetime is None:
+        return None
+    if hasattr(bedrock_datetime, 'timestamp'):
+        return int(bedrock_datetime.timestamp())
+    return None
