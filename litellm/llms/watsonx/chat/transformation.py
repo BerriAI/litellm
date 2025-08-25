@@ -7,7 +7,7 @@ Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 from typing import List, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.watsonx import WatsonXAIEndpoint, WatsonXAPIParams
+from litellm.types.llms.watsonx import WatsonXAIEndpoint
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -108,15 +108,3 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             url=url, api_version=optional_params.pop("api_version", None)
         )
         return url
-
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        """
-        Prepare payload for deployment models.
-        Deployment models cannot have 'model_id' or 'model' in the request body.
-        """
-        payload: dict = {}
-        payload["model_id"] = None if model.startswith("deployment/") else model
-        payload["project_id"] = (
-            None if model.startswith("deployment/") else api_params["project_id"]
-        )
-        return payload
