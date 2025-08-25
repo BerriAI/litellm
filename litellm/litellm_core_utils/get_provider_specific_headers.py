@@ -17,7 +17,7 @@ class ProviderSpecificHeaderUtils:
         """
         if (
             provider_specific_header is not None
-            and provider_specific_header["custom_llm_provider"] == custom_llm_provider
+            and provider_specific_header.get("custom_llm_provider") == custom_llm_provider
         ):
-            return provider_specific_header["extra_headers"]
+            return provider_specific_header.get("extra_headers", {})
         return {}
