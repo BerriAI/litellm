@@ -20,6 +20,12 @@ export const prepareModelAddRequest = async (
         delete formValues["model_mappings"];
       }
       
+      // Process model mappings to handle empty public_name values
+      const processedMappings = modelMappings.map((mapping: any) => ({
+        ...mapping,
+        public_name: mapping.public_name || mapping.litellm_model // Use litellm_model as default when public_name is empty
+      }));
+      
       
       // Handle wildcard case
       if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
@@ -36,7 +42,7 @@ export const prepareModelAddRequest = async (
 
       // Create a deployment for each mapping
       const deployments = [];
-      for (const mapping of modelMappings) {
+      for (const mapping of processedMappings) {
         const litellmParamsObj: Record<string, any> = {};
         const modelInfoObj: Record<string, any> = {};
         

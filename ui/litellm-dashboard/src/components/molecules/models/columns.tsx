@@ -1,6 +1,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Icon } from "@tremor/react";
-import { Tooltip } from "antd";
+import { Tooltip, InputNumber } from "antd";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { ModelData } from "../../model_dashboard/types";
 import { TrashIcon, PencilIcon, PencilAltIcon, KeyIcon } from "@heroicons/react/outline";
@@ -195,6 +195,61 @@ export const columns = (
             )}
           </div>
         </Tooltip>
+      );
+    },
+  },
+  {
+    header: () => (
+      <span className="text-sm font-semibold">
+        Weight
+        <Tooltip title="Load balancing weight. Higher weights get selected more often.">
+          <span className="ml-1 text-gray-400">ⓘ</span>
+        </Tooltip>
+      </span>
+    ),
+    accessorKey: "litellm_params.weight",
+    size: 100,
+    cell: ({ row }) => {
+      const model = row.original;
+      const weight = model.litellm_params?.weight || 1;
+      
+      const handleWeightChange = (newWeight: number | null) => {
+        if (newWeight !== null && newWeight >= 0) {
+          // Update the model's weight in the data
+          model.litellm_params = {
+            ...model.litellm_params,
+            weight: newWeight
+          };
+          
+          // Trigger a refresh to update the UI
+          if (handleRefreshClick) {
+            handleRefreshClick();
+          }
+        }
+      };
+      
+      return (
+        <div className="max-w-[100px]">
+          <InputNumber
+            size="small"
+            min={0}
+            step={0.1}
+            value={weight}
+            onChange={handleWeightChange}
+            className="w-full"
+            placeholder="1"
+            formatter={(value) => {
+              if (value === 1) return "1 (default)";
+              return value ? value.toString() : "";
+            }}
+            parser={(value) => {
+              if (!value) return 1;
+              if (value === "1 (default)" || value === "1") return 1;
+              const parsed = parseFloat(value);
+              return isNaN(parsed) ? 1 : parsed;
+            }}
+          />
+        </div>
       );
     },
   },

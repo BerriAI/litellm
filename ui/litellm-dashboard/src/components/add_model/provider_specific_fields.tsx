@@ -9,8 +9,10 @@ const { Link } = Typography;
 
 
 interface ProviderSpecificFieldsProps {
-  selectedProvider: Providers;
+  selectedProvider: Providers | null;
   uploadProps?: UploadProps;
+  labelCol?: { span: number };
+  wrapperCol?: { span: number };
 }
 
 interface ProviderCredentialField {
@@ -448,14 +450,16 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
-  uploadProps
+  uploadProps,
+  labelCol,
+  wrapperCol
 }) => {
-  const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
+  const selectedProviderEnum = selectedProvider ? Providers[selectedProvider as keyof typeof Providers] as Providers : null;
   const form = Form.useFormInstance(); // Get form instance from context
 
   // Simply use the fields as defined in PROVIDER_CREDENTIAL_FIELDS
   const allFields = React.useMemo(() => {
-    return PROVIDER_CREDENTIAL_FIELDS[selectedProviderEnum] || [];
+    return selectedProviderEnum ? (PROVIDER_CREDENTIAL_FIELDS[selectedProviderEnum] || []) : [];
   }, [selectedProviderEnum]);
 
   const handleUpload = {
@@ -497,11 +501,15 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
             rules={field.required ? [{ required: true, message: "Required" }] : undefined}
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
+            labelCol={labelCol}
+            wrapperCol={wrapperCol}
           >
             {field.type === "select" ? (
               <Select
                 placeholder={field.placeholder}
                 defaultValue={field.defaultValue}
+                style={{ width: '50%' }}
+                getPopupContainer={(triggerNode) => triggerNode.parentElement}
               >
                 {field.options?.map((option) => (
                   <Select.Option key={option} value={option}>
@@ -528,10 +536,14 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
             ) : (
-              <TextInput
-                placeholder={field.placeholder}
-                type={field.type === "password" ? "password" : "text"}
-              />
+              <div style={{ width: '50%' }}>
+                <TextInput
+                  placeholder={field.placeholder}
+                  type={field.type === "password" ? "password" : "text"}
+                  autoComplete="new-password"
+                  data-form-type="other"
+                />
+              </div>
             )}
           </Form.Item>
 

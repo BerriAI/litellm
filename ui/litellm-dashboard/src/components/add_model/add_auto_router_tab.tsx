@@ -206,7 +206,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     value: model_group,
                     label: model_group,
                   })),
-                { value: 'custom', label: 'Enter custom model name' }
+                { value: 'custom', label: 'Enter LiteLLM model name' }
               ]}
               style={{ width: "100%" }}
               showSearch={true}
@@ -234,7 +234,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     value: model_group,
                     label: model_group,
                   })),
-                { value: 'custom', label: 'Enter custom model name' }
+                { value: 'custom', label: 'Enter LiteLLM model name' }
               ]}
               style={{ width: "100%" }}
               showSearch={true}

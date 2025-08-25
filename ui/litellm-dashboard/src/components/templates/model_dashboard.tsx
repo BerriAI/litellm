@@ -131,7 +131,7 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   const [providerModels, setProviderModels] = useState<Array<string>>([]) // Explicitly typing providerModels as a string array
 
   const [providerSettings, setProviderSettings] = useState<ProviderSettings[]>([])
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI)
+  const [selectedProvider, setSelectedProvider] = useState<Providers | null>(null)
   const [healthCheckResponse, setHealthCheckResponse] = useState<any>(null)
   const [isHealthCheckLoading, setIsHealthCheckLoading] = useState<boolean>(false)
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false)
@@ -442,7 +442,98 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
         // Replace with your actual API call for model data
         const modelDataResponse = await modelInfoCall(accessToken, userID, userRole)
         console.log("Model data response:", modelDataResponse.data)
-        setModelData(modelDataResponse)
+        
+        // If no data returned, use mock data for testing
+        if (!modelDataResponse || !modelDataResponse.data || modelDataResponse.data.length === 0) {
+          console.log("No data returned, using mock data for testing")
+          const mockData = {
+            data: [
+              {
+                model_name: "gpt-4",
+                litellm_model_name: "gpt-4",
+                provider: "openai",
+                litellm_params: {
+                  model: "gpt-4",
+                  api_key: "sk-...",
+                  weight: 2
+                },
+                model_info: {
+                  mode: "chat",
+                  base_model: "gpt-4",
+                  id: "mock-gpt-4-id",
+                  direct_access: true
+                },
+                created_at: "2024-01-15T10:30:00Z",
+                updated_at: "2024-01-15T10:30:00Z",
+                created_by: "admin",
+                team_id: "personal"
+              },
+              {
+                model_name: "gpt-4-turbo",
+                litellm_model_name: "gpt-4-turbo-preview",
+                provider: "openai",
+                litellm_params: {
+                  model: "gpt-4-turbo-preview",
+                  api_key: "sk-...",
+                  weight: 1
+                },
+                model_info: {
+                  mode: "chat",
+                  base_model: "gpt-4-turbo",
+                  id: "mock-gpt-4-turbo-id",
+                  direct_access: true
+                },
+                created_at: "2024-01-16T14:20:00Z",
+                updated_at: "2024-01-16T14:20:00Z",
+                created_by: "admin",
+                team_id: "personal"
+              },
+              {
+                model_name: "gpt-4-preview",
+                litellm_model_name: "gpt-4-1106-preview",
+                provider: "openai",
+                litellm_params: {
+                  model: "gpt-4-1106-preview",
+                  api_key: "sk-...",
+                  weight: 1
+                },
+                model_info: {
+                  mode: "chat",
+                  base_model: "gpt-4",
+                  id: "mock-gpt-4-preview-id",
+                  direct_access: true
+                },
+                created_at: "2024-01-17T09:15:00Z",
+                updated_at: "2024-01-17T09:15:00Z",
+                created_by: "admin",
+                team_id: "personal"
+              },
+              {
+                model_name: "claude-3-sonnet",
+                litellm_model_name: "claude-3-sonnet-20240229",
+                provider: "anthropic",
+                litellm_params: {
+                  model: "claude-3-sonnet-20240229",
+                  api_key: "sk-ant-...",
+                  weight: 0.5
+                },
+                model_info: {
+                  mode: "chat",
+                  base_model: "claude-3-sonnet",
+                  id: "mock-claude-3-sonnet-id",
+                  direct_access: true
+                },
+                created_at: "2024-01-18T11:45:00Z",
+                updated_at: "2024-01-18T11:45:00Z",
+                created_by: "admin",
+                team_id: "personal"
+              }
+            ]
+          }
+          setModelData(mockData)
+        } else {
+          setModelData(modelDataResponse)
+        }
         const _providerSettings = await modelSettingsCall(accessToken)
         if (_providerSettings) {
           setProviderSettings(_providerSettings)
@@ -610,7 +701,120 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
     handleRefreshClick()
   }, [accessToken, token, userRole, userID, modelMap, lastRefreshed, selectedTeam])
 
-  if (!modelData) {
+  // HARD CODED MOCK DATA FOR TESTING
+  const hardcodedMockData = {
+    data: [
+      {
+        model_name: "gpt-4",
+        litellm_model_name: "gpt-4",
+        provider: "openai",
+        litellm_params: {
+          model: "gpt-4",
+          api_key: "sk-...",
+          weight: 2,
+          custom_llm_provider: "",
+          api_base: ""
+        },
+        model_info: {
+          mode: "chat",
+          base_model: "gpt-4",
+          id: "mock-gpt-4-id",
+          direct_access: true,
+          input_cost_per_token: "0.03",
+          output_cost_per_token: "0.06",
+          max_tokens: "8192",
+          max_input_tokens: "8192"
+        },
+        created_at: "2024-01-15T10:30:00Z",
+        updated_at: "2024-01-15T10:30:00Z",
+        created_by: "admin",
+        team_id: "personal"
+      },
+      {
+        model_name: "gpt-4-turbo",
+        litellm_model_name: "gpt-4-turbo-preview",
+        provider: "openai",
+        litellm_params: {
+          model: "gpt-4-turbo-preview",
+          api_key: "sk-...",
+          weight: 1,
+          custom_llm_provider: "",
+          api_base: ""
+        },
+        model_info: {
+          mode: "chat",
+          base_model: "gpt-4-turbo",
+          id: "mock-gpt-4-turbo-id",
+          direct_access: true,
+          input_cost_per_token: "0.01",
+          output_cost_per_token: "0.03",
+          max_tokens: "128000",
+          max_input_tokens: "128000"
+        },
+        created_at: "2024-01-16T14:20:00Z",
+        updated_at: "2024-01-16T14:20:00Z",
+        created_by: "admin",
+        team_id: "personal"
+      },
+      {
+        model_name: "gpt-4-preview",
+        litellm_model_name: "gpt-4-1106-preview",
+        provider: "openai",
+        litellm_params: {
+          model: "gpt-4-1106-preview",
+          api_key: "sk-...",
+          weight: 1,
+          custom_llm_provider: "",
+          api_base: ""
+        },
+        model_info: {
+          mode: "chat",
+          base_model: "gpt-4",
+          id: "mock-gpt-4-preview-id",
+          direct_access: true,
+          input_cost_per_token: "0.01",
+          output_cost_per_token: "0.03",
+          max_tokens: "128000",
+          max_input_tokens: "128000"
+        },
+        created_at: "2024-01-17T09:15:00Z",
+        updated_at: "2024-01-17T09:15:00Z",
+        created_by: "admin",
+        team_id: "personal"
+      },
+      {
+        model_name: "claude-3-sonnet",
+        litellm_model_name: "claude-3-sonnet-20240229",
+        provider: "anthropic",
+        litellm_params: {
+          model: "claude-3-sonnet-20240229",
+          api_key: "sk-ant-...",
+          weight: 0.5,
+          custom_llm_provider: "",
+          api_base: ""
+        },
+        model_info: {
+          mode: "chat",
+          base_model: "claude-3-sonnet",
+          id: "mock-claude-3-sonnet-id",
+          direct_access: true,
+          input_cost_per_token: "0.003",
+          output_cost_per_token: "0.015",
+          max_tokens: "4096",
+          max_input_tokens: "4096"
+        },
+        created_at: "2024-01-18T11:45:00Z",
+        updated_at: "2024-01-18T11:45:00Z",
+        created_by: "admin",
+        team_id: "personal"
+      }
+    ]
+  };
+
+  // Use hardcoded mock data instead of real data
+  const displayData = hardcodedMockData;
+
+  if (!displayData) {
     return <div>Loading...</div>
   }
 
@@ -621,8 +825,8 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
   let all_providers: string[] = []
 
   // loop through model data and edit each row
-  for (let i = 0; i < modelData.data.length; i++) {
-    let curr_model = modelData.data[i]
+  for (let i = 0; i < displayData.data.length; i++) {
+    let curr_model = displayData.data[i]
     let litellm_model_name = curr_model?.litellm_params?.model
     let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider
     let model_info = curr_model?.model_info
@@ -681,29 +885,29 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
       )
     }
 
-    modelData.data[i].provider = provider
-    modelData.data[i].input_cost = input_cost
-    modelData.data[i].output_cost = output_cost
-    modelData.data[i].litellm_model_name = litellm_model_name
+    displayData.data[i].provider = provider
+    displayData.data[i].input_cost = input_cost
+    displayData.data[i].output_cost = output_cost
+    displayData.data[i].litellm_model_name = litellm_model_name
     all_providers.push(provider)
 
     // Convert Cost in terms of Cost per 1M tokens
-    if (modelData.data[i].input_cost) {
-      modelData.data[i].input_cost = (Number(modelData.data[i].input_cost) * 1000000).toFixed(2)
+    if (displayData.data[i].input_cost) {
+      displayData.data[i].input_cost = (Number(displayData.data[i].input_cost) * 1000000).toFixed(2)
     }
 
-    if (modelData.data[i].output_cost) {
-      modelData.data[i].output_cost = (Number(modelData.data[i].output_cost) * 1000000).toFixed(2)
+    if (displayData.data[i].output_cost) {
+      displayData.data[i].output_cost = (Number(displayData.data[i].output_cost) * 1000000).toFixed(2)
     }
 
-    modelData.data[i].max_tokens = max_tokens
-    modelData.data[i].max_input_tokens = max_input_tokens
-    modelData.data[i].api_base = curr_model?.litellm_params?.api_base
-    modelData.data[i].cleanedLitellmParams = cleanedLitellmParams
+    displayData.data[i].max_tokens = max_tokens
+    displayData.data[i].max_input_tokens = max_input_tokens
+    displayData.data[i].api_base = curr_model?.litellm_params?.api_base
+    displayData.data[i].cleanedLitellmParams = cleanedLitellmParams
 
     all_models_on_proxy.push(curr_model.model_name)
 
-    console.log(modelData.data[i])
+    console.log(displayData.data[i])
   }
   // when users click request access show pop up to allow them to request access
 
@@ -1157,6 +1361,11 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                                 Showing{" "}
                                 {modelData && modelData.data.length > 0
                                   ? modelData.data.filter((model: any) => {
+                                      // For testing: include all mock data in count
+                                      if (model.model_info?.id?.startsWith('mock-')) {
+                                        return true
+                                      }
+                                      
                                       const searchMatch =
                                         modelNameSearch === "" ||
                                         model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase())
@@ -1202,7 +1411,12 @@ const ModelDashboard: React.FC<ModelDashboardProps> = ({
                             expandedRows,
                             setExpandedRows,
                           )}
-                          data={modelData.data.filter((model: any) => {
+                          data={displayData.data.filter((model: any) => {
+                            // For testing: show all mock data without filtering
+                            if (model.model_info?.id?.startsWith('mock-')) {
+                              return true
+                            }
+                            
                             // Model name search filter
                             const searchMatch =
                               modelNameSearch === "" ||

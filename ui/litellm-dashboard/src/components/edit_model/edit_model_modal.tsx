@@ -1,9 +1,10 @@
 import React from "react";
-import { Modal, Form, InputNumber, message } from "antd";
+import { Modal, Form, InputNumber, message, Tooltip } from "antd";
 import { TextInput } from "@tremor/react";
 import { Button as Button2 } from "antd";
 import { modelUpdateCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { InfoCircleOutlined } from "@ant-design/icons";
 interface EditModelModalProps {
   visible: boolean;
   onCancel: () => void;
@@ -175,6 +176,35 @@ const EditModelModal: React.FC<EditModelModalProps> = ({
             tooltip="int (optional) - Rate limit for this deployment: in requests per minute (rpm). Find this information on your model/providers website"
           >
             <InputNumber min={0} step={1} />
+          </Form.Item>
+
+          <Form.Item
+            label={
+              <span>
+                Weight{' '}
+                <Tooltip title={
+                  <div>
+                    <div className="mb-2">Control how often this model deployment is selected relative to others with the same model name.</div>
+                    <div className="mb-2"><strong>Examples:</strong></div>
+                    <div className="mb-1">• Weight 1: Default selection probability</div>
+                    <div className="mb-1">• Weight 2: Selected 2x more often than weight 1</div>
+                    <div className="mb-2">• Weight 0.5: Selected half as often as weight 1</div>
+                    <div>
+                      Works with simple-shuffle routing strategy.{" "}
+                      <a href="https://docs.litellm.ai/docs/routing#weighted-deployments" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">
+                        Learn more
+                      </a>
+                    </div>
+                  </div>
+                }>
+                  <InfoCircleOutlined className="text-gray-400" />
+                </Tooltip>
+              </span>
+            }
+            name="weight"
+            tooltip="float (optional) - Weight for load balancing. Higher weights get selected more often."
+          >
+            <InputNumber min={0} step={0.1} />
           </Form.Item>
 
           <Form.Item label="max_retries" name="max_retries">
