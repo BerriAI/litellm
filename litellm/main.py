@@ -61,6 +61,9 @@ from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_for_health_check
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    ProviderSpecificHeaderUtils,
+)
 from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
@@ -1107,11 +1110,11 @@ def completion(  # type: ignore # noqa: PLR0915
             api_key=api_key,
         )
 
-        if (
-            provider_specific_header is not None
-            and provider_specific_header["custom_llm_provider"] == custom_llm_provider
-        ):
-            headers.update(provider_specific_header["extra_headers"])
+        if provider_specific_header is not None:
+            headers.update(ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                provider_specific_header=provider_specific_header,
+                custom_llm_provider=custom_llm_provider,
+            ))
 
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
