@@ -338,6 +338,12 @@ const PROVIDER_CREDENTIAL_FIELDS: Record<Providers, ProviderCredentialField[]> =
     type: "password",
     required: true
   }],
+  [Providers.AIML]: [{
+    key: "api_key",
+    label: "API Key",
+    type: "password",
+    required: true
+  }],
   [Providers.Cerebras]: [{
     key: "api_key",
     label: "API Key",

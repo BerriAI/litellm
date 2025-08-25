@@ -3826,13 +3826,36 @@ def test_vertex_ai_gemini_audio_ogg():
 
 @pytest.mark.asyncio
 async def test_vertex_ai_deepseek():
-    load_vertex_ai_credentials()
+    """Test that deepseek models use the correct v1 API endpoint instead of v1beta1."""
+    #load_vertex_ai_credentials()
     litellm._turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     client = AsyncHTTPHandler()
 
-    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
+    # Create a proper mock response
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?"
+                },
+                "index": 0,
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30
+        },
+        "model": "deepseek-ai/deepseek-r1-0528-maas"
+    }
+    mock_response.status_code = 200
+    
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
         response = await acompletion(
             model="vertex_ai/deepseek-ai/deepseek-r1-0528-maas",
             messages=[{"role": "user", "content": "Hi!"}],
@@ -3840,9 +3863,11 @@ async def test_vertex_ai_deepseek():
         )
 
         mock_post.assert_called_once()
-        print(f"mock_post.call_args: {mock_post.call_args[0][0]}")
-        assert "v1beta1" not in mock_post.call_args[0][0]
-        assert "v1" in mock_post.call_args[0][0]
+        # Access the URL from kwargs since the call is made with keyword arguments
+        url = mock_post.call_args.kwargs["url"]
+        print(f"mock_post.call_args.kwargs['url']: {url}")
+        assert "v1beta1" not in url
+        assert "v1" in url
 
 
 def test_gemini_grounding_on_streaming():

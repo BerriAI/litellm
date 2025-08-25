@@ -833,10 +833,22 @@ async def _client_async_logging_helper(
         print_verbose(
             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
         )
-        # check if user does not want this to be logged
-        asyncio.create_task(
-            logging_obj.async_success_handler(result, start_time, end_time)
+        ################################################
+        # Async Logging Worker
+        ################################################
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine = logging_obj.async_success_handler(
+                result=result,
+                start_time=start_time, 
+                end_time=end_time
+            )
         )
+
+
+        ################################################
+        # Sync Logging Worker
+        ################################################
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=result,
             start_time=start_time,
@@ -2255,7 +2267,17 @@ def _update_dictionary(existing_dict: Dict, new_dict: dict) -> dict:
     for k, v in new_dict.items():
         if v is not None:
             # Convert stringified numbers to appropriate numeric types
-            existing_dict[k] = _convert_stringified_numbers(v)
+            if isinstance(v, str):
+                existing_dict[k] = _convert_stringified_numbers(v)
+            elif isinstance(v, dict):
+                existing_nested_dict = existing_dict.get(k)
+                if isinstance(existing_nested_dict, dict):
+                    existing_nested_dict.update(v)
+                    existing_dict[k] = existing_nested_dict
+                else:
+                    existing_dict[k] = v
+            else:
+                existing_dict[k] = v
 
     return existing_dict
 
@@ -5217,6 +5239,7 @@ def validate_environment(  # noqa: PLR0915
     model: Optional[str] = None,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
 ) -> dict:
     """
     Checks if the environment variables are valid for the given model.
@@ -5567,19 +5590,18 @@ def validate_environment(  # noqa: PLR0915
             else:
                 missing_keys.append("NEBIUS_API_KEY")
 
+    def filter_missing_keys(keys: List[str], exclude_pattern: str) -> List[str]:
+        """Filter out keys that contain the exclude_pattern (case insensitive)."""
+        return [key for key in keys if exclude_pattern not in key.lower()]
+
     if api_key is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_key" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_key")
 
     if api_base is not None:
-        new_missing_keys = []
-        for key in missing_keys:
-            if "api_base" not in key.lower():
-                new_missing_keys.append(key)
-        missing_keys = new_missing_keys
+        missing_keys = filter_missing_keys(missing_keys, "api_base")
+
+    if api_version is not None:
+        missing_keys = filter_missing_keys(missing_keys, "api_version")
 
     if len(missing_keys) == 0:  # no missing keys
         keys_in_environment = True
@@ -7329,6 +7351,12 @@ class ProviderConfigManager:
             )
 
             return get_recraft_image_generation_config(model)
+        elif LlmProviders.AIML == provider:
+            from litellm.llms.aiml.image_generation import (
+                get_aiml_image_generation_config,
+            )
+
+            return get_aiml_image_generation_config(model)
         elif LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.image_generation import (
                 get_gemini_image_generation_config,
