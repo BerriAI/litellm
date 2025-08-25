@@ -1025,3 +1025,94 @@ def test_vertex_ai_code_line_length():
     
     # Verify it contains the expected UUID format
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
+
+
+def test_vertex_ai_signature_full_roundtrip():
+    """
+    Tests the full lifecycle of a thought signature:
+    1. Parsing it from a raw API response into a litellm.ModelResponse.
+    2. Transforming it from the litellm.ModelResponse back into a request payload.
+    """
+    # ### PART 1: Test Response Parsing ###
+
+    # 1. Arrange: Create a mock raw API response with a signature
+    v_config = VertexGeminiConfig()
+    raw_vertex_response_json = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_weather",
+                                "args": {"location": "Boston"},
+                            },
+                            "thoughtSignature": "test_signature_bytes_from_api",
+                        }
+                    ],
+                },
+                "finishReason": "TOOL_CALL",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 10,
+            "totalTokenCount": 20,
+        },
+    }
+    mock_response = MagicMock()
+    mock_response.json.return_value = raw_vertex_response_json
+
+    # 2. Act: Transform the raw response into a litellm object
+    model_response = v_config.transform_response(
+        model="gemini-2.5-flash",
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    # 3. Assert: Check that the signature was correctly parsed and stored
+    assert model_response is not None
+    assistant_message = model_response.choices[0].message
+    assert assistant_message.tool_calls is not None
+    assert len(assistant_message.tool_calls) == 1
+    tool_call = assistant_message.tool_calls[0]
+    
+    # This is the crucial check for the first half of the process
+    assert "thought_signature" in tool_call
+    assert tool_call["thought_signature"] == "test_signature_bytes_from_api"
+
+
+    # ### PART 2: Test Request Transformation ###
+
+    # 1. Arrange: Create the message history for the next turn
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+    
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": tool_call["id"],
+        "content": '{"temperature": "22"}',
+    }
+    messages_for_next_turn = [assistant_message, tool_message]
+
+    # 2. Act: Transform the messages for the next API call
+    transformed_contents = _gemini_convert_messages_with_history(messages_for_next_turn)
+
+    # 3. Assert: Check that the signature is correctly included in the request payload
+    assert len(transformed_contents) == 2
+    tool_content = transformed_contents[1]
+    assert tool_content["role"] == "tool"
+    assert len(tool_content["parts"]) == 1
+    tool_part = tool_content["parts"][0]
+
+    # This is the crucial check for the second half of the process
+    assert "thought_signature" in tool_part
+    assert tool_part["thought_signature"] == "test_signature_bytes_from_api"
