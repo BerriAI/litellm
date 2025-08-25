@@ -41,7 +41,7 @@ class PartType(TypedDict, total=False):
     function_call: FunctionCall
     function_response: FunctionResponse
     thought: bool
-    thought_signature: bytes
+    thoughtSignature: bytes
 
 
 class HttpxFunctionCall(TypedDict):
@@ -73,7 +73,7 @@ class HttpxPartType(TypedDict, total=False):
     executableCode: HttpxExecutableCode
     codeExecutionResult: HttpxCodeExecutionResult
     thought: bool
-    thought_signature: bytes
+    thoughtSignature: bytes
 
 
 class HttpxContentType(TypedDict, total=False):

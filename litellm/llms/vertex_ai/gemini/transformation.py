@@ -118,8 +118,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     contents: List[ContentType] = []
 
     last_message_with_tool_calls = None
-    # Map tool_call_id to its signature
-    signatures_map: Dict[str, bytes] = {}
 
     msg_i = 0
     tool_call_responses = []
@@ -267,10 +265,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         convert_to_gemini_tool_call_invoke(assistant_msg)
                     )
                     last_message_with_tool_calls = assistant_msg
-                    # Store signatures from this message's tool calls
-                    for tc in tool_calls:
-                        if "thought_signature" in tc:
-                            signatures_map[tc["id"]] = tc["thought_signature"]
 
                 msg_i += 1
 
@@ -287,10 +281,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 _part = convert_to_gemini_tool_call_result(
                     tool_msg, last_message_with_tool_calls  # type: ignore
                 )
-                # Look up and attach the corresponding signature
-                tool_call_id = tool_msg.get("tool_call_id")
-                if tool_call_id and tool_call_id in signatures_map:
-                    _part["thought_signature"] = signatures_map[tool_call_id]
 
                 msg_i += 1
                 tool_call_responses.append(_part)
