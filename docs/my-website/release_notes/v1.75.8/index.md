@@ -55,7 +55,7 @@ pip install litellm==1.75.8
 ## Team Member Rate Limits
 
 <Image 
-  img={require('../img/release_notes/team_member_rate_limits.png')}
+  img={require('../../img/release_notes/team_member_rate_limits.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 <p style={{textAlign: 'left', color: '#666'}}>
