@@ -10,33 +10,11 @@ import TabItem from '@theme/TabItem';
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Get free 7-day trial key](https://www.litellm.ai/#trial)
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
 
 :::
 
-### SSO for UI
-
-#### Step 1: Set upperbounds for keys
-Control the upperbound that users can use for `max_budget`, `budget_duration` or any `key/generate` param per key. 
-
-```yaml
-litellm_settings:
-  upperbound_key_generate_params:
-    max_budget: 100 # Optional[float], optional): upperbound of $100, for all /key/generate requests
-    budget_duration: "10d" # Optional[str], optional): upperbound of 10 days for budget_duration values
-    duration: "30d" # Optional[str], optional): upperbound of 30 days for all /key/generate requests
-    max_parallel_requests: 1000 # (Optional[int], optional): Max number of requests that can be made in parallel. Defaults to None.
-    tpm_limit: 1000 #(Optional[int], optional): Tpm limit. Defaults to None.
-    rpm_limit: 1000 #(Optional[int], optional): Rpm limit. Defaults to None.
-
-```
-
-** Expected Behavior **
-
-- Send a `/key/generate` request with `max_budget=200`
-- Key will be created with `max_budget=100` since 100 is the upper bound
-
-#### Step 2: Setup Oauth Client
+### Usage (Google, Microsoft, Okta, etc.)
 
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
@@ -50,6 +28,7 @@ GENERIC_AUTHORIZATION_ENDPOINT = "<your-okta-domain>/authorize" # https://dev-2k
 GENERIC_TOKEN_ENDPOINT = "<your-okta-domain>/token" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/oauth/token
 GENERIC_USERINFO_ENDPOINT = "<your-okta-domain>/userinfo" # https://dev-2kqkcd6lx6kdkuzt.us.auth0.com/userinfo
 GENERIC_CLIENT_STATE = "random-string" # [OPTIONAL] REQUIRED BY OKTA, if not set random state value is generated
+GENERIC_SSO_HEADERS = "Content-Type=application/json, X-Custom-Header=custom-value" # [OPTIONAL] Comma-separated list of additional headers to add to the request - e.g. Content-Type=application/json, etc.
 ```
 
 You can get your domain specific auth/token/userinfo endpoints at `<YOUR-OKTA-DOMAIN>/.well-known/openid-configuration`
@@ -186,6 +165,10 @@ Set a Proxy Admin when SSO is enabled. Once SSO is enabled, the `user_id` for us
 export PROXY_ADMIN_ID="116544810872468347480"
 ```
 
+This will update the user role in the `LiteLLM_UserTable` to `proxy_admin`. 
+
+If you plan to change this ID, please update the user role via API `/user/update` or UI (Internal Users page). 
+
 #### Step 3: See all proxy keys
 
 <Image img={require('../../img/litellm_ui_admin.png')} />
@@ -243,12 +226,12 @@ We allow you to pass a local image or a an http/https url of your image
 
 Set `UI_LOGO_PATH` on your env. We recommend using a hosted image, it's a lot easier to set up and configure / debug
 
-Exaple setting Hosted image
+Example setting Hosted image
 ```shell
 UI_LOGO_PATH="https://litellm-logo-aws-marketplace.s3.us-west-2.amazonaws.com/berriai-logo-github.png"
 ```
 
-Exaple setting a local image (on your container)
+Example setting a local image (on your container)
 ```shell
 UI_LOGO_PATH="ui_images/logo.jpg"
 ```
@@ -272,4 +255,90 @@ Set your colors to any of the following colors: https://www.tremor.so/docs/layou
 
 ```
 - Deploy LiteLLM Proxy Server
+
+## Troubleshooting
+
+### "The 'redirect_uri' parameter must be a Login redirect URI in the client app settings" Error
+
+This error commonly occurs with Okta and other SSO providers when the redirect URI configuration is incorrect.
+
+#### Issue
+```
+Your request resulted in an error. The 'redirect_uri' parameter must be a Login redirect URI in the client app settings
+```
+
+#### Solution
+
+**1. Ensure you have set PROXY_BASE_URL in your .env and it includes protocol**
+
+Make sure your `PROXY_BASE_URL` includes the complete URL with protocol (`http://` or `https://`):
+
+```bash
+# ✅ Correct - includes https://
+PROXY_BASE_URL=https://litellm.platform.com
+
+# ✅ Correct - includes http://
+PROXY_BASE_URL=http://litellm.platform.com
+
+# ❌ Incorrect - missing protocol
+PROXY_BASE_URL=litellm.platform.com
+```
+
+**2. For Okta specifically, ensure GENERIC_CLIENT_STATE is set**
+
+Okta requires the `GENERIC_CLIENT_STATE` parameter:
+
+```bash
+GENERIC_CLIENT_STATE="random-string" # Required for Okta
+```
+
+### Common Configuration Issues
+
+#### Missing Protocol in Base URL
+```bash
+# This will cause redirect_uri errors
+PROXY_BASE_URL=mydomain.com
+
+# Fix: Add the protocol
+PROXY_BASE_URL=https://mydomain.com
+```
+
+### Fallback Login
+
+If you need to access the UI via username/password when SSO is on navigate to `/fallback/login`. This route will allow you to sign in with your username/password credentials.
+
+<Image img={require('../../img/fallback_login.png')} />
+
+
+### Debugging SSO JWT fields 
+
+If you need to inspect the JWT fields received from your SSO provider by LiteLLM, follow these instructions. This guide walks you through setting up a debug callback to view the JWT data during the SSO process.
+
+
+<Image img={require('../../img/debug_sso.png')}  style={{ width: '500px', height: 'auto' }} />
+<br />
+
+1. Add `/sso/debug/callback` as a redirect URL in your SSO provider 
+
+  In your SSO provider's settings, add the following URL as a new redirect (callback) URL:
+
+  ```bash showLineNumbers title="Redirect URL"
+  http://<proxy_base_url>/sso/debug/callback
+  ```
+
+
+2. Navigate to the debug login page on your browser 
+
+    Navigate to the following URL on your browser:
+
+    ```bash showLineNumbers title="URL to navigate to"
+    https://<proxy_base_url>/sso/debug/login
+    ```
+
+    This will initiate the standard SSO flow. You will be redirected to your SSO provider's login screen, and after successful authentication, you will be redirected back to LiteLLM's debug callback route.
+
+
+3. View the JWT fields 
+
+Once redirected, you should see a page called "SSO Debug Information". This page displays the JWT fields received from your SSO provider (as shown in the image above)
 

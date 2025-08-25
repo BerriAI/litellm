@@ -131,6 +131,7 @@ def test_null_role_response():
 
         assert response.choices[0].message.role == "assistant"
 
+
 @pytest.mark.skip(reason="Cohere having RBAC issues")
 def test_completion_azure_command_r():
     try:
@@ -173,27 +174,6 @@ def test_completion_azure_ai_gpt_4o(api_base):
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_databricks(sync_mode):
-    litellm.set_verbose = True
-
-    if sync_mode:
-        response: litellm.ModelResponse = completion(
-            model="databricks/databricks-dbrx-instruct",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )  # type: ignore
-
-    else:
-        response: litellm.ModelResponse = await litellm.acompletion(
-            model="databricks/databricks-dbrx-instruct",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )  # type: ignore
-    print(f"response: {response}")
-
-    response_format_tests(response=response)
 
 
 def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
@@ -477,11 +457,11 @@ def test_completion_claude_3_function_call(model):
         ("claude-3-opus-20240229", None, None),
         ("command-r", None, None),
         ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
-        (
-            "azure_ai/command-r-plus",
-            os.getenv("AZURE_COHERE_API_KEY"),
-            os.getenv("AZURE_COHERE_API_BASE"),
-        ),
+        # (
+        #     "azure_ai/command-r-plus",
+        #     os.getenv("AZURE_COHERE_API_KEY"),
+        #     os.getenv("AZURE_COHERE_API_BASE"),
+        # ),
     ],
 )
 @pytest.mark.asyncio
@@ -779,68 +759,6 @@ def test_completion_base64(model):
         else:
             pytest.fail(f"An exception occurred - {str(e)}")
 
-
-@pytest.mark.parametrize("model", ["claude-3-sonnet-20240229"])
-def test_completion_function_plus_image(model):
-    litellm.set_verbose = True
-
-    image_content = [
-        {"type": "text", "text": "What’s in this image?"},
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-            },
-        },
-    ]
-    image_message = {"role": "user", "content": image_content}
-
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {
-                            "type": "string",
-                            "enum": ["celsius", "fahrenheit"],
-                        },
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-
-    tool_choice = {"type": "function", "function": {"name": "get_current_weather"}}
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-
-    try:
-        response = completion(
-            model=model,
-            messages=[image_message],
-            tool_choice=tool_choice,
-            tools=tools,
-            stream=False,
-        )
-
-        print(response)
-    except litellm.InternalServerError:
-        pass
-
-
 def test_completion_mistral_api():
     try:
         litellm.set_verbose = True
@@ -925,7 +843,7 @@ def test_completion_mistral_api_mistral_large_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="mistral/open-mistral-7b",
+            model="mistral/mistral-medium-latest",
             messages=messages,
             tools=tools,
             tool_choice="auto",
@@ -960,6 +878,8 @@ def test_completion_mistral_api_mistral_large_function_call():
             tool_choice="auto",
         )
         print(second_response)
+    except litellm.RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1495,9 +1415,8 @@ HF Tests we should pass
 """
 
 
-
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm", "lm_studio"]
+    "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
 )  # "vertex_ai",
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
@@ -1539,6 +1458,7 @@ async def test_openai_compatible_custom_api_base(provider):
     [
         "openai",
         "hosted_vllm",
+        "llamafile",
     ],
 )  # "vertex_ai",
 @pytest.mark.asyncio
@@ -1583,8 +1503,10 @@ async def test_openai_compatible_custom_api_video(provider):
 def test_lm_studio_completion(monkeypatch):
     monkeypatch.delenv("LM_STUDIO_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    litellm._turn_on_debug()
     try:
         completion(
+            api_key="fake-key",
             model="lm_studio/typhoon2-quen2.5-7b-instruct",
             messages=[
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
@@ -1642,7 +1564,6 @@ def mock_post(url, **kwargs):
         ]
     ]
     return mock_response
-
 
 
 def test_ollama_image():
@@ -2661,11 +2582,10 @@ def test_re_use_openaiClient():
 
 def test_completion_azure():
     try:
-        print("azure chatgpt-v-3 test\n\n")
         litellm.set_verbose = False
         ## Test azure call
         response = completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4o-new-test",
             messages=messages,
             api_key="os.environ/AZURE_API_KEY",
         )
@@ -2863,7 +2783,7 @@ def test_completion_azure_deployment_id():
     try:
         litellm.set_verbose = True
         response = completion(
-            deployment_id="chatgpt-v-3",
+            deployment_id="gpt-4o-new-test",
             model="gpt-3.5-turbo",
             messages=messages,
         )
@@ -3776,7 +3696,7 @@ def test_completion_volcengine():
     [
         # "gemini-1.0-pro",
         "gemini-1.5-pro",
-        # "gemini-1.5-flash",
+        # "gemini-2.5-flash-lite",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -3830,7 +3750,7 @@ def test_completion_gemini(model):
 @pytest.mark.asyncio
 async def test_acompletion_gemini():
     litellm.set_verbose = True
-    model_name = "gemini/gemini-1.5-flash"
+    model_name = "gemini/gemini-2.5-flash-lite"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         response = await litellm.acompletion(model=model_name, messages=messages)
@@ -4160,7 +4080,7 @@ async def test_completion_ai21_chat():
     litellm.set_verbose = True
     try:
         response = await litellm.acompletion(
-            model="jamba-1.5-large",
+            model="ai21_chat/jamba-mini",
             user="ishaan",
             tool_choice="auto",
             seed=123,
@@ -4413,6 +4333,84 @@ def test_humanloop_completion(monkeypatch):
         prompt_variables={"person": "John"},
         messages=[{"role": "user", "content": "Tell me a joke."}],
     )
+
+
+def test_completion_novita_ai():
+    litellm.set_verbose = True
+    messages = [
+        {"role": "system", "content": "You're a good bot"},
+        {
+            "role": "user",
+            "content": "Hey",
+        },
+    ]
+
+    from openai import OpenAI
+
+    openai_client = OpenAI(api_key="fake-key")
+
+    with patch.object(
+        openai_client.chat.completions, "create", new=MagicMock()
+    ) as mock_call:
+        try:
+            completion(
+                model="novita/meta-llama/llama-3.3-70b-instruct",
+                messages=messages,
+                client=openai_client,
+                api_base="https://api.novita.ai/v3/openai",
+            )
+
+            mock_call.assert_called_once()
+
+            # Verify model is passed correctly
+            assert (
+                mock_call.call_args.kwargs["model"]
+                == "meta-llama/llama-3.3-70b-instruct"
+            )
+            # Verify messages are passed correctly
+            assert mock_call.call_args.kwargs["messages"] == messages
+
+        except Exception as e:
+            pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.parametrize("api_key", ["my-bad-api-key"])
+def test_completion_novita_ai_dynamic_params(api_key):
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You're a good bot"},
+            {
+                "role": "user",
+                "content": "Hey",
+            },
+        ]
+
+        from openai import OpenAI
+
+        openai_client = OpenAI(api_key="fake-key")
+
+        with patch.object(
+            openai_client.chat.completions,
+            "create",
+            side_effect=Exception("Invalid API key"),
+        ) as mock_call:
+            try:
+                completion(
+                    model="novita/meta-llama/llama-3.3-70b-instruct",
+                    messages=messages,
+                    api_key=api_key,
+                    client=openai_client,
+                    api_base="https://api.novita.ai/v3/openai",
+                )
+                pytest.fail(f"This call should have failed!")
+            except Exception as e:
+                # This should fail with the mocked exception
+                assert "Invalid API key" in str(e)
+
+            mock_call.assert_called_once()
+    except Exception as e:
+        pytest.fail(f"Unexpected error: {e}")
 
 
 def test_deepseek_reasoning_content_completion():

@@ -5,7 +5,7 @@ from typing import Any, Optional
 import httpx
 
 import litellm
-from litellm import verbose_logger
+from litellm._logging import verbose_logger
 
 from ..exceptions import (
     APIConnectionError,
@@ -22,6 +22,55 @@ from ..exceptions import (
     Timeout,
     UnprocessableEntityError,
 )
+
+
+class ExceptionCheckers:
+    """
+    Helper class for checking various error conditions in exception strings.
+    """
+
+    @staticmethod
+    def is_error_str_rate_limit(error_str: str) -> bool:
+        """
+        Check if an error string indicates a rate limit error.
+
+        Args:
+            error_str: The error string to check
+
+        Returns:
+            True if the error indicates a rate limit, False otherwise
+        """
+        if not isinstance(error_str, str):
+            return False
+        
+        if "429" in error_str or "rate limit" in error_str.lower():
+            return True
+        
+        #######################################
+        # Mistral API returns this error string
+        #########################################
+        if "service tier capacity exceeded" in error_str.lower():
+            return True
+        
+        return False
+
+    @staticmethod
+    def is_error_str_context_window_exceeded(error_str: str) -> bool:
+        """
+        Check if an error string indicates a context window exceeded error.
+        """
+        _error_str_lowercase = error_str.lower()
+        known_exception_substrings = [
+            "exceed context limit",
+            "this model's maximum context length is",
+            "string too long. expected a string with maximum length",
+            "model's maximum context limit",
+            "is longer than the model's context length",
+        ]
+        for substring in known_exception_substrings:
+            if substring in _error_str_lowercase:
+                return True
+        return False
 
 
 def get_error_message(error_obj) -> Optional[str]:
@@ -248,6 +297,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 or custom_llm_provider == "text-completion-openai"
                 or custom_llm_provider == "custom_openai"
                 or custom_llm_provider in litellm.openai_compatible_providers
+                or custom_llm_provider == "mistral"
             ):
                 # custom_llm_provider is openai, make it OpenAI
                 message = get_error_message(error_obj=original_exception)
@@ -274,12 +324,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         + "Exception"
                     )
 
-                if (
-                    "This model's maximum context length is" in error_str
-                    or "string too long. Expected a string with maximum length"
-                    in error_str
-                    or "model's maximum context limit" in error_str
-                ):
+                if ExceptionCheckers.is_error_str_rate_limit(error_str):
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                        message=f"RateLimitError: {exception_provider} - {message}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        response=getattr(original_exception, "response", None),
+                    )
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"ContextWindowExceededError: {exception_provider} - {message}",
@@ -309,8 +362,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         litellm_debug_info=extra_information,
                     )
                 elif (
-                    "invalid_request_error" in error_str
-                    and "content_policy_violation" in error_str
+                    (
+                        "invalid_request_error" in error_str
+                        and "content_policy_violation" in error_str
+                    )
+                    or (
+                        "Invalid prompt" in error_str
+                        and "violating our usage policy" in error_str
+                    )
+                    or (
+                        "request was rejected as a result of the safety system"
+                        in error_str.lower()
+                    )
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
@@ -433,6 +496,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
                         )
+                    elif original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise InternalServerError(
+                            message=f"InternalServerError: {exception_provider} - {message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                            litellm_debug_info=extra_information,
+                        )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
@@ -449,6 +521,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True
@@ -801,6 +874,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif custom_llm_provider == "bedrock":
                 if (
@@ -972,6 +1046,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif (
                 custom_llm_provider == "sagemaker"
@@ -1090,6 +1165,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
             elif (
                 custom_llm_provider == "vertex_ai"
@@ -1304,6 +1380,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"GeminiException - {original_exception.message}",
                         model=model,
                         llm_provider="palm",
+                        exception_status_code=original_exception.status_code,
                     )
                 if "400 Request payload size exceeds" in error_str:
                     exception_mapping_worked = True
@@ -1380,6 +1457,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="cohere",
                         response=getattr(original_exception, "response", None),
                     )
+                elif "internal server error" in error_str.lower():
+                    exception_mapping_worked = True
+                    raise InternalServerError(
+                        message=f"CohereException - {error_str}",
+                        model=model,
+                        llm_provider="cohere",
+                        response=getattr(original_exception, "response", None),
+                    )
                 elif hasattr(original_exception, "status_code"):
                     if (
                         original_exception.status_code == 400
@@ -1401,7 +1486,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
-                        raise ServiceUnavailableError(
+                        raise InternalServerError(
                             message=f"CohereException - {original_exception.message}",
                             llm_provider="cohere",
                             model=model,
@@ -1427,7 +1512,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif "Unexpected server error" in error_str:
                     exception_mapping_worked = True
-                    raise ServiceUnavailableError(
+                    raise InternalServerError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
                         model=model,
@@ -2047,6 +2132,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             litellm_debug_info=extra_information,
                             llm_provider="azure",
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True
@@ -2141,6 +2227,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            exception_status_code=original_exception.status_code,
                         )
                     else:
                         exception_mapping_worked = True

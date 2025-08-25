@@ -2,15 +2,22 @@
 Common utilities used across bedrock chat/embedding/image generation
 """
 
+import json
 import os
-from typing import List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
 
 import httpx
 
 import litellm
+from litellm.llms.base_llm.anthropic_messages.transformation import (
+    BaseAnthropicMessagesConfig,
+)
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class BedrockError(BaseLLMException):
@@ -334,6 +341,37 @@ class BedrockModelInfo(BaseLLMModelInfo):
     all_global_regions = global_config.get_all_regions()
 
     @staticmethod
+    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+        """
+        Get the API base for the given model.
+        """
+        return api_base
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        """
+        Get the API key for the given model.
+        """
+        return api_key
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        return headers
+
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        return []
+
+    @staticmethod
     def extract_model_name_from_arn(model: str) -> str:
         """
         Extract the model name from an AWS Bedrock ARN.
@@ -402,21 +440,171 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return ["us", "eu", "apac"]
 
     @staticmethod
-    def get_bedrock_route(model: str) -> Literal["converse", "invoke", "converse_like"]:
+    def get_bedrock_route(
+        model: str,
+    ) -> Literal["converse", "invoke", "converse_like", "agent"]:
         """
         Get the bedrock route for the given model.
         """
+        route_mappings: Dict[str, Literal["invoke", "converse_like", "converse", "agent"]] = {
+            "invoke/": "invoke",
+            "converse_like/": "converse_like", 
+            "converse/": "converse",
+            "agent/": "agent"
+        }
+        
+        # Check explicit routes first
+        for prefix, route_type in route_mappings.items():
+            if prefix in model:
+                return route_type
+        
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if "invoke/" in model:
-            return "invoke"
-        elif "converse_like" in model:
-            return "converse_like"
-        elif "converse/" in model:
-            return "converse"
-        elif (
+        if (
             base_model in litellm.bedrock_converse_models
             or alt_model in litellm.bedrock_converse_models
         ):
             return "converse"
         return "invoke"
+    
+    @staticmethod
+    def _explicit_converse_route(model: str) -> bool:
+        """
+        Check if the model is an explicit converse route.
+        """
+        return "converse/" in model
+    
+    @staticmethod
+    def _explicit_invoke_route(model: str) -> bool:
+        """
+        Check if the model is an explicit invoke route.
+        """
+        return "invoke/" in model
+    
+    @staticmethod
+    def _explicit_agent_route(model: str) -> bool:
+        """
+        Check if the model is an explicit agent route.
+        """
+        return "agent/" in model
+    
+    @staticmethod
+    def _explicit_converse_like_route(model: str) -> bool:
+        """
+        Check if the model is an explicit converse like route.
+        """
+        return "converse_like/" in model
+    
+
+    @staticmethod
+    def get_bedrock_provider_config_for_messages_api(model: str) -> Optional[BaseAnthropicMessagesConfig]:
+        """
+        Get the bedrock provider config for the given model.
+
+        Only route to AmazonAnthropicClaude3MessagesConfig() for BaseMessagesConfig
+
+        All other routes should return None since they will go through litellm.completion
+        """
+
+        #########################################################
+        # Converse routes should go through litellm.completion()
+        if BedrockModelInfo._explicit_converse_route(model):
+            return None
+        
+        #########################################################
+        # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
+        # Since bedrock Invoke supports Native Anthropic Messages API
+        #########################################################
+        if "claude" in model:
+            return litellm.AmazonAnthropicClaudeMessagesConfig()
+        
+        #########################################################
+        # These routes will go through litellm.completion()
+        #########################################################
+        return None
+
+class BedrockEventStreamDecoderBase:
+    """
+    Base class for event stream decoding for Bedrock
+    """
+
+    _response_stream_shape_cache = None
+
+    def __init__(self):
+        from botocore.parsers import EventStreamJSONParser
+
+        self.parser = EventStreamJSONParser()
+
+    def get_response_stream_shape(self):
+        if self._response_stream_shape_cache is None:
+            from botocore.loaders import Loader
+            from botocore.model import ServiceModel
+
+            loader = Loader()
+            bedrock_service_dict = loader.load_service_model(
+                "bedrock-runtime", "service-2"
+            )
+            bedrock_service_model = ServiceModel(bedrock_service_dict)
+            self._response_stream_shape_cache = bedrock_service_model.shape_for(
+                "ResponseStream"
+            )
+
+        return self._response_stream_shape_cache
+
+    def _parse_message_from_event(self, event) -> Optional[str]:
+        response_dict = event.to_response_dict()
+        parsed_response = self.parser.parse(
+            response_dict, self.get_response_stream_shape()
+        )
+
+        if response_dict["status_code"] != 200:
+            decoded_body = response_dict["body"].decode()
+            if isinstance(decoded_body, dict):
+                error_message = decoded_body.get("message")
+            elif isinstance(decoded_body, str):
+                error_message = decoded_body
+            else:
+                error_message = ""
+            exception_status = response_dict["headers"].get(":exception-type")
+            error_message = exception_status + " " + error_message
+            raise BedrockError(
+                status_code=response_dict["status_code"],
+                message=(
+                    json.dumps(error_message)
+                    if isinstance(error_message, dict)
+                    else error_message
+                ),
+            )
+        if "chunk" in parsed_response:
+            chunk = parsed_response.get("chunk")
+            if not chunk:
+                return None
+            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+        else:
+            chunk = response_dict.get("body")
+            if not chunk:
+                return None
+
+            return chunk.decode()  # type: ignore[no-any-return]
+
+
+def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
+    """
+    Extract anthropic-beta header values and convert them to a list.
+    Supports comma-separated values from user headers.
+    
+    Used by both converse and invoke transformations for consistent handling
+    of anthropic-beta headers that should be passed to AWS Bedrock.
+    
+    Args:
+        headers (dict): Request headers dictionary
+        
+    Returns:
+        List[str]: List of anthropic beta feature strings, empty list if no header
+    """
+    anthropic_beta_header = headers.get("anthropic-beta")
+    if not anthropic_beta_header:
+        return []
+    
+    # Split comma-separated values and strip whitespace
+    return [beta.strip() for beta in anthropic_beta_header.split(",")]

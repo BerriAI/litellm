@@ -96,8 +96,8 @@ export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
             <span className="text-red-700">{errorInfo.error_class || "Unknown Error"}</span>
           </div>
           <div className="flex mt-2">
-            <span className="text-red-800 font-medium w-20">Message:</span>
-            <span className="text-red-700">{errorInfo.error_message || "Unknown error occurred"}</span>
+            <span className="text-red-800 font-medium w-20 flex-shrink-0">Message:</span>
+            <span className="text-red-700 break-words whitespace-pre-wrap">{errorInfo.error_message || "Unknown error occurred"}</span>
           </div>
         </div>
         

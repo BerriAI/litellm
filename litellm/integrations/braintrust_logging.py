@@ -19,10 +19,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.utils import print_verbose
 
-global_braintrust_http_handler = get_async_httpx_client(
-    llm_provider=httpxSpecialProvider.LoggingCallback
-)
-global_braintrust_sync_http_handler = HTTPHandler()
 API_BASE = "https://api.braintrustdata.com/v1"
 
 
@@ -42,7 +38,7 @@ class BraintrustLogger(CustomLogger):
     ) -> None:
         super().__init__()
         self.validate_environment(api_key=api_key)
-        self.api_base = api_base or API_BASE
+        self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
         self.api_key: str = api_key or os.getenv("BRAINTRUST_API_KEY")  # type: ignore
         self.headers = {
@@ -52,6 +48,10 @@ class BraintrustLogger(CustomLogger):
         self._project_id_cache: Dict[
             str, str
         ] = {}  # Cache mapping project names to IDs
+        self.global_braintrust_http_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
+        self.global_braintrust_sync_http_handler = HTTPHandler()
 
     def validate_environment(self, api_key: Optional[str]):
         """
@@ -76,7 +76,7 @@ class BraintrustLogger(CustomLogger):
             return self._project_id_cache[project_name]
 
         try:
-            response = global_braintrust_sync_http_handler.post(
+            response = self.global_braintrust_sync_http_handler.post(
                 f"{self.api_base}/project",
                 headers=self.headers,
                 json={"name": project_name},
@@ -96,7 +96,7 @@ class BraintrustLogger(CustomLogger):
             return self._project_id_cache[project_name]
 
         try:
-            response = await global_braintrust_http_handler.post(
+            response = await self.global_braintrust_http_handler.post(
                 f"{self.api_base}/project/register",
                 headers=self.headers,
                 json={"name": project_name},
@@ -111,7 +111,7 @@ class BraintrustLogger(CustomLogger):
     @staticmethod
     def add_metadata_from_header(litellm_params: dict, metadata: dict) -> dict:
         """
-        Adds metadata from proxy request headers to Langfuse logging if keys start with "langfuse_"
+        Adds metadata from proxy request headers to Braintrust logging if keys start with "braintrust_"
         and overwrites litellm_params.metadata if already included.
 
         For example if you want to append your trace to an existing `trace_id` via header, send
@@ -146,7 +146,7 @@ class BraintrustLogger(CustomLogger):
         return metadata
 
     async def create_default_project_and_experiment(self):
-        project = await global_braintrust_http_handler.post(
+        project = await self.global_braintrust_http_handler.post(
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
@@ -155,7 +155,7 @@ class BraintrustLogger(CustomLogger):
         self.default_project_id = project_dict["id"]
 
     def create_sync_default_project_and_experiment(self):
-        project = global_braintrust_sync_http_handler.post(
+        project = self.global_braintrust_sync_http_handler.post(
             f"{self.api_base}/project", headers=self.headers, json={"name": "litellm"}
         )
 
@@ -254,6 +254,11 @@ class BraintrustLogger(CustomLogger):
             if cost is not None:
                 clean_metadata["litellm_response_cost"] = cost
 
+            # metadata.model is required for braintrust to calculate the "Estimated cost" metric
+            litellm_model = kwargs.get("model", None)
+            if litellm_model is not None:
+                clean_metadata["model"] = litellm_model
+
             metrics: Optional[dict] = None
             usage_obj = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
@@ -286,9 +291,9 @@ class BraintrustLogger(CustomLogger):
 
             try:
                 print_verbose(
-                    f"global_braintrust_sync_http_handler.post: {global_braintrust_sync_http_handler.post}"
+                    f"self.global_braintrust_sync_http_handler.post: {self.global_braintrust_sync_http_handler.post}"
                 )
-                global_braintrust_sync_http_handler.post(
+                self.global_braintrust_sync_http_handler.post(
                     url=f"{self.api_base}/project_logs/{project_id}/insert",
                     json={"events": [request_data]},
                     headers=self.headers,
@@ -391,6 +396,11 @@ class BraintrustLogger(CustomLogger):
             if cost is not None:
                 clean_metadata["litellm_response_cost"] = cost
 
+            # metadata.model is required for braintrust to calculate the "Estimated cost" metric
+            litellm_model = kwargs.get("model", None)
+            if litellm_model is not None:
+                clean_metadata["model"] = litellm_model
+
             metrics: Optional[dict] = None
             usage_obj = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
@@ -436,7 +446,7 @@ class BraintrustLogger(CustomLogger):
                 request_data["metrics"] = metrics
 
             try:
-                await global_braintrust_http_handler.post(
+                await self.global_braintrust_http_handler.post(
                     url=f"{self.api_base}/project_logs/{project_id}/insert",
                     json={"events": [request_data]},
                     headers=self.headers,

@@ -47,6 +47,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
+from .chat.gpt_5_transformation import OpenAIGPT5Config
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
@@ -55,6 +56,7 @@ from .common_utils import (
 )
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
+openAIGPT5Config = OpenAIGPT5Config()
 
 
 class MistralEmbeddingConfig:
@@ -183,6 +185,8 @@ class OpenAIConfig(BaseConfig):
         """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.get_supported_openai_params(model=model)
+        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+            return openAIGPT5Config.get_supported_openai_params(model=model)
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
@@ -212,6 +216,13 @@ class OpenAIConfig(BaseConfig):
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+            return openAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -527,6 +538,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     model=model, provider=LlmProviders(custom_llm_provider)
                 )
 
+            if provider_config is None:
+                provider_config = OpenAIConfig()
+
             if provider_config:
                 fake_stream = provider_config.should_fake_stream(
                     model=model, custom_llm_provider=custom_llm_provider, stream=stream
@@ -551,30 +565,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             for _ in range(
                 2
             ):  # if call fails due to alternating messages, retry with reformatted message
-                if provider_config is not None:
-                    data = provider_config.transform_request(
-                        model=model,
-                        messages=messages,
-                        optional_params=inference_params,
-                        litellm_params=litellm_params,
-                        headers=headers or {},
-                    )
-                else:
-                    data = OpenAIConfig().transform_request(
-                        model=model,
-                        messages=messages,
-                        optional_params=inference_params,
-                        litellm_params=litellm_params,
-                        headers=headers or {},
-                    )
                 try:
-                    max_retries = data.pop("max_retries", 2)
+                    max_retries = inference_params.pop("max_retries", 2)
                     if acompletion is True:
                         if stream is True and fake_stream is False:
                             return self.async_streaming(
                                 logging_obj=logging_obj,
                                 headers=headers,
-                                data=data,
+                                messages=messages,
+                                optional_params=inference_params,
+                                litellm_params=litellm_params,
+                                provider_config=provider_config,
                                 model=model,
                                 api_base=api_base,
                                 api_key=api_key,
@@ -588,7 +589,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             )
                         else:
                             return self.acompletion(
-                                data=data,
+                                messages=messages,
+                                optional_params=inference_params,
+                                litellm_params=litellm_params,
+                                provider_config=provider_config,
                                 headers=headers,
                                 model=model,
                                 logging_obj=logging_obj,
@@ -603,7 +607,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                 drop_params=drop_params,
                                 fake_stream=fake_stream,
                             )
-                    elif stream is True and fake_stream is False:
+
+                    data = provider_config.transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=inference_params,
+                        litellm_params=litellm_params,
+                        headers=headers or {},
+                    )
+                    if stream is True and fake_stream is False:
                         return self.streaming(
                             logging_obj=logging_obj,
                             headers=headers,
@@ -741,7 +753,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     async def acompletion(
         self,
-        data: dict,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        provider_config: BaseConfig,
         model: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
@@ -758,6 +773,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         fake_stream: bool = False,
     ):
         response = None
+        data = await provider_config.async_transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers or {},
+        )
         for _ in range(
             2
         ):  # if call fails due to alternating messages, retry with reformatted message
@@ -903,7 +925,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def async_streaming(
         self,
         timeout: Union[float, httpx.Timeout],
-        data: dict,
+        messages: list,
+        optional_params: dict,
+        litellm_params: dict,
+        provider_config: BaseConfig,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         api_key: Optional[str] = None,
@@ -917,6 +942,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         stream_options: Optional[dict] = None,
     ):
         response = None
+        data = provider_config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers or {},
+        )
         data["stream"] = True
         data.update(
             self.get_stream_options(stream_options=stream_options, api_base=api_base)

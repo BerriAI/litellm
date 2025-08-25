@@ -88,6 +88,11 @@ class PrismaWrapper:
     ):
         from prisma import Prisma  # type: ignore
 
+        try:
+            await self._original_prisma.disconnect()
+        except Exception as e:
+            verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
+
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)
         else:
@@ -133,11 +138,9 @@ class PrismaManager:
             bool: True if setup was successful, False otherwise
         """
 
-        use_migrate = str_to_bool(os.getenv("USE_PRISMA_MIGRATE")) or use_migrate
         for attempt in range(4):
             original_dir = os.getcwd()
             prisma_dir = PrismaManager._get_prisma_dir()
-            schema_path = prisma_dir + "/schema.prisma"
             os.chdir(prisma_dir)
             try:
                 if use_migrate:
@@ -150,11 +153,8 @@ class PrismaManager:
                         return False
 
                     prisma_dir = PrismaManager._get_prisma_dir()
-                    schema_path = prisma_dir + "/schema.prisma"
 
-                    return ProxyExtrasDBManager.setup_database(
-                        schema_path=schema_path, use_migrate=use_migrate
-                    )
+                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
@@ -183,7 +183,7 @@ class PrismaManager:
 
 
 def should_update_prisma_schema(
-    disable_updates: Optional[Union[bool, str]] = None
+    disable_updates: Optional[Union[bool, str]] = None,
 ) -> bool:
     """
     Determines if Prisma Schema updates should be applied during startup.

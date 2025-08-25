@@ -94,7 +94,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
+        hidden_params = {"model": model, "custom_llm_provider": "azure"}
         final_response: TranscriptionResponse = convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, hidden_params=hidden_params, response_type="audio_transcription")  # type: ignore
         return final_response
 
@@ -174,7 +174,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 },
                 original_response=stringified_response,
             )
-            hidden_params = {"model": "whisper-1", "custom_llm_provider": "azure"}
+            hidden_params = {"model": model, "custom_llm_provider": "azure"}
             response = convert_to_model_response_object(
                 _response_headers=headers,
                 response_object=stringified_response,

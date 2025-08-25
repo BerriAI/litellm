@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Langsmith - Logging LLM Input/Output
 
@@ -22,10 +24,13 @@ pip install litellm
 ## Quick Start
 Use just 2 lines of code, to instantly log your responses **across all providers** with Langsmith
 
+<Tabs>
+<TabItem value="python" label="SDK">
 
 ```python
-litellm.success_callback = ["langsmith"]
+litellm.callbacks = ["langsmith"]
 ```
+
 ```python
 import litellm
 import os
@@ -37,7 +42,7 @@ os.environ["LANGSMITH_DEFAULT_RUN_NAME"] = "" # defaults to LLMRun
 os.environ['OPENAI_API_KEY']=""
 
 # set langsmith as a callback, litellm will send the data to langsmith
-litellm.success_callback = ["langsmith"] 
+litellm.callbacks = ["langsmith"] 
  
 # openai call
 response = litellm.completion(
@@ -47,8 +52,124 @@ response = litellm.completion(
   ]
 )
 ```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  callbacks: ["langsmith"]
+```
+
+2. Start LiteLLM Proxy
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-eWkpOhYaHiuIZV-29JDeTQ' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how are you?"
+    }
+  ],
+  "max_completion_tokens": 250
+}'
+```
+</TabItem>
+</Tabs>
+
+
 
 ## Advanced
+
+### Local Testing - Control Batch Size
+
+Set the size of the batch that Langsmith will process at a time, default is 512. 
+
+Set `langsmith_batch_size=1` when testing locally, to see logs land quickly.
+
+<Tabs>
+<TabItem value="python" label="SDK">
+
+```python
+import litellm
+import os
+
+os.environ["LANGSMITH_API_KEY"] = ""
+# LLM API Keys
+os.environ['OPENAI_API_KEY']=""
+
+# set langsmith as a callback, litellm will send the data to langsmith
+litellm.callbacks = ["langsmith"] 
+litellm.langsmith_batch_size = 1 # 👈 KEY CHANGE
+ 
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+     messages=[
+        {"role": "user", "content": "Hi 👋 - i'm openai"}
+    ]
+)
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  langsmith_batch_size: 1
+  callbacks: ["langsmith"]
+```
+
+2. Start LiteLLM Proxy
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-eWkpOhYaHiuIZV-29JDeTQ' \
+-d '{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how are you?"
+    }
+  ],
+  "max_completion_tokens": 250
+}'
+```
+
+
+
+</TabItem>
+</Tabs>
+
+
+
+
 ### Set Langsmith fields
 
 ```python

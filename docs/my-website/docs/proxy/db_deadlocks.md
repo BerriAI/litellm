@@ -19,7 +19,7 @@ LiteLLM writes `UPDATE` and `UPSERT` queries to the DB. When using 10+ instances
 
 ### Stage 1. Each instance writes updates to redis
 
-Each instance will accumlate the spend updates for a key, user, team, etc and write the updates to a redis queue. 
+Each instance will accumulate the spend updates for a key, user, team, etc and write the updates to a redis queue. 
 
 <Image img={require('../../img/deadlock_fix_1.png')}  style={{ width: '900px', height: 'auto' }} />
 <p style={{textAlign: 'left', color: '#666'}}>

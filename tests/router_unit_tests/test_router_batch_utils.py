@@ -18,7 +18,7 @@ from io import BytesIO
 from typing import Dict, List
 from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
-    _get_router_metadata_variable_name,
+    _get_router_metadata_variable_name, InMemoryFile,
 )
 
 
@@ -57,6 +57,9 @@ def test_bytes_input(sample_jsonl_bytes):
     result = replace_model_in_jsonl(sample_jsonl_bytes, new_model)
 
     assert result is not None
+    assert isinstance(result, InMemoryFile)
+    assert result.name == "modified_file.jsonl"
+    assert result.content_type == "application/jsonl"
 
 
 def test_tuple_input(sample_jsonl_bytes):
@@ -66,6 +69,9 @@ def test_tuple_input(sample_jsonl_bytes):
     result = replace_model_in_jsonl(test_tuple, new_model)
 
     assert result is not None
+    assert isinstance(result, InMemoryFile)
+    assert result.name == "modified_file.jsonl"
+    assert result.content_type == "application/jsonl"
 
 
 def test_file_like_object(sample_file_like):
@@ -74,6 +80,9 @@ def test_file_like_object(sample_file_like):
     result = replace_model_in_jsonl(sample_file_like, new_model)
 
     assert result is not None
+    assert isinstance(result, InMemoryFile)
+    assert result.name == "modified_file.jsonl"
+    assert result.content_type == "application/jsonl"
 
 
 def test_router_metadata_variable_name():
@@ -82,3 +91,40 @@ def test_router_metadata_variable_name():
     assert (
         _get_router_metadata_variable_name(function_name="batch") == "litellm_metadata"
     )
+    assert (
+        _get_router_metadata_variable_name(function_name="acreate_file") == "litellm_metadata"
+    )
+    assert (
+        _get_router_metadata_variable_name(function_name="aget_file") == "litellm_metadata"
+    )
+
+
+def test_non_json_input():
+    """Test that replace_model_in_jsonl returns original content for non-JSON input"""
+    from litellm.router_utils.batch_utils import replace_model_in_jsonl
+    
+    # Test with non-JSON string
+    non_json_str = "This is not a JSON string"
+    result = replace_model_in_jsonl(non_json_str, "gpt-4")
+    assert result == non_json_str
+    
+    # Test with non-JSON bytes
+    non_json_bytes = b"This is not JSON bytes"
+    result = replace_model_in_jsonl(non_json_bytes, "gpt-4")
+    assert result == non_json_bytes
+    
+    # Test with non-JSON file-like object
+    from io import BytesIO
+    non_json_file = BytesIO(b"This is not JSON in a file")
+    result = replace_model_in_jsonl(non_json_file, "gpt-4")
+    assert result == non_json_file
+
+
+def test_should_replace_model_in_jsonl():
+    """Test that should_replace_model_in_jsonl returns the correct value"""
+    from litellm.router_utils.batch_utils import should_replace_model_in_jsonl
+    assert should_replace_model_in_jsonl(purpose="batch") == True
+    assert should_replace_model_in_jsonl(purpose="test") == False
+    assert should_replace_model_in_jsonl(purpose="user_data") == False
+    
+    

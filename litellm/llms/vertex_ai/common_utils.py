@@ -7,8 +7,11 @@ import litellm
 from litellm import supports_response_schema, supports_system_messages, verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
+from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import PartType, Schema
+from litellm.types.utils import TokenCountResponse
 
 
 class VertexAIError(BaseLLMException):
@@ -63,7 +66,7 @@ def get_supports_response_schema(
 from typing import Literal, Optional
 
 all_gemini_url_modes = Literal[
-    "chat", "embedding", "batch_embedding", "image_generation"
+    "chat", "embedding", "batch_embedding", "image_generation", "count_tokens"
 ]
 
 
@@ -84,9 +87,15 @@ def _get_vertex_url(
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}?alt=sse"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
         else:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         # if model is only numeric chars then it's a fine tuned gemini model
         # model = 4965075652664360960
@@ -107,6 +116,12 @@ def _get_vertex_url(
         url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
         if model.isdigit():
             url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+    elif mode == "count_tokens":
+        endpoint = "countTokens"
+        if vertex_location == "global":
+            url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
+        else:
+            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
@@ -142,10 +157,17 @@ def _get_gemini_url(
         url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
             _gemini_model_name, endpoint, gemini_api_key
         )
+    elif mode == "count_tokens":
+        endpoint = "countTokens"
+        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
+            _gemini_model_name, endpoint, gemini_api_key
+        )
     elif mode == "image_generation":
         raise ValueError(
             "LiteLLM's `gemini/` route does not support image generation yet. Let us know if you need this feature by opening an issue at https://github.com/BerriAI/litellm/issues"
         )
+    else:
+        raise ValueError(f"Unsupported mode: {mode}")
 
     return url, endpoint
 
@@ -192,14 +214,67 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    # Handle empty items objects
+    process_items(parameters)
     add_object_type(parameters)
     # Postprocessing
     # Filter out fields that don't exist in Schema
+
     parameters = filter_schema_fields(parameters, valid_schema_fields)
 
     if add_property_ordering:
         set_schema_property_ordering(parameters)
+
     return parameters
+
+
+def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    When anyof is present, only keep the anyof field and its contents - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
+    Filter out other fields in the same dict.
+
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test"} -> {"anyOf": [{"type": "string"}, {"type": "null"}]}
+
+    Case 2: If additional metadata is present, try to keep it
+    E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
+    """
+    title = schema_dict.get("title", None)
+    description = schema_dict.get("description", None)
+
+    if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
+        any_of = schema_dict["anyOf"]
+        if (
+            (title or description)
+            and isinstance(any_of, list)
+            and all(isinstance(item, dict) for item in any_of)
+        ):
+            for item in any_of:
+                if title:
+                    item["title"] = title
+                if description:
+                    item["description"] = description
+            return {"anyOf": any_of}
+        else:
+            return schema_dict
+    return schema_dict
+
+
+def process_items(schema, depth=0):
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
+        )
+    if isinstance(schema, dict):
+        if "items" in schema and schema["items"] == {}:
+            schema["items"] = {"type": "object"}
+        for key, value in schema.items():
+            if isinstance(value, dict):
+                process_items(value, depth + 1)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        process_items(item, depth + 1)
 
 
 def set_schema_property_ordering(
@@ -250,6 +325,7 @@ def filter_schema_fields(
         return schema_dict
 
     result = {}
+    schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:
             continue
@@ -259,6 +335,11 @@ def filter_schema_fields(
                 k: filter_schema_fields(v, valid_fields, processed)
                 for k, v in value.items()
             }
+        elif key == "format":
+            if value in {"enum", "date-time"}:
+                result[key] = value
+            else:
+                continue
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
@@ -285,6 +366,9 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
+            elif "type" not in atype and len(atype) == 0:
+                # Handle empty object case
+                atype["type"] = "object"
 
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
@@ -296,6 +380,13 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
             for atype in anyof:
+                # Remove items field if type is array and items is empty
+                if (
+                    atype.get("type") == "array"
+                    and "items" in atype
+                    and not atype["items"]
+                ):
+                    atype.pop("items")
                 atype["nullable"] = True
 
     properties = schema.get("properties", None)
@@ -427,3 +518,119 @@ def construct_target_url(
 
     updated_url = new_base_url.copy_with(path=updated_requested_route)
     return updated_url
+
+
+def is_global_only_vertex_model(model: str) -> bool:
+    """
+    Check if a model is only available in the global region.
+
+    Args:
+        model: The model name to check
+
+    Returns:
+        True if the model is only available in global region, False otherwise
+    """
+    from litellm.utils import get_supported_regions
+
+    supported_regions = get_supported_regions(
+        model=model, custom_llm_provider="vertex_ai"
+    )
+    if supported_regions is None:
+        return False
+    return "global" in supported_regions
+
+class VertexAIModelInfo(BaseLLMModelInfo):    
+    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+        """
+        Factory method to create a token counter for this provider.
+        
+        Returns:
+            Optional TokenCounterInterface implementation for this provider,
+            or None if token counting is not supported.
+        """
+        return VertexAITokenCounter()
+    
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+    
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        """
+        Returns a list of models supported by this provider.
+        """
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+    @staticmethod
+    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+    @staticmethod
+    def get_api_base(
+        api_base: Optional[str] = None,
+    ) -> Optional[str]:
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+
+
+    @staticmethod
+    def get_base_model(model: str) -> Optional[str]:
+        """
+        Returns the base model name from the given model name.
+
+        Some providers like bedrock - can receive model=`invoke/anthropic.claude-3-opus-20240229-v1:0` or `converse/anthropic.claude-3-opus-20240229-v1:0`
+            This function will return `anthropic.claude-3-opus-20240229-v1:0`
+        """
+        raise NotImplementedError("Vertex AI models are not supported yet")
+
+
+class VertexAITokenCounter(BaseTokenCounter):
+    """Token counter implementation for Google AI Studio provider."""
+    def should_use_token_counting_api(
+        self, 
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        from litellm.types.utils import LlmProviders
+        return custom_llm_provider == LlmProviders.VERTEX_AI.value
+    
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[List[Dict[str, Any]]],
+        deployment: Optional[Dict[str, Any]] = None,
+        request_model: str = "",
+    ) -> Optional[TokenCountResponse]:
+        import copy
+
+        from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+        deployment = deployment or {}
+        count_tokens_params_request = copy.deepcopy(deployment.get("litellm_params", {}))
+        count_tokens_params = {
+            "model": model_to_use,
+            "contents": contents,
+        }
+        count_tokens_params_request.update(count_tokens_params)
+        result = await VertexAITokenCounter().acount_tokens(
+            **count_tokens_params_request,
+        )
+        
+        if result is not None:
+            return TokenCountResponse(
+                total_tokens=result.get("totalTokens", 0),
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type=result.get("tokenizer_used", ""),
+                original_response=result,
+            )
+        
+        return None

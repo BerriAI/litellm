@@ -57,6 +57,11 @@ def _should_use_dd_tracer():
     return get_secret_bool("USE_DDTRACE", False) is True
 
 
+def _should_use_dd_profiler():
+    """Returns True if `USE_DDPROFILER` is set to True in .env"""
+    return get_secret_bool("USE_DDPROFILER", False) is True
+
+
 # Initialize tracer
 should_use_dd_tracer = _should_use_dd_tracer()
 tracer: Union[NullTracer, DD_TRACER] = NullTracer()

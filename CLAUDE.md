@@ -2,148 +2,88 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commands
+## Development Commands
 
-### Development Setup
-```bash
-# Install dependencies with Poetry
-poetry install --with dev,proxy-dev
-
-# Or install specific extras
-poetry install --with dev          # Core development dependencies
-poetry install --extras "proxy"    # Proxy server dependencies
-poetry install --extras "extra_proxy"  # Additional proxy features (Prisma, Azure, GCS, Redis)
-```
-
-### Running the Application
-```bash
-# Start proxy server locally
-uvicorn litellm.proxy.proxy_server:app --host localhost --port 4000 --reload
-
-# Run with Docker dependencies
-docker-compose up db prometheus  # Start dependent services
-```
+### Installation
+- `make install-dev` - Install core development dependencies
+- `make install-proxy-dev` - Install proxy development dependencies with full feature set
+- `make install-test-deps` - Install all test dependencies
 
 ### Testing
-```bash
-# Run all tests
-make test
-# Or: poetry run pytest tests/
-
-# Run unit tests only
-make test-unit
-# Or: poetry run pytest tests/litellm/
-
-# Run integration tests
-make test-integration
-# Or: poetry run pytest tests/ -k "not litellm"
-
-# Run specific test categories
-poetry run pytest tests/llm_translation/  # LLM translation tests
-poetry run pytest tests/router_unit_tests/  # Router tests
-poetry run pytest tests/proxy_unit_tests/  # Proxy server tests
-```
+- `make test` - Run all tests
+- `make test-unit` - Run unit tests (tests/test_litellm) with 4 parallel workers
+- `make test-integration` - Run integration tests (excludes unit tests)
+- `pytest tests/` - Direct pytest execution
 
 ### Code Quality
-```bash
-# Run linting and type checking
-make lint
-# Or manually:
-poetry run mypy litellm --ignore-missing-imports
+- `make lint` - Run all linting (Ruff, MyPy, Black, circular imports, import safety)
+- `make format` - Apply Black code formatting
+- `make lint-ruff` - Run Ruff linting only
+- `make lint-mypy` - Run MyPy type checking only
 
-# Format code with Black
-poetry run black .
+### Single Test Files
+- `poetry run pytest tests/path/to/test_file.py -v` - Run specific test file
+- `poetry run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
 
-# Run Ruff for linting and formatting
-poetry run ruff check .
-poetry run ruff format .
-```
+## Architecture Overview
 
-## High-Level Architecture
+LiteLLM is a unified interface for 100+ LLM providers with two main components:
 
-### Core Components
+### Core Library (`litellm/`)
+- **Main entry point**: `litellm/main.py` - Contains core completion() function
+- **Provider implementations**: `litellm/llms/` - Each provider has its own subdirectory
+- **Router system**: `litellm/router.py` + `litellm/router_utils/` - Load balancing and fallback logic
+- **Type definitions**: `litellm/types/` - Pydantic models and type hints
+- **Integrations**: `litellm/integrations/` - Third-party observability, caching, logging
+- **Caching**: `litellm/caching/` - Multiple cache backends (Redis, in-memory, S3, etc.)
 
-1. **LiteLLM Core (`litellm/`)**: Main library providing unified LLM API interface
-   - `main.py`: Core completion functions (completion, acompletion, streaming)
-   - `utils.py`: Utility functions for API translation and model management
-   - `router.py`: Load balancing and failover logic across multiple deployments
-   - `cost_calculator.py`: Tracks and calculates costs across providers
+### Proxy Server (`litellm/proxy/`)
+- **Main server**: `proxy_server.py` - FastAPI application
+- **Authentication**: `auth/` - API key management, JWT, OAuth2
+- **Database**: `db/` - Prisma ORM with PostgreSQL/SQLite support
+- **Management endpoints**: `management_endpoints/` - Admin APIs for keys, teams, models
+- **Pass-through endpoints**: `pass_through_endpoints/` - Provider-specific API forwarding
+- **Guardrails**: `guardrails/` - Safety and content filtering hooks
+- **UI Dashboard**: Served from `_experimental/out/` (Next.js build)
 
-2. **LLM Provider Integrations (`litellm/llms/`)**: Provider-specific implementations
-   - Each provider has its own module handling API translation
-   - Base classes define common interfaces
-   - Supports 100+ LLM providers (OpenAI, Anthropic, Azure, Bedrock, Vertex AI, etc.)
+## Key Patterns
 
-3. **Proxy Server (`litellm/proxy/`)**: LLM Gateway for production deployments
-   - `proxy_server.py`: FastAPI server providing OpenAI-compatible endpoints
-   - Handles authentication, rate limiting, budgets, and usage tracking
-   - Database-backed (Prisma) for key management and spend tracking
-   - Supports virtual keys, team management, and model access control
+### Provider Implementation
+- Providers inherit from base classes in `litellm/llms/base.py`
+- Each provider has transformation functions for input/output formatting
+- Support both sync and async operations
+- Handle streaming responses and function calling
 
-4. **Router System (`litellm/router.py` & `router_strategy/`)**: Intelligent request routing
-   - Load balancing strategies: least busy, lowest cost, lowest latency
-   - Automatic failover and retry logic
-   - Cooldown management for failed deployments
-   - Tag-based and pattern-based routing
+### Error Handling
+- Provider-specific exceptions mapped to OpenAI-compatible errors
+- Fallback logic handled by Router system
+- Comprehensive logging through `litellm/_logging.py`
 
-5. **Caching Layer (`litellm/caching/`)**: Multi-tier caching system
-   - In-memory, Redis, and S3 cache implementations
-   - Semantic caching with embeddings
-   - Dual cache for combining different cache types
-   - LLM response caching for cost reduction
+### Configuration
+- YAML config files for proxy server (see `proxy/example_config_yaml/`)
+- Environment variables for API keys and settings
+- Database schema managed via Prisma (`proxy/schema.prisma`)
 
-6. **Observability (`litellm/integrations/`)**: Comprehensive logging and monitoring
-   - 30+ integrations (Langfuse, DataDog, Prometheus, OpenTelemetry, etc.)
-   - Custom callback system for extensibility
-   - Standard logging payload format across all callbacks
+## Development Notes
 
-7. **Moneta Integration (`moneta/`)**: Lago billing system integration
-   - Pre-call entitlement checking
-   - Post-call usage reporting
-   - Thread-safe call metadata storage
-   - Graceful error handling with fallback options
-
-### Request Flow
-
-1. **Client Request** → LiteLLM (via SDK or Proxy)
-2. **Router Selection** → Chooses deployment based on strategy
-3. **Pre-call Checks** → Budget limits, rate limits, entitlements (Moneta/Lago)
-4. **Provider Translation** → Converts to provider-specific format
-5. **API Call** → Sends to LLM provider
-6. **Response Processing** → Standardizes response format
-7. **Post-call Actions** → Usage tracking, cost calculation, callbacks
-8. **Client Response** → Returns standardized OpenAI-format response
-
-### Key Design Patterns
-
-- **Provider Abstraction**: All providers implement common interfaces, allowing seamless switching
-- **Async-First**: Core functions support both sync and async operations
-- **Callback Architecture**: Extensible system for logging, monitoring, and custom actions
-- **Retry/Fallback Logic**: Automatic handling of failures with configurable policies
-- **Cost Tracking**: Built-in cost calculation and budget management
-- **OpenAI Compatibility**: Maintains OpenAI API format for easy migration
-
-### Database Schema (Prisma)
-
-The proxy server uses PostgreSQL with Prisma ORM for:
-- API key management
-- Team and user management
-- Usage and spend tracking
-- Model configurations
-- Budget limits and alerts
+### Code Style
+- Uses Black formatter, Ruff linter, MyPy type checker
+- Pydantic v2 for data validation
+- Async/await patterns throughout
+- Type hints required for all public APIs
 
 ### Testing Strategy
+- Unit tests in `tests/test_litellm/`
+- Integration tests for each provider in `tests/llm_translation/`
+- Proxy tests in `tests/proxy_unit_tests/`
+- Load tests in `tests/load_tests/`
 
-- **Unit Tests**: Test individual components and functions
-- **Integration Tests**: Test end-to-end flows with real providers
-- **Load Tests**: Performance testing for proxy server
-- **Provider-Specific Tests**: Ensure correct translation for each provider
+### Database Migrations
+- Prisma handles schema migrations
+- Migration files auto-generated with `prisma migrate dev`
+- Always test migrations against both PostgreSQL and SQLite
 
-## Code Style Guidelines
-
-- Follow Google Python Style Guide
-- Use type hints for all functions
-- Maintain async/sync parity for core functions
-- Keep provider implementations isolated
-- Use environment variables for configuration
-- Implement proper error handling with custom exceptions
+### Enterprise Features
+- Enterprise-specific code in `enterprise/` directory
+- Optional features enabled via environment variables
+- Separate licensing and authentication for enterprise features

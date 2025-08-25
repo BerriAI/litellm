@@ -358,7 +358,6 @@ async def test_edit_delete_permissions():
         
         # Generate an admin key for the team
         admin_key_data = await generate_key(session, master_key, team_id)
-        admin_key = admin_key_data["key"]
         key_id = admin_key_data["key"]
         
         # Create a user key

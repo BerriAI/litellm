@@ -22,6 +22,8 @@ import {
   Icon,
   Text,
 } from "@tremor/react";
+import UsageDatePicker from "./shared/usage_date_picker";
+import NotificationsManager from "./molecules/notifications_manager";
 
 import {
   Button as Button2,
@@ -161,12 +163,6 @@ const CacheDashboard: React.FC<CachePageProps> = ({
       return;
     }
 
-    // the endTime put it to the last hour of the selected date
-    endTime.setHours(23, 59, 59, 999);
-
-    // startTime put it to the first hour of the selected date
-    startTime.setHours(0, 0, 0, 0);
-
     let new_cache_data = await adminGlobalCacheActivity(
       accessToken,
       formatDateWithoutTZ(startTime),
@@ -270,7 +266,7 @@ const handleRefreshClick = () => {
 
 const runCachingHealthCheck = async () => {
   try {
-    message.info("Running cache health check...");
+    NotificationsManager.info("Running cache health check...");
     setHealthCheckResponse("");
     const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
     console.log("CACHING HEALTH CHECK RESPONSE", response);
@@ -349,14 +345,12 @@ const runCachingHealthCheck = async () => {
           </MultiSelect>
         </Col>
         <Col>
-          <DateRangePicker
-          enableSelect={true} 
+          <UsageDatePicker
             value={dateValue}
             onValueChange={(value) => {
                 setDateValue(value);
                 updateCachingData(value.from, value.to);
               }}
-            selectPlaceholder="Select date range"
           />
         </Col>
       </Grid>

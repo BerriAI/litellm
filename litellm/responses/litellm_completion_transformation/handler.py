@@ -56,6 +56,10 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 **kwargs,
             )
+        
+        completion_args = {}
+        completion_args.update(kwargs)
+        completion_args.update(litellm_completion_request)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -80,6 +84,8 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=input,
                 responses_api_request=responses_api_request,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )
 
     async def async_response_api_handler(
@@ -89,11 +95,24 @@ class LiteLLMCompletionTransformationHandler:
         responses_api_request: ResponsesAPIOptionalRequestParams,
         **kwargs,
     ) -> Union[ResponsesAPIResponse, BaseResponsesAPIStreamingIterator]:
+
+        previous_response_id: Optional[str] = responses_api_request.get(
+            "previous_response_id"
+        )
+        if previous_response_id:
+            litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id=previous_response_id,
+                litellm_completion_request=litellm_completion_request,
+            )
+        
+        acompletion_args = {}
+        acompletion_args.update(kwargs)
+        acompletion_args.update(litellm_completion_request)
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = await litellm.acompletion(
-            **litellm_completion_request,
-            **kwargs,
+            **acompletion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -112,4 +131,6 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
                 responses_api_request=responses_api_request,
+                custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
             )

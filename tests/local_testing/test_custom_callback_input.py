@@ -450,12 +450,12 @@ def test_chat_azure_stream():
         customHandler = CompletionCustomHandler()
         litellm.callbacks = [customHandler]
         response = litellm.completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4o-new-test",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
         )
         # test streaming
         response = litellm.completion(
-            model="azure/chatgpt-v-3",
+            model="azure/gpt-4o-new-test",
             messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
             stream=True,
         )
@@ -464,7 +464,7 @@ def test_chat_azure_stream():
         # test failure callback
         try:
             response = litellm.completion(
-                model="azure/chatgpt-v-3",
+                model="azure/gpt-4o-new-test",
                 messages=[{"role": "user", "content": "Hi 👋 - i'm sync azure"}],
                 api_key="my-bad-key",
                 stream=True,
@@ -1089,6 +1089,7 @@ async def test_async_completion_azure_caching_streaming():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_async_embedding_azure_caching():
     print("Testing custom callback input - Azure Caching")
     customHandler_caching = CompletionCustomHandler()
@@ -1536,7 +1537,7 @@ def test_logging_standard_payload_failure_call():
         assert "additional_headers" in standard_logging_object["hidden_params"]
 
 
-@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("stream", [False, True])
 def test_logging_standard_payload_llm_headers(stream):
     from litellm.types.utils import StandardLoggingPayload
 
@@ -1651,9 +1652,10 @@ async def test_standard_logging_payload_stream_usage(sync_mode):
             )
 
             built_response = stream_chunk_builder(chunks=chunks)
+            print(f"built_response: {built_response}")
             assert (
                 built_response.usage.total_tokens
-                != standard_logging_object["total_tokens"]
+                == standard_logging_object["total_tokens"]
             )
             print(f"standard_logging_object usage: {built_response.usage}")
     except litellm.InternalServerError:

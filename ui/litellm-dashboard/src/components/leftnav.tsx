@@ -1,7 +1,8 @@
 import { Layout, Menu } from "antd";
 import Link from "next/link";
 import { List } from "postcss/lib/list";
-import { Text } from "@tremor/react";
+import { Text, Button } from "@tremor/react";
+import { useState } from "react";
 import { 
   KeyOutlined,
   PlayCircleOutlined,
@@ -23,13 +24,17 @@ import {
   LockOutlined,
   ToolOutlined,
   TagsOutlined,
+  BgColorsOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons';
-import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles } from '../utils/roles';
-
+import { old_admin_roles, v2_admin_role_names, all_admin_roles, rolesAllowedToSeeUsage, rolesWithWriteAccess, internalUserRoles, isAdminRole } from '../utils/roles';
+import UsageIndicator from './usage_indicator';
 const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
+  accessToken: string | null;
   setPage: (page: string) => void;
   userRole: string;
   defaultSelectedKey: string;
@@ -48,22 +53,44 @@ interface MenuItem {
 
 
 const Sidebar: React.FC<SidebarProps> = ({
+  accessToken,
   setPage,
   userRole,
   defaultSelectedKey,
 }) => {
+  const [collapsed, setCollapsed] = useState(false);
+
+  const toggleCollapse = () => {
+    setCollapsed(!collapsed);
+  };
   // Note: If a menu item does not have a role, it is visible to all roles.
   const menuItems: MenuItem[] = [
     { key: "1", page: "api-keys", label: "Virtual Keys", icon: <KeyOutlined /> },
     { key: "3", page: "llm-playground", label: "Test Key", icon: <PlayCircleOutlined />, roles: rolesWithWriteAccess },
-    { key: "2", page: "models", label: "Models", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
+    { key: "2", page: "models", label: "Models + Endpoints", icon: <BlockOutlined />, roles: rolesWithWriteAccess },
     { key: "12", page: "new_usage", label: "Usage", icon: <BarChartOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
     { key: "6", page: "teams", label: "Teams", icon: <TeamOutlined /> },
     { key: "17", page: "organizations", label: "Organizations", icon: <BankOutlined />, roles: all_admin_roles },
     { key: "5", page: "users", label: "Internal Users", icon: <UserOutlined />, roles: all_admin_roles },
     { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined /> },
-    { key: "16", page: "model-hub", label: "Model Hub", icon: <AppstoreOutlined /> },
+    { 
+      key: "16", 
+      page: "model-hub-table", 
+      label: "Model Hub", 
+      icon: <AppstoreOutlined />
+    },
     { key: "15", page: "logs", label: "Logs", icon: <LineChartOutlined />},
+    { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
+    {
+      key: "26",
+      page: "tools",
+      label: "Tools",
+      icon: <ToolOutlined />,
+      children: [
+        { key: "18", page: "mcp-servers", label: "MCP Servers", icon: <ToolOutlined /> },
+        { key: "21", page: "vector-stores", label: "Vector Stores", icon: <DatabaseOutlined />, roles: all_admin_roles },
+      ]
+    },
     { 
       key: "experimental", 
       page: "experimental",
@@ -71,12 +98,11 @@ const Sidebar: React.FC<SidebarProps> = ({
       icon: <ExperimentOutlined />,
       children: [
         { key: "9", page: "caching", label: "Caching", icon: <DatabaseOutlined />, roles: all_admin_roles },
+        { key: "25", page: "prompts", label: "Prompts", icon: <FileTextOutlined />, roles: all_admin_roles },
         { key: "10", page: "budgets", label: "Budgets", icon: <BankOutlined />, roles: all_admin_roles },
-        { key: "11", page: "guardrails", label: "Guardrails", icon: <SafetyOutlined />, roles: all_admin_roles },
-        { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
         { key: "20", page: "transform-request", label: "API Playground", icon: <ApiOutlined />, roles: [...all_admin_roles, ...internalUserRoles] },
-        { key: "18", page: "mcp-tools", label: "MCP Tools", icon: <ToolOutlined />, roles: all_admin_roles },
         { key: "19", page: "tag-management", label: "Tag Management", icon: <TagsOutlined />, roles: all_admin_roles },
+        { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined /> },
       ]
     },
     {
@@ -87,9 +113,9 @@ const Sidebar: React.FC<SidebarProps> = ({
       roles: all_admin_roles,
       children: [
         { key: "11", page: "general-settings", label: "Router Settings", icon: <SettingOutlined />, roles: all_admin_roles },
-        { key: "12", page: "pass-through-settings", label: "Pass-Through", icon: <ApiOutlined />, roles: all_admin_roles },
         { key: "8", page: "settings", label: "Logging & Alerts", icon: <SettingOutlined />, roles: all_admin_roles },
         { key: "13", page: "admin-panel", label: "Admin Settings", icon: <SettingOutlined />, roles: all_admin_roles },
+        { key: "14", page: "ui-theme", label: "UI Theme", icon: <BgColorsOutlined />, roles: all_admin_roles },
       ]
     }
   ];
@@ -115,6 +141,8 @@ const Sidebar: React.FC<SidebarProps> = ({
     // Check if parent item has roles and user has access
     const hasParentAccess = !item.roles || item.roles.includes(userRole);
     
+    console.log(`Menu item ${item.label}: roles=${item.roles}, userRole=${userRole}, hasAccess=${hasParentAccess}`);
+    
     if (!hasParentAccess) return false;
 
     // Filter children if they exist
@@ -130,38 +158,119 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
-      <Sider theme="light" width={220}>
+      <Sider 
+        theme="light" 
+        width={220}
+        collapsed={collapsed}
+        collapsedWidth={80}
+        collapsible
+        trigger={null}
+        style={{
+          transition: 'all 0.2s',
+          position: 'relative',
+        }}
+      >
         <Menu
           mode="inline"
           selectedKeys={[selectedMenuKey]}
+          defaultOpenKeys={collapsed ? [] : ["llm-tools"]}
+          inlineCollapsed={collapsed}
           style={{ 
             borderRight: 0,
             backgroundColor: 'transparent',
             fontSize: '14px',
           }}
-          items={filteredMenuItems.map(item => ({
-            key: item.key,
-            icon: item.icon,
-            label: item.label,
-            children: item.children?.map(child => ({
-              key: child.key,
-              icon: child.icon,
-              label: child.label,
-              onClick: () => {
+          items={[
+            // Expand button row when collapsed, or first menu item when expanded
+            collapsed ? {
+              key: 'expand-toggle',
+              icon: <MenuUnfoldOutlined />,
+              label: '',
+              onClick: toggleCollapse,
+              style: {
+                cursor: 'pointer',
+              },
+              title: "Expand navigation sidebar"
+            } : {
+              key: filteredMenuItems[0]?.key,
+              icon: filteredMenuItems[0]?.icon,
+              label: (
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'space-between',
+                  width: '100%'
+                }}>
+                  <span>{filteredMenuItems[0]?.label}</span>
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCollapse();
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      padding: '8px 12px',
+                      borderRadius: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '12px',
+                      color: '#888',
+                      transition: 'all 0.2s',
+                      marginLeft: '8px',
+                      marginRight: '-8px',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(0, 0, 0, 0.04)';
+                      e.currentTarget.style.color = '#666';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = '#888';
+                    }}
+                    title="Collapse navigation sidebar"
+                  >
+                    <MenuFoldOutlined />
+                  </div>
+                </div>
+              ),
+              onClick: !filteredMenuItems[0]?.children ? () => {
                 const newSearchParams = new URLSearchParams(window.location.search);
-                newSearchParams.set('page', child.page);
+                newSearchParams.set('page', filteredMenuItems[0]?.page || '');
                 window.history.pushState(null, '', `?${newSearchParams.toString()}`);
-                setPage(child.page);
-              }
-            })),
-            onClick: !item.children ? () => {
-              const newSearchParams = new URLSearchParams(window.location.search);
-              newSearchParams.set('page', item.page);
-              window.history.pushState(null, '', `?${newSearchParams.toString()}`);
-              setPage(item.page);
-            } : undefined
-          }))}
+                setPage(filteredMenuItems[0]?.page || '');
+              } : undefined
+            },
+            // Rest of the menu items (or all items when collapsed)
+            ...(collapsed ? filteredMenuItems : filteredMenuItems.slice(1)).map(item => ({
+              key: item.key,
+              icon: item.icon,
+              label: item.label,
+              children: item.children?.map(child => ({
+                key: child.key,
+                icon: child.icon,
+                label: child.label,
+                onClick: () => {
+                  const newSearchParams = new URLSearchParams(window.location.search);
+                  newSearchParams.set('page', child.page);
+                  window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+                  setPage(child.page);
+                }
+              })),
+              onClick: !item.children ? () => {
+                const newSearchParams = new URLSearchParams(window.location.search);
+                newSearchParams.set('page', item.page);
+                window.history.pushState(null, '', `?${newSearchParams.toString()}`);
+                setPage(item.page);
+              } : undefined
+            }))
+          ]}
         />
+        {
+          isAdminRole(userRole) && !collapsed && (
+            <UsageIndicator accessToken={accessToken} width={220}/>
+          )
+        }
       </Sider>
     </Layout>
   );

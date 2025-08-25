@@ -25,6 +25,8 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 
 | Model Name              | Function Call                                              |
 |-------------------------|------------------------------------------------------------|
+| voyage-3.5              | `embedding(model="voyage/voyage-3.5", input)`              | 
+| voyage-3.5-lite         | `embedding(model="voyage/voyage-3.5-lite", input)`         | 
 | voyage-3-large          | `embedding(model="voyage/voyage-3-large", input)`          | 
 | voyage-3                | `embedding(model="voyage/voyage-3", input)`                | 
 | voyage-3-lite           | `embedding(model="voyage/voyage-3-lite", input)`           | 
@@ -35,8 +37,8 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-multilingual-2   | `embedding(model="voyage/voyage-multilingual-2	", input)`  | 
 | voyage-large-2-instruct | `embedding(model="voyage/voyage-large-2-instruct", input)` | 
 | voyage-large-2          | `embedding(model="voyage/voyage-large-2", input)`          |
-| voyage-2           | `embedding(model="voyage/voyage-2", input)`           | 
+| voyage-2                | `embedding(model="voyage/voyage-2", input)`                | 
 | voyage-lite-02-instruct | `embedding(model="voyage/voyage-lite-02-instruct", input)` | 
-| voyage-01          | `embedding(model="voyage/voyage-01", input)`          | 
-| voyage-lite-01     | `embedding(model="voyage/voyage-lite-01", input)`     | 
+| voyage-01               | `embedding(model="voyage/voyage-01", input)`               | 
+| voyage-lite-01          | `embedding(model="voyage/voyage-lite-01", input)`          | 
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` | 

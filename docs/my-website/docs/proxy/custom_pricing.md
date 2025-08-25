@@ -56,7 +56,7 @@ model_list:
       model: azure/<your_deployment_name>
       api_key: os.environ/AZURE_API_KEY
       api_base: os.environ/AZURE_API_BASE
-      api_version: os.envrion/AZURE_API_VERSION
+      api_version: os.environ/AZURE_API_VERSION
     model_info:
       input_cost_per_token: 0.000421 # 👈 ONLY to track cost per token
       output_cost_per_token: 0.000520 # 👈 ONLY to track cost per token

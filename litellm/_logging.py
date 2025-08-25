@@ -108,26 +108,51 @@ verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
+def _suppress_loggers():
+    """Suppress noisy loggers at INFO level"""
+    # Suppress httpx request logging at INFO level
+    httpx_logger = logging.getLogger("httpx")
+    httpx_logger.setLevel(logging.WARNING)
+
+    # Suppress APScheduler logging at INFO level
+    apscheduler_executors_logger = logging.getLogger("apscheduler.executors.default")
+    apscheduler_executors_logger.setLevel(logging.WARNING)
+    apscheduler_scheduler_logger = logging.getLogger("apscheduler.scheduler")
+    apscheduler_scheduler_logger.setLevel(logging.WARNING)
+
+# Call the suppression function
+_suppress_loggers()
+
+ALL_LOGGERS = [
+    logging.getLogger(),
+    verbose_logger,
+    verbose_router_logger,
+    verbose_proxy_logger,
+]
+
+
+def _initialize_loggers_with_handler(handler: logging.Handler):
+    """
+    Initialize all loggers with a handler
+
+    - Adds a handler to each logger
+    - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
+    """
+    for lg in ALL_LOGGERS:
+        lg.handlers.clear()  # remove any existing handlers
+        lg.addHandler(handler)  # add JSON formatter handler
+        lg.propagate = False  # prevent bubbling to parent/root
+
 
 def _turn_on_json():
+    """
+    Turn on JSON logging
+
+    - Adds a JSON formatter to all loggers
+    """
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
-
-    # Define all loggers to update, including root logger
-    loggers = [logging.getLogger()] + [
-        verbose_router_logger,
-        verbose_proxy_logger,
-        verbose_logger,
-    ]
-
-    # Iterate through each logger and update its handlers
-    for logger in loggers:
-        # Remove all existing handlers
-        for h in logger.handlers[:]:
-            logger.removeHandler(h)
-        # Add the new handler
-        logger.addHandler(handler)
-
+    _initialize_loggers_with_handler(handler)
     # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
 

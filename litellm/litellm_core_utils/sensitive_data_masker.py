@@ -1,6 +1,6 @@
 from typing import Any, Dict, Optional, Set
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 
 
 class SensitiveDataMasker:
@@ -33,7 +33,12 @@ class SensitiveDataMasker:
 
         value_str = str(value)
         masked_length = len(value_str) - (self.visible_prefix + self.visible_suffix)
-        return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}{value_str[-self.visible_suffix:]}"
+
+        # Handle the case where visible_suffix is 0 to avoid showing the entire string
+        if self.visible_suffix == 0:
+            return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}"
+        else:
+            return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}{value_str[-self.visible_suffix:]}"
 
     def is_sensitive_key(self, key: str) -> bool:
         key_lower = str(key).lower()
@@ -44,7 +49,7 @@ class SensitiveDataMasker:
         self,
         data: Dict[str, Any],
         depth: int = 0,
-        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
+        max_depth: int = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
     ) -> Dict[str, Any]:
         if depth >= max_depth:
             return data

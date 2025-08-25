@@ -1,80 +1,73 @@
-# Instructor - Function Calling
+# Instructor
 
-Use LiteLLM with [jxnl's instructor library](https://github.com/jxnl/instructor) for function calling in prod. 
+Combine LiteLLM with [jxnl's instructor library](https://github.com/jxnl/instructor) for more robust structured outputs. Outputs are automatically validated into Pydantic types and validation errors are provided back to the model to increase the chance of a successful response in the retries.
 
-## Usage
+## Usage (Sync)
 
 ```python
-import os
-
 import instructor
 from litellm import completion
 from pydantic import BaseModel
 
-os.environ["LITELLM_LOG"] = "DEBUG"  # 👈 print DEBUG LOGS
 
 client = instructor.from_litellm(completion)
 
-# import dotenv
-# dotenv.load_dotenv()
 
-
-class UserDetail(BaseModel):
+class User(BaseModel):
     name: str
     age: int
 
 
-user = client.chat.completions.create(
-    model="gpt-4o-mini",
-    response_model=UserDetail,
-    messages=[
-        {"role": "user", "content": "Extract Jason is 25 years old"},
-    ],
-)
+def extract_user(text: str):
+    return client.chat.completions.create(
+        model="gpt-4o-mini",
+        response_model=User,
+        messages=[
+            {"role": "user", "content": text},
+        ],
+        max_retries=3,
+    )
 
-assert isinstance(user, UserDetail)
+user = extract_user("Jason is 25 years old")
+
+assert isinstance(user, User)
 assert user.name == "Jason"
 assert user.age == 25
-
-print(f"user: {user}")
+print(f"{user=}")
 ```
 
-## Async Calls
+## Usage (Async)
 
 ```python
 import asyncio
+
 import instructor
-from litellm import Router
+from litellm import acompletion
 from pydantic import BaseModel
 
-aclient = instructor.patch(
-    Router(
-        model_list=[
-            {
-                "model_name": "gpt-4o-mini",
-                "litellm_params": {"model": "gpt-4o-mini"},
-            }
-        ],
-        default_litellm_params={"acompletion": True},  # 👈 IMPORTANT - tells litellm to route to async completion function.
-    )
-)
+
+client = instructor.from_litellm(acompletion)
 
 
-class UserExtract(BaseModel):
+class User(BaseModel):
     name: str
     age: int
 
 
-async def main():
-    model = await aclient.chat.completions.create(
+async def extract(text: str) -> User:
+    return await client.chat.completions.create(
         model="gpt-4o-mini",
-        response_model=UserExtract,
+        response_model=User,
         messages=[
-            {"role": "user", "content": "Extract jason is 25 years old"},
+            {"role": "user", "content": text},
         ],
+        max_retries=3,
     )
-    print(f"model: {model}")
 
+user = asyncio.run(extract("Alice is 30 years old"))
 
-asyncio.run(main())
+assert isinstance(user, User)
+assert user.name == "Alice"
+assert user.age == 30
+print(f"{user=}")
 ```

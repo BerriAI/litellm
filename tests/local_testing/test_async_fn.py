@@ -217,11 +217,12 @@ def test_get_cloudflare_response_streaming():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="HF Inference API is unstable, this is now the 3rd time it's stopped working")
 async def test_hf_completion_tgi():
     # litellm.set_verbose=True
     try:
         response = await acompletion(
-            model="huggingface/HuggingFaceH4/zephyr-7b-beta",
+            model="huggingface/deepseek-ai/DeepSeek-R1",
             messages=[{"content": "Hello, how are you?", "role": "user"}],
         )
         # Add any assertions here to check the response
