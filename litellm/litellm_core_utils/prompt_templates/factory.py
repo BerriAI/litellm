@@ -1073,10 +1073,9 @@ def convert_to_gemini_tool_call_invoke(
                         )
                     )
                     if gemini_function_call is not None:
-                        part = VertexPartType(function_call=gemini_function_call)
-                        if "thought_signature" in tool:
-                            part["thoughtSignature"] = tool["thought_signature"]
-                        _parts_list.append(part)
+                        _parts_list.append(
+                            VertexPartType(function_call=gemini_function_call)
+                        )
                     else:  # don't silently drop params. Make it clear to user what's happening.
                         raise Exception(
                             "function_call missing. Received tool call with 'type': 'function'. No function call in argument - {}".format(

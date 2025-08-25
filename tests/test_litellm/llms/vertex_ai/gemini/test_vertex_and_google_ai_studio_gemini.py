@@ -1066,7 +1066,7 @@ def test_vertex_ai_signature_full_roundtrip():
 
     # 2. Act: Transform the raw response into a litellm object
     model_response = v_config.transform_response(
-        model="gemini-pro",
+        model="gemini-2.5-flash",
         raw_response=mock_response,
         model_response=ModelResponse(),
         logging_obj=MagicMock(),
@@ -1108,16 +1108,11 @@ def test_vertex_ai_signature_full_roundtrip():
 
     # 3. Assert: Check that the signature is correctly included in the request payload
     assert len(transformed_contents) == 2
-    model_content = transformed_contents[0]
-    assert model_content["role"] == "model"
-    assert len(model_content["parts"]) == 1
-    model_part = model_content["parts"][0]
-
-    # This is the crucial check for the second half of the process
-    assert "function_call" in model_part
-    assert "thoughtSignature" in model_part
-    assert model_part["thoughtSignature"] == "test_signature_bytes_from_api"
-
     tool_content = transformed_contents[1]
     assert tool_content["role"] == "tool"
-    assert "thoughtSignature" not in tool_content["parts"][0]
+    assert len(tool_content["parts"]) == 1
+    tool_part = tool_content["parts"][0]
+
+    # This is the crucial check for the second half of the process
+    assert "thought_signature" in tool_part
+    assert tool_part["thought_signature"] == "test_signature_bytes_from_api"
