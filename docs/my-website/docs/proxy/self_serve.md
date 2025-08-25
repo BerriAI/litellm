@@ -335,6 +335,8 @@ curl -X POST '<PROXY_BASE_URL>/team/new' \
 }'
 ```
 
+</TabItem>
+</Tabs>
 
 
 
