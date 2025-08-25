@@ -19,6 +19,9 @@ from litellm.utils import ImageResponse
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
+# Configure pytest marks to avoid warnings
+pytestmark = pytest.mark.asyncio
+
 class TestCustomLogger(CustomLogger):
     def __init__(self):
         self.standard_logging_payload: Optional[StandardLoggingPayload] = None
@@ -34,6 +37,8 @@ TEST_IMAGES = [
     open(os.path.join(pwd, "ishaan_github.png"), "rb"),
     open(os.path.join(pwd, "litellm_site.png"), "rb"),
 ]
+
+SINGLE_TEST_IMAGE = open(os.path.join(pwd, "ishaan_github.png"), "rb")
 
 def get_test_images_as_bytesio():
     """Helper function to get test images as BytesIO objects"""
@@ -501,3 +506,278 @@ def test_recraft_image_edit_config():
     assert files[0][0] == "image"  # Field name (not image[] like OpenAI)
     assert files[0][1][1] == mock_image  # Image data
     assert files[0][1][2] == "image/png"  # Content type
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.flaky(retries=3, delay=2)
+@pytest.mark.asyncio
+async def test_multiple_vs_single_image_edit(sync_mode):
+    """Test that both single and multiple image editing work correctly"""
+    from litellm import image_edit, aimage_edit
+    litellm._turn_on_debug()
+    
+    try:
+        prompt = "Add a soft blue tint to the image(s)"
+        
+        # Test single image
+        if sync_mode:
+            single_result = image_edit(
+                prompt=prompt,
+                model="gpt-image-1",
+                image=SINGLE_TEST_IMAGE,
+            )
+        else:
+            single_result = await aimage_edit(
+                prompt=prompt,
+                model="gpt-image-1",
+                image=SINGLE_TEST_IMAGE,
+            )
+        
+        print("Single image result:", single_result)
+        ImageResponse.model_validate(single_result)
+        
+        # Test multiple images
+        if sync_mode:
+            multiple_result = image_edit(
+                prompt=prompt,
+                model="gpt-image-1",
+                image=TEST_IMAGES,
+            )
+        else:
+            multiple_result = await aimage_edit(
+                prompt=prompt,
+                model="gpt-image-1",
+                image=TEST_IMAGES,
+            )
+        
+        print("Multiple images result:", multiple_result)
+        ImageResponse.model_validate(multiple_result)
+        
+        # Both should return valid responses
+        assert single_result is not None
+        assert multiple_result is not None
+        assert single_result.data is not None
+        assert multiple_result.data is not None
+        assert len(single_result.data) > 0
+        assert len(multiple_result.data) > 0
+        
+    except litellm.ContentPolicyViolationError as e:
+        pytest.skip(f"Content policy violation: {e}")
+
+
+@pytest.mark.flaky(retries=3, delay=2)
+@pytest.mark.asyncio
+async def test_multiple_image_edit_with_different_formats():
+    """Test multiple images editing with different file formats and types"""
+    from litellm import aimage_edit
+    litellm._turn_on_debug()
+    
+    try:
+        prompt = "Create a cohesive artistic style across all images"
+        
+        # Test with mixed BytesIO and file objects
+        mixed_images = [
+            SINGLE_TEST_IMAGE,  # File object
+            get_test_images_as_bytesio()[1]  # BytesIO object
+        ]
+        
+        result = await aimage_edit(
+            prompt=prompt,
+            model="gpt-image-1",
+            image=mixed_images,
+        )
+        
+        print("Mixed format images result:", result)
+        ImageResponse.model_validate(result)
+        
+        assert result is not None
+        assert result.data is not None
+        assert len(result.data) > 0
+        
+        # Save result if available
+        if result.data and result.data[0].b64_json:
+            image_bytes = base64.b64decode(result.data[0].b64_json)
+            with open("test_multiple_image_edit_mixed.png", "wb") as f:
+                f.write(image_bytes)
+        
+    except litellm.ContentPolicyViolationError as e:
+        pytest.skip(f"Content policy violation: {e}")
+
+
+@pytest.mark.flaky(retries=3, delay=2)
+@pytest.mark.asyncio
+async def test_image_edit_array_handling():
+    """Test that the image parameter correctly handles both single items and arrays"""
+    from litellm import aimage_edit
+    
+    # Mock response
+    mock_response = {
+        "created": 1589478378,
+        "data": [
+            {
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+            }
+        ]
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(mock_response, 200)
+        
+        prompt = "Test prompt"
+        
+        # Test 1: Single image (should be converted to list internally)
+        result1 = await aimage_edit(
+            prompt=prompt,
+            model="gpt-image-1",
+            image=SINGLE_TEST_IMAGE,
+        )
+        
+        # Test 2: Multiple images (already a list)
+        result2 = await aimage_edit(
+            prompt=prompt,
+            model="gpt-image-1",
+            image=TEST_IMAGES,
+        )
+        
+        # Test 3: Empty list (should fail validation)
+        with pytest.raises(Exception):
+            await aimage_edit(
+                prompt=prompt,
+                model="gpt-image-1",
+                image=[],
+            )
+        
+        # Both valid calls should succeed
+        ImageResponse.model_validate(result1)
+        ImageResponse.model_validate(result2)
+        
+        # Verify that both calls were made to the API
+        assert mock_post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openai_transformation_handles_multiple_images():
+    """Test that OpenAI transformation correctly handles multiple images in request"""
+    from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
+    from litellm.types.router import GenericLiteLLMParams
+    
+    config = OpenAIImageEditConfig()
+    
+    # Test with multiple images
+    prompt = "Edit these images"
+    images = [b"fake_image_1", b"fake_image_2", b"fake_image_3"]
+    litellm_params = GenericLiteLLMParams(api_key="test_key")
+    
+    data, files = config.transform_image_edit_request(
+        model="gpt-image-1",
+        prompt=prompt,
+        image=images,
+        image_edit_optional_request_params={"n": 1},
+        litellm_params=litellm_params,
+        headers={}
+    )
+    
+    # Check that data contains the prompt and parameters
+    assert data["prompt"] == prompt
+    assert data["model"] == "gpt-image-1"
+    assert data["n"] == 1
+    
+    # Check that files contains all images with correct field names
+    assert len(files) == len(images)
+    for i, file_entry in enumerate(files):
+        assert file_entry[0] == "image[]"  # OpenAI uses image[] for multiple files
+        assert file_entry[1][1] == images[i]  # Image data
+        assert file_entry[1][2] == "image/png"  # Content type
+    
+    print(f"Successfully processed {len(images)} images in transformation")
+
+
+@pytest.mark.asyncio
+async def test_multiple_image_edit_parameter_validation():
+    """Test parameter validation with multiple images"""
+    from litellm import aimage_edit
+    
+    # Mock response
+    mock_response = {
+        "created": 1589478378,
+        "data": [
+            {
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+            }
+        ]
+    }
+
+    class MockResponse:
+        def __init__(self, json_data, status_code):
+            self._json_data = json_data
+            self.status_code = status_code
+            self.text = json.dumps(json_data)
+
+        def json(self):
+            return self._json_data
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(mock_response, 200)
+        
+        # Test with valid parameters
+        result = await aimage_edit(
+            prompt="Test prompt",
+            model="gpt-image-1",
+            image=TEST_IMAGES,
+            n=1,
+            size="1024x1024",
+            response_format="b64_json"
+        )
+        
+        ImageResponse.model_validate(result)
+        
+        # Verify the request was made with correct parameters
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        
+        # Check that the request contains the expected data
+        if 'data' in call_args.kwargs:
+            form_data = call_args.kwargs['data']
+            assert 'model' in form_data
+            assert 'prompt' in form_data
+            assert 'n' in form_data
+            assert form_data['n'] == 1  # Could be int or string depending on implementation        print("Parameter validation passed for multiple image edit")
+
+
+@pytest.mark.asyncio 
+async def test_multiple_image_edit_error_handling():
+    """Test error handling with multiple images"""
+    from litellm import aimage_edit
+    
+    # Test with None image (should raise error)
+    with pytest.raises(Exception):
+        await aimage_edit(
+            prompt="Test prompt",
+            model="gpt-image-1",
+            image=None,
+        )
+    
+    # Test with invalid model (should raise error)
+    with pytest.raises(Exception):
+        await aimage_edit(
+            prompt="Test prompt",
+            model="invalid-model",
+            image=TEST_IMAGES,
+        )
+    
+    print("Error handling tests passed for multiple image edit")
