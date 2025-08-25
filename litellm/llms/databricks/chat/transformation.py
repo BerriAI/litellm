@@ -174,6 +174,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             type="function",
             function=DatabricksFunction(
                 name=tool["name"],
+                description=cast(dict, tool.get("description")),
                 parameters=cast(dict, tool.get("input_schema") or {}),
             ),
         )
