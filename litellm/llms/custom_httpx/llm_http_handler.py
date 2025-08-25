@@ -1257,6 +1257,10 @@ class BaseLLMHTTPHandler:
         stream: Optional[bool] = False,
         kwargs: Optional[Dict[str, Any]] = None,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+        from litellm.litellm_core_utils.get_provider_specific_headers import (
+            ProviderSpecificHeaderUtils,
+        )
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.ANTHROPIC
@@ -1270,10 +1274,9 @@ class BaseLLMHTTPHandler:
             Optional[litellm.types.utils.ProviderSpecificHeader],
             kwargs.get("provider_specific_header", None),
         )
-        extra_headers = (
-            provider_specific_header.get("extra_headers", {})
-            if provider_specific_header
-            else {}
+        extra_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=provider_specific_header,
+            custom_llm_provider=custom_llm_provider,
         )
         (
             headers,
