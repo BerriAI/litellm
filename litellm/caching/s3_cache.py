@@ -13,7 +13,7 @@ import asyncio
 import json
 from functools import partial
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from litellm._logging import print_verbose, verbose_logger
 
@@ -70,10 +70,9 @@ class S3Cache(BaseCache):
 
             if ttl is not None:
                 cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
-                import datetime
 
                 # Calculate expiration time
-                expiration_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=ttl)
+                expiration_time = datetime.now(timezone.utc) + timedelta(seconds=ttl)
                 # Upload the data to S3 with the calculated expiration time
                 self.s3_client.put_object(
                     Bucket=self.bucket_name,
