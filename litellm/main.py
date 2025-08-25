@@ -497,7 +497,10 @@ async def acompletion(
     }
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=completion_kwargs.get("base_url", None)
+            model=model,
+            custom_llm_provider=kwargs.get("custom_llm_provider", None),
+            api_base=kwargs.get("api_base", None),
+            api_key=kwargs.get("api_key", None),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -3589,7 +3592,10 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
+            model=model,
+            custom_llm_provider=kwargs.get("custom_llm_provider", None),
+            api_base=kwargs.get("api_base", None),
+            api_key=kwargs.get("api_key", None),
         )
 
         # Await normally
