@@ -16,6 +16,7 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
@@ -277,6 +278,22 @@ class OllamaChatConfig(BaseConfig):
                 m, BaseModel
             ):  # avoid message serialization issues - https://github.com/BerriAI/litellm/issues/5319
                 m = m.model_dump(exclude_none=True)
+
+            content = m.get("content")
+            if content is not None and isinstance(content, list):
+                for content_item in content:
+                    if "text" in content_item:
+                        new_messages.append({
+                            "role": m["role"],
+                            "content": content_item["text"]
+                        })
+                    else:
+                        verbose_logger.warning(
+                            'Dropping item in message["content"] with keys %s. Only items with a "text" key are supported.',
+                            content_item.keys()
+                        )
+                continue
+
             tool_calls = m.get("tool_calls")
             if tool_calls is not None and isinstance(tool_calls, list):
                 new_tools: List[OllamaToolCall] = []
