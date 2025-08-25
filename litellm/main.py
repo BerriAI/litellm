@@ -5081,7 +5081,7 @@ def transcription(
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
     atranscription = kwargs.get("atranscription", False)
-    atranscription = kwargs.get("atranscription", False)
+    duration = kwargs.get("duration", 0.0)
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
     extra_headers = kwargs.get("extra_headers", None)
     kwargs.pop("tags", [])
@@ -5247,6 +5247,10 @@ def transcription(
             headers={},
             provider_config=provider_config,
         )
+    if isinstance(response, dict):
+        response["duration"] = duration
+    else:
+        setattr(response, "duration", duration)
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
     return response
