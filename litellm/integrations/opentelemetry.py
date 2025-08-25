@@ -19,7 +19,6 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
-    from opentelemetry._logs import LogRecord
     from opentelemetry.trace import Context as _Context
     from opentelemetry.trace import Span as _Span
     from opentelemetry.trace import Tracer as _Tracer
@@ -268,7 +267,7 @@ class OpenTelemetry(CustomLogger):
         if not self.config.enable_events:
             return
 
-        from opentelemetry._logs import set_logger_provider, get_logger
+        from opentelemetry._logs import set_logger_provider
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
         from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -657,8 +656,7 @@ class OpenTelemetry(CustomLogger):
         # per-message events
         for msg in kwargs.get("messages", []):
             role = msg.get("role", "user")
-            name = f"gen_ai.content.prompt"
-            attrs = {"event_name": name, "gen_ai.system": provider}
+            attrs = {"event_name": "gen_ai.content.prompt", "gen_ai.system": provider}
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
             if self.message_logging and msg.get("content"):
@@ -676,9 +674,8 @@ class OpenTelemetry(CustomLogger):
 
         # per-choice events
         for idx, choice in enumerate(response_obj.get("choices", [])):
-            name = "gen_ai.content.completion"
             attrs = {
-                "event_name": name,
+                "event_name": "gen_ai.content.prompt",
                 "gen_ai.system": provider,
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
