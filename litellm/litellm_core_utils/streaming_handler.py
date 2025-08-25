@@ -881,9 +881,15 @@ class CustomStreamWrapper:
                     content=None
                 )  # ensure empty delta chunk returned
                 # get any function call arguments
-                model_response.choices[0].finish_reason = map_finish_reason(
+                mapped_finish_reason = map_finish_reason(
                     finish_reason=self.received_finish_reason
                 )  # ensure consistent output to openai
+                
+                # Override finish_reason to "tool_calls" if tool calls were made
+                if mapped_finish_reason == "stop" and self.tool_call:
+                    model_response.choices[0].finish_reason = "tool_calls"
+                else:
+                    model_response.choices[0].finish_reason = mapped_finish_reason
 
                 self.sent_last_chunk = True
 
@@ -892,8 +898,13 @@ class CustomStreamWrapper:
             model_response.choices[0].delta.tool_calls is not None
             or model_response.choices[0].delta.function_call is not None
         ):
+            # Set tool_call flag to ensure finish_reason is set correctly
+            if model_response.choices[0].delta.tool_calls is not None:
+                self.tool_call = True
+            elif model_response.choices[0].delta.function_call is not None:
+                self.tool_call = True
+            
             model_response = self.strip_role_from_delta(model_response)
-
             return model_response
         elif (
             len(model_response.choices) > 0
@@ -1313,6 +1324,12 @@ class CustomStreamWrapper:
                     if delta is not None and (
                         delta.function_call is not None or delta.tool_calls is not None
                     ):
+                        # Set tool_call flag to ensure finish_reason is set correctly
+                        if delta.tool_calls is not None:
+                            self.tool_call = True
+                        elif delta.function_call is not None:
+                            self.tool_call = True
+                        
                         try:
                             model_response.system_fingerprint = (
                                 original_chunk.system_fingerprint

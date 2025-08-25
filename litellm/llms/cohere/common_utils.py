@@ -55,6 +55,7 @@ class ModelResponseIterator:
         self.content_blocks: List = []
         self.tool_index = -1
         self.json_mode = json_mode
+        self.has_tool_calls = False  # Track if we've seen any tool calls
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
@@ -69,9 +70,42 @@ class ModelResponseIterator:
 
             if "text" in chunk:
                 text = chunk["text"]
-            elif "is_finished" in chunk and chunk["is_finished"] is True:
+            
+            # Handle tool call deltas
+            if "tool_call_delta" in chunk:
+                self.has_tool_calls = True  # Mark that we've seen tool calls
+                tool_delta = chunk["tool_call_delta"]
+                tool_index = tool_delta.get("index", 0)
+                
+                # Create tool call chunk
+                tool_use = ChatCompletionToolCallChunk(
+                    index=tool_index,
+                    id=tool_delta.get("name", None),  # Use name as initial ID for first chunk
+                    type="function",
+                    function={
+                        "name": tool_delta.get("name", None),
+                        "arguments": tool_delta.get("parameters", "")
+                    }
+                )
+            
+            # Handle finish event with tool calls
+            if "is_finished" in chunk and chunk["is_finished"] is True:
                 is_finished = chunk["is_finished"]
                 finish_reason = chunk["finish_reason"]
+                
+                # Check if this is a tool call completion
+                # Either tool_calls are in the final chunk OR we've seen tool calls earlier
+                if ("tool_calls" in chunk and chunk["tool_calls"]) or self.has_tool_calls:
+                    finish_reason = "tool_calls"
+                    
+                # Handle usage data for final chunk
+                if "meta" in chunk and "billed_units" in chunk["meta"]:
+                    billed_units = chunk["meta"]["billed_units"]
+                    usage = ChatCompletionUsageBlock(
+                        prompt_tokens=billed_units.get("input_tokens", 0),
+                        completion_tokens=billed_units.get("output_tokens", 0),
+                        total_tokens=billed_units.get("input_tokens", 0) + billed_units.get("output_tokens", 0)
+                    )
 
             if "citations" in chunk:
                 provider_specific_fields = {"citations": chunk["citations"]}
@@ -119,9 +153,12 @@ class ModelResponseIterator:
         str_line = chunk
         if isinstance(chunk, bytes):  # Handle binary data
             str_line = chunk.decode("utf-8")  # Convert bytes to string
-            index = str_line.find("data:")
-            if index != -1:
-                str_line = str_line[index:]
+        
+        # Strip SSE prefix if present
+        if str_line.startswith("data: "):
+            str_line = str_line[6:]  # Remove "data: " prefix
+        elif str_line.startswith("data:"):
+            str_line = str_line[5:]  # Remove "data:" prefix
 
         data_json = json.loads(str_line)
         return self.chunk_parser(chunk=data_json)
