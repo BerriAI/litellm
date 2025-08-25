@@ -4801,11 +4801,14 @@ async def audio_transcriptions(
             file=file,
             router_model_names=router_model_names,
         )
-
         file_content = await file.read()
         file_object = io.BytesIO(file_content)
         file_object.name = file.filename
         data["file"] = file_object
+        from mutagen import File
+        audio = File(fileobj=file_object)
+        duration = audio.info.length
+        data["duration"] = duration
         try:
             ### CALL HOOKS ### - modify incoming data / reject request before calling the model
             data = await proxy_logging_obj.pre_call_hook(
@@ -4822,6 +4825,12 @@ async def audio_transcriptions(
                 user_model=user_model,
             )
             response = await llm_call
+            if isinstance(response, dict):
+                response["usage"] = {}
+                response["usage"]["seconds"] = duration
+                response["usage"]["type"] = "duration"
+            else:
+                setattr(response, "usage", {"seconds": duration, "type": "duration"})
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         finally:

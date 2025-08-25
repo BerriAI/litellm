@@ -1447,6 +1447,8 @@ def client(original_function):  # noqa: PLR0915
 
             # MODEL CALL
             result = await original_function(*args, **kwargs)
+            if kwargs.get("duration", False) is not False:
+                result.duration = kwargs.get("duration", False)
             end_time = datetime.datetime.now()
             if _is_streaming_request(
                 kwargs=kwargs,
