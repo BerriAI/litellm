@@ -362,3 +362,99 @@ def test_x_initiator_header_system_only_messages():
     )
     
     assert headers["X-Initiator"] == "user"
+
+
+def test_copilot_vision_request_header_with_image():
+    """Test that Copilot-Vision-Request header is added when messages contain images"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,abc123"}
+                }
+            ]
+        }
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4-vision-preview",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["Copilot-Vision-Request"] == "true"
+    assert headers["X-Initiator"] == "user"
+
+
+def test_copilot_vision_request_header_text_only():
+    """Test that Copilot-Vision-Request header is not added for text-only messages"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {"role": "user", "content": "Just a text message"},
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert "Copilot-Vision-Request" not in headers
+    assert headers["X-Initiator"] == "user"
+
+
+def test_copilot_vision_request_header_with_type_image_url():
+    """Test that Copilot-Vision-Request header is added for content with type: image_url"""
+    config = GithubCopilotConfig()
+    
+    # Mock the authenticator
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key-123"
+    config.authenticator.get_api_base.return_value = None
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this image"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+            ]
+        }
+    ]
+    
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-4-vision-preview",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+    
+    assert headers["Copilot-Vision-Request"] == "true"
+    assert headers["X-Initiator"] == "user"
