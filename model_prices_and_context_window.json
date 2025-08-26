@@ -16674,6 +16674,18 @@
         "supports_tool_choice": false,
         "supports_response_schema": true
     },
+    "fireworks_ai/accounts/fireworks/models/deepseek-v3p1": {
+        "max_tokens": 8192,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 5.6e-07,
+        "output_cost_per_token": 1.68e-06,
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "supports_response_schema": true,
+        "source": "https://fireworks.ai/pricing",
+        "supports_tool_choice": true
+    },
     "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct": {
         "max_tokens": 131072,
         "max_input_tokens": 131072,
