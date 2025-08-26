@@ -571,3 +571,41 @@ def test_gemini_tool_use():
             stop_reason = chunk.choices[0].finish_reason
     assert stop_reason is not None
     assert stop_reason == "tool_calls"
+
+@pytest.mark.asyncio
+async def test_gemini_image_generation_async():
+    #litellm._turn_on_debug()
+    response = await litellm.acompletion(
+        messages=[{"role": "user", "content": "Generate an image of a banana wearing a costume that says LiteLLM"}],
+        model="gemini/gemini-2.5-flash-image-preview",
+    )
+
+    CONTENT = response.choices[0].message.content
+
+    IMAGE_URL = response.choices[0].message.image
+    print("IMAGE_URL: ", IMAGE_URL)
+
+    assert CONTENT is not None
+    assert IMAGE_URL is not None
+    assert IMAGE_URL["url"] is not None
+    assert IMAGE_URL["url"].startswith("data:image/png;base64,")
+
+
+
+@pytest.mark.asyncio
+async def test_gemini_image_generation_async_stream():
+    #litellm._turn_on_debug()
+    response = await litellm.acompletion(
+        messages=[{"role": "user", "content": "Generate an image of a banana wearing a costume that says LiteLLM"}],
+        model="gemini/gemini-2.5-flash-image-preview",
+        stream=True,
+    )
+
+    for chunk in response:
+        print(chunk)
+        if chunk.choices[0].message.image is not None:
+            IMAGE_URL = chunk.choices[0].message.image
+            print("IMAGE_URL: ", IMAGE_URL)
+            assert IMAGE_URL["url"] is not None
+            assert IMAGE_URL["url"].startswith("data:image/png;base64,")
+            break

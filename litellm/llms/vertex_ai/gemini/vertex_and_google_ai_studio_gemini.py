@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParamFunctionChunk,
+    ImageURLObject,
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
@@ -774,8 +775,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "inlineData" in part:
                 mime_type = part["inlineData"]["mimeType"]
                 data = part["inlineData"]["data"]
-                # Check if inline data is audio - if so, exclude from text content
-                if mime_type.startswith("audio/"):
+                # Check if inline data is audio or image - if so, exclude from text content
+                # Images and audio are now handled separately in their respective response fields
+                if mime_type.startswith("audio/") or mime_type.startswith("image/"):
                     continue
                 _content_str += "data:{};base64,{}".format(mime_type, data)
 
@@ -790,6 +792,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     content_str += _content_str
 
         return content_str, reasoning_content_str
+    
+    def _extract_image_response_from_parts(
+        self, parts: List[HttpxPartType]
+    ) -> Optional[ImageURLObject]:
+        """Extract image response from parts if present"""
+        for part in parts:
+            if "inlineData" in part:
+                mime_type = part["inlineData"]["mimeType"]
+                data = part["inlineData"]["data"]
+                if mime_type.startswith("image/"):
+                    # Convert base64 data to data URI format
+                    data_uri = f"data:{mime_type};base64,{data}"
+                    return ImageURLObject(
+                        url=data_uri,
+                        detail="auto"
+                    )
+        return None
 
     def _extract_audio_response_from_parts(
         self, parts: List[HttpxPartType]
@@ -1172,18 +1191,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         parts=candidate["content"]["parts"]
                     )
                 )
+                image_response = (
+                    VertexGeminiConfig()._extract_image_response_from_parts(
+                        parts=candidate["content"]["parts"]
+                    )
+                )
 
                 if audio_response is not None:
                     cast(Dict[str, Any], chat_completion_message)[
                         "audio"
                     ] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
+                
+                #########################################################
+                #########################################################
+                if image_response is not None:
+                    # Handle image response - combine with text content into structured format
+                    cast(Dict[str, Any], chat_completion_message)["image"] = image_response
+                    
                 elif content is not None:
                     chat_completion_message["content"] = content
 
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
-
                 (
                     functions,
                     tools,
