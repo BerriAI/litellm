@@ -3088,6 +3088,7 @@ def pre_process_non_default_params(
     model: str,
     remove_sensitive_keys: bool = False,
     add_provider_specific_params: bool = False,
+    provider_config: Optional[BaseConfig] = None,
 ) -> dict:
     """
     Pre-process non-default params to a standardized format
@@ -3103,13 +3104,6 @@ def pre_process_non_default_params(
         additional_endpoint_specific_params=["messages"],
     )
 
-    provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
 
     if "response_format" in non_default_params:
         if provider_config is not None:
@@ -3307,6 +3301,7 @@ def get_optional_params(  # noqa: PLR0915
     messages: Optional[List[AllMessageValues]] = None,
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    provider_config: Optional[BaseConfig] = None,
     **kwargs,
 ):
     passed_params = locals().copy()
@@ -3317,19 +3312,14 @@ def get_optional_params(  # noqa: PLR0915
         custom_llm_provider=custom_llm_provider,
         additional_drop_params=additional_drop_params,
         model=model,
+        provider_config=provider_config,
     )
     optional_params = pre_process_optional_params(
         passed_params=passed_params,
         non_default_params=non_default_params,
         custom_llm_provider=custom_llm_provider,
     )
-    provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
+
 
     def _check_valid_arg(supported_params: List[str]):
         """
