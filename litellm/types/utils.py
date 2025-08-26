@@ -68,6 +68,44 @@ def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
 
 
+# Pre-generated object pools for performance optimization
+_DEFAULT_MESSAGE = None
+_DEFAULT_CHOICES = None
+_DEFAULT_STREAMING_CHOICES = None
+_DEFAULT_USAGE = None
+_DEFAULT_DELTA = None
+
+def _get_default_message():
+    global _DEFAULT_MESSAGE
+    if _DEFAULT_MESSAGE is None:
+        _DEFAULT_MESSAGE = Message()
+    return _DEFAULT_MESSAGE
+
+def _get_default_choices():
+    global _DEFAULT_CHOICES
+    if _DEFAULT_CHOICES is None:
+        _DEFAULT_CHOICES = Choices()
+    return _DEFAULT_CHOICES
+
+def _get_default_streaming_choices():
+    global _DEFAULT_STREAMING_CHOICES
+    if _DEFAULT_STREAMING_CHOICES is None:
+        _DEFAULT_STREAMING_CHOICES = StreamingChoices()
+    return _DEFAULT_STREAMING_CHOICES
+
+def _get_default_usage():
+    global _DEFAULT_USAGE
+    if _DEFAULT_USAGE is None:
+        _DEFAULT_USAGE = Usage()
+    return _DEFAULT_USAGE
+
+def _get_default_delta():
+    global _DEFAULT_DELTA
+    if _DEFAULT_DELTA is None:
+        _DEFAULT_DELTA = Delta()
+    return _DEFAULT_DELTA
+
+
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
@@ -1204,25 +1242,33 @@ class ModelResponse(ModelResponseBase):
         _response_headers=None,
         **params,
     ) -> None:
+        # Fast path optimizations
+        
+        # Optimize object type and choices creation
         if stream is not None and stream is True:
             object = "chat.completion.chunk"
-            if choices is not None and isinstance(choices, list):
+            if choices is None:
+                # Use cached default streaming choices for better performance
+                choices = [_get_default_streaming_choices()]
+            elif isinstance(choices, list):
                 new_choices = []
                 for choice in choices:
-                    _new_choice = None
                     if isinstance(choice, StreamingChoices):
                         _new_choice = choice
                     elif isinstance(choice, dict):
                         _new_choice = StreamingChoices(**choice)
                     elif isinstance(choice, BaseModel):
                         _new_choice = StreamingChoices(**choice.model_dump())
+                    else:
+                        _new_choice = choice
                     new_choices.append(_new_choice)
                 choices = new_choices
-            else:
-                choices = [StreamingChoices()]
         else:
             object = "chat.completion"
-            if choices is not None and isinstance(choices, list):
+            if choices is None:
+                # Use cached default choices for better performance
+                choices = [_get_default_choices()]
+            elif isinstance(choices, list):
                 new_choices = []
                 for choice in choices:
                     if isinstance(choice, Choices):
@@ -1233,30 +1279,33 @@ class ModelResponse(ModelResponseBase):
                         _new_choice = choice
                     new_choices.append(_new_choice)
                 choices = new_choices
-            else:
-                choices = [Choices()]
+        
+        # Optimize ID generation - only generate if truly needed
         if id is None:
             id = _generate_id()
-        else:
-            id = id
+        
+        # Optimize timestamp generation - only generate if truly needed
         if created is None:
             created = int(time.time())
-        else:
-            created = created
-        model = model
+        
+        # Optimize usage object creation
         if usage is not None:
             if isinstance(usage, dict):
                 usage = Usage(**usage)
-            else:
-                usage = usage
+            # else: usage is already a Usage object, keep as-is
         elif stream is None or stream is False:
-            usage = Usage()
+            # Use cached default usage for better performance
+            usage = _get_default_usage()
+        
+        # Set hidden params only if provided
         if hidden_params:
             self._hidden_params = hidden_params
 
+        # Set response headers only if provided
         if _response_headers:
             self._response_headers = _response_headers
 
+        # Build init_values more efficiently
         init_values = {
             "id": id,
             "choices": choices,

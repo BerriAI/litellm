@@ -1683,6 +1683,7 @@ def update_response_metadata(
         - response._hidden_params["litellm_overhead_time_ms"]
         - response.response_time_ms
     """
+    return None
     if result is None:
         return
 

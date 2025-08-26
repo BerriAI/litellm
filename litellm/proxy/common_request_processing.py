@@ -14,6 +14,13 @@ from typing import (
     Union,
 )
 
+# line_profiler import with fallback
+try:
+    from line_profiler import profile
+except ImportError:
+    def profile(func):
+        return func
+
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
@@ -348,6 +355,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
+    @profile
     async def base_process_llm_request(
         self,
         request: Request,

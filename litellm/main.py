@@ -45,6 +45,13 @@ import tiktoken
 from pydantic import BaseModel
 from typing_extensions import overload
 
+# line_profiler import with fallback
+try:
+    from line_profiler import profile
+except ImportError:
+    def profile(func):
+        return func
+
 import litellm
 from litellm import (  # type: ignore
     Logging,
@@ -82,7 +89,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import RawRequestTypedDict
+from litellm.types.utils import RawRequestTypedDict, LlmProvidersSet
 from litellm.utils import (
     CustomStreamWrapper,
     ProviderConfigManager,
@@ -874,6 +881,7 @@ def responses_api_bridge_check(
 
 @tracer.wrap()
 @client
+@profile
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -1187,9 +1195,7 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         provider_config: Optional[BaseConfig] = None
-        if custom_llm_provider is not None and custom_llm_provider in [
-            provider.value for provider in LlmProviders
-        ]:
+        if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet:
             provider_config = ProviderConfigManager.get_provider_chat_config(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
@@ -1335,7 +1341,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 n=n,
                 mock_response=mock_response,
                 mock_tool_calls=mock_tool_calls,
-                logging=logging,
+                logging=None,
                 acompletion=acompletion,
                 mock_delay=kwargs.get("mock_delay", None),
                 custom_llm_provider=custom_llm_provider,

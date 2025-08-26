@@ -462,6 +462,7 @@ class Logging(LiteLLMLoggingBaseClass):
         user: Optional[str] = None,
         **additional_params,
     ):
+        return None
         self.optional_params = optional_params
         if model is not None:
             self.model = model

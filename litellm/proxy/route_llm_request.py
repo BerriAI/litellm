@@ -1,5 +1,12 @@
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
+# line_profiler import with fallback
+try:
+    from line_profiler import profile
+except ImportError:
+    def profile(func):
+        return func
+
 from fastapi import HTTPException, status
 
 import litellm
@@ -54,6 +61,7 @@ def get_team_id_from_data(data: dict) -> Optional[str]:
     return None
 
 
+@profile
 async def route_request(
     data: dict,
     llm_router: Optional[LitellmRouter],

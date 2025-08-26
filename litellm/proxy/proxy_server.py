@@ -4033,6 +4033,56 @@ async def model_info(
         llm_router=llm_router,
     )
 
+import aiohttp
+http_client: aiohttp.ClientSession = None
+# for completion
+@router.post("/aio/chat/completions")
+@router.post("/aio/v1/chat/completions")
+async def proxy_completion(request: Request):
+    global http_client
+    # Get the raw request body
+    body = await request.json()
+    
+    # Get the authorization header
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
+    if http_client is None:
+        http_client = aiohttp.ClientSession()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': auth_header
+    }
+
+    async with http_client.post(
+        'https://exampleopenaiendpoint-production-0ee2.up.railway.app/chat/completions',
+        headers=headers,
+        json=body
+    ) as response:
+        return await response.json()
+
+@router.post("/lite_sdk/chat/completions")
+@router.post("/lite_sdk/v1/chat/completions")
+async def lite_sdk_completion(request: Request):
+    # Get the raw request body
+    body = await request.json()
+    body.pop("model", None)
+    
+    # Get the authorization header
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+    response = await litellm.acompletion(
+        model="openai/fake-openai-endpoint",
+        mock_response="hello",
+        api_base="https://exampleopenaiendpoint-production-0ee2.up.railway.app/",
+        api_key="my-key",
+        **body,
+    )
+    return response
+
 
 @router.post(
     "/v1/chat/completions",
