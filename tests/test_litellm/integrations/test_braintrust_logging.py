@@ -65,6 +65,8 @@ class TestBraintrustLogger(unittest.TestCase):
         choice_mock = Mock()
         choice_mock.message = message_mock
         choice_mock.dict = Mock(return_value={"message": {"content": "test"}})
+        # Mock the __getitem__ to support response_obj["choices"][0]["message"]
+        choice_mock.__getitem__ = Mock(return_value=message_mock)
         
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
@@ -114,6 +116,7 @@ class TestBraintrustLogger(unittest.TestCase):
         choice_mock = Mock()
         choice_mock.message = message_mock
         choice_mock.dict = Mock(return_value={"message": {"content": "test"}})
+        choice_mock.__getitem__ = Mock(return_value=message_mock)
         
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
@@ -162,6 +165,7 @@ class TestBraintrustLogger(unittest.TestCase):
         choice_mock = Mock()
         choice_mock.message = message_mock
         choice_mock.dict = Mock(return_value={"message": {"content": "test"}})
+        choice_mock.__getitem__ = Mock(return_value=message_mock)
         
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
@@ -210,6 +214,7 @@ class TestBraintrustLogger(unittest.TestCase):
         choice_mock = Mock()
         choice_mock.message = message_mock
         choice_mock.dict = Mock(return_value={"message": {"content": "test"}})
+        choice_mock.__getitem__ = Mock(return_value=message_mock)
         
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
@@ -258,6 +263,7 @@ class TestBraintrustLogger(unittest.TestCase):
         choice_mock = Mock()
         choice_mock.message = message_mock
         choice_mock.dict = Mock(return_value={"message": {"content": "test"}})
+        choice_mock.__getitem__ = Mock(return_value=message_mock)
         
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
