@@ -2420,7 +2420,7 @@ def get_optional_params_transcription(
     drop_params: Optional[bool] = None,
     **kwargs,
 ):
-    from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
+    from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS_SET
 
     # retrieve all parameters passed to the function
     passed_params = locals()
@@ -2491,7 +2491,7 @@ def get_optional_params_transcription(
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=OPENAI_TRANSCRIPTION_PARAMS,
+        openai_params=OPENAI_TRANSCRIPTION_PARAMS_SET,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
@@ -2644,6 +2644,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     additional_drop_params: Optional[List[str]] = None,
     **kwargs,
 ):
+    from litellm.constants import DEFAULT_EMBEDDING_PARAMS_SET
+
     # retrieve all parameters passed to the function
     passed_params = locals()
     custom_llm_provider = passed_params.pop("custom_llm_provider", None)
@@ -2903,7 +2905,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=list(DEFAULT_EMBEDDING_PARAM_VALUES.keys()),
+        openai_params=DEFAULT_EMBEDDING_PARAMS_SET,
         additional_drop_params=kwargs.get("additional_drop_params", None),
     )
 
@@ -3092,6 +3094,8 @@ def pre_process_non_default_params(
     """
     Pre-process non-default params to a standardized format
     """
+    from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS_SET
+
     # retrieve all parameters passed to the function
 
     non_default_params = PreProcessNonDefaultParams.base_pre_process_non_default_params(
@@ -3148,7 +3152,7 @@ def pre_process_non_default_params(
             optional_params=non_default_params,
             passed_params=passed_params,
             custom_llm_provider=custom_llm_provider,
-            openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
+            openai_params=OPENAI_CHAT_COMPLETION_PARAMS_SET,
             additional_drop_params=additional_drop_params,
         )
 
@@ -3309,6 +3313,7 @@ def get_optional_params(  # noqa: PLR0915
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     **kwargs,
 ):
+    from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS_SET
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
     non_default_params = pre_process_non_default_params(
@@ -4033,10 +4038,10 @@ def get_optional_params(  # noqa: PLR0915
         optional_params=optional_params,
         passed_params=passed_params,
         custom_llm_provider=custom_llm_provider,
-        openai_params=list(DEFAULT_CHAT_COMPLETION_PARAM_VALUES.keys()),
+        openai_params=OPENAI_CHAT_COMPLETION_PARAMS_SET,
         additional_drop_params=additional_drop_params,
     )
-    print_verbose(f"Final returned optional params: {optional_params}")
+    verbose_logger.debug("Final returned optional params %s", optional_params)
     optional_params = _apply_openai_param_overrides(
         optional_params=optional_params,
         non_default_params=non_default_params,
@@ -4049,7 +4054,7 @@ def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
     custom_llm_provider: str,
-    openai_params: List[str],
+    openai_params: set,
     additional_drop_params: Optional[list] = None,
 ) -> dict:
     """
@@ -4068,9 +4073,10 @@ def add_provider_specific_params_to_optional_params(
             is False
         ):
             extra_body = passed_params.pop("extra_body", {})
-            for k in passed_params.keys():
-                if k not in openai_params:
-                    extra_body[k] = passed_params[k]
+
+            non_openai_params = passed_params.keys() - openai_params
+            for k in non_openai_params:
+                extra_body[k] = passed_params[k]
             optional_params.setdefault("extra_body", {})
             initial_extra_body = {
                 **optional_params["extra_body"],

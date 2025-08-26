@@ -339,14 +339,15 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "thinking",
     "web_search_options",
 ]
-
+OPENAI_CHAT_COMPLETION_PARAMS_SET = set(OPENAI_CHAT_COMPLETION_PARAMS)
 OPENAI_TRANSCRIPTION_PARAMS = [
     "language",
     "response_format",
     "timestamp_granularities",
 ]
-
+OPENAI_TRANSCRIPTION_PARAMS_SET = set(OPENAI_TRANSCRIPTION_PARAMS)
 OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]
+OPENAI_EMBEDDING_PARAMS_SET = set(OPENAI_EMBEDDING_PARAMS)
 
 DEFAULT_EMBEDDING_PARAM_VALUES = {
     **{k: None for k in OPENAI_EMBEDDING_PARAMS},
@@ -354,6 +355,7 @@ DEFAULT_EMBEDDING_PARAM_VALUES = {
     "custom_llm_provider": "",
     "input": None,
 }
+DEFAULT_EMBEDDING_PARAMS_SET = set(DEFAULT_EMBEDDING_PARAM_VALUES.keys())
 
 DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "functions": None,
