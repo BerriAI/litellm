@@ -17,6 +17,7 @@ load_dotenv(
 PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000")
 AZURE_API_BASE = os.environ.get("AZURE_API_BASE")
 AZURE_API_KEY = os.environ.get("AZURE_API_KEY")
+AZURE_API_MODEL = os.environ.get("AZURE_API_MODEL", "gpt-4")
 
 
 class TestAzureMessages:
@@ -95,9 +96,9 @@ class TestAzureMessages:
         Output: 200, valid Anthropic response structure
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [{"role": "user", "content": "Say hello in a brief response."}],
-            "max_tokens": 50,
+            "max_tokens": 150,
         }
         headers = {
             "Content-Type": "application/json",
@@ -125,9 +126,9 @@ class TestAzureMessages:
         Output: Error response
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": "not-a-list",  # INTENTIONALLY WRONG
-            "max_tokens": 50,
+            "max_tokens": 150,
         }
         headers = {
             "Content-Type": "application/json",
@@ -151,11 +152,11 @@ class TestAzureMessages:
         Output: multiple streaming chunks in Anthropic format
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [
                 {"role": "user", "content": "List three colors, one per line."}
             ],
-            "max_tokens": 50,
+            "max_tokens": 150,
             "stream": True,
         }
         headers = {
@@ -191,7 +192,7 @@ class TestAzureMessages:
         Output: 200, tool calls or direct response
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [
                 {
                     "role": "user",
@@ -215,7 +216,7 @@ class TestAzureMessages:
                     },
                 }
             ],
-            "max_tokens": 100,
+            "max_tokens": 200,
         }
         headers = {
             "Content-Type": "application/json",
@@ -251,9 +252,9 @@ class TestAzureMessages:
         Output: Error response
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [{"role": "invalid-role", "content": "This should fail"}],
-            "max_tokens": 50,
+            "max_tokens": 150,
         }
         headers = {
             "Content-Type": "application/json",
@@ -280,11 +281,11 @@ class TestAzureMessages:
             {
                 "model": "non-existent-model",
                 "messages": [{"role": "user", "content": "test"}],
-                "max_tokens": 10,
+                "max_tokens": 150,
             },
-            {"model": "gpt-4", "messages": [], "max_tokens": 10},  # empty messages
+            {"model": AZURE_API_MODEL, "messages": [], "max_tokens": 150},  # empty messages
             {
-                "model": "gpt-4",
+                "model": AZURE_API_MODEL,
                 "messages": [{"role": "user", "content": "test"}],
             },  # missing max_tokens (required for Anthropic)
         ]

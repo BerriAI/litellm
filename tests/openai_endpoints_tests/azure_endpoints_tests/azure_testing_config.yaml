@@ -1,45 +1,55 @@
 model_list:
-  # Main Azure model for testing - matches actual gpt-4o-mini deployment
-  - model_name: azure-gpt-4o-mini
+  # Main Azure model for testing - use GPT-4.1 deployment
+  - model_name: azure-o4-mini
     litellm_params:
-      model: azure/gpt-4o-mini
+      model: azure/gpt-4.1
       api_base: os.environ/AZURE_API_BASE
-      api_version: "2024-08-01-preview"
+      api_version: "2024-10-01-preview"
       api_key: os.environ/AZURE_API_KEY
     model_info:
-      base_model: gpt-4o-mini
+      base_model: gpt-4.1
       
-  # Alias for test compatibility - gpt-4 (maps to gpt-4o-mini deployment)
+  # Alias for test compatibility - gpt-4 (maps to gpt-4.1 deployment)
   - model_name: gpt-4
     litellm_params:
-      model: azure/gpt-4o-mini
+      model: azure/gpt-4.1
       api_base: os.environ/AZURE_API_BASE
-      api_version: "2024-08-01-preview"
+      api_version: "2024-10-01-preview"
       api_key: os.environ/AZURE_API_KEY
     model_info:
-      base_model: gpt-4o-mini
+      base_model: gpt-4.1
       
-  # Additional alias for gpt-4o (maps to gpt-4o-mini deployment)
+  # Additional alias for gpt-4o (maps to gpt-4.1 deployment)
   - model_name: gpt-4o
     litellm_params:
-      model: azure/gpt-4o-mini
+      model: azure/gpt-4.1
       api_base: os.environ/AZURE_API_BASE
-      api_version: "2024-08-01-preview"
+      api_version: "2024-10-01-preview"
       api_key: os.environ/AZURE_API_KEY
     model_info:
-      base_model: gpt-4o-mini
+      base_model: gpt-4.1
 
-  # Direct alias for gpt-4o-mini model name
+  # Direct alias for gpt-4o-mini model name (maps to gpt-4.1 deployment)
   - model_name: gpt-4o-mini
     litellm_params:
-      model: azure/gpt-4o-mini
+      model: azure/gpt-4.1
       api_base: os.environ/AZURE_API_BASE
-      api_version: "2024-08-01-preview"
+      api_version: "2024-10-01-preview"
       api_key: os.environ/AZURE_API_KEY
     model_info:
-      base_model: gpt-4o-mini
+      base_model: gpt-4.1
 
-  # O4-mini model for responses API
+  # GPT-4.1 alias for direct use
+  - model_name: gpt-4.1
+    litellm_params:
+      model: azure/gpt-4.1
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2024-10-01-preview"
+      api_key: os.environ/AZURE_API_KEY
+    model_info:
+      base_model: gpt-4.1
+
+  # O4-mini model for responses API ONLY
   - model_name: o4-mini
     litellm_params:
       model: azure/o4-mini

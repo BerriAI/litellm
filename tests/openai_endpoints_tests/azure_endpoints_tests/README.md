@@ -11,6 +11,8 @@ Create `.env.test` in repository root:
 ```bash
 AZURE_API_BASE=https://your-resource.openai.azure.com/
 AZURE_API_KEY=your-azure-api-key-here
+AZURE_API_MODEL="o4-mini" # Ensure model works with Responses API
+
 ```
 
 ### 2. Start LiteLLM Proxy

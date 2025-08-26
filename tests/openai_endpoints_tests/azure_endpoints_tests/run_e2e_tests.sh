@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 # Dynamically find the repository root (litellm directory)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../" && pwd)"
-TEST_DIR="${REPO_ROOT}/tests/azure_endpoints_tests"
+TEST_DIR="${REPO_ROOT}/tests/openai_endpoints_tests/azure_endpoints_tests"
 VENV_PATH="${REPO_ROOT}/.venv"
 ENV_FILE="${REPO_ROOT}/.env.test"
 CONFIG_FILE="${TEST_DIR}/azure_testing_config.yaml"
@@ -115,6 +115,7 @@ check_env_vars() {
     log_success "Environment variables validated"
     log_info "AZURE_API_BASE: ${AZURE_API_BASE}"
     log_info "AZURE_API_KEY: ${AZURE_API_KEY:0:10}..."
+    log_info "AZURE_API_VERSION will be set to: 2025-03-01-preview (required for Responses API)"
 }
 
 # Check if proxy is already running
@@ -149,10 +150,14 @@ start_proxy() {
     # Export environment variables for proxy process
     export AZURE_API_BASE
     export AZURE_API_KEY
+    export AZURE_API_MODEL
+    export AZURE_RESPONSES_MODEL
     export OPENAI_API_KEY
+    # Set the correct API version for Azure Responses API (requires 2025-03-01-preview or later)
+    export AZURE_API_VERSION="2025-03-01-preview"
     
     # Start proxy in background with environment variables loaded
-    nohup env AZURE_API_BASE="${AZURE_API_BASE}" AZURE_API_KEY="${AZURE_API_KEY}" OPENAI_API_KEY="${OPENAI_API_KEY}" litellm --config azure_testing_config.yaml --port ${PROXY_PORT} --detailed_debug > proxy.log 2>&1 &
+    nohup env AZURE_API_BASE="${AZURE_API_BASE}" AZURE_API_KEY="${AZURE_API_KEY}" AZURE_API_MODEL="${AZURE_API_MODEL}" AZURE_RESPONSES_MODEL="${AZURE_RESPONSES_MODEL}" AZURE_API_VERSION="${AZURE_API_VERSION}" OPENAI_API_KEY="${OPENAI_API_KEY}" litellm --config azure_testing_config.yaml --port ${PROXY_PORT} --detailed_debug > proxy.log 2>&1 &
     PROXY_PID=$!
     
     # Wait for proxy to start

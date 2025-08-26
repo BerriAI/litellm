@@ -18,6 +18,7 @@ load_dotenv(
 PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000")
 AZURE_API_BASE = os.environ.get("AZURE_API_BASE")
 AZURE_API_KEY = os.environ.get("AZURE_API_KEY")
+AZURE_API_MODEL = os.environ.get("AZURE_API_MODEL", "gpt-4")
 
 
 # Test cases for Azure OpenAI Batch API via LiteLLM proxy
@@ -51,9 +52,9 @@ class TestAzureBatches:
                 "method": "POST",
                 "url": "/v1/chat/completions",
                 "body": {
-                    "model": "gpt-4",
+                    "model": AZURE_API_MODEL,
                     "messages": [{"role": "user", "content": "Say hello"}],
-                    "max_tokens": 50,
+                    "max_tokens": 150,
                 },
             },
             {
@@ -61,9 +62,9 @@ class TestAzureBatches:
                 "method": "POST",
                 "url": "/v1/chat/completions",
                 "body": {
-                    "model": "gpt-4",
+                    "model": AZURE_API_MODEL,
                     "messages": [{"role": "user", "content": "Count to 3"}],
-                    "max_tokens": 50,
+                    "max_tokens": 150,
                 },
             },
         ]

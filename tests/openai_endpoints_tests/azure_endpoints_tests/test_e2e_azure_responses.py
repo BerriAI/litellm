@@ -36,17 +36,7 @@ AZURE_API_KEY = os.environ.get("AZURE_API_KEY")
 # instead of hardcoding "o4-mini", as the specific model will likely change
 # in future Azure updates and deployments
 config_path = os.path.join(os.path.dirname(__file__), "azure_testing_config.yaml")
-DEFAULT_RESPONSES_MODEL = None
-
-with open(config_path, 'r') as f:
-    config_content = f.read()
-    # Look for o4-mini model definition
-    if 'model_name: o4-mini' in config_content:
-        DEFAULT_RESPONSES_MODEL = "o4-mini"
-
-if DEFAULT_RESPONSES_MODEL is None:
-    raise ValueError("o4-mini model not found in azure_testing_config.yaml")
-
+DEFAULT_RESPONSES_MODEL = os.environ.get("AZURE_RESPONSES_MODEL", "o4-mini")  # Use dedicated responses model
 
 # Test cases for Azure OpenAI Responses API via LiteLLM proxy
 class TestAzureResponsesAPI:

@@ -16,6 +16,7 @@ load_dotenv(
 PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000")
 AZURE_API_BASE = os.environ.get("AZURE_API_BASE")
 AZURE_API_KEY = os.environ.get("AZURE_API_KEY")
+AZURE_API_MODEL = os.environ.get("AZURE_API_MODEL", "gpt-4")
 
 
 # Test cases for Azure OpenAI Chat Completions API via LiteLLM proxy
@@ -160,10 +161,10 @@ class TestAzureChatCompletions:
         Output: 200, valid response structure
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [{"role": "user", "content": "Say hello in a brief response."}],
             "temperature": 0,
-            "max_tokens": 50,
+            "max_tokens": 150,
         }
         headers = {
             "Content-Type": "application/json",
@@ -191,7 +192,7 @@ class TestAzureChatCompletions:
         Output: Error response
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": "not-a-list",  # INTENTIONALLY WRONG
             "temperature": 0,
         }
@@ -217,13 +218,13 @@ class TestAzureChatCompletions:
         Output: multiple streaming chunks (not single response)
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [
                 {"role": "user", "content": "List three colors, one per line."}
             ],
             "temperature": 0,
             "stream": True,
-            "max_tokens": 50,
+            "max_tokens": 150,
         }
         headers = {
             "Content-Type": "application/json",
@@ -258,7 +259,7 @@ class TestAzureChatCompletions:
         Output: 200, function calls or direct response
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [
                 {
                     "role": "user",
@@ -321,7 +322,7 @@ class TestAzureChatCompletions:
         Output: Error response
         """
         payload = {
-            "model": "gpt-4",
+            "model": AZURE_API_MODEL,
             "messages": [{"role": "invalid-role", "content": "This should fail"}],
             "temperature": 0,
         }
@@ -351,8 +352,8 @@ class TestAzureChatCompletions:
                 "model": "non-existent-model",
                 "messages": [{"role": "user", "content": "test"}],
             },
-            {"model": "gpt-4", "messages": []},  # empty messages
-            {"model": "gpt-4", "temperature": 5000},  # invalid temperature
+            {"model": AZURE_API_MODEL, "messages": []},  # empty messages
+            {"model": AZURE_API_MODEL, "temperature": 5000},  # invalid temperature
         ]
 
         headers = {
