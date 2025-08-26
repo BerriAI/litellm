@@ -604,13 +604,13 @@ class TestOpenTelemetry(unittest.TestCase):
         logs = self.wait_for_log(log_exporter, "gen_ai.")
         self.assertTrue(logs, "Expected at least one gen_ai log")
 
-        user_logs = [l for l in logs if l.log_record.attributes.get("event_name") == "gen_ai.content.prompt"]
+        user_logs = [log for log in logs if log.log_record.attributes.get("event_name") == "gen_ai.content.prompt"]
         self.assertTrue(user_logs, "did not see a gen_ai.content.prompt log")
         # check log bodies
         user_prompt = user_logs[0].log_record.attributes.get("gen_ai.prompt")
         self.assertEqual("What is the capital of France?", user_prompt, "did not see a prompt message")
 
-        choice_logs = [l for l in logs if l.log_record.attributes.get("event_name") == "gen_ai.content.completion"]
+        choice_logs = [log for log in logs if log.log_record.attributes.get("event_name") == "gen_ai.content.completion"]
         self.assertTrue(choice_logs, "did not see a gen_ai.content.completion event")
 
         choice_response = choice_logs[0].log_record.body
