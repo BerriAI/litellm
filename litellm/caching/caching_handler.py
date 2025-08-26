@@ -18,7 +18,6 @@ import asyncio
 import datetime
 import inspect
 import threading
-from functools import lru_cache, wraps
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -36,7 +35,6 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm._service_logger import ServiceLogging
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
 from litellm.litellm_core_utils.logging_utils import (
@@ -601,7 +599,7 @@ class LLMCachingHandler:
                 cached_result = await litellm.cache.async_get_cache(
                     dynamic_cache_object=self.dual_cache, **new_kwargs
                 )
-            else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
+            else:  # fallback for caches that don't support async
                 cached_result = litellm.cache.get_cache(
                     dynamic_cache_object=self.dual_cache, **new_kwargs
                 )
@@ -808,12 +806,6 @@ class LLMCachingHandler:
                             result, dynamic_cache_object=self.dual_cache, **new_kwargs
                         )
                     )
-                elif isinstance(litellm.cache.cache, S3Cache):
-                    threading.Thread(
-                        target=litellm.cache.add_cache,
-                        args=(result,),
-                        kwargs=new_kwargs,
-                    ).start()
                 else:
                     asyncio.create_task(
                         litellm.cache.async_add_cache(
