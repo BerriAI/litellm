@@ -434,6 +434,7 @@ class AmazonConverseConfig(BaseConfig):
                         )
                     )
                 optional_params["json_mode"] = True
+                optional_params["structured_output_tool_name"] = schema_name if schema_name != "" else "json_tool_call"
                 if non_default_params.get("stream", False) is True:
                     optional_params["fake_stream"] = True
             if param == "max_tokens" or param == "max_completion_tokens":
@@ -1047,6 +1048,7 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         json_mode: Optional[bool] = optional_params.pop("json_mode", None)
+        structured_output_tool_name: Optional[str] = optional_params.pop("structured_output_tool_name", None)
         ## RESPONSE OBJECT
         try:
             completion_response = ConverseResponseBlock(**response.json())  # type: ignore
@@ -1120,10 +1122,13 @@ class AmazonConverseConfig(BaseConfig):
             )
         chat_completion_message["content"] = content_str
         if json_mode is True and tools is not None and len(tools) == 1:
-            # to support 'json_schema' logic on bedrock models
-            json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
-            if json_mode_content_str is not None:
-                chat_completion_message["content"] = json_mode_content_str
+            function_name = tools[0]["function"].get("name")
+            if function_name == structured_output_tool_name:
+                json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
+                if json_mode_content_str is not None:
+                    chat_completion_message["content"] = json_mode_content_str
+            else:
+                chat_completion_message["tool_calls"] = tools
         else:
             chat_completion_message["tool_calls"] = tools
 
