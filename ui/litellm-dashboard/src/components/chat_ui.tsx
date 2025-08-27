@@ -450,6 +450,38 @@ const ChatUI: React.FC<ChatUIProps> = ({
     ]);
   };
 
+  const updateChatImageUI = (imageUrl: string, model?: string) => {
+    setChatHistory((prev) => {
+      const last = prev[prev.length - 1];
+      // If the last message is from assistant and has content, add image to it
+      if (last && last.role === "assistant" && !last.isImage) {
+        const updated = {
+          ...last,
+          image: {
+            url: imageUrl,
+            detail: "auto"
+          },
+          model: last.model ?? model
+        };
+        return [...prev.slice(0, -1), updated];
+      } else {
+        // Otherwise create a new assistant message with just the image
+        return [
+          ...prev,
+          {
+            role: "assistant",
+            content: "",
+            model,
+            image: {
+              url: imageUrl,
+              detail: "auto"
+            }
+          }
+        ];
+      }
+    });
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault(); // Prevent default to avoid newline
@@ -611,7 +643,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools // Pass the selected tool directly
+            selectedMCPTools, // Pass the selected tool directly
+            updateChatImageUI // Pass the image callback
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -663,7 +696,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tool directly
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
-            handleResponseId // Pass callback to capture new response ID
+            handleResponseId, // Pass callback to capture new response ID
+            updateChatImageUI // Pass the image callback
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
@@ -1057,6 +1091,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         >
                           {typeof message.content === "string" ? message.content : ""}
                         </ReactMarkdown>
+                        
+                        {/* Show generated image from chat completions */}
+                        {message.image && (
+                          <div className="mt-3">
+                            <img 
+                              src={message.image.url} 
+                              alt="Generated image" 
+                              className="max-w-full rounded-md border border-gray-200 shadow-sm" 
+                              style={{ maxHeight: '500px' }} 
+                            />
+                          </div>
+                        )}
                       </>
                     )}
                                         

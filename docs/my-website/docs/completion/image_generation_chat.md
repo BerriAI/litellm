@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Image Generation in Chat Completions, Responses API
 
-This guide covers how to generate images when using the `chat/completions` or `/responses` API.
+This guide covers how to generate images when using the `chat/completions`. Note - if you want this on Responses API please file a Feature Request [here](https://github.com/BerriAI/litellm/issues/new).
 
 :::info
 
