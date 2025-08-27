@@ -175,7 +175,7 @@ class TestAimlImageGeneration(BaseImageGenTest):
 
 class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "gemini/imagen-4.0-generate-preview-06-06"}
+        return {"model": "gemini/imagen-4.0-generate-001"}
 
 class TestAzureOpenAIDalle3(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
