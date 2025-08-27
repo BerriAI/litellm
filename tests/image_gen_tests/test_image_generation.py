@@ -330,3 +330,78 @@ async def test_gpt_image_1_with_input_fidelity():
         assert captured_kwargs["quality"] == "medium"
         assert captured_kwargs["size"] == "1024x1024"
 
+
+@pytest.mark.asyncio
+async def test_aiml_image_generation_with_dynamic_api_key():
+    """
+    Test that when api_key is passed as a dynamic parameter to aimage_generation,
+    it gets properly used for AIML provider authentication instead of falling back
+    to environment variables.
+    
+    This test validates the fix for ensuring dynamic API keys are respected
+    when making image generation requests to the AIML provider.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    import httpx
+    
+    # Mock AIML response
+    mock_aiml_response = {
+        "created": 1703658209,
+        "data": [
+            {
+                "url": "https://example.com/generated_image.png"
+            }
+        ]
+    }
+    
+    # Track captured arguments
+    captured_headers = None
+    captured_url = None
+    captured_json_data = None
+    
+    def capture_post_call(*args, **kwargs):
+        nonlocal captured_headers, captured_url, captured_json_data
+        captured_url = kwargs.get('url') or (args[0] if args else None)
+        captured_headers = kwargs.get('headers', {})
+        captured_json_data = kwargs.get('json', {})
+        
+        # Create a mock response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_aiml_response
+        mock_response.text = json.dumps(mock_aiml_response)
+        return mock_response
+    
+    # Mock the HTTP client that actually makes the request (sync version for image generation)
+    with patch('litellm.llms.custom_httpx.http_handler.HTTPHandler.post') as mock_post:
+        mock_post.side_effect = capture_post_call
+        
+        # Test with dynamic api_key
+        test_api_key = "test-dynamic-api-key-12345"
+        
+        response = await litellm.aimage_generation(
+            prompt="A cute baby sea otter",
+            model="aiml/flux-pro/v1.1",
+            api_key=test_api_key,  # This should be used instead of env vars
+        )
+
+        # Validate the response (mocked response processing might not populate data correctly)
+        assert response is not None
+        
+        # The most important validations: API key and endpoint usage
+        # These prove that the dynamic API key was properly used
+        assert captured_headers is not None
+        assert "Authorization" in captured_headers
+        assert captured_headers["Authorization"] == f"Bearer {test_api_key}"
+        print("TESTCAPTURED HEADERS", captured_headers)
+        # Validate the correct AIML endpoint was called
+        assert captured_url is not None
+        assert "api.aimlapi.com" in captured_url
+        assert "/v1/images/generations" in captured_url
+        
+        # Validate the request data
+        assert captured_json_data is not None
+        assert captured_json_data["prompt"] == "A cute baby sea otter"
+        assert captured_json_data["model"] == "flux-pro/v1.1"
+
+
