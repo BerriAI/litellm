@@ -696,8 +696,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedMCPTools, // Pass the selected tool directly
             useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
-            handleResponseId, // Pass callback to capture new response ID
-            updateChatImageUI // Pass the image callback
+            handleResponseId // Pass callback to capture new response ID
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [...chatHistory.filter(msg => !msg.isImage).map(({ role, content }) => ({ role, content })), newUserMessage];
