@@ -88,7 +88,6 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         
         Google AI API format: https://generativelanguage.googleapis.com/v1beta/models/{model}:predict
         """
-     
         complete_url: str = (
             api_base 
             or get_secret_str("GEMINI_API_BASE") 
