@@ -1165,6 +1165,40 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return choice
 
     @staticmethod
+    def _extract_candidate_metadata(candidate: Candidates) -> Tuple[List[dict], List[dict], List, List]:
+        """
+        Extract metadata from a single candidate response.
+        
+        Returns:
+            grounding_metadata: List[dict]
+            url_context_metadata: List[dict] 
+            safety_ratings: List
+            citation_metadata: List
+        """
+        grounding_metadata: List[dict] = []
+        url_context_metadata: List[dict] = []
+        safety_ratings: List = []
+        citation_metadata: List = []
+        
+        if "groundingMetadata" in candidate:
+            if isinstance(candidate["groundingMetadata"], list):
+                grounding_metadata.extend(candidate["groundingMetadata"])  # type: ignore
+            else:
+                grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
+
+        if "safetyRatings" in candidate:
+            safety_ratings.append(candidate["safetyRatings"])
+
+        if "citationMetadata" in candidate:
+            citation_metadata.append(candidate["citationMetadata"])
+
+        if "urlContextMetadata" in candidate:
+            # Add URL context metadata to grounding metadata
+            url_context_metadata.append(cast(dict, candidate["urlContextMetadata"]))
+            
+        return grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
+
+    @staticmethod
     def _process_candidates(
         _candidates: List[Candidates],
         model_response: Union[ModelResponse, "ModelResponseStream"],
@@ -1199,21 +1233,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "content" not in candidate:
                 continue
 
-            if "groundingMetadata" in candidate:
-                if isinstance(candidate["groundingMetadata"], list):
-                    grounding_metadata.extend(candidate["groundingMetadata"])  # type: ignore
-                else:
-                    grounding_metadata.append(candidate["groundingMetadata"])  # type: ignore
-
-            if "safetyRatings" in candidate:
-                safety_ratings.append(candidate["safetyRatings"])
-
-            if "citationMetadata" in candidate:
-                citation_metadata.append(candidate["citationMetadata"])
-
-            if "urlContextMetadata" in candidate:
-                # Add URL context metadata to grounding metadata
-                url_context_metadata.append(cast(dict, candidate["urlContextMetadata"]))
+            # Extract metadata using helper function
+            (
+                candidate_grounding_metadata,
+                candidate_url_context_metadata,
+                candidate_safety_ratings,
+                candidate_citation_metadata,
+            ) = VertexGeminiConfig._extract_candidate_metadata(candidate)
+            
+            grounding_metadata.extend(candidate_grounding_metadata)
+            url_context_metadata.extend(candidate_url_context_metadata)
+            safety_ratings.extend(candidate_safety_ratings)
+            citation_metadata.extend(candidate_citation_metadata)
 
             if "parts" in candidate["content"]:
                 (
@@ -1239,13 +1270,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         "audio"
                     ] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
-                
-                #########################################################
-                #########################################################
-                if image_response is not None:
+                elif image_response is not None:
                     # Handle image response - combine with text content into structured format
                     cast(Dict[str, Any], chat_completion_message)["image"] = image_response
-                    
                 elif content is not None:
                     chat_completion_message["content"] = content
 
