@@ -88,18 +88,15 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         
         Google AI API format: https://generativelanguage.googleapis.com/v1beta/models/{model}:predict
         """
-        from litellm.llms.gemini.common_utils import GeminiModelInfo
-        
+     
         complete_url: str = (
             api_base 
             or get_secret_str("GEMINI_API_BASE") 
             or self.DEFAULT_BASE_URL
         )
 
-        # Strip the "gemini/" prefix from the model name for the API call
-        base_model = GeminiModelInfo.get_base_model(model) or model
         complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/models/{base_model}:predict"
+        complete_url = f"{complete_url}/models/{model}:predict"
         return complete_url
 
     def validate_environment(
