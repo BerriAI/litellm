@@ -703,6 +703,7 @@ class Delta(OpenAIObject):
         function_call=None,
         tool_calls=None,
         audio: Optional[ChatCompletionAudioResponse] = None,
+        image: Optional[ImageURLObject] = None,
         reasoning_content: Optional[str] = None,
         thinking_blocks: Optional[
             List[
@@ -720,6 +721,7 @@ class Delta(OpenAIObject):
         self.function_call: Optional[Union[FunctionCall, Any]] = None
         self.tool_calls: Optional[List[Union[ChatCompletionDeltaToolCall, Any]]] = None
         self.audio: Optional[ChatCompletionAudioResponse] = None
+        self.image: Optional[ImageURLObject] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
         if reasoning_content is not None:
@@ -739,6 +741,11 @@ class Delta(OpenAIObject):
             self.annotations = annotations
         else:
             del self.annotations
+        
+        if image is not None:
+            self.image = image
+        else:
+            del self.image
 
         if function_call is not None and isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
