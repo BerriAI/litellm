@@ -1316,7 +1316,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "reasoning_effort": reasoning_effort,
             "thinking": thinking,
             "web_search_options": web_search_options,
-                "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            "allowed_openai_params": kwargs.get("allowed_openai_params"),
             }
         # Timing #3 bottleneck: get_optional_params call (18.6% of total time)
         with _timer("3_get_optional_params"):
