@@ -2678,6 +2678,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
     ) -> Union[
         ImageResponse,
         Coroutine[Any, Any, ImageResponse],
@@ -2702,6 +2703,7 @@ class BaseLLMHTTPHandler:
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
+                api_key=api_key,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -2712,7 +2714,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers = image_generation_provider_config.validate_environment(
-            api_key=litellm_params.get("api_key", None),
+            api_key=api_key,
             headers=image_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,
@@ -2795,6 +2797,7 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        api_key: Optional[str] = None,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -2809,7 +2812,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         headers = image_generation_provider_config.validate_environment(
-            api_key=litellm_params.get("api_key", None),
+            api_key=api_key,
             headers=image_generation_optional_request_params.get("extra_headers", {})
             or {},
             model=model,
