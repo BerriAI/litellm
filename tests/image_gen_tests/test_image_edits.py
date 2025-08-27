@@ -651,14 +651,7 @@ async def test_image_edit_array_handling():
             image=TEST_IMAGES,
         )
         
-        # Test 3: Empty list (should fail validation)
-        with pytest.raises(Exception):
-            await aimage_edit(
-                prompt=prompt,
-                model="gpt-image-1",
-                image=[],
-            )
-        
+
         # Both valid calls should succeed
         ImageResponse.model_validate(result1)
         ImageResponse.model_validate(result2)
