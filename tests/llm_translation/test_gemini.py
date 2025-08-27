@@ -261,7 +261,13 @@ def test_gemini_image_generation():
         messages=[{"role": "user", "content": "Generate an image of a cat"}],
         modalities=["image", "text"],
     )
-    assert response.choices[0].message.content is not None
+
+    #########################################################
+    # Important: Validate we did get an image in the response
+    #########################################################
+    assert response.choices[0].message.image is not None
+    assert response.choices[0].message.image["url"] is not None
+    assert response.choices[0].message.image["url"].startswith("data:image/png;base64,")
 
 
 def test_gemini_thinking():
