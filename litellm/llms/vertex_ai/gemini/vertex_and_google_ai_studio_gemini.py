@@ -1150,6 +1150,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: List[dict] = []
         url_context_metadata: List[dict] = []
+        image_response: Optional[ImageURLObject] = None
         safety_ratings: List = []
         citation_metadata: List = []
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
@@ -1250,6 +1251,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             "reasoning_content"
                         ),
                         tool_calls=tools,
+                        image=image_response,
                         function_call=functions,
                     ),
                     logprobs=chat_completion_logprobs,
