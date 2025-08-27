@@ -1,0 +1,201 @@
+# Gemini Image Generation Migration Guide
+
+## Who is impacted by this change?
+
+Anyone using the following models with /chat/completions:
+- `gemini/gemini-2.0-flash-exp-image-generation`
+- `vertex_ai/gemini-2.5-flash-image-preview`
+
+## Key Change
+
+Gemini models now support image generation through chat completions. Images are returned in `response.choices[0].message.image` with base64 data URLs.
+
+## Before and After
+
+### Before
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-2.0-flash-exp-image-generation",
+    messages=[{"role": "user", "content": "Generate an image of a cat"}],
+    modalities=["image", "text"],
+)
+
+
+base_64_image_data = response.choices[0].message.content
+```
+
+### After  
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-2.0-flash-exp-image-generation",
+    messages=[{"role": "user", "content": "Generate an image of a cat"}],
+    modalities=["image", "text"],
+)
+
+# Image is now available in the response
+image_url = response.choices[0].message.image["url"]  # "data:image/png;base64,..."
+```
+
+## Usage
+
+### Using the Python SDK
+
+**Key Change:**
+```diff
+# Before
+-- base_64_image_data = response.choices[0].message.content
+
+# After
+++ image_url = response.choices[0].message.image["url"]
+```
+
+#### Basic Image Generation
+
+```python
+from litellm import completion
+import os
+
+# Set your API key
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+# Generate an image
+response = completion(
+    model="gemini/gemini-2.0-flash-exp-image-generation",
+    messages=[{"role": "user", "content": "Generate an image of a cat"}],
+    modalities=["image", "text"],
+)
+
+# Access the generated image
+print(response.choices[0].message.content)  # Text response (if any)
+print(response.choices[0].message.image)    # Image data
+```
+
+#### Response Format
+
+The image is returned in the `message.image` field:
+
+```python
+{
+    "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+    "detail": "auto"
+}
+```
+
+### Using the LiteLLM Proxy Server
+
+**Key Change:**
+```diff
+# Before
+-- "content": "base64-image-data..."
+
+# After  
+++ "image": {
+++   "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+++   "detail": "auto"
+++ }
+```
+
+#### Configuration Setup
+
+1. **Configure your models in `config.yaml`:**
+
+```yaml
+model_list:
+  - model_name: gemini-image-gen
+    litellm_params:
+      model: gemini/gemini-2.0-flash-exp-image-generation
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: vertex-image-gen  
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash-image-preview
+      vertex_project: your-project-id
+      vertex_location: us-central1
+
+general_settings:
+  master_key: sk-1234  # Your proxy API key
+```
+
+2. **Start the proxy server:**
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+#### Making Requests
+
+**Using OpenAI SDK:**
+
+```python
+from openai import OpenAI
+
+# Point to your proxy server
+client = OpenAI(
+    api_key="sk-1234",  # Your proxy API key
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.chat.completions.create(
+    model="gemini-image-gen",
+    messages=[{"role": "user", "content": "Generate an image of a cat"}],
+    extra_body={"modalities": ["image", "text"]}
+)
+
+# Access the generated image
+print(response.choices[0].message.content)  # Text response (if any)
+print(response.choices[0].message.image)    # Image data
+```
+
+**Using curl:**
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+  "model": "gemini-image-gen",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Generate an image of a cat"
+    }
+  ],
+  "modalities": ["image", "text"]
+}'
+```
+
+**Response format from proxy:**
+
+```json
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1704089632,
+  "model": "gemini-image-gen",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Here's an image of a cat for you!",
+        "image": {
+          "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+          "detail": "auto"
+        }
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 8,
+    "total_tokens": 18
+  }
+}
+```
+
