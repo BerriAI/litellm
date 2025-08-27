@@ -79,6 +79,7 @@ from litellm.utils import (
     ModelResponse,
     ProviderConfigManager,
 )
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -107,6 +108,16 @@ class BaseLLMHTTPHandler:
         max_retry_on_unprocessable_entity_error = (
             provider_config.max_retry_on_unprocessable_entity_error
         )
+
+        for message in data.get("messages", []):
+            if message.get("role") == "assistant" and message.get("tool_calls"):
+                for tool in message["tool_calls"]:
+                    fn = tool.get("function")
+                    if fn:
+                        tool["function"] = (
+                            fn.model_dump() if isinstance(fn, BaseModel)
+                            else getattr(fn, "__dict__", fn)
+                        )
 
         response: Optional[httpx.Response] = None
         for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
