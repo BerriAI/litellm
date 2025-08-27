@@ -34,7 +34,7 @@ import {
 import AdvancedDatePicker from "./shared/advanced_date_picker"
 import { AreaChart } from "@tremor/react"
 
-import { userDailyActivityCall, tagListCall } from "./networking"
+import { userDailyActivityCall, userDailyActivityAggregatedCall, tagListCall } from "./networking"
 import { Tag } from "./tag_management/types"
 import ViewUserSpend from "./view_user_spend"
 import TopKeyView from "./top_key_view"
@@ -304,16 +304,22 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
     const endTime = new Date(dateValue.to)
 
     try {
-      // Get first page
+      // Prefer aggregated endpoint to avoid many page requests
+      try {
+        const aggregated = await userDailyActivityAggregatedCall(accessToken, startTime, endTime)
+        setUserSpendData(aggregated)
+        return
+      } catch (e) {
+        // Fallback to paginated calls if aggregated endpoint is unavailable
+      }
+
       const firstPageData = await userDailyActivityCall(accessToken, startTime, endTime)
 
-      // If only one page, just set the data
       if (firstPageData.metadata.total_pages <= 1) {
         setUserSpendData(firstPageData)
         return
       }
 
-      // Fetch all pages
       const allResults = [...firstPageData.results]
       const aggregatedMetadata = { ...firstPageData.metadata }
 
@@ -329,7 +335,6 @@ const NewUsagePage: React.FC<NewUsagePageProps> = ({ accessToken, userRole, user
         }
       }
 
-      // Combine all results with the first page's metadata
       setUserSpendData({
         results: allResults,
         metadata: aggregatedMetadata,

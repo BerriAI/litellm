@@ -901,12 +901,14 @@ async def update_group(
 
         # Update team in database
         existing_metadata = existing_team.metadata if existing_team.metadata else {}
+        updated_metadata = {**existing_metadata, "scim_data": group.model_dump()}
+        
         updated_team = await prisma_client.db.litellm_teamtable.update(
             where={"team_id": group_id},
             data={
                 "team_alias": group.displayName,
                 "members": member_ids,
-                "metadata": {**existing_metadata, "scim_data": group.model_dump()},
+                "metadata": safe_dumps(updated_metadata),
             },
         )
 

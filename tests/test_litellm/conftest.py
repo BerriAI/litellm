@@ -23,10 +23,9 @@ os.environ["LITELLM_LOG_FILE"] = test_log_file
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import asyncio
+
 import litellm
-
-
-
 
 @pytest.fixture(scope="function")
 def temp_log_file():
@@ -83,6 +82,16 @@ def cleanup_temp_log_dir():
             shutil.rmtree(temp_dir, ignore_errors=True)
         except OSError:
             pass  # Ignore errors if cleanup fails
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
 
 
 @pytest.fixture(scope="function", autouse=True)
