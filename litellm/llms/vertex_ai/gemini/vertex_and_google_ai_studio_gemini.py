@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+    StreamingChoices = Any
 
 
 class VertexAIBaseConfig:
