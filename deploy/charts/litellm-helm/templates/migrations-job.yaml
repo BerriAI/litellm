@@ -49,7 +49,14 @@ spec:
                   name: {{ .Values.db.secret.name }}
                   key: {{ .Values.db.secret.passwordKey }}
             - name: DATABASE_HOST
+              {{- if .Values.db.secret.endpointKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.endpointKey }}
+              {{- else }}
               value: {{ .Values.db.endpoint }}
+              {{- end }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
             - name: DATABASE_URL
@@ -71,6 +78,10 @@ spec:
               value: "false" # always run the migration from the Helm PreSync hook, override the value set
           {{- with .Values.volumeMounts }}
           volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.migrationJob.resources }}
+          resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       {{- with .Values.migrationJob.extraContainers }}

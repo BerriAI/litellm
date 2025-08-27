@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Select, SelectItem, MultiSelect, MultiSelectItem } from "@tremor/react";
+import { Select, SelectItem, MultiSelect, MultiSelectItem, SearchSelect, SearchSelectItem } from "@tremor/react";
 import { setCallbacksCall } from "./networking";
 import {
   Modal,
@@ -14,6 +14,7 @@ import {
   message,
 } from "antd";
 import { fetchAvailableModels, ModelGroup } from "./chat_ui/llm_calls/fetch_models";
+import NotificationManager from "./molecules/notifications_manager";
 
 interface AddFallbacksProps {
   models?: string[];
@@ -91,10 +92,10 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
         // Update routerSettings state
         setRouterSettings(updatedRouterSettings);
     } catch (error) {
-        message.error("Failed to update router settings: " + error, 20);
+        NotificationManager.fromBackend("Failed to update router settings: " + error);
     }
 
-    message.success("router settings updated successfully");
+    NotificationManager.success("router settings updated successfully");
 
     setIsModalVisible(false);
     form.resetFields();
@@ -154,7 +155,7 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                   rules={[{ required: true, message: 'Please select the primary model that needs fallbacks' }]}
                   className="!mb-0"
                 >
-                  <Select 
+                  <SearchSelect 
                     placeholder="Select the model that needs fallback protection"
                     value={selectedModel}
                     onValueChange={(value: string) => {
@@ -167,14 +168,14 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                     }}
                   >
                     {Array.from(new Set(modelInfo.map(option => option.model_group))).map((model: string, index: number) => (
-                      <SelectItem
+                      <SearchSelectItem
                         key={index}
                         value={model}
                       >
                         {model}
-                      </SelectItem>
+                      </SearchSelectItem>
                     ))}
-                  </Select>
+                  </SearchSelect>
                   <p className="text-sm text-gray-500 mt-1">
                     This is the primary model that users will request
                   </p>
@@ -222,7 +223,7 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                     )}
                     
                     {/* Model selector */}
-                    <Select 
+                    <SearchSelect 
                       placeholder="Add a fallback model"
                       value=""
                       onValueChange={(value: string) => {
@@ -237,11 +238,11 @@ const AddFallbacks: React.FC<AddFallbacksProps> = ({
                         .filter((data: string) => data !== selectedModel && !selectedFallbacks.includes(data))
                         .sort()
                         .map((model: string) => (
-                          <SelectItem key={model} value={model}>
+                          <SearchSelectItem key={model} value={model}>
                             {model}
-                          </SelectItem>
+                          </SearchSelectItem>
                         ))}
-                    </Select>
+                    </SearchSelect>
                   </div>
                   <p className="text-sm text-gray-500 mt-1">
                     <strong>Order matters:</strong> Models will be tried in the order shown above (1st, 2nd, 3rd, etc.)

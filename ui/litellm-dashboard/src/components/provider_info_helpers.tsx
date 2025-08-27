@@ -1,7 +1,9 @@
 import OpenAI from "openai";
 import React from "react";
+import NotificationManager from "./molecules/notifications_manager";
 
 export enum Providers {
+  AIML = "AI/ML API",
   Bedrock = "Amazon Bedrock",           
   Anthropic = "Anthropic",              
   AssemblyAI = "AssemblyAI",            
@@ -17,7 +19,9 @@ export enum Providers {
   ElevenLabs = "ElevenLabs",            
   FireworksAI = "Fireworks AI",         
   Google_AI_Studio = "Google AI Studio",
+  GradientAI = "GradientAI",
   Groq = "Groq",                       
+  Hosted_Vllm = "vllm",
   JinaAI = "Jina AI",                 
   MistralAI = "Mistral AI",             
   Ollama = "Ollama",                   
@@ -35,8 +39,9 @@ export enum Providers {
   Voyage = "Voyage AI",                
   xAI = "xAI",                          
 }
-  
+
 export const provider_map: Record<string, string> = {
+    AIML: "aiml",
     OpenAI: "openai",
     OpenAI_Text: "text-completion-openai",
     Azure: "azure",
@@ -61,6 +66,7 @@ export const provider_map: Record<string, string> = {
     TogetherAI: "together_ai",
     Openrouter: "openrouter",
     FireworksAI: "fireworks_ai",
+    GradientAI: "gradient_ai",
     Triton: "triton",
     Deepgram: "deepgram",
     ElevenLabs: "elevenlabs",
@@ -68,12 +74,14 @@ export const provider_map: Record<string, string> = {
     Voyage: "voyage",
     JinaAI: "jina_ai",
     VolcEngine: "volcengine",
-    DeepInfra: "deepinfra"
+    DeepInfra: "deepinfra",
+    Hosted_Vllm: "hosted_vllm",
 };
 
 const asset_logos_folder = '/ui/assets/logos/';
 
 export const providerLogoMap: Record<string, string> = {
+    [Providers.AIML]: `${asset_logos_folder}aiml_api.svg`,
     [Providers.Anthropic]: `${asset_logos_folder}anthropic.svg`,
     [Providers.AssemblyAI]: `${asset_logos_folder}assemblyai_small.png`,
     [Providers.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
@@ -87,6 +95,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.FireworksAI]: `${asset_logos_folder}fireworks.svg`,
     [Providers.Groq]: `${asset_logos_folder}groq.svg`,
     [Providers.Google_AI_Studio]: `${asset_logos_folder}google.svg`,
+    [Providers.Hosted_Vllm]: `${asset_logos_folder}vllm.png`,
     [Providers.MistralAI]: `${asset_logos_folder}mistral.svg`,
     [Providers.Ollama]: `${asset_logos_folder}ollama.svg`,
     [Providers.OpenAI]: `${asset_logos_folder}openai_small.svg`,
@@ -99,6 +108,7 @@ export const providerLogoMap: Record<string, string> = {
     [Providers.TogetherAI]: `${asset_logos_folder}togetherai.svg`,
     [Providers.Vertex_AI]: `${asset_logos_folder}google.svg`,
     [Providers.xAI]: `${asset_logos_folder}xai.svg`,
+    [Providers.GradientAI]: `${asset_logos_folder}gradientai.svg`,
     [Providers.Triton]: `${asset_logos_folder}nvidia_triton.png`,
     [Providers.Deepgram]: `${asset_logos_folder}deepgram.png`,
     [Providers.ElevenLabs]: `${asset_logos_folder}elevenlabs.png`,
@@ -137,7 +147,9 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string, d
 };
 
 export const getPlaceholder = (selectedProvider: string): string => {
-    if (selectedProvider === Providers.Vertex_AI) {
+    if (selectedProvider === Providers.AIML) {
+      return "aiml/flux-pro/v1.1";
+    } else if (selectedProvider === Providers.Vertex_AI) {
       return "gemini-pro";
     } else if (selectedProvider == Providers.Anthropic) {
       return "claude-3-opus";
@@ -169,9 +181,9 @@ export const getPlaceholder = (selectedProvider: string): string => {
     console.log(`Provider key: ${providerKey}`);
     let custom_llm_provider = provider_map[providerKey];
     console.log(`Provider mapped to: ${custom_llm_provider}`);
-    
+
     let providerModels: Array<string> = [];
-    
+
     if (providerKey && typeof modelMap === "object") {
       Object.entries(modelMap).forEach(([key, value]) => {
         if (
@@ -184,7 +196,6 @@ export const getPlaceholder = (selectedProvider: string): string => {
           providerModels.push(key);
         }
       });
-  
       // Special case for cohere
       // we need both cohere_chat and cohere models to show on dropdown
       if (providerKey == Providers.Cohere) {
@@ -217,6 +228,6 @@ export const getPlaceholder = (selectedProvider: string): string => {
         });
       }
     }
-  
+
     return providerModels;
   };

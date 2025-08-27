@@ -1,6 +1,5 @@
 import json
 import time
-import uuid
 from enum import Enum
 from typing import (
     TYPE_CHECKING,
@@ -14,6 +13,7 @@ from typing import (
     Union,
 )
 
+import fastuuid as uuid
 from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
@@ -1618,7 +1618,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     usage: Optional[ImageUsage] = None  # type: ignore
     """
-    Users might use litellm with older python versions, we don't want this to break for them. 
+    Users might use litellm with older python versions, we don't want this to break for them.
     Happens when their OpenAIImageResponse has the old OpenAI usage class.
     """
 
@@ -2324,11 +2324,14 @@ class LlmProviders(str, Enum):
     ASSEMBLYAI = "assemblyai"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
+    GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
+    AIML = "aiml"
+    COMETAPI = "cometapi"
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     DOTPROMPT = "dotprompt"
@@ -2352,6 +2355,17 @@ class LiteLLMLoggingBaseClass:
         self, original_response, input=None, api_key=None, additional_args={}
     ):
         pass
+
+
+class TokenCountResponse(LiteLLMPydanticObjectBase):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+    original_response: Optional[dict] = None
+    """
+    Original Response from upstream API call - if an API call was made for token counting
+    """
 
 
 class CustomHuggingfaceTokenizer(TypedDict):
